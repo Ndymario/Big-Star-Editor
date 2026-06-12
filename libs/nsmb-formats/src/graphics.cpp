@@ -156,4 +156,30 @@ core::Result<std::vector<Bgr555Color>> decode_bgr555_palette(std::span<const std
     return colors;
 }
 
+core::Result<std::vector<IndexedTile4Bpp>> decode_4bpp_tiles(std::span<const std::uint8_t> data) {
+    constexpr std::size_t tile_size = 32;
+    constexpr std::size_t tile_width = 8;
+    constexpr std::size_t bytes_per_row = 4;
+
+    if ((data.size() % tile_size) != 0U) {
+        return core::make_error(core::ErrorCode::ParseError, "4bpp tile data must be a multiple of 32 bytes");
+    }
+
+    std::vector<IndexedTile4Bpp> tiles;
+    tiles.reserve(data.size() / tile_size);
+    for (std::size_t tile_offset = 0; tile_offset < data.size(); tile_offset += tile_size) {
+        IndexedTile4Bpp tile;
+        for (std::size_t y = 0; y < tile_width; ++y) {
+            for (std::size_t byte_x = 0; byte_x < bytes_per_row; ++byte_x) {
+                const auto packed = data[tile_offset + y * bytes_per_row + byte_x];
+                const auto pixel = y * tile_width + byte_x * 2U;
+                tile.pixels[pixel] = static_cast<std::uint8_t>(packed & 0x0FU);
+                tile.pixels[pixel + 1U] = static_cast<std::uint8_t>((packed >> 4U) & 0x0FU);
+            }
+        }
+        tiles.push_back(tile);
+    }
+    return tiles;
+}
+
 } // namespace nsmb::formats

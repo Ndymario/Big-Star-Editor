@@ -34,9 +34,8 @@ MainWindow::MainWindow() {
     resize(1200, 800);
 
     projectModel_ = new ProjectTreeModel(this);
-    canvasLabel_ = new QLabel("Open a project to list levels.", this);
-    canvasLabel_->setAlignment(Qt::AlignCenter);
-    setCentralWidget(canvasLabel_);
+    preview_ = new LevelPreviewWidget(this);
+    setCentralWidget(preview_);
 
     auto project = nsmb::project::create_empty_project("Empty Project", {}).value();
     setProject(project);
@@ -66,14 +65,16 @@ void MainWindow::createDocks() {
     auto* levelDock = new QDockWidget("Levels", this);
     levelTree_ = new QTreeView(levelDock);
     levelTree_->setModel(projectModel_);
-    levelTree_->setRootIsDecorated(false);
+    levelTree_->setRootIsDecorated(true);
     levelTree_->setAlternatingRowColors(true);
     levelTree_->setSelectionBehavior(QAbstractItemView::SelectRows);
     levelTree_->setSelectionMode(QAbstractItemView::SingleSelection);
     levelTree_->header()->setStretchLastSection(true);
     levelTree_->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    levelTree_->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
     levelDock->setWidget(levelTree_);
     addDockWidget(Qt::LeftDockWidgetArea, levelDock);
+    levelTree_->expandToDepth(1);
 
     connect(levelTree_->selectionModel(), &QItemSelectionModel::currentChanged, this, [this](const QModelIndex& current, const QModelIndex&) {
         updateSelectedLevel(current);
@@ -136,20 +137,19 @@ void MainWindow::saveProject() {
 void MainWindow::setProject(const nsmb::project::Project& project) {
     currentProject_ = project;
     projectModel_->setProject(currentProject_);
+    if (levelTree_) {
+        levelTree_->expandToDepth(1);
+    }
     setWindowTitle(projectTitle(currentProject_));
     updateProjectSummary();
 }
 
 void MainWindow::updateProjectSummary() {
-    if (!canvasLabel_ || !propertiesLabel_) {
+    if (!preview_ || !propertiesLabel_) {
         return;
     }
 
-    if (projectModel_->levelCount() == 0) {
-        canvasLabel_->setText("No level candidates found in this project.");
-    } else {
-        canvasLabel_->setText("Select a level from the sidebar.");
-    }
+    preview_->showProjectSummary(currentProject_, projectModel_->levelCount(), projectModel_->availableLevelCount());
 
     QString text;
     text += "Project: " + QString::fromStdString(currentProject_.name()) + "\n";
@@ -158,7 +158,8 @@ void MainWindow::updateProjectSummary() {
         text += "Manifest: " + manifest + "\n";
     }
     text += "Files: " + QString::number(static_cast<qulonglong>(currentProject_.game_files().size())) + "\n";
-    text += "Levels: " + QString::number(projectModel_->levelCount());
+    text += "Catalog areas: " + QString::number(projectModel_->levelCount()) + "\n";
+    text += "Available areas: " + QString::number(projectModel_->availableLevelCount());
     propertiesLabel_->setText(text);
 }
 
@@ -169,15 +170,41 @@ void MainWindow::updateSelectedLevel(const QModelIndex& index) {
     }
 
     const auto level_index = index.sibling(index.row(), 0);
-    const auto name = projectModel_->data(level_index, Qt::DisplayRole).toString();
-    const auto path = projectModel_->data(level_index, ProjectTreeModel::PathRole).toString();
-    const auto size = projectModel_->data(level_index, ProjectTreeModel::SizeRole).toULongLong();
+    const auto kind = projectModel_->data(level_index, ProjectTreeModel::NodeKindRole).toInt();
+    if (kind != ProjectTreeModel::AreaNode && kind != ProjectTreeModel::OtherNode) {
+        updateProjectSummary();
+        return;
+    }
 
-    if (canvasLabel_) {
-        canvasLabel_->setText("Level: " + name + "\n" + path + "\n\nRead-only level preview is not implemented yet.");
+    const auto name = projectModel_->data(level_index, Qt::DisplayRole).toString();
+    const auto world = projectModel_->data(level_index, ProjectTreeModel::WorldRole).toString();
+    const auto area_name = projectModel_->data(level_index, ProjectTreeModel::AreaNameRole).toString();
+    const auto course_path = projectModel_->data(level_index, ProjectTreeModel::CoursePathRole).toString();
+    const auto bgdat_path = projectModel_->data(level_index, ProjectTreeModel::BgdatPathRole).toString();
+    const auto source_token = projectModel_->data(level_index, ProjectTreeModel::SourceTokenRole).toString();
+    const auto size = projectModel_->data(level_index, ProjectTreeModel::SizeRole).toULongLong();
+    const auto available = projectModel_->data(level_index, ProjectTreeModel::AvailableRole).toBool();
+
+    if (preview_) {
+        preview_->showLevel(currentProject_, name, world, area_name, course_path, bgdat_path, source_token);
     }
     if (propertiesLabel_) {
-        propertiesLabel_->setText("Level: " + name + "\nPath: " + path + "\nSize: " + QString::number(size) + " bytes");
+        QString text;
+        text += "Level: " + name + "\n";
+        if (!world.isEmpty()) {
+            text += "World: " + world + "\n";
+        }
+        if (!area_name.isEmpty() && area_name != name) {
+            text += "Area: " + area_name + "\n";
+        }
+        if (!source_token.isEmpty()) {
+            text += "Token: " + source_token + "\n";
+        }
+        text += "Course: " + (course_path.isEmpty() ? QString("missing") : course_path) + "\n";
+        text += "BGDat: " + (bgdat_path.isEmpty() ? QString("missing") : bgdat_path) + "\n";
+        text += "Available: " + QString(available ? "yes" : "no") + "\n";
+        text += "Size: " + QString::number(size) + " bytes";
+        propertiesLabel_->setText(text);
     }
 }
 

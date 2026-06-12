@@ -1,5 +1,13 @@
 qt_standard_project_setup()
-add_executable(nsmb-qt src/main.cpp src/MainWindow.cpp src/MainWindow.hpp src/ProjectTreeModel.cpp src/ProjectTreeModel.hpp)
+add_executable(nsmb-qt
+  src/main.cpp
+  src/LevelPreviewWidget.cpp
+  src/LevelPreviewWidget.hpp
+  src/MainWindow.cpp
+  src/MainWindow.hpp
+  src/ProjectTreeModel.cpp
+  src/ProjectTreeModel.hpp
+)
 target_link_libraries(nsmb-qt PRIVATE Qt6::Widgets nsmb-project nsmb-patching nsmb-formats)
 target_compile_features(nsmb-qt PRIVATE cxx_std_20)
 set_target_properties(nsmb-qt PROPERTIES WIN32_EXECUTABLE TRUE MACOSX_BUNDLE TRUE)

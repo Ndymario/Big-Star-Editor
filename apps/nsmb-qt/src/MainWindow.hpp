@@ -5,6 +5,7 @@
 #include <QTextEdit>
 #include <QTreeView>
 
+#include "LevelPreviewWidget.hpp"
 #include "ProjectTreeModel.hpp"
 #include "nsmb/project/project.hpp"
 
@@ -25,7 +26,7 @@ private:
     nsmb::project::Project currentProject_;
     ProjectTreeModel* projectModel_{};
     QTreeView* levelTree_{};
-    QLabel* canvasLabel_{};
+    LevelPreviewWidget* preview_{};
     QLabel* propertiesLabel_{};
     QTextEdit* logOutput_{};
 };

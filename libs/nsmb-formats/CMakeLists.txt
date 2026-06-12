@@ -1,6 +1,7 @@
 add_library(nsmb-formats
   src/graphics.cpp
   src/identify.cpp
+  src/level.cpp
 )
 add_library(nsmb::formats ALIAS nsmb-formats)
 target_include_directories(nsmb-formats PUBLIC include)

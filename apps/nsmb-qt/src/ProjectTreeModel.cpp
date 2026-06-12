@@ -1,15 +1,36 @@
 #include "ProjectTreeModel.hpp"
 
 #include "nsmb/formats/identify.hpp"
+#include "nsmb/project/level_catalog.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <filesystem>
+#include <map>
+#include <set>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 
 namespace {
+
+QString pathText(const nsmb::project::GameFile* file) {
+    return file ? QString::fromStdString(file->path.generic_string()) : QString{};
+}
 
 QString levelNameFromPath(const std::filesystem::path& path) {
     const auto stem = QString::fromStdString(path.stem().string());
     return stem.isEmpty() ? QString::fromStdString(path.filename().string()) : stem;
+}
+
+std::string lower(std::string value) {
+    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return value;
+}
+
+bool endsWith(std::string_view value, std::string_view suffix) {
+    return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
 }
 
 bool isLevelCandidate(const nsmb::project::GameFile& file) {
@@ -17,9 +38,82 @@ bool isLevelCandidate(const nsmb::project::GameFile& file) {
     return nsmb::formats::identify_format({}, path) == nsmb::formats::FormatKind::LevelCandidate;
 }
 
+struct FileLookup {
+    std::unordered_map<std::string, const nsmb::project::GameFile*> by_name;
+    std::vector<const nsmb::project::GameFile*> sorted_files;
+};
+
+FileLookup buildLookup(const nsmb::project::Project& project) {
+    FileLookup lookup;
+    lookup.sorted_files.reserve(project.game_files().size());
+    for (const auto& file : project.game_files()) {
+        lookup.sorted_files.push_back(&file);
+    }
+    std::sort(lookup.sorted_files.begin(), lookup.sorted_files.end(), [](const auto* lhs, const auto* rhs) {
+        return lhs->path.generic_string() < rhs->path.generic_string();
+    });
+    for (const auto* file : lookup.sorted_files) {
+        lookup.by_name.emplace(file->path.filename().string(), file);
+    }
+    return lookup;
+}
+
+const nsmb::project::GameFile* findByName(const FileLookup& lookup, const std::string& name) {
+    const auto found = lookup.by_name.find(name);
+    return found == lookup.by_name.end() ? nullptr : found->second;
+}
+
+const nsmb::project::GameFile* findNarcMember(const FileLookup& lookup, const nsmb::project::LevelCatalogArea& area, std::string_view suffix) {
+    if (!area.narc_name) {
+        return nullptr;
+    }
+
+    const auto wanted_name = area.course_token + std::string(suffix);
+    const auto wanted_narc = lower(area.narc_name.value());
+    for (const auto* file : lookup.sorted_files) {
+        const auto file_name = file->path.filename().string();
+        if (file_name != wanted_name) {
+            continue;
+        }
+        const auto path = lower(file->path.generic_string());
+        if (path.find(wanted_narc) != std::string::npos) {
+            return file;
+        }
+    }
+    return nullptr;
+}
+
+const nsmb::project::GameFile* findCourseFile(const FileLookup& lookup, const nsmb::project::LevelCatalogArea& area) {
+    if (const auto* narc_member = findNarcMember(lookup, area, ".bin")) {
+        return narc_member;
+    }
+    if (area.narc_name) {
+        return nullptr;
+    }
+    return findByName(lookup, area.course_token + ".bin");
+}
+
+const nsmb::project::GameFile* findBgdatFile(const FileLookup& lookup, const nsmb::project::LevelCatalogArea& area) {
+    if (const auto* narc_member = findNarcMember(lookup, area, "_bgdat.bin")) {
+        return narc_member;
+    }
+    if (area.narc_name) {
+        return nullptr;
+    }
+    return findByName(lookup, area.course_token + "_bgdat.bin");
+}
+
+QString sourceTokenText(const nsmb::project::LevelCatalogArea& area) {
+    return QString::fromStdString(area.source_token);
+}
+
+QString areaLabel(const nsmb::project::LevelCatalogEntry& entry, const nsmb::project::LevelCatalogArea& area) {
+    return QString::fromStdString(entry.areas.size() == 1U ? entry.display_name : area.display_name);
+}
+
 } // namespace
 
-ProjectTreeModel::ProjectTreeModel(QObject* parent) : QAbstractItemModel(parent) {}
+ProjectTreeModel::ProjectTreeModel(QObject* parent) : QAbstractItemModel(parent), root_(makeNode(RootNode, {})) {}
 
 void ProjectTreeModel::setProject(const nsmb::project::Project& project) {
     beginResetModel();
@@ -30,48 +124,93 @@ void ProjectTreeModel::setProject(const nsmb::project::Project& project) {
 
 const nsmb::project::Project& ProjectTreeModel::project() const noexcept { return project_; }
 
-int ProjectTreeModel::levelCount() const noexcept { return static_cast<int>(levels_.size()); }
+int ProjectTreeModel::levelCount() const noexcept { return level_count_; }
 
-QModelIndex ProjectTreeModel::index(int row, int column, const QModelIndex& parent) const {
-    if (parent.isValid() || row < 0 || column < 0 || column >= columnCount(parent) || row >= rowCount(parent)) {
+int ProjectTreeModel::availableLevelCount() const noexcept { return available_level_count_; }
+
+QModelIndex ProjectTreeModel::index(int row, int column, const QModelIndex& parent_index) const {
+    if (row < 0 || column < 0 || column >= columnCount(parent_index)) {
         return {};
     }
-    return createIndex(row, column);
-}
 
-QModelIndex ProjectTreeModel::parent(const QModelIndex&) const { return {}; }
-
-int ProjectTreeModel::rowCount(const QModelIndex& parent) const {
-    if (parent.isValid()) {
-        return 0;
+    auto* parent_node = nodeFromIndex(parent_index);
+    if (!parent_node || row >= static_cast<int>(parent_node->children.size())) {
+        return {};
     }
-    return static_cast<int>(levels_.size());
+
+    return createIndex(row, column, parent_node->children[static_cast<std::size_t>(row)].get());
 }
 
-int ProjectTreeModel::columnCount(const QModelIndex&) const { return 2; }
+QModelIndex ProjectTreeModel::parent(const QModelIndex& child) const {
+    auto* node = nodeFromIndex(child);
+    if (!node || !node->parent || node->parent == root_.get()) {
+        return {};
+    }
+    return createIndex(node->parent->row, 0, node->parent);
+}
+
+int ProjectTreeModel::rowCount(const QModelIndex& parent_index) const {
+    const auto* node = nodeFromIndex(parent_index);
+    return node ? static_cast<int>(node->children.size()) : 0;
+}
+
+int ProjectTreeModel::columnCount(const QModelIndex&) const { return 3; }
 
 QVariant ProjectTreeModel::data(const QModelIndex& idx, int role) const {
-    if (!idx.isValid() || idx.row() < 0 || idx.row() >= rowCount({})) {
+    const auto* node = nodeFromIndex(idx);
+    if (!node || node == root_.get()) {
         return {};
     }
 
-    const auto& level = levels_.at(static_cast<std::size_t>(idx.row()));
     if (role == Qt::DisplayRole) {
         if (idx.column() == 0) {
-            return level.name;
+            return node->label;
+        }
+        if (node->kind == LevelNode && idx.column() == 1) {
+            return QString("%1 areas").arg(node->children.size());
         }
         if (idx.column() == 1) {
-            return level.path;
+            return node->course_path;
+        }
+        if (idx.column() == 2) {
+            return node->bgdat_path;
         }
     }
-    if (role == PathRole) {
-        return level.path;
+    if (role == CoursePathRole || role == PathRole) {
+        return node->course_path;
+    }
+    if (role == BgdatPathRole) {
+        return node->bgdat_path;
     }
     if (role == SizeRole) {
-        return QVariant::fromValue<qulonglong>(static_cast<qulonglong>(level.size));
+        return QVariant::fromValue<qulonglong>(static_cast<qulonglong>(node->size));
+    }
+    if (role == SourceTokenRole) {
+        return node->source_token;
+    }
+    if (role == WorldRole) {
+        return node->world;
+    }
+    if (role == AreaNameRole) {
+        return node->area_name;
+    }
+    if (role == AvailableRole) {
+        return node->available;
+    }
+    if (role == NodeKindRole) {
+        return static_cast<int>(node->kind);
     }
     if (role == Qt::ToolTipRole) {
-        return QString("%1\n%2 bytes").arg(level.path).arg(static_cast<qulonglong>(level.size));
+        if (node->kind != AreaNode && node->kind != OtherNode) {
+            return node->label;
+        }
+        QString text = node->label;
+        if (!node->source_token.isEmpty()) {
+            text += "\nToken: " + node->source_token;
+        }
+        text += "\nCourse: " + (node->course_path.isEmpty() ? QString("missing") : node->course_path);
+        text += "\nBGDat: " + (node->bgdat_path.isEmpty() ? QString("missing") : node->bgdat_path);
+        return text;
     }
     return {};
 }
@@ -84,21 +223,127 @@ QVariant ProjectTreeModel::headerData(int section, Qt::Orientation orientation, 
         return "Level";
     }
     if (section == 1) {
-        return "Path";
+        return "Course";
+    }
+    if (section == 2) {
+        return "BGDat";
     }
     return {};
 }
 
-void ProjectTreeModel::rebuildLevels() {
-    levels_.clear();
-    for (const auto& file : project_.game_files()) {
-        if (!isLevelCandidate(file)) {
-            continue;
-        }
-        levels_.push_back(LevelEntry{levelNameFromPath(file.path), QString::fromStdString(file.path.generic_string()), file.size});
+Qt::ItemFlags ProjectTreeModel::flags(const QModelIndex& index) const {
+    const auto* node = nodeFromIndex(index);
+    if (!node || node == root_.get()) {
+        return Qt::NoItemFlags;
     }
 
-    std::sort(levels_.begin(), levels_.end(), [](const auto& lhs, const auto& rhs) {
-        return QString::localeAwareCompare(lhs.path, rhs.path) < 0;
-    });
+    Qt::ItemFlags flags = Qt::ItemIsEnabled;
+    if (node->kind == AreaNode || node->kind == OtherNode) {
+        flags |= Qt::ItemIsSelectable;
+    }
+    return flags;
+}
+
+ProjectTreeModel::Node* ProjectTreeModel::nodeFromIndex(const QModelIndex& index) const {
+    if (!index.isValid()) {
+        return root_.get();
+    }
+    return static_cast<Node*>(index.internalPointer());
+}
+
+std::unique_ptr<ProjectTreeModel::Node> ProjectTreeModel::makeNode(NodeKind kind, QString label) {
+    auto node = std::make_unique<Node>();
+    node->kind = kind;
+    node->label = std::move(label);
+    return node;
+}
+
+ProjectTreeModel::Node* ProjectTreeModel::addChild(Node& parent, std::unique_ptr<Node> child) {
+    child->parent = &parent;
+    child->row = static_cast<int>(parent.children.size());
+    auto* raw = child.get();
+    parent.children.push_back(std::move(child));
+    return raw;
+}
+
+void ProjectTreeModel::rebuildLevels() {
+    root_ = makeNode(RootNode, {});
+    level_count_ = 0;
+    available_level_count_ = 0;
+
+    const auto lookup = buildLookup(project_);
+    std::map<std::string, Node*> worlds;
+    std::set<std::string> used_course_paths;
+
+    auto worldNode = [&](const std::string& world) -> Node* {
+        if (const auto found = worlds.find(world); found != worlds.end()) {
+            return found->second;
+        }
+        auto* node = addChild(*root_, makeNode(WorldNode, QString::fromStdString(world)));
+        node->world = QString::fromStdString(world);
+        worlds.emplace(world, node);
+        return node;
+    };
+
+    auto populateAreaNode = [&](Node& node, const nsmb::project::LevelCatalogEntry& entry, const nsmb::project::LevelCatalogArea& area) {
+        const auto* course = findCourseFile(lookup, area);
+        const auto* bgdat = findBgdatFile(lookup, area);
+        node.world = QString::fromStdString(entry.world);
+        node.area_name = QString::fromStdString(area.display_name);
+        node.source_token = sourceTokenText(area);
+        node.course_path = pathText(course);
+        node.bgdat_path = pathText(bgdat);
+        node.available = course != nullptr && bgdat != nullptr;
+        node.size = (course ? course->size : 0U) + (bgdat ? bgdat->size : 0U);
+        ++level_count_;
+        if (node.available) {
+            ++available_level_count_;
+            used_course_paths.insert(course->path.generic_string());
+        }
+    };
+
+    for (const auto& entry : nsmb::project::nsmb_level_catalog()) {
+        auto* world = worldNode(entry.world);
+        if (entry.areas.size() == 1U) {
+            auto area_node = makeNode(AreaNode, areaLabel(entry, entry.areas.front()));
+            populateAreaNode(*area_node, entry, entry.areas.front());
+            addChild(*world, std::move(area_node));
+            continue;
+        }
+
+        auto* level = addChild(*world, makeNode(LevelNode, QString::fromStdString(entry.display_name)));
+        level->world = QString::fromStdString(entry.world);
+        for (const auto& area : entry.areas) {
+            auto area_node = makeNode(AreaNode, QString::fromStdString(area.display_name));
+            populateAreaNode(*area_node, entry, area);
+            addChild(*level, std::move(area_node));
+        }
+    }
+
+    auto* other = static_cast<Node*>(nullptr);
+    for (const auto* file : lookup.sorted_files) {
+        const auto path = file->path.generic_string();
+        const auto filename = file->path.filename().string();
+        if (used_course_paths.contains(path) || endsWith(filename, "_bgdat.bin") || !isLevelCandidate(*file)) {
+            continue;
+        }
+        if (!other) {
+            other = worldNode("Other Files");
+        }
+
+        auto area_node = makeNode(OtherNode, levelNameFromPath(file->path));
+        area_node->world = "Other Files";
+        area_node->area_name = area_node->label;
+        area_node->course_path = pathText(file);
+        const auto stem = file->path.stem().string();
+        const auto* bgdat = findByName(lookup, stem + "_bgdat.bin");
+        area_node->bgdat_path = pathText(bgdat);
+        area_node->available = bgdat != nullptr;
+        area_node->size = file->size + (bgdat ? bgdat->size : 0U);
+        ++level_count_;
+        if (area_node->available) {
+            ++available_level_count_;
+        }
+        addChild(*other, std::move(area_node));
+    }
 }

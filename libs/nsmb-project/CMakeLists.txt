@@ -1,4 +1,4 @@
-add_library(nsmb-project src/project.cpp src/manifest.cpp)
+add_library(nsmb-project src/project.cpp src/manifest.cpp src/level_catalog.cpp)
 add_library(nsmb::project ALIAS nsmb-project)
 target_include_directories(nsmb-project PUBLIC include)
 target_link_libraries(nsmb-project PUBLIC nsmb-core nsmb-nds)
