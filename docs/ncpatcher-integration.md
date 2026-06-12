@@ -4,7 +4,7 @@
 
 `nsmb-patching` exposes a `PatcherService` interface and an `NCPatcherExternalTool` implementation. The implementation validates a project directory, creates a minimal `ncpatcher.json` when missing, constructs a command, and can run the external executable in a controlled working directory.
 
-ROM extraction and building are represented by `RomExtractionService`, `RomBuildService`, and `ExternalToolRomBuildService` wrappers for `nds-extract` and `nds-build`.
+ROM extraction and building are represented by `RomExtractionService`, `RomBuildService`, and `ExternalToolRomBuildService` wrappers for `nds-extract` and `nds-build`. `import-rom` now invokes `nds-extract`, writes project-relative YAML metadata, and generates Fireflower-style `buildrules.txt` for later rebuilds.
 
 ## Current constraints observed in references
 

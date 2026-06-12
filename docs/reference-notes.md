@@ -26,3 +26,10 @@ These notes summarize a limited M0 inspection of the current ecosystem. The old 
 
 - GBATEK is the technical reference for NDS ROM layout, ARM binaries, overlays, filesystem tables, compression, and hardware constraints.
 - NSMB Code Reference and NSMB Code Template are useful for symbols, hooks, and patching workflow expectations, but they may involve Nitro SDK expectations. This repository must not include Nintendo SDK material.
+
+## nsmb-coop finished mod example
+
+- The example project keeps source/configuration at the repository root and modified NitroFS content under `nitrofs/` by language. It expects a user-provided clean ROM named `rom.nds` and does not include the base ROM.
+- Its `ncpatcher.json` uses project-relative paths: `backup` under `code/backup`, `filesystem` as `__tmp`, and target/build files under `code/`. This reinforces that Big Star Editor project manifests should avoid absolute paths.
+- The project contains many graphics-related files that matter for initial identification: raw UI files ending in `_ncg.bin`, layout files such as `.bncl` / `.bncd`, model/texture assets such as `.nsbmd` / `.nsbtp`, BMG scripts, language-specific folders, and patched NitroFS replacements.
+- Its Python build scripts orchestrate code insertion, file insertion, language selection, and patch generation around NCPatcher rather than relying on an editor-specific binary project format.

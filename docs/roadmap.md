@@ -8,13 +8,13 @@
 
 ## M1: ROM import/list filesystem
 
-- Integrate `nds-extract` workflow behind `RomExtractionService`.
-- Populate `Project` with an extracted file tree.
+- Integrate and harden the `nds-extract` workflow behind `RomExtractionService` beyond the initial CLI extraction path.
+- Populate `Project` with an extracted file tree and derived format metadata.
 - Add safe NDS header and filesystem metadata inspection.
 
 ## M2: level format read-only viewer
 
-- Identify NSMB level/course file pairs and related NARC/tile resources.
+- Identify NSMB level/course file pairs and related NARC/tile/graphics resources.
 - Implement defensive read-only parsers with synthetic tests.
 - Show a read-only level outline in Qt.
 

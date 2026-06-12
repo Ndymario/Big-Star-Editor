@@ -20,8 +20,12 @@ Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementa
 
 ## Initial vertical slice
 
-M0 provides CMake configuration, backend libraries, a CLI, optional Qt shell, project manifest round-trip, file-tree scanning, NDS header parsing, command construction for external tools, and unit tests. Level editing is intentionally stubbed.
+M0/M1 now provides CMake configuration, backend libraries, a CLI, optional Qt shell, YAML project manifest round-trip, file-tree scanning, NDS header parsing, external ROM extraction/build service execution, initial Nitro graphics identification, and unit tests. Level editing is intentionally stubbed.
 
 ## Async frontend design
 
 Long-running external tools are modeled as services with structured requests and results. The Qt M0 shell logs placeholders synchronously, but the service boundary is suitable for later execution on worker threads with progress reporting and cancellation.
+
+## Project files
+
+Projects are opened by directory, so the project manifest does not serialize an absolute project root. `big-star-project.yaml` stores only project-relative paths such as `extracted-rom/root/...`, which keeps projects portable across machines and avoids leaking user filesystem paths. See `docs/project-format.md`.

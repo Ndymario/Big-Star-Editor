@@ -6,12 +6,14 @@ Big Star Editor is the start of a modern, portable C++ rewrite/rearchitecture of
 
 - `libs/nsmb-core`: result/error types, byte buffers, endian utilities, logging and command interfaces.
 - `libs/nsmb-nds`: generic Nintendo DS ROM/header/file-tree concepts and extraction/build interfaces.
-- `libs/nsmb-formats`: defensive format-identification stubs for future NSMB/NDS parsers.
+- `libs/nsmb-formats`: defensive format-identification and initial Nitro graphics helpers for future NSMB/NDS parsers.
 - `libs/nsmb-project`: frontend-agnostic editor project model and manifest load/save.
 - `libs/nsmb-patching`: narrow service wrappers for NCPatcher, `nds-extract`, and `nds-build`.
 - `apps/nsmb-cli`: minimal CLI for inspection and service command construction.
 - `apps/nsmb-qt`: optional Qt 6 Widgets desktop shell.
 - `apps/nsmb-web`: documented placeholder for a future WebAssembly/web adapter.
+
+Project manifests are YAML files named `big-star-project.yaml`. They store project-relative paths only; the project directory is implied by where the manifest is opened.
 
 ## Build requirements
 
@@ -71,9 +73,10 @@ ctest --test-dir build --output-on-failure
 ```sh
 ./build/apps/nsmb-cli/nsmb-cli --version
 ./build/apps/nsmb-cli/nsmb-cli inspect-rom path/to/homebrew_or_user_provided.nds
+PATH_TO_NDS_EXTRACT/nds-extract must be on PATH for import-rom
 ./build/apps/nsmb-cli/nsmb-cli import-rom path/to/user_provided.nds my-project
 ./build/apps/nsmb-cli/nsmb-cli run-patcher my-project
 ./build/apps/nsmb-cli/nsmb-cli build-rom my-project output.nds
 ```
 
-External tools are represented by service interfaces first. This milestone constructs and validates commands, but full import/build workflows remain roadmap work.
+`import-rom` invokes `nds-extract`, indexes the extracted tree, writes `big-star-project.yaml` with project-relative paths, and generates `buildrules.txt`. `build-rom` invokes `nds-build` through the backend service boundary. Full level editing remains roadmap work.
