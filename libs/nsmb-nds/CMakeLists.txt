@@ -1,0 +1,5 @@
+add_library(nsmb-nds src/rom.cpp)
+add_library(nsmb::nds ALIAS nsmb-nds)
+target_include_directories(nsmb-nds PUBLIC include)
+target_link_libraries(nsmb-nds PUBLIC nsmb-core)
+target_compile_features(nsmb-nds PUBLIC cxx_std_20)

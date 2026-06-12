@@ -1,0 +1,5 @@
+add_library(nsmb-formats src/identify.cpp)
+add_library(nsmb::formats ALIAS nsmb-formats)
+target_include_directories(nsmb-formats PUBLIC include)
+target_link_libraries(nsmb-formats PUBLIC nsmb-core)
+target_compile_features(nsmb-formats PUBLIC cxx_std_20)
