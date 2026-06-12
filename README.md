@@ -10,7 +10,7 @@ Big Star Editor is the start of a modern, portable C++ rewrite/rearchitecture of
 - `libs/nsmb-project`: frontend-agnostic editor project model and manifest load/save.
 - `libs/nsmb-patching`: narrow service wrapper for NCPatcher.
 - `apps/nsmb-cli`: minimal CLI for inspection and service command construction.
-- `apps/nsmb-qt`: optional Qt 6 Widgets desktop shell.
+- `apps/nsmb-qt`: optional Qt 6 Widgets desktop shell with project opening and level-candidate listing.
 - `apps/nsmb-web`: documented placeholder for a future WebAssembly/web adapter.
 
 Project manifests are YAML files named `big-star-project.yaml`. They store project-relative paths only; the project directory is implied by where the manifest is opened.

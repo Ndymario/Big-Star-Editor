@@ -20,11 +20,11 @@ Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementa
 
 ## Initial vertical slice
 
-M0/M1 now provides CMake configuration, backend libraries, a CLI, optional Qt shell, YAML project manifest round-trip, file-tree scanning, NDS header parsing, built-in ROM extraction/build, initial Nitro graphics identification, and unit tests. Level editing is intentionally stubbed.
+M0/M1 now provides CMake configuration, backend libraries, a CLI, optional Qt shell with project opening and level-candidate listing, YAML project manifest round-trip, file-tree scanning, NDS header parsing, built-in ROM extraction/build, initial Nitro graphics identification, and unit tests. Level editing is intentionally stubbed.
 
 ## Async frontend design
 
-Long-running external tools are modeled as services with structured requests and results. The Qt M0 shell logs placeholders synchronously, but the service boundary is suitable for later execution on worker threads with progress reporting and cancellation.
+Long-running external tools are modeled as services with structured requests and results. The Qt shell still runs actions synchronously, but the service boundary is suitable for later execution on worker threads with progress reporting and cancellation.
 
 ## Project files
 
