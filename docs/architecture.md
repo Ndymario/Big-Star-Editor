@@ -9,10 +9,10 @@ The frontend lives under `apps/`. Qt-specific models and widgets are allowed onl
 ## Module boundaries
 
 - `nsmb-core`: common infrastructure: `Result<T>`, `Error`, `ByteBuffer`, little-endian reader/writer, logging, and undo/redo command interfaces.
-- `nsmb-nds`: NDS-level concepts independent from NSMB: ROM headers, extracted ROM roots, file-tree nodes, ARM/overlay placeholders, and extraction/build service interfaces.
+- `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, extracted ROM roots, file-tree nodes, and extraction/build services.
 - `nsmb-formats`: NSMB/NDS format detection and future parsers. M0 deliberately includes only conservative identification stubs.
 - `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, and future domain objects (`Level`, `Area`, `Zone`, `Sprite`, `Entrance`, `Path`, `TilesetRef`).
-- `nsmb-patching`: external process boundaries for NCPatcher, `nds-extract`, and `nds-build`.
+- `nsmb-patching`: external process boundary for NCPatcher.
 
 ## Error policy
 
@@ -20,7 +20,7 @@ Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementa
 
 ## Initial vertical slice
 
-M0/M1 now provides CMake configuration, backend libraries, a CLI, optional Qt shell, YAML project manifest round-trip, file-tree scanning, NDS header parsing, external ROM extraction/build service execution, initial Nitro graphics identification, and unit tests. Level editing is intentionally stubbed.
+M0/M1 now provides CMake configuration, backend libraries, a CLI, optional Qt shell, YAML project manifest round-trip, file-tree scanning, NDS header parsing, built-in ROM extraction/build, initial Nitro graphics identification, and unit tests. Level editing is intentionally stubbed.
 
 ## Async frontend design
 

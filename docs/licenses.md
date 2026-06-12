@@ -6,10 +6,6 @@ This repository is currently GPL-3.0 because the root `LICENSE` is GPL version 3
 
 The current NSMB Editor repository contains GPL-3.0-or-later notices. Copying or translating source code from it would require preserving compatible GPL obligations and attribution. M0 does not copy or line-by-line port code; it records behavioral observations only.
 
-## Fireflower
-
-Fireflower includes a license file and useful extraction/build tools. M0 does not vendor Fireflower or copy implementation code. It only defines service interfaces/wrappers that can invoke external `nds-extract` and `nds-build` executables supplied by the user.
-
 ## NCPatcher
 
 NCPatcher is an external C++ tool. M0 does not vendor it. The integration is a narrow external-process boundary that expects a user-installed `ncpatcher` executable and a project-local `ncpatcher.json`.

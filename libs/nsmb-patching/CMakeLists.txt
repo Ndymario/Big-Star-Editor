@@ -1,7 +1,7 @@
 add_library(nsmb-patching src/external_tools.cpp)
 add_library(nsmb::patching ALIAS nsmb-patching)
 target_include_directories(nsmb-patching PUBLIC include)
-target_link_libraries(nsmb-patching PUBLIC nsmb-core nsmb-nds)
+target_link_libraries(nsmb-patching PUBLIC nsmb-core)
 target_compile_features(nsmb-patching PUBLIC cxx_std_20)
 if(BSE_BUILD_TESTS)
   add_executable(nsmb-patching-tests tests/patching_tests.cpp)

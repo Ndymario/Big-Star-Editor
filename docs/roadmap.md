@@ -8,7 +8,7 @@
 
 ## M1: ROM import/list filesystem
 
-- Integrate and harden the `nds-extract` workflow behind `RomExtractionService` beyond the initial CLI extraction path.
+- Harden the built-in `NitroRomService` extraction path and broaden synthetic ROM coverage.
 - Populate `Project` with an extracted file tree and derived format metadata.
 - Add safe NDS header and filesystem metadata inspection.
 
@@ -27,7 +27,7 @@
 ## M4: save/rebuild pipeline
 
 - Serialize modified project files.
-- Run build service through `nds-build`.
+- Harden the built-in ROM build service for edited NitroFS trees and overlays.
 - Validate output paths and preserve user backups.
 
 ## M5: patching integration

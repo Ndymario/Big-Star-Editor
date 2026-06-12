@@ -114,7 +114,7 @@ int main(int argc, char** argv) {
             return 6;
         }
 
-        nsmb::patching::ExternalToolRomBuildService rom_service;
+        nsmb::nds::NitroRomService rom_service;
         auto extracted = rom_service.extract(rom_path, extracted_dir);
         if (!extracted) {
             std::cerr << extracted.error().message << '\n';
@@ -125,16 +125,10 @@ int main(int argc, char** argv) {
         project.attach_extracted_rom("extracted-rom", header.value());
         collect_files(project, project_dir, extracted_dir);
 
-        auto rules = rom_service.write_fireflower_build_rules(extracted_dir, project_dir / "buildrules.txt");
-        if (!rules) {
-            std::cerr << rules.error().message << '\n';
-            return 8;
-        }
-
         auto saved = nsmb::project::save_manifest(project, project_dir / nsmb::project::manifest_file_name);
         if (!saved) {
             std::cerr << saved.error().message << '\n';
-            return 9;
+            return 8;
         }
 
         std::cout << "Imported ROM into " << project_dir << "\n"
@@ -154,7 +148,7 @@ int main(int argc, char** argv) {
     }
 
     if (command == "build-rom" && argc == 4) {
-        nsmb::patching::ExternalToolRomBuildService service;
+        nsmb::nds::NitroRomService service;
         auto result = service.build(fs::path(argv[2]) / "extracted-rom", argv[3]);
         if (!result) {
             std::cerr << result.error().message << '\n';
