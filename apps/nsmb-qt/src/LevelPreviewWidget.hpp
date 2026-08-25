@@ -8,9 +8,12 @@
 #include <vector>
 
 #include "nsmb/formats/level.hpp"
+#include "nsmb/project/editable_level.hpp"
 #include "nsmb/project/project.hpp"
 
 class LevelPreviewWidget final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit LevelPreviewWidget(QWidget* parent = nullptr);
 
@@ -21,7 +24,9 @@ public:
                    const QString& area_name,
                    const QString& course_path,
                    const QString& bgdat_path,
-                   const QString& source_token);
+                   const QString& source_token,
+                   nsmb::project::EditableLevel* level);
+    void setSelection(int kind, int item_index, int node_index);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -40,9 +45,11 @@ public:
         QString course_path;
         QString bgdat_path;
         QString source_token;
-        nsmb::formats::NsmbLevelCourse course;
-        std::vector<nsmb::formats::NsmbLevelObject> objects;
+        nsmb::project::EditableLevel* level{};
         std::optional<GraphicsSample> graphics;
+        int selected_kind{};
+        int selected_item{};
+        int selected_node{};
     };
 
 private:

@@ -18,6 +18,11 @@ int main() {
     assert(cmd);
     assert(cmd.value().working_directory == dir);
     assert(cmd.value().arguments.size() == 1);
+#ifdef _WIN32
+    assert(nsmb::patching::command_to_string({"patcher$(false)", {"it's safe"}, {}}) == "\"patcher$(false)\" \"it's safe\"");
+#else
+    assert(nsmb::patching::command_to_string({"patcher$(false)", {"it's safe"}, {}}) == "'patcher$(false)' 'it'\\''s safe'");
+#endif
 
     fs::remove_all(dir);
     return 0;

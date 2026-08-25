@@ -53,6 +53,7 @@ void parse_entrances(NsmbLevelCourse& course, std::span<const std::uint8_t> bloc
     for (std::size_t i = 0; i < count; ++i) {
         const auto offset = i * 20U;
         NsmbLevelEntrance entrance;
+        std::copy_n(block.begin() + static_cast<std::ptrdiff_t>(offset), entrance.raw.size(), entrance.raw.begin());
         entrance.x = read_u16(block, offset);
         entrance.y = read_u16(block, offset + 2U);
         entrance.camera_x = read_u16(block, offset + 4U);
@@ -103,8 +104,46 @@ void parse_zones(NsmbLevelCourse& course, std::span<const std::uint8_t> block) {
         zone.width = read_u16(block, offset + 4U);
         zone.height = read_u16(block, offset + 6U);
         zone.number = block[offset + 8U];
+        std::copy_n(block.begin() + static_cast<std::ptrdiff_t>(offset + 9U), zone.trailing.size(), zone.trailing.begin());
         course.zones.push_back(zone);
     }
+}
+
+core::Result<std::vector<NsmbLevelPath>> parse_paths(std::span<const std::uint8_t> headers,
+                                                     std::span<const std::uint8_t> nodes) {
+    constexpr std::size_t path_record_size = 8;
+    constexpr std::size_t node_record_size = 16;
+    if ((headers.size() % path_record_size) != 0U || (nodes.size() % node_record_size) != 0U) {
+        return core::make_error(core::ErrorCode::ParseError, "NSMB path blocks contain partial records");
+    }
+
+    std::vector<NsmbLevelPath> paths;
+    paths.reserve(headers.size() / path_record_size);
+    for (std::size_t offset = 0; offset < headers.size(); offset += path_record_size) {
+        NsmbLevelPath path;
+        path.id = read_u16(headers, offset);
+        const auto first_node = static_cast<std::size_t>(read_u16(headers, offset + 2U));
+        const auto node_count = static_cast<std::size_t>(read_u16(headers, offset + 4U));
+        path.unknown = read_u16(headers, offset + 6U);
+        const auto available_nodes = nodes.size() / node_record_size;
+        if (first_node > available_nodes || node_count > available_nodes - first_node) {
+            return core::make_error(core::ErrorCode::OutOfBounds, "NSMB path references nodes outside its node block");
+        }
+
+        path.nodes.reserve(node_count);
+        for (std::size_t i = 0; i < node_count; ++i) {
+            const auto node_offset = (first_node + i) * node_record_size;
+            NsmbLevelPathNode node;
+            node.x = read_u16(nodes, node_offset);
+            node.y = read_u16(nodes, node_offset + 2U);
+            for (std::size_t value_index = 0; value_index < node.values.size(); ++value_index) {
+                node.values[value_index] = read_u16(nodes, node_offset + 4U + value_index * 2U);
+            }
+            path.nodes.push_back(node);
+        }
+        paths.push_back(std::move(path));
+    }
+    return paths;
 }
 
 } // namespace
@@ -137,7 +176,11 @@ core::Result<NsmbLevelCourse> parse_nsmb_level_course(std::span<const std::uint8
     auto block6 = checked_block(data, course.blocks[6]);
     auto block7 = checked_block(data, course.blocks[7]);
     auto block8 = checked_block(data, course.blocks[8]);
-    if (!block0 || !block2 || !block5 || !block6 || !block7 || !block8) {
+    auto block9 = checked_block(data, course.blocks[9]);
+    auto block10 = checked_block(data, course.blocks[10]);
+    auto block11 = checked_block(data, course.blocks[11]);
+    auto block12 = checked_block(data, course.blocks[12]);
+    if (!block0 || !block2 || !block5 || !block6 || !block7 || !block8 || !block9 || !block10 || !block11 || !block12) {
         return core::make_error(core::ErrorCode::ParseError, "could not read NSMB course blocks");
     }
 
@@ -150,10 +193,23 @@ core::Result<NsmbLevelCourse> parse_nsmb_level_course(std::span<const std::uint8
     parse_sprites(course, block6.value());
     parse_views(course, block7.value());
     parse_zones(course, block8.value());
+    auto paths = parse_paths(block10.value(), block12.value());
+    auto progress_paths = parse_paths(block9.value(), block11.value());
+    if (!paths) {
+        return paths.error();
+    }
+    if (!progress_paths) {
+        return progress_paths.error();
+    }
+    course.paths = std::move(paths.value());
+    course.progress_paths = std::move(progress_paths.value());
     return course;
 }
 
 core::Result<std::vector<NsmbLevelObject>> parse_nsmb_bgdat_objects(std::span<const std::uint8_t> data) {
+    if ((data.size() % nsmb_bgdat_object_size) == 2U && data[data.size() - 2U] == 0xFFU && data[data.size() - 1U] == 0xFFU) {
+        data = data.first(data.size() - 2U);
+    }
     if ((data.size() % nsmb_bgdat_object_size) != 0U) {
         return core::make_error(core::ErrorCode::ParseError, "NSMB BGDat object data must be made of 10-byte records");
     }

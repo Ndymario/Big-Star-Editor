@@ -20,15 +20,16 @@
 
 ## M3: level editing and undo/redo
 
-- Add domain commands for sprites, entrances, paths, zones, and tileset references.
-- Wire backend command history to Qt actions.
-- Keep UI models as adapters over backend state.
+- Implemented editable backend sessions for objects, sprites, entrances, paths, progress paths, zones, and tileset references.
+- Implemented branching command history and wired it to Qt Undo/Redo actions and shortcuts.
+- Added a Qt property editor, add/delete controls, path-node controls, selection highlighting, dirty-state warnings, and per-level session caching.
 
 ## M4: save/rebuild pipeline
 
-- Serialize modified project files.
-- Harden the built-in ROM build service for edited NitroFS trees and overlays.
-- Validate output paths and preserve user backups.
+- Implemented loss-preserving course/BGDat serialization for every currently editable entity and reference type.
+- Added round-trip validation, atomic file replacement, original-file backups, and manifest size updates.
+- Wired the Qt File menu to create/open projects, import ROMs, save edits, invoke NCPatcher, and build ROMs.
+- Hardened external-tool argument quoting and exercised the built-in ROM service against synthetic ROMs.
 
 ## M5: patching integration
 

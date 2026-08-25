@@ -45,12 +45,13 @@ QString elided(const QFontMetrics& metrics, const QString& text, int width) {
 }
 
 QString countsText(const LevelPreviewWidget::Scene& scene) {
+    const auto& course = scene.level->course();
     return QString("Objects %1   Sprites %2   Entrances %3   Views %4   Zones %5")
-        .arg(static_cast<qulonglong>(scene.objects.size()))
-        .arg(static_cast<qulonglong>(scene.course.sprites.size()))
-        .arg(static_cast<qulonglong>(scene.course.entrances.size()))
-        .arg(static_cast<qulonglong>(scene.course.views.size()))
-        .arg(static_cast<qulonglong>(scene.course.zones.size()));
+        .arg(static_cast<qulonglong>(scene.level->objects().size()))
+        .arg(static_cast<qulonglong>(course.sprites.size()))
+        .arg(static_cast<qulonglong>(course.entrances.size()))
+        .arg(static_cast<qulonglong>(course.views.size()))
+        .arg(static_cast<qulonglong>(course.zones.size()));
 }
 
 QString formatIdsText(const nsmb::formats::NsmbLevelCourse& course) {
@@ -94,23 +95,33 @@ void includeRect(QRectF& bounds, bool& has_bounds, const QRectF& rect) {
 }
 
 QRectF sceneBounds(const LevelPreviewWidget::Scene& scene) {
+    const auto& course = scene.level->course();
     QRectF bounds;
     bool has_bounds = false;
-    for (const auto& zone : scene.course.zones) {
+    for (const auto& zone : course.zones) {
         includeRect(bounds, has_bounds, zoneRect(zone));
     }
-    for (const auto& view : scene.course.views) {
+    for (const auto& view : course.views) {
         includeRect(bounds, has_bounds, viewRect(view));
     }
-    for (const auto& object : scene.objects) {
+    for (const auto& object : scene.level->objects()) {
         includeRect(bounds, has_bounds, objectRect(object));
     }
-    for (const auto& sprite : scene.course.sprites) {
+    for (const auto& sprite : course.sprites) {
         includeRect(bounds, has_bounds, spriteRect(sprite));
     }
-    for (const auto& entrance : scene.course.entrances) {
+    for (const auto& entrance : course.entrances) {
         includeRect(bounds, has_bounds, entranceRect(entrance));
     }
+    auto includePaths = [&](const auto& paths) {
+        for (const auto& path : paths) {
+            for (const auto& node : path.nodes) {
+                includeRect(bounds, has_bounds, QRectF(node.x, node.y, 16.0, 16.0));
+            }
+        }
+    };
+    includePaths(course.paths);
+    includePaths(course.progress_paths);
     if (!has_bounds) {
         bounds = QRectF(0.0, 0.0, 512.0 * 16.0, 256.0 * 16.0);
     }
@@ -131,6 +142,7 @@ QColor objectColor(std::uint8_t tileset_slot) {
 }
 
 void drawMap(QPainter& painter, const QRectF& target, const LevelPreviewWidget::Scene& scene) {
+    const auto& course = scene.level->course();
     painter.save();
     painter.setPen(QPen(QColor(190, 198, 208)));
     painter.setBrush(QColor(248, 250, 252));
@@ -159,22 +171,35 @@ void drawMap(QPainter& painter, const QRectF& target, const LevelPreviewWidget::
     }
 
     painter.setRenderHint(QPainter::Antialiasing, true);
-    for (const auto& zone : scene.course.zones) {
+    for (std::size_t i = 0; i < course.zones.size(); ++i) {
+        const auto& zone = course.zones[i];
         painter.setPen(QPen(QColor(84, 154, 110), 0));
         painter.setBrush(QColor(84, 154, 110, 34));
         painter.drawRect(zoneRect(zone));
+        if (scene.selected_kind == 4 && scene.selected_item == static_cast<int>(i)) {
+            painter.setPen(QPen(QColor(24, 111, 58), 3.0 / scale));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(zoneRect(zone));
+        }
     }
-    for (const auto& view : scene.course.views) {
+    for (const auto& view : course.views) {
         painter.setPen(QPen(QColor(65, 122, 180), 0));
         painter.setBrush(QColor(65, 122, 180, 25));
         painter.drawRect(viewRect(view));
     }
-    for (const auto& object : scene.objects) {
+    for (std::size_t i = 0; i < scene.level->objects().size(); ++i) {
+        const auto& object = scene.level->objects()[i];
         painter.setPen(QPen(QColor(38, 46, 58), 0));
         painter.setBrush(objectColor(object.tileset_slot));
         painter.drawRoundedRect(objectRect(object), 2.0 / scale, 2.0 / scale);
+        if (scene.selected_kind == 1 && scene.selected_item == static_cast<int>(i)) {
+            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(objectRect(object));
+        }
     }
-    for (const auto& sprite : scene.course.sprites) {
+    for (std::size_t i = 0; i < course.sprites.size(); ++i) {
+        const auto& sprite = course.sprites[i];
         const auto rect = spriteRect(sprite);
         const QPointF center = rect.center();
         QPolygonF diamond;
@@ -183,12 +208,49 @@ void drawMap(QPainter& painter, const QRectF& target, const LevelPreviewWidget::
         painter.setPen(QPen(QColor(135, 78, 29), 0));
         painter.setBrush(QColor(238, 178, 75, 190));
         painter.drawPolygon(diamond);
+        if (scene.selected_kind == 2 && scene.selected_item == static_cast<int>(i)) {
+            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(rect.adjusted(-3.0, -3.0, 3.0, 3.0));
+        }
     }
-    for (const auto& entrance : scene.course.entrances) {
+    for (std::size_t i = 0; i < course.entrances.size(); ++i) {
+        const auto& entrance = course.entrances[i];
         painter.setPen(QPen(QColor(34, 94, 122), 0));
         painter.setBrush(QColor(92, 190, 214, 190));
         painter.drawEllipse(entranceRect(entrance));
+        if (scene.selected_kind == 3 && scene.selected_item == static_cast<int>(i)) {
+            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawEllipse(entranceRect(entrance).adjusted(-3.0, -3.0, 3.0, 3.0));
+        }
     }
+
+    auto drawPaths = [&](const auto& paths, bool progress) {
+        for (std::size_t path_index = 0; path_index < paths.size(); ++path_index) {
+            const auto& path = paths[path_index];
+            painter.setPen(QPen(progress ? QColor(155, 92, 180) : QColor(199, 76, 76), 2.0 / scale));
+            for (std::size_t node_index = 1; node_index < path.nodes.size(); ++node_index) {
+                const auto& before = path.nodes[node_index - 1U];
+                const auto& node = path.nodes[node_index];
+                painter.drawLine(QPointF(before.x + 8.0, before.y + 8.0), QPointF(node.x + 8.0, node.y + 8.0));
+            }
+            for (std::size_t node_index = 0; node_index < path.nodes.size(); ++node_index) {
+                const auto& node = path.nodes[node_index];
+                const QRectF rect(node.x, node.y, 16.0, 16.0);
+                painter.setBrush(node_index == 0 ? QColor(79, 178, 98) : QColor(235, 105, 95));
+                painter.drawEllipse(rect);
+                if (scene.selected_kind == (progress ? 6 : 5) && scene.selected_item == static_cast<int>(path_index) &&
+                    scene.selected_node == static_cast<int>(node_index)) {
+                    painter.setPen(QPen(Qt::white, 3.0 / scale));
+                    painter.setBrush(Qt::NoBrush);
+                    painter.drawEllipse(rect.adjusted(-3.0, -3.0, 3.0, 3.0));
+                }
+            }
+        }
+    };
+    drawPaths(course.paths, false);
+    drawPaths(course.progress_paths, true);
 
     painter.restore();
 }
@@ -360,38 +422,13 @@ void LevelPreviewWidget::showLevel(const nsmb::project::Project& project,
                                    const QString& area_name,
                                    const QString& course_path,
                                    const QString& bgdat_path,
-                                   const QString& source_token) {
+                                   const QString& source_token,
+                                   nsmb::project::EditableLevel* level) {
     scene_.reset();
 
-    if (course_path.isEmpty() || bgdat_path.isEmpty()) {
+    if (course_path.isEmpty() || bgdat_path.isEmpty() || !level) {
         message_ = "Level files are not available in this project yet.\nCourse: " + (course_path.isEmpty() ? QString("missing") : course_path) +
                    "\nBGDat: " + (bgdat_path.isEmpty() ? QString("missing") : bgdat_path);
-        update();
-        return;
-    }
-
-    auto course_data = readBinaryFile(absoluteProjectPath(project, course_path));
-    if (!course_data) {
-        message_ = QString::fromStdString(course_data.error().message);
-        update();
-        return;
-    }
-    auto bgdat_data = readBinaryFile(absoluteProjectPath(project, bgdat_path));
-    if (!bgdat_data) {
-        message_ = QString::fromStdString(bgdat_data.error().message);
-        update();
-        return;
-    }
-
-    auto course = nsmb::formats::parse_nsmb_level_course(course_data.value());
-    if (!course) {
-        message_ = QString::fromStdString(course.error().message);
-        update();
-        return;
-    }
-    auto objects = nsmb::formats::parse_nsmb_bgdat_objects(bgdat_data.value());
-    if (!objects) {
-        message_ = QString::fromStdString(objects.error().message);
         update();
         return;
     }
@@ -403,9 +440,11 @@ void LevelPreviewWidget::showLevel(const nsmb::project::Project& project,
         course_path,
         bgdat_path,
         source_token,
-        std::move(course.value()),
-        std::move(objects.value()),
+        level,
         findGraphicsSample(project),
+        0,
+        0,
+        0,
     };
     message_.clear();
     update();
@@ -448,7 +487,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                      elided(body_metrics, countsText(*scene_), static_cast<int>(outer.width())));
     painter.drawText(outer.adjusted(0, 80, 0, -outer.height() + 100),
                      Qt::AlignLeft | Qt::AlignVCenter,
-                     elided(body_metrics, formatIdsText(scene_->course), static_cast<int>(outer.width())));
+                     elided(body_metrics, formatIdsText(scene_->level->course()), static_cast<int>(outer.width())));
 
     const auto graphics_height = scene_->graphics ? std::min(160.0, outer.height() * 0.28) : 0.0;
     const QRectF map_rect(outer.left(), outer.top() + 112.0, outer.width(), outer.height() - 112.0 - graphics_height - (graphics_height > 0 ? 14.0 : 0.0));
@@ -460,4 +499,14 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
         const QRectF graphics_rect(outer.left(), outer.bottom() - graphics_height, outer.width(), graphics_height);
         drawGraphicsSample(painter, graphics_rect, scene_->graphics.value());
     }
+}
+
+void LevelPreviewWidget::setSelection(int kind, int item_index, int node_index) {
+    if (!scene_) {
+        return;
+    }
+    scene_->selected_kind = kind;
+    scene_->selected_item = item_index;
+    scene_->selected_node = node_index;
+    update();
 }

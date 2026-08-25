@@ -105,6 +105,17 @@ int main() {
     zone[8] = 4;
     append_block(course, 8, zone);
 
+    std::vector<std::uint8_t> path_header(8);
+    put_u16(path_header, 0, 6);
+    put_u16(path_header, 2, 0);
+    put_u16(path_header, 4, 1);
+    append_block(course, 10, path_header);
+    std::vector<std::uint8_t> path_node(16);
+    put_u16(path_node, 0, 144);
+    put_u16(path_node, 2, 160);
+    put_u16(path_node, 4, 99);
+    append_block(course, 12, path_node);
+
     auto parsed_course = parse_nsmb_level_course(course);
     assert(parsed_course);
     assert(parsed_course.value().tileset_id == 42);
@@ -120,6 +131,10 @@ int main() {
     assert(parsed_course.value().views[0].width == 256);
     assert(parsed_course.value().zones.size() == 1);
     assert(parsed_course.value().zones[0].number == 4);
+    assert(parsed_course.value().paths.size() == 1);
+    assert(parsed_course.value().paths[0].id == 6);
+    assert(parsed_course.value().paths[0].nodes[0].x == 144);
+    assert(parsed_course.value().paths[0].nodes[0].values[0] == 99);
 
     std::vector<std::uint8_t> bgdat(10);
     put_u16(bgdat, 0, static_cast<std::uint16_t>(0x2000U | 0x0123U));
@@ -134,6 +149,9 @@ int main() {
     assert(objects.value()[0].tileset_slot == 2);
     assert(objects.value()[0].x == -4);
     assert(objects.value()[0].width == 12);
+    bgdat.push_back(0xFF);
+    bgdat.push_back(0xFF);
+    assert(parse_nsmb_bgdat_objects(bgdat));
     bgdat.push_back(0);
     assert(!parse_nsmb_bgdat_objects(bgdat));
 

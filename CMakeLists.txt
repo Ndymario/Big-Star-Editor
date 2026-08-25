@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(BigStarEditor VERSION 0.2.0 LANGUAGES CXX)
+project(BigStarEditor VERSION 0.4.0 LANGUAGES CXX)
 
 option(BSE_BUILD_QT "Build the Qt 6 desktop frontend when Qt is available" ON)
 option(BSE_BUILD_TESTS "Build unit tests" ON)

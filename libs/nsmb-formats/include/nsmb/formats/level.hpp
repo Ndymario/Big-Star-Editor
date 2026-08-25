@@ -48,6 +48,7 @@ struct NsmbLevelEntrance {
     std::uint8_t unknown1{};
     std::uint8_t entry_view{};
     std::uint8_t unknown2{};
+    std::array<std::uint8_t, 20> raw{};
 };
 
 struct NsmbLevelView {
@@ -71,6 +72,19 @@ struct NsmbLevelZone {
     std::uint16_t width{};
     std::uint16_t height{};
     std::uint8_t number{};
+    std::array<std::uint8_t, 3> trailing{};
+};
+
+struct NsmbLevelPathNode {
+    std::uint16_t x{};
+    std::uint16_t y{};
+    std::array<std::uint16_t, 6> values{};
+};
+
+struct NsmbLevelPath {
+    std::uint16_t id{};
+    std::vector<NsmbLevelPathNode> nodes;
+    std::uint16_t unknown{};
 };
 
 struct NsmbLevelCourse {
@@ -83,6 +97,8 @@ struct NsmbLevelCourse {
     std::vector<NsmbLevelEntrance> entrances;
     std::vector<NsmbLevelView> views;
     std::vector<NsmbLevelZone> zones;
+    std::vector<NsmbLevelPath> paths;
+    std::vector<NsmbLevelPath> progress_paths;
 };
 
 core::Result<NsmbLevelCourse> parse_nsmb_level_course(std::span<const std::uint8_t> data);

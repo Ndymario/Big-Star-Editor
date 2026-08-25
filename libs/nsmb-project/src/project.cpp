@@ -41,6 +41,19 @@ void Project::add_game_file(GameFile file) {
     dirty_ = true;
 }
 
+void Project::update_game_file_size(const std::filesystem::path& path, std::uintmax_t size) {
+    if (!rom_) {
+        return;
+    }
+    for (auto& file : rom_->files) {
+        if (file.path == path) {
+            file.size = size;
+            dirty_ = true;
+            return;
+        }
+    }
+}
+
 void Project::clear_game_files() {
     if (rom_) {
         rom_->files.clear();

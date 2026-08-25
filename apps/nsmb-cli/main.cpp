@@ -14,7 +14,7 @@ namespace fs = std::filesystem;
 namespace {
 
 void usage() {
-    std::cout << "nsmb-cli 0.2.0\n"
+    std::cout << "nsmb-cli 0.4.0\n"
               << "Commands:\n"
               << "  --version\n"
               << "  inspect-rom <path>\n"
@@ -72,7 +72,7 @@ int main(int argc, char** argv) {
 
     const std::string command = argv[1];
     if (command == "--version") {
-        std::cout << "nsmb-cli 0.2.0\n";
+        std::cout << "nsmb-cli 0.4.0\n";
         return 0;
     }
 

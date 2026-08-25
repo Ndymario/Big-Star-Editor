@@ -1,5 +1,6 @@
 add_library(nsmb-core
   src/byte_buffer.cpp
+  src/command.cpp
   src/endian.cpp
 )
 add_library(nsmb::core ALIAS nsmb-core)

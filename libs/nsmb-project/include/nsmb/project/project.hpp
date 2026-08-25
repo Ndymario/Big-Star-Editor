@@ -86,6 +86,7 @@ public:
     [[nodiscard]] const std::optional<Rom>& rom() const noexcept;
 
     void add_game_file(GameFile file);
+    void update_game_file_size(const std::filesystem::path& path, std::uintmax_t size);
     void clear_game_files();
     [[nodiscard]] const std::vector<GameFile>& game_files() const noexcept;
 

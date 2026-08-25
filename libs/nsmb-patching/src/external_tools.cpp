@@ -13,6 +13,7 @@ namespace {
 
 std::string shell_quote(const std::filesystem::path& path) {
     std::string input = path.string();
+#ifdef _WIN32
     std::string quoted = "\"";
     for (char c : input) {
         if (c == '"') {
@@ -22,6 +23,17 @@ std::string shell_quote(const std::filesystem::path& path) {
         }
     }
     quoted.push_back('"');
+#else
+    std::string quoted = "'";
+    for (char c : input) {
+        if (c == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted.push_back(c);
+        }
+    }
+    quoted.push_back('\'');
+#endif
     return quoted;
 }
 

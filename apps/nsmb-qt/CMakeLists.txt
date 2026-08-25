@@ -3,6 +3,8 @@ add_executable(nsmb-qt
   src/main.cpp
   src/LevelPreviewWidget.cpp
   src/LevelPreviewWidget.hpp
+  src/LevelPropertiesWidget.cpp
+  src/LevelPropertiesWidget.hpp
   src/MainWindow.cpp
   src/MainWindow.hpp
   src/ProjectTreeModel.cpp
