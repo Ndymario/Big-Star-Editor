@@ -1,7 +1,13 @@
 #include "nsmb/project/manifest.hpp"
 
+#include "nsmb/core/file_io.hpp"
+
 #include <algorithm>
+#include <charconv>
+#include <cctype>
 #include <fstream>
+#include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -19,22 +25,54 @@ std::string trim(std::string value) {
     return value.substr(first, last - first + 1);
 }
 
-std::string unquote(std::string value) {
+core::Result<std::string> parse_scalar(std::string value) {
     value = trim(std::move(value));
-    if (value.size() >= 2 && value.front() == '"' && value.back() == '"') {
-        value = value.substr(1, value.size() - 2);
+    if (value.empty() || value.front() != '"') {
+        return value;
     }
-    return value;
+    if (value.size() < 2 || value.back() != '"') {
+        return core::make_error(core::ErrorCode::ParseError, "unterminated quoted manifest value");
+    }
+
+    std::string decoded;
+    decoded.reserve(value.size() - 2U);
+    for (std::size_t i = 1; i + 1U < value.size(); ++i) {
+        const auto c = value[i];
+        if (c == '"') {
+            return core::make_error(core::ErrorCode::ParseError, "unescaped quote in manifest value");
+        }
+        if (c != '\\') {
+            decoded.push_back(c);
+            continue;
+        }
+        if (++i + 1U >= value.size()) {
+            return core::make_error(core::ErrorCode::ParseError, "incomplete escape in manifest value");
+        }
+        switch (value[i]) {
+        case '\\': decoded.push_back('\\'); break;
+        case '"': decoded.push_back('"'); break;
+        case 'n': decoded.push_back('\n'); break;
+        case 'r': decoded.push_back('\r'); break;
+        case 't': decoded.push_back('\t'); break;
+        default:
+            return core::make_error(core::ErrorCode::ParseError, "unsupported escape in manifest value");
+        }
+    }
+    return decoded;
 }
 
 std::string yaml_scalar(std::string_view key, std::string_view value) {
     std::string escaped;
     escaped.reserve(value.size());
     for (char c : value) {
-        if (c == '"' || c == '\\') {
-            escaped.push_back('\\');
+        switch (c) {
+        case '"': escaped += "\\\""; break;
+        case '\\': escaped += "\\\\"; break;
+        case '\n': escaped += "\\n"; break;
+        case '\r': escaped += "\\r"; break;
+        case '\t': escaped += "\\t"; break;
+        default: escaped.push_back(c); break;
         }
-        escaped.push_back(c);
     }
     return std::string(key) + ": \"" + escaped + "\"\n";
 }
@@ -47,11 +85,49 @@ std::string path_to_manifest_string(const std::filesystem::path& path) {
     return path.lexically_normal().generic_string();
 }
 
+core::Result<std::filesystem::path> parse_manifest_path(std::string value, std::string_view field) {
+    auto scalar = parse_scalar(std::move(value));
+    if (!scalar) {
+        return scalar.error();
+    }
+    const auto& text = scalar.value();
+    const auto has_drive_prefix = text.size() >= 2U && std::isalpha(static_cast<unsigned char>(text[0])) && text[1] == ':';
+    auto path = std::filesystem::path(text).lexically_normal();
+    if (path.empty() || path == "." || path.is_absolute() || has_drive_prefix || text.find('\\') != std::string::npos ||
+        contains_parent_reference(path)) {
+        return core::make_error(core::ErrorCode::ParseError, std::string(field) + " must be a project-relative path");
+    }
+    return path;
+}
+
+bool path_starts_with(const std::filesystem::path& path, const std::filesystem::path& prefix) {
+    auto path_part = path.begin();
+    for (auto prefix_part = prefix.begin(); prefix_part != prefix.end(); ++prefix_part, ++path_part) {
+        if (path_part == path.end() || *path_part != *prefix_part) {
+            return false;
+        }
+    }
+    return true;
+}
+
+core::Result<std::uintmax_t> parse_size(std::string value) {
+    value = trim(std::move(value));
+    std::uintmax_t parsed{};
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), parsed);
+    if (error != std::errc{} || end != value.data() + value.size()) {
+        return core::make_error(core::ErrorCode::ParseError, "manifest file size is not a valid integer");
+    }
+    return parsed;
+}
+
 } // namespace
 
 core::Result<std::filesystem::path> make_project_relative(const std::filesystem::path& project_dir,
                                                           const std::filesystem::path& path) {
     auto normalized = path.lexically_normal();
+    if (normalized.empty() || normalized == ".") {
+        return core::make_error(core::ErrorCode::InvalidArgument, "project manifest paths cannot be empty");
+    }
     if (!normalized.is_absolute()) {
         if (contains_parent_reference(normalized)) {
             return core::make_error(core::ErrorCode::InvalidArgument, "project manifest paths must stay inside the project directory");
@@ -69,16 +145,7 @@ core::Result<std::filesystem::path> make_project_relative(const std::filesystem:
 
 core::Result<void> save_manifest(const Project& project, const std::filesystem::path& path) {
     const auto project_dir = path.parent_path();
-    std::error_code ec;
-    std::filesystem::create_directories(project_dir, ec);
-    if (ec) {
-        return core::make_error(core::ErrorCode::IoError, "could not create project directory");
-    }
-
-    std::ofstream out(path);
-    if (!out) {
-        return core::make_error(core::ErrorCode::IoError, "could not open project manifest for writing");
-    }
+    std::ostringstream out;
 
     out << "format: big-star-editor-project\n";
     out << "version: 1\n";
@@ -90,10 +157,10 @@ core::Result<void> save_manifest(const Project& project, const std::filesystem::
             return extracted_path.error();
         }
         out << "rom:\n";
-        out << "  extracted_path: \"" << path_to_manifest_string(extracted_path.value()) << "\"\n";
+        out << "  " << yaml_scalar("extracted_path", path_to_manifest_string(extracted_path.value()));
         if (project.rom()->header) {
-            out << "  game_title: \"" << project.rom()->header->game_title << "\"\n";
-            out << "  game_code: \"" << project.rom()->header->game_code << "\"\n";
+            out << "  " << yaml_scalar("game_title", project.rom()->header->game_title);
+            out << "  " << yaml_scalar("game_code", project.rom()->header->game_code);
         }
         out << "files:\n";
         for (const auto& file : project.game_files()) {
@@ -101,12 +168,15 @@ core::Result<void> save_manifest(const Project& project, const std::filesystem::
             if (!relative) {
                 return relative.error();
             }
-            out << "  - path: \"" << path_to_manifest_string(relative.value()) << "\"\n";
+            if (!path_starts_with(relative.value(), extracted_path.value())) {
+                return core::make_error(core::ErrorCode::InvalidArgument, "project file path is outside rom.extracted_path");
+            }
+            out << "  - " << yaml_scalar("path", path_to_manifest_string(relative.value()));
             out << "    size: " << file.size << "\n";
         }
     }
 
-    return {};
+    return core::write_text_file_atomically(path, out.str());
 }
 
 core::Result<Project> load_manifest(const std::filesystem::path& path) {
@@ -119,19 +189,30 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     project.set_directory(path.parent_path());
 
     bool saw_format = false;
+    bool saw_version = false;
+    bool saw_name = false;
     bool in_rom = false;
     bool in_files = false;
     std::optional<nds::RomHeader> header;
     std::filesystem::path extracted_path;
-    std::optional<GameFile> pending_file;
+    struct PendingFile {
+        std::filesystem::path path;
+        std::optional<std::uintmax_t> size;
+    };
+    std::optional<PendingFile> pending_file;
     std::vector<GameFile> files;
     std::string line;
 
-    auto flush_pending_file = [&files, &pending_file]() {
-        if (pending_file) {
-            files.push_back(*pending_file);
-            pending_file.reset();
+    auto flush_pending_file = [&files, &pending_file]() -> core::Result<void> {
+        if (!pending_file) {
+            return {};
         }
+        if (pending_file->path.empty() || !pending_file->size) {
+            return core::make_error(core::ErrorCode::ParseError, "manifest file entry needs both path and size");
+        }
+        files.push_back({pending_file->path, pending_file->size.value()});
+        pending_file.reset();
+        return {};
     };
 
     while (std::getline(in, line)) {
@@ -143,8 +224,21 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
             saw_format = true;
             in_rom = false;
             in_files = false;
+        } else if (stripped.rfind("version:", 0) == 0) {
+            auto version = parse_size(stripped.substr(8));
+            if (!version || version.value() != 1U) {
+                return core::make_error(core::ErrorCode::ParseError, "unsupported project manifest version");
+            }
+            saw_version = true;
+            in_rom = false;
+            in_files = false;
         } else if (stripped.rfind("name:", 0) == 0) {
-            project.set_name(unquote(stripped.substr(5)));
+            auto name = parse_scalar(stripped.substr(5));
+            if (!name) {
+                return name.error();
+            }
+            project.set_name(std::move(name.value()));
+            saw_name = true;
             in_rom = false;
             in_files = false;
         } else if (stripped == "rom:") {
@@ -154,29 +248,72 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
             in_rom = false;
             in_files = true;
         } else if (in_rom && stripped.rfind("extracted_path:", 0) == 0) {
-            extracted_path = unquote(stripped.substr(15));
+            auto parsed = parse_manifest_path(stripped.substr(15), "rom.extracted_path");
+            if (!parsed) {
+                return parsed.error();
+            }
+            extracted_path = std::move(parsed.value());
         } else if (in_rom && stripped.rfind("game_title:", 0) == 0) {
             if (!header) {
                 header = nds::RomHeader{};
             }
-            header->game_title = unquote(stripped.substr(11));
+            auto title = parse_scalar(stripped.substr(11));
+            if (!title) {
+                return title.error();
+            }
+            header->game_title = std::move(title.value());
         } else if (in_rom && stripped.rfind("game_code:", 0) == 0) {
             if (!header) {
                 header = nds::RomHeader{};
             }
-            header->game_code = unquote(stripped.substr(10));
+            auto code = parse_scalar(stripped.substr(10));
+            if (!code) {
+                return code.error();
+            }
+            header->game_code = std::move(code.value());
         } else if (in_files && stripped.rfind("- path:", 0) == 0) {
-            flush_pending_file();
-            pending_file = GameFile{};
-            pending_file->path = unquote(stripped.substr(7));
+            auto flushed = flush_pending_file();
+            if (!flushed) {
+                return flushed.error();
+            }
+            auto parsed = parse_manifest_path(stripped.substr(7), "files.path");
+            if (!parsed) {
+                return parsed.error();
+            }
+            pending_file = PendingFile{std::move(parsed.value()), std::nullopt};
         } else if (in_files && stripped.rfind("size:", 0) == 0 && pending_file) {
-            pending_file->size = static_cast<std::uintmax_t>(std::stoull(trim(stripped.substr(5))));
+            auto size = parse_size(stripped.substr(5));
+            if (!size) {
+                return size.error();
+            }
+            pending_file->size = size.value();
         }
     }
-    flush_pending_file();
+    auto flushed = flush_pending_file();
+    if (!flushed) {
+        return flushed.error();
+    }
 
     if (!saw_format) {
         return core::make_error(core::ErrorCode::ParseError, "manifest format marker is missing");
+    }
+    if (!saw_version) {
+        return core::make_error(core::ErrorCode::ParseError, "manifest version is missing");
+    }
+    if (!saw_name || project.name().empty()) {
+        return core::make_error(core::ErrorCode::ParseError, "project name is missing");
+    }
+    if (!files.empty() && extracted_path.empty()) {
+        return core::make_error(core::ErrorCode::ParseError, "manifest files require rom.extracted_path");
+    }
+    std::set<std::filesystem::path> unique_paths;
+    if (std::any_of(files.begin(), files.end(), [&](const auto& file) { return !unique_paths.insert(file.path).second; })) {
+        return core::make_error(core::ErrorCode::ParseError, "manifest contains a duplicate file path");
+    }
+    if (!extracted_path.empty() && std::any_of(files.begin(), files.end(), [&](const auto& file) {
+            return !path_starts_with(file.path, extracted_path);
+        })) {
+        return core::make_error(core::ErrorCode::ParseError, "manifest file path is outside rom.extracted_path");
     }
     if (!extracted_path.empty()) {
         project.attach_extracted_rom(extracted_path, header);
@@ -186,6 +323,66 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     }
     project.mark_clean();
     return project;
+}
+
+core::Result<void> index_project_files(Project& project, const std::filesystem::path& extracted_dir) {
+    if (project.directory().empty()) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "project directory is required before indexing files");
+    }
+    if (!project.rom() || project.rom()->extracted_path.empty()) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "project needs an extracted ROM before indexing files");
+    }
+    auto relative_root = make_project_relative(project.directory(), extracted_dir);
+    if (!relative_root) {
+        return relative_root.error();
+    }
+    auto configured_root = make_project_relative(project.directory(), project.rom()->extracted_path);
+    if (!configured_root) {
+        return configured_root.error();
+    }
+    if (relative_root.value() != configured_root.value()) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "indexed directory does not match rom.extracted_path");
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(extracted_dir, ec)) {
+        return core::make_error(core::ErrorCode::NotFound, "extracted ROM directory does not exist");
+    }
+
+    std::vector<GameFile> files;
+    std::filesystem::recursive_directory_iterator current(extracted_dir, ec);
+    const std::filesystem::recursive_directory_iterator end;
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not read extracted ROM directory");
+    }
+    while (current != end) {
+        const auto regular = current->is_regular_file(ec);
+        if (ec) {
+            return core::make_error(core::ErrorCode::IoError, "could not inspect " + current->path().string());
+        }
+        if (regular) {
+            auto relative = make_project_relative(project.directory(), current->path());
+            if (!relative) {
+                return relative.error();
+            }
+            const auto size = current->file_size(ec);
+            if (ec) {
+                return core::make_error(core::ErrorCode::IoError, "could not read file size for " + current->path().string());
+            }
+            files.push_back({std::move(relative.value()), size});
+        }
+        current.increment(ec);
+        if (ec) {
+            return core::make_error(core::ErrorCode::IoError, "could not continue reading extracted ROM directory");
+        }
+    }
+    std::sort(files.begin(), files.end(), [](const auto& lhs, const auto& rhs) {
+        return lhs.path.generic_string() < rhs.path.generic_string();
+    });
+    project.clear_game_files();
+    for (auto& file : files) {
+        project.add_game_file(std::move(file));
+    }
+    return {};
 }
 
 } // namespace nsmb::project

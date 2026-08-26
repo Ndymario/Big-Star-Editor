@@ -8,9 +8,9 @@ The frontend lives under `apps/`. Qt-specific models and widgets are allowed onl
 
 ## Module boundaries
 
-- `nsmb-core`: common infrastructure: `Result<T>`, `Error`, `ByteBuffer`, little-endian reader/writer, logging, and undo/redo command interfaces.
+- `nsmb-core`: common infrastructure: `Result<T>`, `Error`, `ByteBuffer`, little-endian reader/writer, atomic file I/O, logging, and undo/redo command interfaces.
 - `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, extracted ROM roots, file-tree nodes, and extraction/build services.
-- `nsmb-formats`: NSMB/NDS format detection and future parsers. M0 deliberately includes only conservative identification stubs.
+- `nsmb-formats`: defensive NSMB level and Nitro graphics identification, parsing, and serialization helpers.
 - `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, editable level sessions, and backend command history.
 - `nsmb-patching`: external process boundary for NCPatcher.
 
@@ -22,7 +22,7 @@ Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementa
 
 M0-M4 provides CMake configuration, backend libraries, a CLI, an optional Qt editor, YAML project manifest round-trip, file-tree scanning, NDS header parsing, built-in ROM extraction/build, level and graphics parsing, entity editing, safe persistence, and unit tests. The Qt UI adapts backend-owned editing sessions and command histories; switching views does not discard an edited session.
 
-Course/BGDat saves preserve untouched block bytes, rebuild the structures the editor owns, validate the serialized result by parsing it again, back up both original files, and atomically replace each target. ROM builds consume that saved extracted tree through `NitroRomService`.
+Course/BGDat saves preserve untouched block bytes, rebuild the structures the editor owns, validate the serialized result by parsing it again, back up both original files, and atomically replace each target. Manifest and ROM writes use the same failure-safe replacement policy. ROM builds consume the manifest's configured extracted tree through `NitroRomService` and refuse output paths inside that input tree.
 
 ## Async frontend design
 

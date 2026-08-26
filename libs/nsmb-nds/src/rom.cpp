@@ -1,12 +1,13 @@
 #include "nsmb/nds/rom.hpp"
 
 #include "nsmb/core/endian.hpp"
+#include "nsmb/core/file_io.hpp"
 
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
 #include <iomanip>
-#include <iterator>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <system_error>
@@ -105,11 +106,7 @@ void put_u32(std::vector<std::uint8_t>& data, std::size_t offset, std::uint32_t 
 }
 
 core::Result<std::vector<std::uint8_t>> read_file(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return core::make_error(core::ErrorCode::IoError, "could not open " + path.string());
-    }
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
+    return core::read_file(path);
 }
 
 core::Result<std::vector<std::uint8_t>> read_optional_file(const fs::path& path) {
@@ -121,6 +118,9 @@ core::Result<std::vector<std::uint8_t>> read_optional_file(const fs::path& path)
 }
 
 core::Result<void> write_file(const fs::path& path, std::span<const std::uint8_t> data) {
+    if (data.size() > static_cast<std::size_t>(std::numeric_limits<std::streamsize>::max())) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "file is too large to write");
+    }
     std::error_code ec;
     const auto parent = path.parent_path();
     if (!parent.empty()) {
@@ -136,6 +136,10 @@ core::Result<void> write_file(const fs::path& path, std::span<const std::uint8_t
     }
     if (!data.empty()) {
         out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+    }
+    out.flush();
+    if (!out) {
+        return core::make_error(core::ErrorCode::IoError, "could not finish writing " + path.string());
     }
     return {};
 }
@@ -216,6 +220,16 @@ std::size_t infer_banner_size(std::span<const std::uint8_t> rom, const RomHeader
 
 bool invalid_rom_name(const std::string& name) {
     return name.empty() || name.find('/') != std::string::npos || name.find('\\') != std::string::npos;
+}
+
+bool path_starts_with(const fs::path& path, const fs::path& prefix) {
+    auto path_part = path.begin();
+    for (auto prefix_part = prefix.begin(); prefix_part != prefix.end(); ++prefix_part, ++path_part) {
+        if (path_part == path.end() || *path_part != *prefix_part) {
+            return false;
+        }
+    }
+    return true;
 }
 
 core::Result<std::vector<FntDirectoryEntry>> parse_fnt_directory_table(std::span<const std::uint8_t> data) {
@@ -678,6 +692,18 @@ core::Result<ExtractedRom> NitroRomService::extract(const fs::path& rom, const f
     if (rom.empty() || output_dir.empty()) {
         return core::make_error(core::ErrorCode::InvalidArgument, "ROM input and extraction output paths are required");
     }
+    std::error_code ec;
+    if (fs::exists(output_dir, ec)) {
+        if (!fs::is_directory(output_dir, ec)) {
+            return core::make_error(core::ErrorCode::InvalidArgument, "ROM extraction output must be a directory");
+        }
+        if (!fs::is_empty(output_dir, ec)) {
+            return core::make_error(core::ErrorCode::InvalidArgument, "ROM extraction output directory must be empty");
+        }
+    }
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not inspect ROM extraction output directory");
+    }
 
     auto rom_data = read_file(rom);
     if (!rom_data) {
@@ -845,6 +871,17 @@ core::Result<void> NitroRomService::build(const fs::path& extracted_dir, const f
     std::error_code ec;
     if (!fs::is_directory(extracted_dir, ec)) {
         return core::make_error(core::ErrorCode::NotFound, "extracted ROM directory does not exist");
+    }
+    const auto canonical_input = fs::weakly_canonical(extracted_dir, ec);
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not resolve extracted ROM directory");
+    }
+    const auto canonical_output = fs::weakly_canonical(output_rom, ec);
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not resolve ROM output path");
+    }
+    if (path_starts_with(canonical_output, canonical_input)) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "ROM output must be outside the extracted ROM directory");
     }
 
     auto header_bytes = read_file(extracted_dir / "header.bin");
@@ -1073,22 +1110,39 @@ core::Result<void> NitroRomService::build(const fs::path& extracted_dir, const f
     if (!header_written) return header_written.error();
 
     std::copy(header_bytes.value().begin(), header_bytes.value().end(), output.begin());
-    return write_file(output_rom, output);
+    return core::write_file_atomically(output_rom, output);
 }
 
 core::Result<FileTreeNode> scan_file_tree(const std::filesystem::path& root) {
     std::error_code ec;
-    if (!std::filesystem::exists(root, ec)) {
+    const auto exists = std::filesystem::exists(root, ec);
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not inspect file tree root");
+    }
+    if (!exists) {
         return core::make_error(core::ErrorCode::NotFound, "file tree root does not exist");
     }
-    FileTreeNode node{root.filename().string(), root, std::filesystem::is_directory(root, ec), {}};
+    const auto directory = std::filesystem::is_directory(root, ec);
+    if (ec) {
+        return core::make_error(core::ErrorCode::IoError, "could not inspect " + root.string());
+    }
+    FileTreeNode node{root.filename().string(), root, directory, {}};
     if (node.directory) {
-        for (const auto& entry : std::filesystem::directory_iterator(root, ec)) {
-            auto child = scan_file_tree(entry.path());
+        std::filesystem::directory_iterator current(root, ec);
+        const std::filesystem::directory_iterator end;
+        if (ec) {
+            return core::make_error(core::ErrorCode::IoError, "could not read " + root.string());
+        }
+        while (current != end) {
+            auto child = scan_file_tree(current->path());
             if (!child) {
                 return child.error();
             }
             node.children.push_back(child.value());
+            current.increment(ec);
+            if (ec) {
+                return core::make_error(core::ErrorCode::IoError, "could not continue reading " + root.string());
+            }
         }
         std::sort(node.children.begin(), node.children.end(), [](const auto& a, const auto& b) { return a.name < b.name; });
     }

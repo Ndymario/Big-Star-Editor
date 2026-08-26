@@ -4,9 +4,9 @@ Big Star Editor is a modern, portable C++ rewrite/rearchitecture of the New Supe
 
 ## Architecture at a glance
 
-- `libs/nsmb-core`: result/error types, byte buffers, endian utilities, logging and command interfaces.
+- `libs/nsmb-core`: result/error types, byte buffers, endian utilities, atomic file I/O, logging, and command interfaces.
 - `libs/nsmb-nds`: GBATEK-backed Nintendo DS ROM/header/FNT/FAT/overlay structures plus built-in extraction/build services.
-- `libs/nsmb-formats`: defensive format-identification and initial Nitro graphics helpers for future NSMB/NDS parsers.
+- `libs/nsmb-formats`: defensive NSMB level and Nitro graphics parsing helpers.
 - `libs/nsmb-project`: frontend-agnostic project model, manifest load/save, editable level sessions, and undo/redo commands.
 - `libs/nsmb-patching`: narrow service wrapper for NCPatcher.
 - `apps/nsmb-cli`: minimal CLI for inspection and service command construction.
@@ -78,6 +78,6 @@ ctest --test-dir build --output-on-failure
 ./build/apps/nsmb-cli/nsmb-cli build-rom my-project output.nds
 ```
 
-`import-rom` uses the built-in DS ROM service to extract ARM binaries, overlay tables, FNT/FAT data, banner data, and the NitroFS tree, then writes `big-star-project.yaml` with project-relative paths. `build-rom` rebuilds a ROM from the extracted project tree through the same backend service.
+`import-rom` uses the built-in DS ROM service to extract ARM binaries, overlay tables, FNT/FAT data, banner data, and the NitroFS tree, then atomically writes `big-star-project.yaml` with validated project-relative paths. It refuses to overwrite an existing project or a nonempty extraction directory. `build-rom` rebuilds a ROM from the extracted path recorded in that manifest and atomically replaces the chosen output.
 
-The Qt editor can create and open projects, import `.nds` files, edit objects, sprites, entrances, zones, paths, progress paths, and tileset references, run NCPatcher, and build a new ROM. Save validates edited course/BGDat data before atomically replacing files and preserves the originals under the project's `.big-star-backups` directory.
+The Qt editor can create and open projects, import `.nds` files, edit objects, sprites, entrances, zones, paths, progress paths, and tileset references, run NCPatcher, and build a new ROM. The level canvas is currently an accurate schematic of parsed entity placement, not a rendered in-game tileset view. Save validates edited course/BGDat data before atomically replacing files and preserves the originals under the project's `.big-star-backups` directory.

@@ -1,44 +1,14 @@
 #include "LevelPreviewWidget.hpp"
 
-#include "nsmb/core/result.hpp"
-#include "nsmb/formats/graphics.hpp"
-
 #include <QFontMetrics>
 #include <QPainter>
 #include <QPaintEvent>
 
 #include <algorithm>
 #include <cmath>
-#include <filesystem>
-#include <fstream>
-#include <iterator>
-#include <string>
-#include <unordered_map>
 #include <utility>
 
 namespace {
-
-namespace fs = std::filesystem;
-
-nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFile(const fs::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not open " + path.string());
-    }
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
-}
-
-fs::path absoluteProjectPath(const nsmb::project::Project& project, const QString& path_text) {
-    if (path_text.isEmpty()) {
-        return {};
-    }
-
-    auto path = fs::path(path_text.toStdString());
-    if (path.is_absolute() || project.directory().empty()) {
-        return path;
-    }
-    return project.directory() / path;
-}
 
 QString elided(const QFontMetrics& metrics, const QString& text, int width) {
     return metrics.elidedText(text, Qt::ElideMiddle, std::max(0, width));
@@ -255,146 +225,6 @@ void drawMap(QPainter& painter, const QRectF& target, const LevelPreviewWidget::
     painter.restore();
 }
 
-std::string paletteNameForCharacterName(std::string name) {
-    const auto ncg = name.find("_ncg");
-    if (ncg != std::string::npos) {
-        name.replace(ncg, 4, "_ncl");
-        return name;
-    }
-    const auto ncgr = name.find(".ncgr");
-    if (ncgr != std::string::npos) {
-        name.replace(ncgr, 5, ".nclr");
-        return name;
-    }
-    return {};
-}
-
-QImage renderTileSheet(std::span<const nsmb::formats::IndexedTile4Bpp> tiles, std::span<const nsmb::formats::Bgr555Color> palette) {
-    constexpr int tile_size = 8;
-    constexpr int columns = 16;
-    const auto tile_count = static_cast<int>(std::min<std::size_t>(tiles.size(), 128U));
-    if (tile_count == 0 || palette.empty()) {
-        return {};
-    }
-
-    const auto rows = (tile_count + columns - 1) / columns;
-    QImage image(columns * tile_size, rows * tile_size, QImage::Format_ARGB32);
-    image.fill(QColor(224, 229, 236));
-
-    for (int tile_index = 0; tile_index < tile_count; ++tile_index) {
-        const auto tile_x = (tile_index % columns) * tile_size;
-        const auto tile_y = (tile_index / columns) * tile_size;
-        const auto& tile = tiles[static_cast<std::size_t>(tile_index)];
-        for (int y = 0; y < tile_size; ++y) {
-            for (int x = 0; x < tile_size; ++x) {
-                const auto palette_index = tile.pixels[static_cast<std::size_t>(y * tile_size + x)];
-                if (palette_index >= palette.size()) {
-                    continue;
-                }
-                const auto& color = palette[palette_index];
-                image.setPixelColor(tile_x + x,
-                                    tile_y + y,
-                                    QColor(color.red, color.green, color.blue, color.transparent ? 0 : 255));
-            }
-        }
-    }
-    return image;
-}
-
-std::optional<LevelPreviewWidget::GraphicsSample> findGraphicsSample(const nsmb::project::Project& project) {
-    std::unordered_map<std::string, const nsmb::project::GameFile*> files_by_name;
-    std::vector<const nsmb::project::GameFile*> character_files;
-    std::vector<const nsmb::project::GameFile*> palette_files;
-
-    for (const auto& file : project.game_files()) {
-        files_by_name.emplace(file.path.filename().string(), &file);
-        const auto hint = file.path.generic_string();
-        const auto kind = nsmb::formats::identify_graphics_format({}, hint);
-        if (kind == nsmb::formats::GraphicsFormatKind::RawCharacterGraphicsCandidate) {
-            character_files.push_back(&file);
-        } else if (kind == nsmb::formats::GraphicsFormatKind::RawPaletteCandidate) {
-            palette_files.push_back(&file);
-        }
-    }
-
-    std::sort(character_files.begin(), character_files.end(), [](const auto* lhs, const auto* rhs) {
-        return lhs->path.generic_string() < rhs->path.generic_string();
-    });
-    std::sort(palette_files.begin(), palette_files.end(), [](const auto* lhs, const auto* rhs) {
-        return lhs->path.generic_string() < rhs->path.generic_string();
-    });
-
-    auto decode = [&](const nsmb::project::GameFile& character_file,
-                      const nsmb::project::GameFile& palette_file) -> std::optional<LevelPreviewWidget::GraphicsSample> {
-        auto character_data = readBinaryFile(absoluteProjectPath(project, QString::fromStdString(character_file.path.generic_string())));
-        auto palette_data = readBinaryFile(absoluteProjectPath(project, QString::fromStdString(palette_file.path.generic_string())));
-        if (!character_data || !palette_data) {
-            return std::nullopt;
-        }
-        auto tiles = nsmb::formats::decode_4bpp_tiles(character_data.value());
-        auto palette = nsmb::formats::decode_bgr555_palette(palette_data.value());
-        if (!tiles || !palette || tiles.value().empty() || palette.value().empty()) {
-            return std::nullopt;
-        }
-
-        auto image = renderTileSheet(tiles.value(), palette.value());
-        if (image.isNull()) {
-            return std::nullopt;
-        }
-
-        return LevelPreviewWidget::GraphicsSample{
-            QString::fromStdString(character_file.path.generic_string()),
-            QString::fromStdString(palette_file.path.generic_string()),
-            image,
-        };
-    };
-
-    for (const auto* character_file : character_files) {
-        const auto palette_name = paletteNameForCharacterName(character_file->path.filename().string());
-        if (palette_name.empty()) {
-            continue;
-        }
-        if (const auto found = files_by_name.find(palette_name); found != files_by_name.end()) {
-            if (auto sample = decode(*character_file, *found->second)) {
-                return sample;
-            }
-        }
-    }
-
-    if (!character_files.empty() && !palette_files.empty()) {
-        return decode(*character_files.front(), *palette_files.front());
-    }
-    return std::nullopt;
-}
-
-void drawGraphicsSample(QPainter& painter, const QRectF& target, const LevelPreviewWidget::GraphicsSample& sample) {
-    painter.save();
-    painter.setPen(QPen(QColor(190, 198, 208)));
-    painter.setBrush(QColor(248, 250, 252));
-    painter.drawRect(target);
-
-    auto font = painter.font();
-    font.setBold(true);
-    painter.setFont(font);
-    painter.setPen(QColor(42, 49, 60));
-    painter.drawText(target.adjusted(12, 8, -12, -8), Qt::AlignLeft | Qt::AlignTop, "Graphics sample");
-
-    font.setBold(false);
-    painter.setFont(font);
-    const QFontMetrics metrics(font);
-    const auto text_rect = target.adjusted(12, 30, -12, -8);
-    painter.setPen(QColor(77, 86, 101));
-    painter.drawText(text_rect,
-                     Qt::AlignLeft | Qt::AlignTop,
-                     elided(metrics, sample.character_path, static_cast<int>(text_rect.width())) + "\n" +
-                         elided(metrics, sample.palette_path, static_cast<int>(text_rect.width())));
-
-    const auto image_rect = target.adjusted(target.width() * 0.52, 10, -12, -10);
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
-    painter.drawImage(image_rect, sample.image);
-    painter.restore();
-}
-
 } // namespace
 
 LevelPreviewWidget::LevelPreviewWidget(QWidget* parent) : QWidget(parent) {
@@ -416,8 +246,7 @@ void LevelPreviewWidget::showProjectSummary(const nsmb::project::Project& projec
     update();
 }
 
-void LevelPreviewWidget::showLevel(const nsmb::project::Project& project,
-                                   const QString& level_name,
+void LevelPreviewWidget::showLevel(const QString& level_name,
                                    const QString& world,
                                    const QString& area_name,
                                    const QString& course_path,
@@ -441,7 +270,6 @@ void LevelPreviewWidget::showLevel(const nsmb::project::Project& project,
         bgdat_path,
         source_token,
         level,
-        findGraphicsSample(project),
         0,
         0,
         0,
@@ -489,15 +317,9 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                      Qt::AlignLeft | Qt::AlignVCenter,
                      elided(body_metrics, formatIdsText(scene_->level->course()), static_cast<int>(outer.width())));
 
-    const auto graphics_height = scene_->graphics ? std::min(160.0, outer.height() * 0.28) : 0.0;
-    const QRectF map_rect(outer.left(), outer.top() + 112.0, outer.width(), outer.height() - 112.0 - graphics_height - (graphics_height > 0 ? 14.0 : 0.0));
+    const QRectF map_rect(outer.left(), outer.top() + 112.0, outer.width(), outer.height() - 112.0);
     if (map_rect.height() > 20.0) {
         drawMap(painter, map_rect, *scene_);
-    }
-
-    if (scene_->graphics) {
-        const QRectF graphics_rect(outer.left(), outer.bottom() - graphics_height, outer.width(), graphics_height);
-        drawGraphicsSample(painter, graphics_rect, scene_->graphics.value());
     }
 }
 

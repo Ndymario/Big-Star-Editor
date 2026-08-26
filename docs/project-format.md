@@ -17,4 +17,6 @@ files:
     size: 1234
 ```
 
-M0/M1 uses a deliberately small YAML subset written by the backend without adding a third-party YAML dependency. If future project metadata becomes richer, add a documented dependency decision before replacing the parser.
+The backend owns a deliberately small YAML subset without a third-party YAML dependency. `format`, `version: 1`, and a nonempty `name` are required. Quoted strings support `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
+
+`rom.extracted_path` and every indexed file path must remain inside the project directory. Absolute paths, parent traversal, Windows drive prefixes, backslashes, duplicate file entries, invalid sizes, and files outside the configured extracted-ROM root are rejected. Manifest writes use an adjacent temporary file followed by atomic replacement, so a failed write does not leave a partially written manifest.

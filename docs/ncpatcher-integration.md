@@ -1,10 +1,10 @@
 # NCPatcher integration
 
-## Current M0 approach
+## Current M4 approach
 
-`nsmb-patching` exposes a `PatcherService` interface and an `NCPatcherExternalTool` implementation. The implementation validates a project directory, creates a minimal `ncpatcher.json` when missing, constructs a command, and can run the external executable in a controlled working directory.
+`nsmb-patching` exposes a `PatcherService` interface and an `NCPatcherExternalTool` implementation. The implementation validates a project directory, creates a minimal `ncpatcher.json` when missing, safely quotes arguments, and runs the external executable in a controlled working directory. The CLI and Qt File menu both use this boundary.
 
-ROM extraction and building are represented by `RomExtractionService`, `RomBuildService`, and the built-in `NitroRomService` implementation in `nsmb-nds`. `import-rom` extracts the ROM directly, writes project-relative YAML metadata, and leaves rebuilds to the backend ROM service.
+ROM extraction and building are represented by `RomExtractionService`, `RomBuildService`, and the built-in `NitroRomService` implementation in `nsmb-nds`. `import-rom` extracts the ROM directly and writes project-relative YAML metadata. After a successful patcher run, the Qt editor reindexes the extracted tree, atomically refreshes the manifest, and clears cached level sessions before the next edit or build.
 
 ## Current constraints observed in references
 
@@ -13,7 +13,7 @@ ROM extraction and building are represented by `RomExtractionService`, `RomBuild
 - The existing editor integration creates a `__tmp` filesystem directory, runs the patcher from the ROM/project directory, and imports changed binaries/overlays back into the editor.
 - Standalone workflows require extract -> patch -> build sequencing.
 
-## Recommended NCPatcher improvements
+## M5 NCPatcher improvements
 
 - Stable CLI flags for config, filesystem input, output/build directory, backup directory, and target files.
 - Explicit input/output paths instead of current-working-directory assumptions.

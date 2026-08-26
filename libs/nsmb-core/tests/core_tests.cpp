@@ -1,7 +1,10 @@
 #include "nsmb/core/byte_buffer.hpp"
 #include "nsmb/core/command.hpp"
 #include "nsmb/core/endian.hpp"
+#include "nsmb/core/file_io.hpp"
+#include <array>
 #include <cassert>
+#include <filesystem>
 #include <memory>
 #include <vector>
 
@@ -58,5 +61,15 @@ int main() {
     assert(history.undo());
     assert(history.execute(std::make_unique<SetValueCommand>(value, 3)));
     assert(value == 3 && !history.can_redo() && history.dirty());
+
+    const auto output = std::filesystem::temp_directory_path() / "big-star-core-atomic-test.bin";
+    assert(write_file_atomically(output, std::array<std::uint8_t, 3>{1, 2, 3}));
+    assert(write_file_atomically(output, std::array<std::uint8_t, 2>{4, 5}));
+    const auto saved = read_file(output);
+    assert(saved && (saved.value() == std::vector<std::uint8_t>{4, 5}));
+    const auto prefix = read_file_prefix(output, 1);
+    assert(prefix && (prefix.value() == std::vector<std::uint8_t>{4}));
+    assert(!std::filesystem::exists(output.string() + ".bse-tmp"));
+    std::filesystem::remove(output);
     return 0;
 }

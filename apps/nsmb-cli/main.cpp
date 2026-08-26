@@ -1,55 +1,24 @@
 #include "nsmb/formats/graphics.hpp"
+#include "nsmb/core/file_io.hpp"
 #include "nsmb/nds/rom.hpp"
 #include "nsmb/patching/external_tools.hpp"
 #include "nsmb/project/manifest.hpp"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
-#include <iterator>
-#include <vector>
 
 namespace fs = std::filesystem;
 
 namespace {
 
 void usage() {
-    std::cout << "nsmb-cli 0.4.0\n"
+    std::cout << "nsmb-cli " BSE_VERSION "\n"
               << "Commands:\n"
               << "  --version\n"
               << "  inspect-rom <path>\n"
               << "  import-rom <rom> <project-dir>\n"
               << "  run-patcher <project-dir>\n"
               << "  build-rom <project-dir> <output-rom>\n";
-}
-
-nsmb::core::Result<std::vector<std::uint8_t>> read_file_prefix(const fs::path& path, std::size_t max_size) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not open file");
-    }
-
-    std::vector<std::uint8_t> data(max_size);
-    in.read(reinterpret_cast<char*>(data.data()), static_cast<std::streamsize>(data.size()));
-    data.resize(static_cast<std::size_t>(in.gcount()));
-    return data;
-}
-
-void collect_files(nsmb::project::Project& project, const fs::path& project_dir, const fs::path& extracted_dir) {
-    std::error_code ec;
-    for (const auto& entry : fs::recursive_directory_iterator(extracted_dir, ec)) {
-        if (ec) {
-            break;
-        }
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        auto relative = nsmb::project::make_project_relative(project_dir, entry.path());
-        if (!relative) {
-            continue;
-        }
-        project.add_game_file({relative.value(), entry.file_size(ec)});
-    }
 }
 
 std::size_t count_graphics_candidates(const nsmb::project::Project& project) {
@@ -72,12 +41,12 @@ int main(int argc, char** argv) {
 
     const std::string command = argv[1];
     if (command == "--version") {
-        std::cout << "nsmb-cli 0.4.0\n";
+        std::cout << "nsmb-cli " BSE_VERSION "\n";
         return 0;
     }
 
     if (command == "inspect-rom" && argc == 3) {
-        auto data = read_file_prefix(argv[2], 0x4000);
+        auto data = nsmb::core::read_file_prefix(argv[2], 0x4000);
         if (!data) {
             std::cerr << data.error().message << '\n';
             return 2;
@@ -102,8 +71,17 @@ int main(int argc, char** argv) {
             std::cerr << "Could not create project directory: " << ec.message() << '\n';
             return 4;
         }
+        const auto manifest_exists = fs::exists(project_dir / nsmb::project::manifest_file_name, ec);
+        if (ec) {
+            std::cerr << "Could not inspect project directory: " << ec.message() << '\n';
+            return 4;
+        }
+        if (manifest_exists) {
+            std::cerr << "Project already exists: " << (project_dir / nsmb::project::manifest_file_name) << '\n';
+            return 4;
+        }
 
-        auto data = read_file_prefix(rom_path, 0x4000);
+        auto data = nsmb::core::read_file_prefix(rom_path, 0x4000);
         if (!data) {
             std::cerr << data.error().message << '\n';
             return 5;
@@ -121,9 +99,17 @@ int main(int argc, char** argv) {
             return 7;
         }
 
-        auto project = nsmb::project::create_empty_project(project_dir.filename().string(), project_dir).value();
+        auto project_name = project_dir.filename().string();
+        if (project_name.empty() || project_name == ".") {
+            project_name = header.value().game_title.empty() ? "Imported ROM" : header.value().game_title;
+        }
+        auto project = nsmb::project::create_empty_project(project_name, project_dir).value();
         project.attach_extracted_rom("extracted-rom", header.value());
-        collect_files(project, project_dir, extracted_dir);
+        auto indexed = nsmb::project::index_project_files(project, extracted_dir);
+        if (!indexed) {
+            std::cerr << indexed.error().message << '\n';
+            return 8;
+        }
 
         auto saved = nsmb::project::save_manifest(project, project_dir / nsmb::project::manifest_file_name);
         if (!saved) {
@@ -148,8 +134,22 @@ int main(int argc, char** argv) {
     }
 
     if (command == "build-rom" && argc == 4) {
+        const fs::path project_dir = argv[2];
+        auto project = nsmb::project::load_manifest(project_dir / nsmb::project::manifest_file_name);
+        if (!project) {
+            std::cerr << project.error().message << '\n';
+            return 11;
+        }
+        if (!project.value().rom() || project.value().rom()->extracted_path.empty()) {
+            std::cerr << "Project does not contain an imported ROM\n";
+            return 11;
+        }
+        auto extracted_path = project.value().rom()->extracted_path;
+        if (!extracted_path.is_absolute()) {
+            extracted_path = project_dir / extracted_path;
+        }
         nsmb::nds::NitroRomService service;
-        auto result = service.build(fs::path(argv[2]) / "extracted-rom", argv[3]);
+        auto result = service.build(extracted_path, argv[3]);
         if (!result) {
             std::cerr << result.error().message << '\n';
             return 11;

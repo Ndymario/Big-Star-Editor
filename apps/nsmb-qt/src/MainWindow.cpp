@@ -1,5 +1,6 @@
 #include "MainWindow.hpp"
 
+#include "nsmb/core/file_io.hpp"
 #include "nsmb/nds/rom.hpp"
 #include "nsmb/patching/external_tools.hpp"
 #include "nsmb/project/manifest.hpp"
@@ -21,8 +22,6 @@
 #include <QVBoxLayout>
 
 #include <filesystem>
-#include <fstream>
-#include <iterator>
 #include <limits>
 #include <span>
 #include <vector>
@@ -37,11 +36,11 @@ QString projectTitle(const nsmb::project::Project& project) {
 }
 
 nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFile(const std::filesystem::path& path) {
-    std::ifstream in(path, std::ios::binary);
-    if (!in) {
-        return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not open " + path.string());
-    }
-    return std::vector<std::uint8_t>(std::istreambuf_iterator<char>(in), {});
+    return nsmb::core::read_file(path);
+}
+
+nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFilePrefix(const std::filesystem::path& path, std::size_t maximum_size) {
+    return nsmb::core::read_file_prefix(path, maximum_size);
 }
 
 nsmb::core::Result<void> writeBinaryFileAtomically(const std::filesystem::path& path, std::span<const std::uint8_t> data) {
@@ -59,24 +58,6 @@ nsmb::core::Result<void> writeBinaryFileAtomically(const std::filesystem::path& 
     return {};
 }
 
-void collectProjectFiles(nsmb::project::Project& project,
-                         const std::filesystem::path& project_dir,
-                         const std::filesystem::path& extracted_dir) {
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::recursive_directory_iterator(extracted_dir, ec)) {
-        if (ec) {
-            break;
-        }
-        if (!entry.is_regular_file(ec)) {
-            continue;
-        }
-        auto relative = nsmb::project::make_project_relative(project_dir, entry.path());
-        if (relative) {
-            project.add_game_file({relative.value(), entry.file_size(ec)});
-        }
-    }
-}
-
 class WaitCursor final {
 public:
     WaitCursor() {
@@ -91,6 +72,14 @@ QString manifestPathText(const nsmb::project::Project& project) {
         return {};
     }
     return QString::fromStdString((project.directory() / nsmb::project::manifest_file_name).string());
+}
+
+std::filesystem::path extractedProjectPath(const nsmb::project::Project& project) {
+    if (!project.rom()) {
+        return {};
+    }
+    auto path = project.rom()->extracted_path;
+    return path.is_absolute() ? path : project.directory() / path;
 }
 
 } // namespace
@@ -276,7 +265,7 @@ bool MainWindow::importRom() {
         return false;
     }
 
-    auto rom_data = readBinaryFile(rom_path);
+    auto rom_data = readBinaryFilePrefix(rom_path, nsmb::nds::default_header_region_size);
     if (!rom_data) {
         QMessageBox::warning(this, "Import ROM Failed", QString::fromStdString(rom_data.error().message));
         return false;
@@ -306,7 +295,12 @@ bool MainWindow::importRom() {
     }
     auto project = nsmb::project::create_empty_project(name, project_dir).value();
     project.attach_extracted_rom("extracted-rom", header.value());
-    collectProjectFiles(project, project_dir, extracted_dir);
+    auto indexed = nsmb::project::index_project_files(project, extracted_dir);
+    if (!indexed) {
+        QMessageBox::warning(this, "Import ROM Failed", QString::fromStdString(indexed.error().message));
+        log("ROM indexing failed: " + QString::fromStdString(indexed.error().message));
+        return false;
+    }
     auto saved = nsmb::project::save_manifest(project, manifest);
     if (!saved) {
         QMessageBox::warning(this, "Import ROM Failed", QString::fromStdString(saved.error().message));
@@ -500,6 +494,28 @@ void MainWindow::runPatcher() {
         log("NCPatcher failed: " + QString::fromStdString(result.error().message));
         return;
     }
+    auto refreshed = currentProject_;
+    auto indexed = nsmb::project::index_project_files(refreshed, extractedProjectPath(refreshed));
+    if (!indexed) {
+        QMessageBox::warning(this,
+                             "NCPatcher Refresh Failed",
+                             "NCPatcher completed, but the project file index could not be refreshed:\n" +
+                                 QString::fromStdString(indexed.error().message));
+        log("NCPatcher completed, but project refresh failed: " + QString::fromStdString(indexed.error().message));
+        return;
+    }
+    const auto manifest = refreshed.directory() / nsmb::project::manifest_file_name;
+    auto saved = nsmb::project::save_manifest(refreshed, manifest);
+    if (!saved) {
+        QMessageBox::warning(this,
+                             "NCPatcher Refresh Failed",
+                             "NCPatcher completed, but the refreshed project manifest could not be saved:\n" +
+                                 QString::fromStdString(saved.error().message));
+        log("NCPatcher completed, but manifest refresh failed: " + QString::fromStdString(saved.error().message));
+        return;
+    }
+    refreshed.mark_clean();
+    setProject(refreshed);
     log("NCPatcher completed successfully.");
     QMessageBox::information(this, "NCPatcher Complete", "NCPatcher completed successfully.");
 }
@@ -522,10 +538,7 @@ void MainWindow::buildRom() {
         return;
     }
 
-    auto extracted_path = currentProject_.rom()->extracted_path;
-    if (!extracted_path.is_absolute()) {
-        extracted_path = currentProject_.directory() / extracted_path;
-    }
+    const auto extracted_path = extractedProjectPath(currentProject_);
     log("Building ROM: " + output);
     nsmb::nds::NitroRomService service;
     nsmb::core::Result<void> result;
@@ -603,7 +616,7 @@ void MainWindow::updateSelectedLevel(const QModelIndex& index) {
     currentLevel_ = session ? session.value() : nullptr;
     levelProperties_->setLevel(currentLevel_);
     if (preview_) {
-        preview_->showLevel(currentProject_, name, world, area_name, course_path, bgdat_path, source_token, currentLevel_);
+        preview_->showLevel(name, world, area_name, course_path, bgdat_path, source_token, currentLevel_);
     }
     if (propertiesLabel_) {
         QString text;

@@ -29,8 +29,11 @@ int main() {
     fs::remove_all(dir);
     fs::create_directories(dir / "extracted-rom/root/course");
 
-    auto project = nsmb::project::create_empty_project("Test Project", dir).value();
-    project.attach_extracted_rom(dir / "extracted-rom");
+    auto project = nsmb::project::create_empty_project("Test \"Project\"\nName", dir).value();
+    nsmb::nds::RomHeader project_header;
+    project_header.game_title = "TEST \"ROM\"";
+    project_header.game_code = "TST1";
+    project.attach_extracted_rom(dir / "extracted-rom", project_header);
     project.add_game_file({dir / "extracted-rom/root/course/course1.bin", 12});
 
     const auto manifest = dir / nsmb::project::manifest_file_name;
@@ -44,12 +47,15 @@ int main() {
     assert(text.find("root:") == std::string::npos);
     assert(text.find(dir.string()) == std::string::npos);
     assert(text.find("extracted_path: \"extracted-rom\"") != std::string::npos);
+    assert(text.find("name: \"Test \\\"Project\\\"\\nName\"") != std::string::npos);
 
     auto loaded = nsmb::project::load_manifest(manifest);
     assert(loaded);
-    assert(loaded.value().name() == "Test Project");
+    assert(loaded.value().name() == "Test \"Project\"\nName");
     assert(loaded.value().rom());
     assert(loaded.value().rom()->extracted_path == "extracted-rom");
+    assert(loaded.value().rom()->header);
+    assert(loaded.value().rom()->header->game_title == "TEST \"ROM\"");
     assert(loaded.value().game_files().size() == 1);
     assert(loaded.value().game_files()[0].path == "extracted-rom/root/course/course1.bin");
     assert(!loaded.value().dirty());
@@ -57,6 +63,50 @@ int main() {
     assert(loaded.value().game_files()[0].size == 99);
     assert(loaded.value().dirty());
     loaded.value().mark_clean();
+
+    {
+        std::ofstream bad(dir / "bad-size.yaml");
+        bad << "format: big-star-editor-project\nversion: 1\nname: \"Bad\"\nrom:\n"
+               "  extracted_path: \"extracted-rom\"\nfiles:\n"
+               "  - path: \"extracted-rom/root/file.bin\"\n    size: nope\n";
+    }
+    assert(!nsmb::project::load_manifest(dir / "bad-size.yaml"));
+    {
+        std::ofstream bad(dir / "bad-path.yaml");
+        bad << "format: big-star-editor-project\nversion: 1\nname: \"Bad\"\nrom:\n"
+               "  extracted_path: \"../outside\"\n";
+    }
+    assert(!nsmb::project::load_manifest(dir / "bad-path.yaml"));
+    {
+        std::ofstream bad(dir / "bad-drive-path.yaml");
+        bad << "format: big-star-editor-project\nversion: 1\nname: \"Bad\"\nrom:\n"
+               "  extracted_path: \"C:/outside\"\n";
+    }
+    assert(!nsmb::project::load_manifest(dir / "bad-drive-path.yaml"));
+    {
+        std::ofstream bad(dir / "bad-version.yaml");
+        bad << "format: big-star-editor-project\nversion: 2\nname: \"Bad\"\n";
+    }
+    assert(!nsmb::project::load_manifest(dir / "bad-version.yaml"));
+    assert(!nsmb::project::make_project_relative(dir, {}));
+
+    auto invalid_project = nsmb::project::create_empty_project("Invalid", dir).value();
+    invalid_project.attach_extracted_rom("extracted-rom");
+    invalid_project.add_game_file({"outside.bin", 1});
+    assert(!nsmb::project::save_manifest(invalid_project, dir / "invalid-save.yaml"));
+
+    {
+        std::ofstream first(dir / "extracted-rom/root/course/a.bin", std::ios::binary);
+        first << "abc";
+        std::ofstream second(dir / "extracted-rom/root/course/z.bin", std::ios::binary);
+        second << "z";
+    }
+    assert(nsmb::project::index_project_files(loaded.value(), dir / "extracted-rom"));
+    assert(loaded.value().game_files().size() == 2);
+    assert(loaded.value().game_files()[0].path == "extracted-rom/root/course/a.bin");
+    assert(loaded.value().game_files()[0].size == 3);
+    assert(loaded.value().game_files()[1].path == "extracted-rom/root/course/z.bin");
+    assert(!nsmb::project::index_project_files(loaded.value(), dir / "missing"));
 
     const auto& catalog = nsmb::project::nsmb_level_catalog();
     assert(!catalog.empty());

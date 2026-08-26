@@ -2,6 +2,7 @@ add_library(nsmb-core
   src/byte_buffer.cpp
   src/command.cpp
   src/endian.cpp
+  src/file_io.cpp
 )
 add_library(nsmb::core ALIAS nsmb-core)
 target_include_directories(nsmb-core PUBLIC include)

@@ -127,10 +127,16 @@ int main() {
     assert(fnt.value()[0].path == "course.bin");
 
     nsmb::nds::NitroRomService service;
+    const auto occupied_dir = dir / "occupied";
+    write_bytes(occupied_dir / "keep.txt", {'K'});
+    assert(!service.extract(rom_path, occupied_dir));
+    assert(read_bytes(occupied_dir / "keep.txt") == std::vector<std::uint8_t>{'K'});
+
     const auto extracted_dir = dir / "extracted-rom";
     auto extracted = service.extract(rom_path, extracted_dir);
     assert(extracted);
     assert(read_bytes(extracted_dir / "root" / "course.bin") == std::vector<std::uint8_t>({'L', 'E', 'V', 'E', 'L'}));
+    assert(!service.build(extracted_dir, extracted_dir / "root" / "invalid.nds"));
 
     write_bytes(extracted_dir / "root" / "course.bin", std::vector<std::uint8_t>{'P', 'A', 'T', 'C', 'H'});
     const auto rebuilt_path = dir / "rebuilt.nds";

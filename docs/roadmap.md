@@ -30,6 +30,8 @@
 - Added round-trip validation, atomic file replacement, original-file backups, and manifest size updates.
 - Wired the Qt File menu to create/open projects, import ROMs, save edits, invoke NCPatcher, and build ROMs.
 - Hardened external-tool argument quoting and exercised the built-in ROM service against synthetic ROMs.
+- Validated portable manifest paths and file indexes, made manifest/ROM output atomic, and prevented accidental project or extraction overwrites.
+- Removed the misleading arbitrary raw-graphics sample; the M4 canvas honestly remains a schematic entity preview.
 
 ## M5: patching integration
 
