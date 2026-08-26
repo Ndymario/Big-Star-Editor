@@ -1,9 +1,11 @@
 #pragma once
 
+#include <QList>
 #include <QWidget>
 
 #include <array>
 #include <cstddef>
+#include <vector>
 
 #include "nsmb/project/editable_level.hpp"
 
@@ -22,6 +24,7 @@ public:
     void setLevel(nsmb::project::EditableLevel* level);
     void refresh();
     void select(Kind kind, int item_index, int node_index = 0);
+    void selectMany(Kind kind, const QList<int>& item_indices);
 
 signals:
     void levelChanged();
@@ -32,10 +35,13 @@ private:
     struct FieldRow {
         QLabel* label{};
         QSpinBox* value{};
+        bool mixed{};
+        int unset_value{};
     };
 
     [[nodiscard]] Kind kind() const;
     [[nodiscard]] std::size_t itemCount() const;
+    [[nodiscard]] std::vector<std::size_t> selectedIndices() const;
     void applyFields();
     void addEntity();
     void deleteEntity();
@@ -54,4 +60,5 @@ private:
     QPushButton* deleteNodeButton_{};
     std::array<FieldRow, 13> fields_{};
     bool refreshing_{};
+    std::vector<std::size_t> selected_items_;
 };

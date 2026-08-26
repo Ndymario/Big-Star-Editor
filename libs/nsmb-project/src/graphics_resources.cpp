@@ -1,0 +1,298 @@
+#include "nsmb/project/graphics_resources.hpp"
+
+#include <algorithm>
+#include <array>
+
+#include "nsmb/core/file_io.hpp"
+#include "nsmb/nds/rom.hpp"
+
+namespace nsmb::project {
+
+namespace {
+
+constexpr std::array profiles{
+    NsmbGraphicsProfile{"A2DE", 131, 0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8},
+    NsmbGraphicsProfile{"A2DP", 135, 0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4},
+    NsmbGraphicsProfile{"A2DJ", 131, 0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008},
+    NsmbGraphicsProfile{"A2DK", 131, 0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0},
+    NsmbGraphicsProfile{"A2DC", 131, 0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC},
+};
+
+struct ActorDefinition {
+    std::uint16_t type;
+    std::string_view name;
+    std::string_view graphics;
+    std::string_view palette;
+    std::string_view model;
+};
+
+constexpr std::array actor_definitions{
+    ActorDefinition{23, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
+    ActorDefinition{24, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
+    ActorDefinition{25, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
+    ActorDefinition{26, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
+    ActorDefinition{28, "Cheep Cheep", {}, {}, "pukupuku.nsbmd"},
+    ActorDefinition{81, "Skeeter", {}, {}, "bomb_menbo.nsbmd"},
+    ActorDefinition{83, "Goomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
+    ActorDefinition{84, "Paragoomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
+    ActorDefinition{85, "Mini Goomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
+    ActorDefinition{88, "Fire Bro.", {}, {}, "hammer_bros.nsbmd"},
+    ActorDefinition{89, "Boomerang Bro.", {}, {}, "hammer_bros.nsbmd"},
+    ActorDefinition{90, "Swooper", {}, {}, "basabasa_wait.nsbmd"},
+    ActorDefinition{91, "Snailicorn", {}, {}, "donketu.nsbmd"},
+    ActorDefinition{93, "Boss Key", {}, {}, "koopa_key.nsbmd"},
+    ActorDefinition{94, "Koopa Troopa", "I_nokonoko256_ncg.bin", "I_enemy_ncl.bin", {}},
+    ActorDefinition{95, "Koopa Paratroopa", "I_nokonoko256_ncg.bin", "I_enemy_B_ncl.bin", {}},
+    ActorDefinition{96, "Climbing Koopa", {}, {}, "net_nokonoko.nsbmd"},
+    ActorDefinition{98, "Pokey", {}, {}, "sanbo_head.nsbmd"},
+    ActorDefinition{99, "Piranha Plant", {}, {}, "pakkun.nsbmd"},
+    ActorDefinition{100, "Big Piranha Plant", {}, {}, "pakkun.nsbmd"},
+    ActorDefinition{101, "Fire Piranha Plant", {}, {}, "pakkun.nsbmd"},
+    ActorDefinition{102, "Large Fire Piranha Plant", {}, {}, "pakkun.nsbmd"},
+    ActorDefinition{103, "Spiked Ball", {}, {}, "iron_ball.nsbmd"},
+    ActorDefinition{237, "Trampoline", {}, {}, "jump_step.nsbmd"},
+    ActorDefinition{239, "Mega Goomba", {}, {}, "kuribo.nsbmd"},
+};
+
+std::filesystem::path extracted_path(const Project& project) {
+    if (!project.rom()) return {};
+    return project.rom()->extracted_path.is_absolute() ? project.rom()->extracted_path : project.directory() / project.rom()->extracted_path;
+}
+
+core::Result<std::vector<std::uint8_t>> read_resource(const std::filesystem::path& path) {
+    auto data = core::read_file(path);
+    if (!data) return data.error();
+    if (!data.value().empty() && (data.value()[0] == 0x10 || data.value()[0] == 0x11)) {
+        return formats::decompress_nitro_lz(data.value());
+    }
+    return data;
+}
+
+core::Result<std::uint16_t> table_file_id(std::span<const std::uint8_t> overlay,
+                                          std::size_t table,
+                                          std::uint8_t id,
+                                          std::uint16_t base) {
+    const auto offset = table + static_cast<std::size_t>(id) * 4U;
+    if (offset + 1U >= overlay.size()) {
+        return core::make_error(core::ErrorCode::OutOfBounds, "graphics resource table is outside Overlay 0");
+    }
+    return static_cast<std::uint16_t>(overlay[offset] | (overlay[offset + 1U] << 8U)) + base;
+}
+
+std::filesystem::path find_named_file(std::span<const nds::NitroFileEntry> files,
+                                      const std::filesystem::path& root,
+                                      std::string_view name) {
+    const auto found = std::find_if(files.begin(), files.end(), [name](const auto& file) { return file.path.filename() == name; });
+    return found == files.end() ? std::filesystem::path{} : root / "root" / found->path;
+}
+
+void copy_image(const formats::RgbaImage& source,
+                formats::RgbaImage& destination,
+                std::size_t destination_x,
+                std::size_t destination_y) {
+    for (std::size_t y = 0; y < source.height; ++y) {
+        for (std::size_t x = 0; x < source.width; ++x) {
+            const auto source_pixel = (y * source.width + x) * 4U;
+            const auto destination_pixel = ((destination_y + y) * destination.width + destination_x + x) * 4U;
+            std::copy_n(source.pixels.begin() + static_cast<std::ptrdiff_t>(source_pixel),
+                        4U,
+                        destination.pixels.begin() + static_cast<std::ptrdiff_t>(destination_pixel));
+        }
+    }
+}
+
+} // namespace
+
+const NsmbGraphicsProfile* nsmb_graphics_profile(std::string_view game_code) {
+    const auto found = std::find_if(profiles.begin(), profiles.end(), [game_code](const auto& profile) { return profile.game_code == game_code; });
+    return found == profiles.end() ? nullptr : &*found;
+}
+
+core::Result<std::filesystem::path> resolve_nitro_file_id(const std::filesystem::path& root,
+                                                          std::span<const std::uint8_t> fnt,
+                                                          std::uint16_t file_id) {
+    auto files = nds::parse_fnt(fnt);
+    if (!files) return files.error();
+    const auto found = std::lower_bound(files.value().begin(), files.value().end(), file_id, [](const auto& file, auto id) { return file.id < id; });
+    if (found == files.value().end() || found->id != file_id) {
+        return core::make_error(core::ErrorCode::NotFound, "graphics resource file ID is not present in fnt.bin");
+    }
+    return root / "root" / found->path;
+}
+
+core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& project,
+                                                            LevelTilesetReferences references) {
+    if (!project.rom() || !project.rom()->header) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "project does not have an imported ROM header");
+    }
+    const auto* profile = nsmb_graphics_profile(project.rom()->header->game_code);
+    if (!profile) return core::make_error(core::ErrorCode::Unsupported, "ROM game code does not have a graphics resource profile");
+    const auto root = extracted_path(project);
+    auto fnt = core::read_file(root / "fnt.bin");
+    auto overlay_file = core::read_file(root / "overlay9" / nds::overlay_file_name(0));
+    if (!fnt) return fnt.error();
+    if (!overlay_file) return overlay_file.error();
+    auto overlay = formats::decompress_blz_overlay(overlay_file.value());
+    if (!overlay) return overlay.error();
+    auto entries = nds::parse_fnt(fnt.value());
+    if (!entries) return entries.error();
+
+    auto table = [&](std::size_t offset, std::uint8_t id) -> core::Result<std::filesystem::path> {
+        auto file_id = table_file_id(overlay.value(), offset, id, profile->file_id_offset);
+        return file_id ? resolve_nitro_file_id(root, fnt.value(), file_id.value()) : core::Result<std::filesystem::path>(file_id.error());
+    };
+    auto named = [&](std::string_view name) -> core::Result<std::filesystem::path> {
+        auto path = find_named_file(entries.value(), root, name);
+        return path.empty() ? core::Result<std::filesystem::path>(core::make_error(core::ErrorCode::NotFound,
+                                                                                  "required ROM graphics file is missing: " + std::string(name)))
+                            : core::Result<std::filesystem::path>(std::move(path));
+    };
+    LevelGraphicsResources result;
+    auto fill = [&](std::filesystem::path& target, core::Result<std::filesystem::path> value) -> core::Result<void> {
+        if (!value) return value.error();
+        target = std::move(value.value());
+        result.watched_files.push_back(target);
+        return {};
+    };
+    auto fill_tileset = [&](TilesetResourceFiles& set,
+                            core::Result<std::filesystem::path> graphics,
+                            core::Result<std::filesystem::path> palette,
+                            core::Result<std::filesystem::path> map16,
+                            core::Result<std::filesystem::path> objects,
+                            core::Result<std::filesystem::path> index,
+                            core::Result<std::filesystem::path> behaviors = std::filesystem::path{}) -> core::Result<void> {
+        if (auto value = fill(set.graphics, std::move(graphics)); !value) return value;
+        if (auto value = fill(set.palette, std::move(palette)); !value) return value;
+        if (auto value = fill(set.map16, std::move(map16)); !value) return value;
+        if (auto value = fill(set.objects, std::move(objects)); !value) return value;
+        if (auto value = fill(set.object_index, std::move(index)); !value) return value;
+        if (behaviors && !behaviors.value().empty()) return fill(set.behaviors, std::move(behaviors));
+        return {};
+    };
+    if (auto value = fill_tileset(result.tilesets[0], named("d_2d_A_J_jyotyu_ncg.bin"), named("d_2d_A_J_jyotyu_ncl.bin"),
+                                  named("d_2d_PA_A_J_jyotyu.bin"), named("A_J_jyotyu.bin"), named("A_J_jyotyu_hd.bin"));
+        !value) return value.error();
+    result.tilesets[1].tile_offset = 192;
+    result.tilesets[1].palette_offset = 2;
+    result.tilesets[1].tile_page_offset = 1;
+    if (auto value = fill_tileset(result.tilesets[1], table(profile->tileset_graphics, references.tileset_id),
+                                  table(profile->tileset_palette, references.tileset_id), table(profile->tileset_map16, references.tileset_id),
+                                  table(profile->tileset_objects, references.tileset_id), table(profile->tileset_index, references.tileset_id),
+                                  table(profile->tileset_behaviors, references.tileset_id));
+        !value) return value.error();
+    result.tilesets[2].tile_offset = 640;
+    result.tilesets[2].palette_offset = 6;
+    result.tilesets[2].tile_page_offset = 4;
+    if (auto value = fill_tileset(result.tilesets[2], named("d_2d_I_S_tikei_nohara_ncg.bin"), named("d_2d_I_S_tikei_nohara_ncl.bin"),
+                                  named("d_2d_PA_I_S_nohara.bin"), named("I_S_nohara.bin"), named("I_S_nohara_hd.bin"),
+                                  named("NoHaRaSubUnitChangeData.bin"));
+        !value) return value.error();
+
+    auto fill_background = [&](BackgroundResourceFiles& files,
+                               std::size_t graphics_table,
+                               std::size_t palette_table,
+                               std::size_t screen_table,
+                               std::uint8_t graphics_id,
+                               std::uint8_t screen_id) -> core::Result<void> {
+        if (auto value = fill(files.graphics, table(graphics_table, graphics_id)); !value) return value;
+        if (auto value = fill(files.palette, table(palette_table, graphics_id)); !value) return value;
+        return fill(files.screen, table(screen_table, screen_id));
+    };
+    if (auto value = fill_background(result.background, profile->background_graphics, profile->background_palette,
+                                     profile->background_screen, references.background_graphics_id, references.background_screen_id);
+        !value) return value.error();
+    if (auto value = fill_background(result.foreground, profile->foreground_graphics, profile->foreground_palette,
+                                     profile->foreground_screen, references.foreground_graphics_id, references.foreground_graphics_id);
+        !value) return value.error();
+    result.watched_files.push_back(root / "fnt.bin");
+    result.watched_files.push_back(root / "overlay9" / nds::overlay_file_name(0));
+    // ponytail: actor art stays schematic until each class has a verified ROM OAM or model layout.
+    constexpr std::uint16_t actor_type_count = 326;
+    for (std::uint16_t type = 0; type < actor_type_count; ++type) {
+        const auto class_offset = profile->sprite_object_ids + static_cast<std::size_t>(type) * 2U;
+        if (class_offset + 1U >= overlay.value().size()) continue;
+        const auto class_id = static_cast<std::uint16_t>(overlay.value()[class_offset] | (overlay.value()[class_offset + 1U] << 8U));
+        const auto definition = std::find_if(actor_definitions.begin(), actor_definitions.end(), [&](const auto& actor) { return actor.type == class_id; });
+        ActorResourceFiles actor;
+        actor.type = type;
+        actor.name = definition == actor_definitions.end() ? "Actor " + std::to_string(type) + " (class " + std::to_string(class_id) + ")"
+                                                            : std::string(definition->name);
+        if (definition != actor_definitions.end() && !definition->model.empty()) {
+            actor.model = definition->model;
+        }
+        result.actors.push_back(std::move(actor));
+    }
+    std::ranges::sort(result.watched_files);
+    result.watched_files.erase(std::unique(result.watched_files.begin(), result.watched_files.end()), result.watched_files.end());
+    return result;
+}
+
+core::Result<DecodedTileset> load_tileset_graphics(const TilesetResourceFiles& files) {
+    auto graphics = read_resource(files.graphics);
+    auto palette_data = read_resource(files.palette);
+    auto map16_data = core::read_file(files.map16);
+    auto object_data = core::read_file(files.objects);
+    auto index_data = core::read_file(files.object_index);
+    if (!graphics) return graphics.error();
+    if (!palette_data) return palette_data.error();
+    if (!map16_data) return map16_data.error();
+    if (!object_data) return object_data.error();
+    if (!index_data) return index_data.error();
+    auto tiles = formats::decode_8bpp_tiles(graphics.value());
+    auto palette = formats::decode_bgr555_palette(palette_data.value());
+    auto map16 = formats::decode_map16(map16_data.value(), files.tile_offset, files.palette_offset);
+    auto objects = formats::decode_object_layouts(object_data.value(), index_data.value(), files.tile_page_offset);
+    if (!tiles) return tiles.error();
+    if (!palette) return palette.error();
+    if (!map16) return map16.error();
+    if (!objects) return objects.error();
+    if (palette.value().size() > 256) palette.value()[256].transparent = true;
+    DecodedTileset result;
+    result.objects = std::move(objects.value());
+    result.map16_tiles.reserve(map16.value().size());
+    for (const auto& tile : map16.value()) {
+        auto image = formats::render_screen_map(tile.tiles, 2, tiles.value(), palette.value());
+        if (!image) return image.error();
+        result.map16_tiles.push_back(std::move(image.value()));
+    }
+    return result;
+}
+
+core::Result<formats::RgbaImage> render_tileset_object(const DecodedTileset& tileset,
+                                                       std::uint16_t object_id,
+                                                       std::size_t width,
+                                                       std::size_t height) {
+    if (object_id >= tileset.objects.size()) return core::make_error(core::ErrorCode::NotFound, "tileset object ID is not defined");
+    auto layout = formats::render_object_layout(tileset.objects[object_id], width, height);
+    if (!layout) return layout.error();
+    formats::RgbaImage image{width * 16U, height * 16U, {}};
+    image.pixels.assign(image.width * image.height * 4U, 0);
+    for (std::size_t y = 0; y < height; ++y) {
+        for (std::size_t x = 0; x < width; ++x) {
+            const auto tile = layout.value()[y * width + x];
+            if (tile >= 0 && static_cast<std::size_t>(tile) < tileset.map16_tiles.size()) {
+                copy_image(tileset.map16_tiles[static_cast<std::size_t>(tile)], image, x * 16U, y * 16U);
+            }
+        }
+    }
+    return image;
+}
+
+core::Result<formats::RgbaImage> load_background_graphics(const BackgroundResourceFiles& files) {
+    auto graphics = read_resource(files.graphics);
+    auto palette_data = read_resource(files.palette);
+    auto screen_data = read_resource(files.screen);
+    if (!graphics) return graphics.error();
+    if (!palette_data) return palette_data.error();
+    if (!screen_data) return screen_data.error();
+    auto tiles = formats::decode_8bpp_tiles(graphics.value());
+    auto palette = formats::decode_bgr555_palette(palette_data.value(), false);
+    auto screen = formats::decode_screen_map(screen_data.value());
+    if (!tiles) return tiles.error();
+    if (!palette) return palette.error();
+    if (!screen) return screen.error();
+    const auto width = screen.value().size() % 64U == 0 ? 64U : 32U;
+    return formats::render_screen_map(screen.value(), width, tiles.value(), palette.value());
+}
+
+} // namespace nsmb::project

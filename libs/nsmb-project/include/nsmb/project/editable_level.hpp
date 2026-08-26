@@ -19,6 +19,30 @@ struct LevelTilesetReferences {
     std::uint8_t foreground_graphics_id{};
 };
 
+template <typename T>
+struct IndexedLevelValue {
+    std::size_t index{};
+    T value;
+};
+
+struct LevelEntityUpdates {
+    std::vector<IndexedLevelValue<formats::NsmbLevelObject>> objects;
+    std::vector<IndexedLevelValue<formats::NsmbLevelSprite>> sprites;
+    std::vector<IndexedLevelValue<formats::NsmbLevelEntrance>> entrances;
+    std::vector<IndexedLevelValue<formats::NsmbLevelZone>> zones;
+    std::vector<IndexedLevelValue<formats::NsmbLevelPath>> paths;
+    std::vector<IndexedLevelValue<formats::NsmbLevelPath>> progress_paths;
+};
+
+struct LevelEntitySelection {
+    std::vector<std::size_t> objects;
+    std::vector<std::size_t> sprites;
+    std::vector<std::size_t> entrances;
+    std::vector<std::size_t> zones;
+    std::vector<std::size_t> paths;
+    std::vector<std::size_t> progress_paths;
+};
+
 class EditableLevel {
 public:
     EditableLevel(EditableLevel&&) noexcept = default;
@@ -51,6 +75,8 @@ public:
     core::Result<void> update_path(bool progress, std::size_t index, formats::NsmbLevelPath path);
     core::Result<std::size_t> add_path(bool progress, formats::NsmbLevelPath path);
     core::Result<void> remove_path(bool progress, std::size_t index);
+    core::Result<void> update_entities(LevelEntityUpdates updates, std::string name = "Edit selection");
+    core::Result<void> remove_entities(LevelEntitySelection selection, std::string name = "Delete selection");
 
     core::Result<void> undo();
     core::Result<void> redo();

@@ -59,6 +59,56 @@ int main() {
     assert(tiles.value()[0].pixels[1] == 2);
     assert(!decode_4bpp_tiles({raw_tile.data(), 31}));
 
+    std::vector<std::uint8_t> raw_8bpp(64);
+    raw_8bpp[0] = 3;
+    auto tiles_8bpp = decode_8bpp_tiles(raw_8bpp);
+    assert(tiles_8bpp && tiles_8bpp.value()[0].pixels[0] == 3);
+    assert(!decode_8bpp_tiles({raw_8bpp.data(), 63}));
+
+    const std::vector<std::uint8_t> literal_lz10 = {0x10, 3, 0, 0, 0, 'a', 'b', 'c'};
+    auto lz10 = decompress_nitro_lz(literal_lz10);
+    assert(lz10 && std::string(lz10.value().begin(), lz10.value().end()) == "abc");
+    assert(!decompress_nitro_lz({literal_lz10.data(), 6}));
+    const std::vector<std::uint8_t> literal_lz11 = {0x11, 3, 0, 0, 0, 'x', 'y', 'z'};
+    auto lz11 = decompress_nitro_lz(literal_lz11);
+    assert(lz11 && std::string(lz11.value().begin(), lz11.value().end()) == "xyz");
+    const std::vector<std::uint8_t> uncompressed_overlay(8);
+    auto blz = decompress_blz_overlay(uncompressed_overlay);
+    assert(blz && blz.value() == uncompressed_overlay);
+
+    std::vector<std::uint8_t> map_data(8);
+    put_u16(map_data, 0, 0);
+    put_u16(map_data, 2, 0x0400);
+    put_u16(map_data, 4, 0x0800);
+    put_u16(map_data, 6, 0x1000);
+    auto map16 = decode_map16(map_data);
+    assert(map16 && map16.value().size() == 1);
+    assert(map16.value()[0].tiles[1].horizontal_flip);
+    assert(map16.value()[0].tiles[2].vertical_flip);
+    assert(map16.value()[0].tiles[3].palette == 1);
+
+    std::vector<IndexedTile8Bpp> render_tiles(1);
+    render_tiles[0].pixels[0] = 1;
+    render_tiles[0].pixels[7] = 2;
+    std::vector<Bgr555Color> render_palette(256);
+    render_palette[1] = {255, 0, 0, false};
+    render_palette[2] = {0, 255, 0, false};
+    const std::array<ScreenMapEntry, 1> flipped{{{0, 0, true, false}}};
+    auto rendered_map = render_screen_map(flipped, 1, render_tiles, render_palette);
+    assert(rendered_map && rendered_map.value().pixels[0] == 0 && rendered_map.value().pixels[1] == 255);
+
+    std::vector<std::uint8_t> object_index(4);
+    std::vector<std::uint8_t> object_definition = {0, 5, 0, 1, 6, 0, 0xFE, 2, 7, 0, 0xFF};
+    auto layouts = decode_object_layouts(object_definition, object_index);
+    assert(layouts && layouts.value().size() == 1);
+    auto rendered_layout = render_object_layout(layouts.value()[0], 4, 3);
+    assert(rendered_layout && rendered_layout.value().size() == 12);
+    assert(rendered_layout.value()[0] == 5);
+    assert(rendered_layout.value()[1] == 6 && rendered_layout.value()[3] == 6);
+    assert(rendered_layout.value()[4] == 7 && rendered_layout.value()[11] == 7);
+    object_definition.pop_back();
+    assert(!decode_object_layouts(object_definition, object_index));
+
     std::vector<std::uint8_t> course(nsmb_level_block_count * 8U);
     for (std::size_t i = 0; i < nsmb_level_block_count; ++i) {
         put_u32(course, i * 8U, static_cast<std::uint32_t>(course.size()));

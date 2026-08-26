@@ -1,4 +1,4 @@
-add_library(nsmb-project src/editable_level.cpp src/project.cpp src/manifest.cpp src/level_catalog.cpp)
+add_library(nsmb-project src/editable_level.cpp src/graphics_resources.cpp src/project.cpp src/manifest.cpp src/level_catalog.cpp)
 add_library(nsmb::project ALIAS nsmb-project)
 target_include_directories(nsmb-project PUBLIC include)
 target_link_libraries(nsmb-project PUBLIC nsmb-core nsmb-nds nsmb-formats)

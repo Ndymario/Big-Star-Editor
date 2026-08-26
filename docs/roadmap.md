@@ -31,7 +31,12 @@
 - Wired the Qt File menu to create/open projects, import ROMs, save edits, invoke NCPatcher, and build ROMs.
 - Hardened external-tool argument quoting and exercised the built-in ROM service against synthetic ROMs.
 - Validated portable manifest paths and file indexes, made manifest/ROM output atomic, and prevented accidental project or extraction overwrites.
-- Removed the misleading arbitrary raw-graphics sample; the M4 canvas honestly remains a schematic entity preview.
+- Added a VS Code-style document workspace with a reusable Preview tab, unique editable level tabs, detachable editor windows, dirty markers, active-document command routing, recoverable docks, and per-project layout restoration.
+- Added Select, Pan, placement, path, multi-selection, marquee, snapping, resizing, deletion, and compound undo/redo gestures to the level canvas, plus a searchable Palette dock.
+- Added portable Nitro LZ/BLZ, 8bpp tile, palette, screen-map, Map16, and NSMB object-layout decoding with defensive fallbacks.
+- Added validated US, European, Japanese, Korean, and Chinese ROM resource profiles and FNT/Overlay 0 resolution for terrain, backgrounds, foregrounds, and the complete actor placement catalog.
+- Added asynchronous ROM-backed rendering, stale-result rejection, watched-resource refresh, and last-valid-image preservation during malformed external writes.
+- Kept actors as labeled schematic fallbacks until their ROM OAM or model layouts are verified; extracted game artwork remains project-local and is never packaged with the editor.
 
 ## M5: NCPatcher 2.x integration
 

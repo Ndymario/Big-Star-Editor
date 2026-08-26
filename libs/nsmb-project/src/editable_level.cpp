@@ -187,6 +187,41 @@ private:
     LevelTilesetReferences after_;
 };
 
+class CompositeCommand final : public core::Command {
+public:
+    CompositeCommand(std::vector<std::unique_ptr<core::Command>> commands, std::string name)
+        : commands_(std::move(commands)), name_(std::move(name)) {}
+
+    std::string_view name() const override { return name_; }
+    core::Result<void> execute() override {
+        std::size_t completed = 0;
+        for (; completed < commands_.size(); ++completed) {
+            auto result = commands_[completed]->execute();
+            if (!result) {
+                while (completed > 0) {
+                    --completed;
+                    (void)commands_[completed]->undo();
+                }
+                return result.error();
+            }
+        }
+        return {};
+    }
+    core::Result<void> undo() override {
+        for (auto command = commands_.rbegin(); command != commands_.rend(); ++command) {
+            auto result = (*command)->undo();
+            if (!result) {
+                return result.error();
+            }
+        }
+        return {};
+    }
+
+private:
+    std::vector<std::unique_ptr<core::Command>> commands_;
+    std::string name_;
+};
+
 template <typename T>
 core::Result<void> replace_at(core::CommandHistory& history,
                               std::vector<T>& values,
@@ -408,6 +443,61 @@ core::Result<std::size_t> EditableLevel::add_path(bool progress, formats::NsmbLe
 core::Result<void> EditableLevel::remove_path(bool progress, std::size_t index) {
     auto& paths = progress ? course_.progress_paths : course_.paths;
     return erase_at(history_, paths, index, progress ? "Delete progress path" : "Delete path");
+}
+
+core::Result<void> EditableLevel::update_entities(LevelEntityUpdates updates, std::string name) {
+    std::vector<std::unique_ptr<core::Command>> commands;
+    auto add = [&]<typename T>(std::vector<T>& values,
+                               std::vector<IndexedLevelValue<T>>& replacements,
+                               std::string command_name) -> core::Result<void> {
+        for (auto& replacement : replacements) {
+            if (replacement.index >= values.size()) {
+                return core::make_error(core::ErrorCode::OutOfBounds, "item index is outside the collection");
+            }
+            commands.push_back(std::make_unique<ReplaceCommand<T>>(values,
+                                                                    replacement.index,
+                                                                    std::move(replacement.value),
+                                                                    command_name));
+        }
+        return {};
+    };
+    if (auto result = add(objects_, updates.objects, "Edit object"); !result) return result;
+    if (auto result = add(course_.sprites, updates.sprites, "Edit sprite"); !result) return result;
+    if (auto result = add(course_.entrances, updates.entrances, "Edit entrance"); !result) return result;
+    if (auto result = add(course_.zones, updates.zones, "Edit zone"); !result) return result;
+    if (auto result = add(course_.paths, updates.paths, "Edit path"); !result) return result;
+    if (auto result = add(course_.progress_paths, updates.progress_paths, "Edit progress path"); !result) return result;
+    if (commands.empty()) {
+        return {};
+    }
+    return history_.execute(std::make_unique<CompositeCommand>(std::move(commands), std::move(name)));
+}
+
+core::Result<void> EditableLevel::remove_entities(LevelEntitySelection selection, std::string name) {
+    std::vector<std::unique_ptr<core::Command>> commands;
+    auto add = [&]<typename T>(std::vector<T>& values,
+                               std::vector<std::size_t>& indices,
+                               std::string command_name) -> core::Result<void> {
+        std::sort(indices.begin(), indices.end(), std::greater<>());
+        indices.erase(std::unique(indices.begin(), indices.end()), indices.end());
+        for (const auto index : indices) {
+            if (index >= values.size()) {
+                return core::make_error(core::ErrorCode::OutOfBounds, "item index is outside the collection");
+            }
+            commands.push_back(std::make_unique<EraseCommand<T>>(values, index, command_name));
+        }
+        return {};
+    };
+    if (auto result = add(objects_, selection.objects, "Delete object"); !result) return result;
+    if (auto result = add(course_.sprites, selection.sprites, "Delete sprite"); !result) return result;
+    if (auto result = add(course_.entrances, selection.entrances, "Delete entrance"); !result) return result;
+    if (auto result = add(course_.zones, selection.zones, "Delete zone"); !result) return result;
+    if (auto result = add(course_.paths, selection.paths, "Delete path"); !result) return result;
+    if (auto result = add(course_.progress_paths, selection.progress_paths, "Delete progress path"); !result) return result;
+    if (commands.empty()) {
+        return {};
+    }
+    return history_.execute(std::make_unique<CompositeCommand>(std::move(commands), std::move(name)));
 }
 
 core::Result<void> EditableLevel::undo() { return history_.undo(); }

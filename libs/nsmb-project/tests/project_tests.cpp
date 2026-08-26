@@ -1,4 +1,5 @@
 #include "nsmb/project/editable_level.hpp"
+#include "nsmb/project/graphics_resources.hpp"
 #include "nsmb/project/level_catalog.hpp"
 #include "nsmb/project/manifest.hpp"
 
@@ -20,6 +21,17 @@ void append_block(std::vector<std::uint8_t>& course, std::size_t index, const st
     put_u32(course, index * 8U, static_cast<std::uint32_t>(course.size()));
     put_u32(course, index * 8U + 4U, static_cast<std::uint32_t>(block.size()));
     course.insert(course.end(), block.begin(), block.end());
+}
+
+std::vector<std::uint8_t> make_fnt() {
+    std::vector<std::uint8_t> fnt(8, 0);
+    put_u32(fnt, 0, 8);
+    fnt[6] = 1;
+    const std::string name = "graphic.bin";
+    fnt.push_back(static_cast<std::uint8_t>(name.size()));
+    fnt.insert(fnt.end(), name.begin(), name.end());
+    fnt.push_back(0);
+    return fnt;
 }
 } // namespace
 
@@ -127,6 +139,17 @@ int main() {
         }
     }
     assert(saw_download_play_level);
+    assert(nsmb::project::nsmb_graphics_profile("A2DE"));
+    assert(nsmb::project::nsmb_graphics_profile("A2DE")->file_id_offset == 131);
+    assert(nsmb::project::nsmb_graphics_profile("A2DP"));
+    assert(nsmb::project::nsmb_graphics_profile("A2DP")->file_id_offset == 135);
+    assert(nsmb::project::nsmb_graphics_profile("A2DJ"));
+    assert(nsmb::project::nsmb_graphics_profile("A2DK"));
+    assert(nsmb::project::nsmb_graphics_profile("A2DC"));
+    assert(!nsmb::project::nsmb_graphics_profile("TST1"));
+    auto resolved_file = nsmb::project::resolve_nitro_file_id(dir / "extracted-rom", make_fnt(), 0);
+    assert(resolved_file && resolved_file.value() == dir / "extracted-rom/root/graphic.bin");
+    assert(!nsmb::project::resolve_nitro_file_id(dir / "extracted-rom", make_fnt(), 1));
 
     std::vector<std::uint8_t> empty_course(nsmb::formats::nsmb_level_block_count * 8U);
     for (std::size_t i = 0; i < nsmb::formats::nsmb_level_block_count; ++i) {
@@ -167,6 +190,21 @@ int main() {
     assert(entrance_index && editable.value().course().entrances.size() == 1);
     auto zone_index = editable.value().add_zone({16, 32, 256, 192, 2});
     assert(zone_index && editable.value().course().zones[0].number == 2);
+
+    nsmb::project::LevelEntityUpdates compound;
+    auto moved_object = editable.value().objects()[0];
+    moved_object.x = 100;
+    auto moved_zone = editable.value().course().zones[0];
+    moved_zone.x = 200;
+    compound.objects.push_back({0, moved_object});
+    compound.zones.push_back({0, moved_zone});
+    assert(editable.value().update_entities(std::move(compound), "Move selection"));
+    assert(editable.value().objects()[0].x == 100 && editable.value().course().zones[0].x == 200);
+    assert(editable.value().undo_name() == "Move selection");
+    assert(editable.value().undo());
+    assert(editable.value().objects()[0].x == -2 && editable.value().course().zones[0].x == 16);
+    assert(editable.value().redo());
+    assert(editable.value().undo());
 
     nsmb::formats::NsmbLevelPath path;
     path.id = 7;
