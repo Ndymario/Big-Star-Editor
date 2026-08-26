@@ -33,11 +33,17 @@
 - Validated portable manifest paths and file indexes, made manifest/ROM output atomic, and prevented accidental project or extraction overwrites.
 - Removed the misleading arbitrary raw-graphics sample; the M4 canvas honestly remains a schematic entity preview.
 
-## M5: patching integration
+## M5: NCPatcher 2.x integration
 
-- Harden NCPatcher config management.
-- Add async execution, log streaming, progress, cancellation, and diagnostics.
-- Evaluate whether tighter integration or upstream NCPatcher CLI changes are needed.
+- Replace the legacy `std::system` wrapper with an asynchronous, no-shell NCPatcher 2.x process integration.
+- Support `ncpatcher.yaml` and `ncpatcher.yml`; refuse to build directly from legacy `ncpatcher.json`.
+- Offer NCPatcher’s verified `migrate --write` workflow for legacy projects, leaving the old JSON untouched until a successful build and optional Move to Trash confirmation.
+- Offer NCPatcher project initialization and configuration validation through the v2 CLI.
+- Stream structured progress, diagnostics, artifacts, and result summaries into the Qt editor.
+- Apply patches transactionally by building a staged ROM, patching a separate output, validating and extracting it, then backing up and replacing the live project tree.
+- Support selection of one configured build variant; defer multi-variant application and graphical YAML editing.
+- Keep NCPatcher external rather than embedding or vendoring it.
+- Defer cancellation until NCPatcher provides a graceful process-tree cancellation contract.
 
 ## M6: web frontend
 
