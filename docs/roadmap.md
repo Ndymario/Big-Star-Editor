@@ -40,18 +40,101 @@
 
 ## M5: NCPatcher 2.x integration
 
-- Replace the legacy `std::system` wrapper with an asynchronous, no-shell NCPatcher 2.x process integration.
-- Support `ncpatcher.yaml` and `ncpatcher.yml`; refuse to build directly from legacy `ncpatcher.json`.
-- Offer NCPatcher’s verified `migrate --write` workflow for legacy projects, leaving the old JSON untouched until a successful build and optional Move to Trash confirmation.
-- Offer NCPatcher project initialization and configuration validation through the v2 CLI.
-- Stream structured progress, diagnostics, artifacts, and result summaries into the Qt editor.
-- Apply patches transactionally by building a staged ROM, patching a separate output, validating and extracting it, then backing up and replacing the live project tree.
-- Support selection of one configured build variant; defer multi-variant application and graphical YAML editing.
-- Keep NCPatcher external rather than embedding or vendoring it.
-- Defer cancellation until NCPatcher provides a graceful process-tree cancellation contract.
+- Replaced the legacy `std::system` and process-wide `chdir` path with a no-shell process runner that passes argv intact and captures both streams.
+- Added an external NCPatcher 2.x client for configuration, module graph, file manifest, build, migration, and version commands.
+- Added strict readers for the versioned config, module, file, and result documents while preserving declaration order for variants.
+- Added structured progress, diagnostics, artifacts, and result summaries to an asynchronous Build Output dock with clickable source locations.
+- Added lazy, per-project single-variant selection and CLI `run-patcher --variant` and `patcher-info` commands.
+- Refused direct legacy `ncpatcher.json` builds and offered the verified `migrate --write` workflow instead.
+- Applied builds transactionally: build and extract in staging, validate, back up the previous extracted tree, swap, clear stale sessions, and reindex.
+- Kept NCPatcher external; multi-variant apply, graphical YAML editing, and cancellation remain deferred.
 
-## M6: web frontend
+## M6: accurate level model and NARC archives
 
-- Compile portable backend to WebAssembly or expose it through another thin adapter.
-- Keep browser APIs out of backend modules.
-- Build a web UI around an explicit C ABI/binding layer.
+- Replaced guessed level fields with the full 14-block record model: header, camera, screen, entrance, stage object, view, zone, path, and object-bank data.
+- Added signed 1/4096 `fx32` values for path speed and acceleration and compile-time record-size checks.
+- Made views and all 16 object-bank slots editable; bank choices show the overlay found by signature-scanning the ROM's ARM9 table instead of relying on a region-specific offset.
+- Preserved unedited and unknown bytes, including block 0 data beyond its 32-byte header and block 13 records after the object-bank slots.
+- Added strict NARC read/write support with preserved FNT bytes, indexed member replacement, bounds checks, and byte-identical untouched round trips.
+- Removed the unused M0 `Level`/`Area`/entity model in favor of `EditableLevel` as the single level representation.
+
+## M7: glue and custom stage objects
+
+- Added strict readers for the generated `level_data.json` and `stageobjects.json` catalogs, with an empty-catalog fallback when either optional file is absent.
+- Added the loss-preserving glue block codec, including the complete malformed-input refusal set, table/payload order preservation, dry-run writes, and byte-identical preservation of unreadable data.
+- Custom placements now carry hashes in memory. Registration is derived in stable loaded order plus first-placement order, drops unused entries, and assigns numeric stage IDs only while serializing.
+- Added a grouped Custom actors palette, hash-aware canvas rendering, editable declared/undeclared level-data rows, and a read-only view of the registration that will be written.
+- Routed vanilla and custom stage-object lookup through `EditableLevel`, returning `-1` for foreign or unresolved hashes instead of indexing a vanilla table.
+
+## M8: module-aware filesystem explorer
+
+- Added a filesystem view that joins the extracted NitroFS tree, the last `ncpatcher.files/1` manifest, and the currently enabled module trees.
+- Reproduced NCPatcher's layer-before-module precedence, base-variant fallback, variant-to-module layer mappings, `into:` prefixes, component glob subtraction, current base/variant `files:` precedence from the resolved config, and outermost `_narc` convention.
+- Added Vanilla, Replaced, Added, Pending, and Orphaned states with byte-level stale detection, including NARC member comparison.
+- Added a Filesystem dock with active module/variant selection, path/status/provenance/variant/id/size columns, recoverable removal, and add/replace/extract/hex-edit actions.
+- Routed level saves into the supplying module or active module target. The extracted ROM remains a derived view and pending writes receive no fabricated file ID.
+- Added a pending-build banner and debounced watchers for external changes throughout enabled module NitroFS trees.
+
+## M9: graphics subsystem
+
+- Added strict, loss-preserving NCLR, NCGR, NSCR, NCER, and NANR readers and writers with malformed-offset and round-trip coverage.
+- Added NSBTX/NSBMD TEX0 parsing and same-layout writing for every DS texture format, including deterministic format-5 4×4 compression and rendering.
+- Added Nitro LZ10/LZ11 compressors, Yaz0 compression/decompression, and backwards-BLZ compression alongside the existing decoders.
+- Added a filesystem graphics dialog for NCGR/raw indexed-pixel painting, NCLR/raw/TEX0 palette editing with the native colour picker, and NSCR/NCER/NANR/TEX0 viewing.
+- Routed graphics saves into the supplying or active module target and retained an input file's LZ10/LZ11 wrapper.
+- Replaced labelled actor diamonds with decoded 2D sprite sheets or model textures for the verified actor resource catalog; unknown actors retain the safe fallback.
+
+## M10: tilesets, Map16, behaviours, and backgrounds
+
+- Added inverse codecs for BGR555 palettes, 4bpp/8bpp tiles, screen maps, Map16, and NSMB object layouts, preserving untouched LZ streams and object-index metadata.
+- Added an editable multi-file tileset model for graphics, palettes, Map16 quadrants, object layouts, and four-byte tile behaviours, including the complete flag/subtype vocabulary and named parameter meanings.
+- Added an editable NSC/tilemap model for background and foreground graphics, palettes, tile indices, palette banks, and flips.
+- Added deterministic median-cut BGR555 quantisation, PNG import/export, exact tile deduplication for imported tilemaps, and a validated versioned `.bstileset` import/export container.
+- Added a seven-tab Qt editor for level slot IDs, tileset graphics, Map16, objects, behaviours, backgrounds, and foregrounds under **Tools → Tilesets and Backgrounds**.
+- Split the foreground graphics and screen IDs in the level model, fixed foreground resource resolution, and preserved both through undo/redo and course serialization.
+- Routed only changed graphics resources to their supplying or active module target; unchanged resources remain byte-identical and do not become pending replacements.
+
+## M11: sprite definitions and rendering
+
+- Added the strict `bigstar.sprite-definitions/1` JSON schema with 0-based bit offsets, non-overlapping fields, choices, categories, colours, shapes, render bounds, and grab bounds.
+- Added ordered plugin → project → local → shipped loading with first-definition-wins resolution by ROM class/object ID and a plugin-directory seam that does not require a plugin host.
+- Added a clean-room shipped catalog for the already verified actor-resource classes; no NSMB Editor XML, code, or data is included.
+- Generated named sprite-setting rows in the property dock while retaining raw settings for undefined actors and deliberately giving module objects no generated fields.
+- Applied definition render bounds and shapes to the canvas and definition grab bounds to scene sizing, hit testing, marquee selection, and selection outlines.
+- Categorized the searchable visual palette while preserving decoded actor thumbnails and the module/component custom-actor tree; module objects render as the default box.
+- Added synthetic backend and Qt coverage for schema refusal, layered precedence, bit reads/writes, generated fields, and definition-driven hit bounds.
+
+## M12: hub window and UX parity
+
+- Added a permanent five-tab Project Hub for level listing, tilesets, backgrounds, the effective filesystem, and common tools; its active state now participates in workspace restoration.
+- Replaced the entity-kind combo with side tabs and the vanilla actor list with categorized, searchable, scrollable thumbnail grids while retaining the module/component custom-actor tree.
+- Added a minimap, fine grid, DS-screen overlay, 50/100/200% zoom presets, fullscreen, draggable reference backgrounds, 8-pixel snapping, Ctrl-drag cloning, keyboard entity-tab switching, arrow nudging, WASD scrolling, Alt/middle-button panning, and PageUp/PageDown z-order.
+- Added compressed Base64 cut/copy/paste for every canvas entity kind, compound paste/import/hex commands, and named multi-step undo/redo split menus.
+- Added strict NSMBe-compatible `.nml` level exchange and a validated level hex editor, plus project-wide object/sprite finders and a sprite-event viewer.
+- Added strict compressed `.nsmbpatch` bundles with safe paths, duplicate refusal, file-ID warnings, transactional module writes, backups, and rollback; xdelta3 create/apply uses the no-shell process service.
+- Added minute-interval dirty-level recovery snapshots with atomic writes, startup recovery, stale-snapshot cleanup, and explicit save/discard semantics.
+- Added a five-language startup locale selector and clean-room translations for the project shell and M12 hub vocabulary.
+- Added synthetic exchange-format, history, clipboard, palette, hub, and recovery coverage; see `docs/m12-manual-checklist.md` for ROM-backed validation.
+
+## M13: remaining tools
+
+- Added strict, loss-preserving BNBL/BNCL/BNCD and ENPG codecs with editable layout, cell/OAM, indexed-image, and palette surfaces; LZ10/LZ11 wrappers remain intact.
+- Added DS icon/title banner editing with all version-available languages, BGR555 palette editing, preserved extension bytes, and regenerated banner CRCs. The typed config reader accepts resolved project/per-variant banner targets when NCPatcher exposes them and otherwise prompts for the configured source.
+- Added the ASCII section/key/value `NSMBeUD` codec and a module-aware editor for NitroFS file ID 131, available both from Tools and the Filesystem dock.
+- Added isolated legacy build adapters: Fireflower retains its historical project-local `__tmp` contract, while NSMBe compatibility uses an explicit external clean-room wrapper contract instead of embedding GPL code. Both produce a separate extracted tree that is rebuilt into a chosen ROM.
+- Decided against an editor-specific network filesystem. Mounted/network-synchronised module directories already work through ordinary filesystem watching; a new remote protocol has no defined authentication, conflict, offline, or recovery contract and would duplicate the active-module workflow.
+- Added synthetic round-trip, malformed-input, Qt-surface, resolved-banner, and isolated legacy-workspace coverage; see `docs/m13-manual-checklist.md` for ROM-backed validation.
+
+## M14: web frontend
+
+- Compiled the portable level backend to WebAssembly behind a versioned,
+  browser-neutral C ABI with opaque sessions, named JSON snapshots, defensive
+  mutations, undo/redo, structured errors, and owned serialization buffers.
+- Kept browser APIs out of `libs/`; Emscripten builds only portable core,
+  formats, and editable-level sources while excluding project-directory,
+  patching, CLI, Qt, and process adapters.
+- Added a dependency-free responsive web editor that opens local course/BGDat
+  pairs, renders a schematic canvas and entity tables, edits the main record
+  types, adds/deletes rows, runs undo/redo, and downloads both serialized files.
+- Added native ABI tests and exercised the compiled WebAssembly bundle in the
+  in-app browser against a real `J01_1` level; see `docs/m14-manual-checklist.md`.

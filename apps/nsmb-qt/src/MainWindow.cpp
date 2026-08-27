@@ -2,43 +2,68 @@
 
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/nds/rom.hpp"
-#include "nsmb/patching/external_tools.hpp"
+#include "PatcherPanel.hpp"
+#include "FilesystemDock.hpp"
+#include "TilesetEditorDialog.hpp"
+#include "UiResourceEditorDialog.hpp"
+#include "nsmb/patching/ncpatcher.hpp"
 #include "nsmb/project/manifest.hpp"
 #include "nsmb/project/graphics_resources.hpp"
+#include "nsmb/project/level_exchange.hpp"
+#include "nsmb/patching/process.hpp"
+#include "nsmb/patching/legacy.hpp"
 
 #include <QApplication>
+#include <QActionGroup>
 #include <QByteArray>
 #include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QDir>
 #include <QDockWidget>
 #include <QCloseEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
+#include <QFormLayout>
 #include <QHeaderView>
 #include <QIcon>
 #include <QItemSelectionModel>
 #include <QInputDialog>
 #include <QKeySequence>
 #include <QLineEdit>
+#include <QComboBox>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QListWidget>
+#include <QPlainTextEdit>
 #include <QPixmap>
+#include <QPushButton>
 #include <QSaveFile>
+#include <QScrollArea>
 #include <QSettings>
 #include <QStandardPaths>
+#include <QSpinBox>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTimer>
+#include <QTemporaryDir>
+#include <QTreeWidget>
+#include <QToolBox>
+#include <QToolButton>
+#include <QToolBar>
+#include <QGridLayout>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
 #include <filesystem>
 #include <limits>
+#include <map>
 #include <span>
 #include <utility>
+#include <unordered_set>
 #include <vector>
 
 namespace {
@@ -52,6 +77,12 @@ QString projectTitle(const nsmb::project::Project& project) {
 
 nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFile(const std::filesystem::path& path) {
     return nsmb::core::read_file(path);
+}
+
+nsmb::core::Result<std::string> readTextFile(const std::filesystem::path& path) {
+    auto bytes = nsmb::core::read_file(path);
+    if (!bytes) return bytes.error();
+    return std::string(reinterpret_cast<const char*>(bytes.value().data()), bytes.value().size());
 }
 
 nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFilePrefix(const std::filesystem::path& path, std::size_t maximum_size) {
@@ -97,12 +128,51 @@ std::filesystem::path extractedProjectPath(const nsmb::project::Project& project
     return path.is_absolute() ? path : project.directory() / path;
 }
 
+QString hexBytes(std::span<const std::uint8_t> bytes) {
+    return QByteArray(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())).toHex(' ').toUpper();
+}
+
+std::optional<std::vector<std::uint8_t>> unhexBytes(QString text) {
+    text.remove(' '); text.remove('\t'); text.remove('\r'); text.remove('\n');
+    if (text.size() % 2) return std::nullopt;
+    for (const auto c : text) if (!c.isDigit() && (c.toLower() < 'a' || c.toLower() > 'f')) return std::nullopt;
+    const auto bytes = QByteArray::fromHex(text.toLatin1()); return std::vector<std::uint8_t>(bytes.begin(), bytes.end());
+}
+
 QString workspaceKey(const nsmb::project::Project& project) {
     if (project.directory().empty()) {
         return {};
     }
     const auto path = QString::fromStdString(project.directory().lexically_normal().generic_string()).toUtf8();
     return path.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+QString uiText(std::string_view english) {
+    struct Translation { std::string_view english, nl, pt, es, fr; };
+    static constexpr std::array translations{
+        Translation{"Project Hub","Projecthub","Central do projeto","Centro del proyecto","Centre du projet"},
+        Translation{"Level Listing","Leveloverzicht","Lista de níveis","Lista de niveles","Liste des niveaux"},
+        Translation{"Tilesets","Tegelsets","Conjuntos de blocos","Conjuntos de bloques","Jeux de tuiles"},
+        Translation{"Backgrounds","Achtergronden","Fundos","Fondos","Arrière-plans"},
+        Translation{"Filesystem","Bestandssysteem","Sistema de arquivos","Sistema de archivos","Système de fichiers"},
+        Translation{"Tools","Gereedschap","Ferramentas","Herramientas","Outils"},
+        Translation{"Open Editor","Editor openen","Abrir editor","Abrir editor","Ouvrir l’éditeur"},
+        Translation{"Hex Editor","Hex-editor","Editor hexadecimal","Editor hexadecimal","Éditeur hexadécimal"},
+        Translation{"File","Bestand","Arquivo","Archivo","Fichier"},
+        Translation{"Edit","Bewerken","Editar","Editar","Édition"},
+        Translation{"View","Beeld","Exibir","Ver","Affichage"},
+        Translation{"Distribution","Distributie","Distribuição","Distribución","Distribution"},
+        Translation{"Save Project","Project opslaan","Salvar projeto","Guardar proyecto","Enregistrer le projet"},
+        Translation{"Cut","Knippen","Recortar","Cortar","Couper"},
+        Translation{"Copy","Kopiëren","Copiar","Copiar","Copier"},
+        Translation{"Paste","Plakken","Colar","Pegar","Coller"},
+        Translation{"Language","Taal","Idioma","Idioma","Langue"},
+    };
+    const auto language = QSettings().value("Language", "en").toString();
+    const auto found = std::ranges::find(translations, english, &Translation::english);
+    if (found == translations.end()) return QString::fromUtf8(english.data(), static_cast<qsizetype>(english.size()));
+    const auto value = language == "nl" ? found->nl : language == "pt" ? found->pt : language == "es" ? found->es : language == "fr" ? found->fr : found->english;
+    return QString::fromUtf8(value.data(), static_cast<qsizetype>(value.size()));
 }
 
 } // namespace
@@ -127,6 +197,15 @@ MainWindow::MainWindow() {
     });
     connect(graphicsRefreshTimer_, &QTimer::timeout, this, &MainWindow::refreshChangedGraphics);
 
+    moduleWatcher_ = new QFileSystemWatcher(this);
+    moduleRefreshTimer_ = new QTimer(this);
+    moduleRefreshTimer_->setSingleShot(true);
+    moduleRefreshTimer_->setInterval(250);
+    connect(moduleWatcher_, &QFileSystemWatcher::directoryChanged, moduleRefreshTimer_, qOverload<>(&QTimer::start));
+    connect(moduleRefreshTimer_, &QTimer::timeout, this, &MainWindow::reloadFilesystemView);
+    autosaveTimer_ = new QTimer(this); autosaveTimer_->setInterval(60000); autosaveTimer_->start();
+    connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::writeRecoverySnapshots);
+
     auto project = nsmb::project::create_empty_project("Empty Project", {}).value();
     setProject(project);
 }
@@ -142,9 +221,21 @@ void MainWindow::createWorkspace() {
     tabs_->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
     setCentralWidget(tabs_);
 
+    hub_ = new QWidget(tabs_); auto* hub_layout = new QVBoxLayout(hub_); auto* hub_tabs = new QTabWidget(hub_); hub_tabs->setObjectName("ProjectHubTabs"); hub_layout->addWidget(hub_tabs);
+    auto page = [&](QString name) { auto* widget=new QWidget(hub_tabs); auto* layout=new QVBoxLayout(widget); hub_tabs->addTab(widget,name); return std::pair{widget,layout}; };
+    auto [levels_page,levels_layout]=page(uiText("Level Listing"));hubLevelTree_=new QTreeView(levels_page);hubLevelTree_->setModel(projectModel_);hubLevelTree_->setRootIsDecorated(true);hubLevelTree_->setSelectionBehavior(QAbstractItemView::SelectRows);hubLevelTree_->setSelectionMode(QAbstractItemView::SingleSelection);hubLevelTree_->header()->setStretchLastSection(true);levels_layout->addWidget(hubLevelTree_);auto* level_buttons=new QHBoxLayout;auto* open_level=new QPushButton(uiText("Open Editor"),levels_page);auto* level_hex=new QPushButton(uiText("Hex Editor"),levels_page);auto* import_level=new QPushButton("Import .nml",levels_page);auto* export_level=new QPushButton("Export .nml",levels_page);for(auto* button:{open_level,level_hex,import_level,export_level})level_buttons->addWidget(button);levels_layout->addLayout(level_buttons);
+    auto [tileset_page,tileset_layout]=page(uiText("Tilesets"));tileset_layout->addWidget(new QLabel("Edit the current level's three tileset slots, Map16, objects, and behaviours.",tileset_page));auto* open_tilesets=new QPushButton("Open Tileset Editor",tileset_page);tileset_layout->addWidget(open_tilesets);tileset_layout->addStretch();
+    auto [background_page,background_layout]=page(uiText("Backgrounds"));background_layout->addWidget(new QLabel("Edit the current level's background and foreground graphics, palettes, and screen maps.",background_page));auto* open_backgrounds=new QPushButton("Open Background Editor",background_page);background_layout->addWidget(open_backgrounds);background_layout->addStretch();
+    auto [filesystem_page,filesystem_layout]=page(uiText("Filesystem"));hubFilesystemTree_=new QTreeWidget(filesystem_page);hubFilesystemTree_->setHeaderLabels({"Path","Status","Module","Variant","Size"});filesystem_layout->addWidget(hubFilesystemTree_);auto* show_filesystem=new QPushButton("Open Filesystem Dock",filesystem_page);filesystem_layout->addWidget(show_filesystem);
+    auto [tools_page,tools_layout]=page(uiText("Tools"));for(const auto& [name,callback]:std::array<std::pair<const char*,std::function<void()>>,9>{{{"Level Hex Editor",[this]{editLevelHex();}},{"Find Object",[this]{findEntity(false);}},{"Find Sprite",[this]{findEntity(true);}},{"Sprite Event Viewer",[this]{showSpriteEvents();}},{"ROM Banner",[this]{editRomBanner();}},{"ROM User Metadata",[this]{editRomUserMetadata();}},{"Export .nsmbpatch",[this]{exportPatch();}},{"Create xdelta",[this]{runXdelta(true);}},{"Run NCPatcher",[this]{runPatcher();}}}}){auto* button=new QPushButton(name,tools_page);connect(button,&QPushButton::clicked,this,callback);tools_layout->addWidget(button);}tools_layout->addStretch();
+    tabs_->addTab(hub_, uiText("Project Hub"));
+
     preview_ = new LevelPreviewWidget(tabs_);
     preview_->setEditable(false);
     tabs_->addTab(preview_, "Preview");
+    connect(hubLevelTree_->selectionModel(),&QItemSelectionModel::currentChanged,this,[this](const QModelIndex& index){updateSelectedLevel(index);});
+    connect(hubLevelTree_,&QTreeView::doubleClicked,this,[this](const QModelIndex& index){openLevelEditor(index);});
+    connect(open_level,&QPushButton::clicked,this,[this]{openLevelEditor(hubLevelTree_->currentIndex());});connect(level_hex,&QPushButton::clicked,this,&MainWindow::editLevelHex);connect(import_level,&QPushButton::clicked,this,&MainWindow::importLevelPackage);connect(export_level,&QPushButton::clicked,this,&MainWindow::exportLevelPackage);connect(open_tilesets,&QPushButton::clicked,this,&MainWindow::openTilesetEditor);connect(open_backgrounds,&QPushButton::clicked,this,&MainWindow::openTilesetEditor);connect(show_filesystem,&QPushButton::clicked,this,[this]{filesystemDock_->show();filesystemDock_->raise();});
     connect(tabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
     connect(tabs_, &QTabWidget::currentChanged, this, [this] { activateCurrentDocument(); });
     connect(tabs_->tabBar(), &QTabBar::customContextMenuRequested, this, [this](const QPoint& position) {
@@ -172,6 +263,7 @@ void MainWindow::createWorkspace() {
             if (document.window && document.window == now->window()) {
                 currentLevel_ = levelSessions_.contains(key) ? levelSessions_.at(key).get() : nullptr;
                 levelProperties_->setLevel(currentLevel_);
+                levelData_->setLevel(currentLevel_, &moduleData_);
                 refreshPalette();
                 updateEditState();
                 return;
@@ -184,7 +276,7 @@ void MainWindow::createMenus() {
     auto* bar = menuBar();
     bar->setNativeMenuBar(false);
 
-    auto* file = bar->addMenu("&File");
+    auto* file = bar->addMenu("&" + uiText("File"));
     file->addAction("New Project...", QKeySequence::New, this, [this] {
         log("File > New Project selected.");
         newProject();
@@ -197,10 +289,12 @@ void MainWindow::createMenus() {
         log("File > Open Project selected.");
         openProject();
     });
-    file->addAction("Save Project", QKeySequence::Save, this, [this] {
+    file->addAction(uiText("Save Project"), QKeySequence::Save, this, [this] {
         log("File > Save Project selected.");
         saveProject();
     });
+    file->addAction("Export Level (.nml)…", this, &MainWindow::exportLevelPackage);
+    file->addAction("Import Level (.nml)…", this, &MainWindow::importLevelPackage);
     file->addSeparator();
     file->addAction("Run Patcher...", this, [this] {
         log("File > Run Patcher selected.");
@@ -216,10 +310,43 @@ void MainWindow::createMenus() {
         close();
     });
 
-    auto* edit = bar->addMenu("&Edit");
+    auto* edit = bar->addMenu("&" + uiText("Edit"));
     undoAction_ = edit->addAction("Undo", QKeySequence::Undo, this, [this] { undo(); });
     redoAction_ = edit->addAction("Redo", QKeySequence::Redo, this, [this] { redo(); });
-    viewMenu_ = bar->addMenu("&View");
+    auto* history_bar=addToolBar("History");history_bar->setObjectName("HistoryToolbar");undoButton_=new QToolButton(history_bar);redoButton_=new QToolButton(history_bar);for(auto* button:{undoButton_,redoButton_}){button->setPopupMode(QToolButton::MenuButtonPopup);button->setMenu(new QMenu(button));history_bar->addWidget(button);}undoButton_->setDefaultAction(undoAction_);redoButton_->setDefaultAction(redoAction_);
+    connect(undoButton_->menu(),&QMenu::aboutToShow,this,[this]{auto* menu=undoButton_->menu();menu->clear();if(!currentLevel_)return;const auto names=currentLevel_->undo_names();for(std::size_t i=0;i<names.size();++i)menu->addAction(QString::fromStdString(names[i]),this,[this,count=i+1]{for(std::size_t n=0;n<count&&currentLevel_&&currentLevel_->can_undo();++n)undo();});});
+    connect(redoButton_->menu(),&QMenu::aboutToShow,this,[this]{auto* menu=redoButton_->menu();menu->clear();if(!currentLevel_)return;const auto names=currentLevel_->redo_names();for(std::size_t i=0;i<names.size();++i)menu->addAction(QString::fromStdString(names[i]),this,[this,count=i+1]{for(std::size_t n=0;n<count&&currentLevel_&&currentLevel_->can_redo();++n)redo();});});
+    edit->addSeparator();
+    edit->addAction(uiText("Cut"), QKeySequence::Cut, this, [this] { if (auto* view=activeLevelView()) view->cutSelection(); });
+    edit->addAction(uiText("Copy"), QKeySequence::Copy, this, [this] { if (auto* view=activeLevelView()) view->copySelection(); });
+    edit->addAction(uiText("Paste"), QKeySequence::Paste, this, [this] { if (auto* view=activeLevelView()) view->pasteSelection(); });
+    edit->addAction("Duplicate", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { if (auto* view=activeLevelView()) view->cloneSelection(); });
+    edit->addAction("Bring Forward", QKeySequence(Qt::Key_PageUp), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(true); });
+    edit->addAction("Send Backward", QKeySequence(Qt::Key_PageDown), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(false); });
+    auto* tools = bar->addMenu("&" + uiText("Tools"));
+    auto* tilesets = tools->addAction("Tilesets and Backgrounds…", this, &MainWindow::openTilesetEditor);
+    tilesets->setObjectName("TilesetEditorAction");
+    tools->addAction("Level Hex Editor…", this, &MainWindow::editLevelHex);
+    tools->addAction("Find Object…", this, [this] { findEntity(false); });
+    tools->addAction("Find Sprite…", this, [this] { findEntity(true); });
+    tools->addAction("Sprite Event Viewer…", this, &MainWindow::showSpriteEvents);
+    auto* bannerAction = tools->addAction("ROM Banner…", this, &MainWindow::editRomBanner);
+    bannerAction->setObjectName("RomBannerAction");
+    auto* metadataAction = tools->addAction("ROM User Metadata…", this, &MainWindow::editRomUserMetadata);
+    metadataAction->setObjectName("RomUserMetadataAction");
+    auto* distribution = bar->addMenu("&" + uiText("Distribution"));
+    distribution->addAction("Export .nsmbpatch…", this, &MainWindow::exportPatch);
+    distribution->addAction("Import .nsmbpatch…", this, &MainWindow::importPatch);
+    distribution->addAction("Create xdelta…", this, [this] { runXdelta(true); });
+    distribution->addAction("Apply xdelta…", this, [this] { runXdelta(false); });
+    distribution->addSeparator();
+    auto* fireflower = distribution->addAction("Build with Fireflower…", this, [this] { runLegacyPatch(true); });
+    fireflower->setObjectName("FireflowerBuildAction");
+    auto* nsmbe = distribution->addAction("Build with NSMBe Wrapper…", this, [this] { runLegacyPatch(false); });
+    nsmbe->setObjectName("NsmbeWrapperBuildAction");
+    auto* language = bar->addMenu(uiText("Language")); auto* language_group = new QActionGroup(language); language_group->setExclusive(true);
+    for (const auto& [code, name] : std::array{std::pair{"en","English"},std::pair{"nl","Nederlands"},std::pair{"pt","Português"},std::pair{"es","Español"},std::pair{"fr","Français"}}) { auto* action=language->addAction(name);action->setCheckable(true);action->setChecked(QSettings().value("Language","en").toString()==code);language_group->addAction(action);connect(action,&QAction::triggered,this,[this,code]{QSettings().setValue("Language",code);QMessageBox::information(this,uiText("Language"),"The interface language will be applied the next time Big Star starts.");}); }
+    viewMenu_ = bar->addMenu("&" + uiText("View"));
     updateEditState();
 }
 
@@ -254,8 +381,10 @@ void MainWindow::createDocks() {
     propertiesLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     propertiesLabel_->setMargin(8);
     levelProperties_ = new LevelPropertiesWidget(propertiesContainer);
+    levelData_ = new LevelDataWidget(propertiesContainer);
     propertiesLayout->addWidget(propertiesLabel_);
     propertiesLayout->addWidget(levelProperties_, 1);
+    propertiesLayout->addWidget(levelData_, 1);
     propertiesDock_->setWidget(propertiesContainer);
     addDockWidget(Qt::RightDockWidgetArea, propertiesDock_);
 
@@ -281,6 +410,15 @@ void MainWindow::createDocks() {
         log("Edit failed: " + message);
         QMessageBox::warning(this, "Level Edit Failed", message);
     });
+    connect(levelData_, &LevelDataWidget::levelChanged, this, [this] {
+        preview_->update();
+        for (auto& [key, document] : documents_) { (void)key; document.view->refreshLevelState(); }
+        updateEditState();
+    });
+    connect(levelData_, &LevelDataWidget::errorOccurred, this, [this](const QString& message) {
+        log("Level data edit failed: " + message);
+        QMessageBox::warning(this, "Level Data Edit Failed", message);
+    });
 
     paletteDock_ = new QDockWidget("Palette", this);
     paletteDock_->setObjectName("PaletteDock");
@@ -289,38 +427,60 @@ void MainWindow::createDocks() {
     paletteLayout->setContentsMargins(4, 4, 4, 4);
     paletteSearch_ = new QLineEdit(paletteContainer);
     paletteSearch_->setPlaceholderText("Filter palette...");
-    paletteList_ = new QListWidget(paletteContainer);
+    auto* paletteTabs = new QTabWidget(paletteContainer);
+    paletteToolbox_ = new QToolBox(paletteTabs);
+    paletteToolbox_->setObjectName("VanillaPaletteToolbox");
+    customPaletteTree_ = new QTreeWidget(paletteTabs);
+    customPaletteTree_->setHeaderHidden(true);
+    paletteTabs->addTab(paletteToolbox_, "Vanilla actors");
+    paletteTabs->addTab(customPaletteTree_, "Custom actors");
     paletteLayout->addWidget(paletteSearch_);
-    paletteLayout->addWidget(paletteList_, 1);
+    paletteLayout->addWidget(paletteTabs, 1);
     paletteDock_->setWidget(paletteContainer);
     addDockWidget(Qt::LeftDockWidgetArea, paletteDock_);
     tabifyDockWidget(levelsDock_, paletteDock_);
     levelsDock_->raise();
     connect(paletteSearch_, &QLineEdit::textChanged, this, [this](const QString& text) {
-        for (int row = 0; row < paletteList_->count(); ++row) {
-            paletteList_->item(row)->setHidden(!paletteList_->item(row)->text().contains(text, Qt::CaseInsensitive));
+        for (auto* button : paletteButtons_) button->setVisible(button->text().contains(text,Qt::CaseInsensitive)||button->property("category").toString().contains(text,Qt::CaseInsensitive));
+        for (int module = 0; module < customPaletteTree_->topLevelItemCount(); ++module) {
+            auto* moduleItem = customPaletteTree_->topLevelItem(module); bool moduleVisible = false;
+            for (int component = 0; component < moduleItem->childCount(); ++component) {
+                auto* componentItem = moduleItem->child(component); bool componentVisible = false;
+                for (int actor = 0; actor < componentItem->childCount(); ++actor) {
+                    auto* actorItem = componentItem->child(actor);
+                    const bool visible = actorItem->text(0).contains(text, Qt::CaseInsensitive);
+                    actorItem->setHidden(!visible); componentVisible |= visible;
+                }
+                componentItem->setHidden(!componentVisible); moduleVisible |= componentVisible;
+            }
+            moduleItem->setHidden(!moduleVisible);
         }
     });
-    connect(paletteList_, &QListWidget::currentItemChanged, this, [this](QListWidgetItem* item, QListWidgetItem*) {
+    connect(customPaletteTree_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item, QTreeWidgetItem*) {
+        if (!item || !item->data(0, Qt::UserRole).isValid()) return;
         LevelPreviewWidget* view = nullptr;
-        for (auto& [key, document] : documents_) {
-            (void)key;
-            if (document.view->level() == currentLevel_) view = document.view;
-        }
+        for (auto& [key, document] : documents_) { (void)key; if (document.view->level() == currentLevel_) view = document.view; }
         if (!view) return;
-        if (!item) {
-            view->clearPlacement();
-            return;
-        }
-        const auto tool = static_cast<LevelPreviewWidget::Tool>(item->data(Qt::UserRole).toInt());
-        if (tool == LevelPreviewWidget::Tool::Object) {
-            view->setPlacementObject(item->data(Qt::UserRole + 2).toInt(), item->data(Qt::UserRole + 1).toInt());
-        } else if (tool == LevelPreviewWidget::Tool::Sprite) {
-            view->setPlacementSprite(item->data(Qt::UserRole + 1).toInt());
-        } else {
-            view->setPlacementTool(tool);
-        }
+        view->setPlacementCustomSprite(static_cast<std::uint32_t>(item->data(0, Qt::UserRole).toULongLong()));
         view->setFocus();
+    });
+
+    filesystemDock_ = new QDockWidget("Filesystem", this);
+    filesystemDock_->setObjectName("FilesystemDock");
+    filesystemPanel_ = new FilesystemDock(filesystemDock_);
+    filesystemDock_->setWidget(filesystemPanel_);
+    addDockWidget(Qt::LeftDockWidgetArea, filesystemDock_);
+    tabifyDockWidget(levelsDock_, filesystemDock_);
+    connect(filesystemPanel_, &FilesystemDock::activeTargetChanged, this, [this](const QString& module, const QString& variant) {
+        if (activeModule_ == module && activeVariant_ == variant) return;
+        activeModule_ = module; activeVariant_ = variant; ncpatcherVariant_ = variant;
+        patcherPanel_->setSelectedVariant(variant);
+        reloadFilesystemView();
+    });
+    connect(filesystemPanel_, &FilesystemDock::filesChanged, this, &MainWindow::reloadFilesystemView);
+    connect(filesystemPanel_, &FilesystemDock::runPatcherRequested, this, &MainWindow::runPatcher);
+    connect(filesystemPanel_, &FilesystemDock::errorOccurred, this, [this](const QString& message) {
+        log("Filesystem: " + message); QMessageBox::warning(this, "Filesystem Operation Failed", message);
     });
 
     logDock_ = new QDockWidget("Log", this);
@@ -330,7 +490,35 @@ void MainWindow::createDocks() {
     logDock_->setWidget(logOutput_);
     addDockWidget(Qt::BottomDockWidgetArea, logDock_);
 
-    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, logDock_}) {
+    buildDock_ = new QDockWidget("Build Output", this);
+    buildDock_->setObjectName("BuildOutputDock");
+    patcherPanel_ = new PatcherPanel(buildDock_);
+    buildDock_->setWidget(patcherPanel_);
+    addDockWidget(Qt::BottomDockWidgetArea, buildDock_);
+    // Sharing the bottom area with the Log, since a build is something you
+    // switch to rather than watch alongside the editor.
+    tabifyDockWidget(logDock_, buildDock_);
+    logDock_->raise();
+
+    connect(patcherPanel_, &PatcherPanel::logMessage, this, &MainWindow::log);
+    // Remembered per project, alongside the rest of the workspace state.
+    connect(patcherPanel_, &PatcherPanel::variantChanged, this,
+            [this](const QString& variant) {
+                ncpatcherVariant_ = variant;
+                if (activeVariant_ != variant) { activeVariant_ = variant; reloadFilesystemView(); }
+            });
+    connect(patcherPanel_, &PatcherPanel::diagnosticActivated, this,
+            &MainWindow::openDiagnosticLocation);
+    connect(patcherPanel_, &PatcherPanel::buildFinished, this, &MainWindow::onPatcherFinished);
+    connect(patcherPanel_, &PatcherPanel::treeApplied, this,
+            [this](const QString& backupDir, const QString& builtRom) {
+                log("Built ROM: " + builtRom);
+                if (!backupDir.isEmpty()) {
+                    log("Previous extracted tree kept at: " + backupDir);
+                }
+            });
+
+    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, logDock_, buildDock_}) {
         viewMenu_->addAction(dock->toggleViewAction());
     }
     viewMenu_->addSeparator();
@@ -527,6 +715,10 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         if (!bgdat_relative) {
             return bgdat_relative.error();
         }
+        auto course_target = moduleSaveTarget(course_relative.value());
+        auto bgdat_target = moduleSaveTarget(bgdat_relative.value());
+        if (!course_target) return course_target.error();
+        if (!bgdat_target) return bgdat_target.error();
 
         auto course = level->serialize_course();
         auto bgdat = level->serialize_bgdat();
@@ -543,13 +735,17 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         }
 
         levels.push_back({level.get()});
-        files.push_back({currentProject_.directory() / course_relative.value(),
-                         course_relative.value(),
-                         backup_root / course_relative.value(),
+        auto course_target_relative = nsmb::project::make_project_relative(currentProject_.directory(), course_target.value());
+        auto bgdat_target_relative = nsmb::project::make_project_relative(currentProject_.directory(), bgdat_target.value());
+        if (!course_target_relative) return course_target_relative.error();
+        if (!bgdat_target_relative) return bgdat_target_relative.error();
+        files.push_back({course_target.value(),
+                         course_target_relative.value(),
+                         backup_root / course_target_relative.value(),
                          std::move(course.value())});
-        files.push_back({currentProject_.directory() / bgdat_relative.value(),
-                         bgdat_relative.value(),
-                         backup_root / bgdat_relative.value(),
+        files.push_back({bgdat_target.value(),
+                         bgdat_target_relative.value(),
+                         backup_root / bgdat_target_relative.value(),
                          std::move(bgdat.value())});
     }
     if (files.empty()) {
@@ -558,16 +754,15 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
 
     std::error_code ec;
     for (const auto& file : files) {
-        if (!std::filesystem::is_regular_file(file.target, ec)) {
-            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "level file does not exist: " + file.target.string());
-        }
-        std::filesystem::create_directories(file.backup.parent_path(), ec);
+        std::filesystem::create_directories(file.target.parent_path(), ec);
         if (ec) {
-            return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not create the level backup directory");
+            return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not create the module target directory");
         }
-        std::filesystem::copy_file(file.target, file.backup, std::filesystem::copy_options::none, ec);
-        if (ec) {
-            return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not back up " + file.target.string());
+        if (std::filesystem::is_regular_file(file.target, ec)) {
+            std::filesystem::create_directories(file.backup.parent_path(), ec);
+            if (ec) return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not create the level backup directory");
+            std::filesystem::copy_file(file.target, file.backup, std::filesystem::copy_options::none, ec);
+            if (ec) return nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "could not back up " + file.target.string());
         }
     }
 
@@ -576,22 +771,20 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         auto result = writeBinaryFileAtomically(files[written].target, files[written].bytes);
         if (!result) {
             for (std::size_t rollback = 0; rollback < written; ++rollback) {
-                std::filesystem::copy_file(files[rollback].backup,
-                                           files[rollback].target,
-                                           std::filesystem::copy_options::overwrite_existing,
-                                           ec);
+                if (std::filesystem::is_regular_file(files[rollback].backup, ec))
+                    std::filesystem::copy_file(files[rollback].backup, files[rollback].target, std::filesystem::copy_options::overwrite_existing, ec);
+                else std::filesystem::remove(files[rollback].target, ec);
             }
             return result.error();
         }
     }
 
-    for (const auto& file : files) {
-        currentProject_.update_game_file_size(file.relative, file.bytes.size());
-    }
     for (const auto& level : levels) {
         level.level->mark_clean();
     }
-    log("Backed up original level files to " + QString::fromStdString(backup_root.string()));
+    writeRecoverySnapshots();
+    log("Saved level edits to the active module tree. Run NCPatcher to apply them to the extracted ROM.");
+    reloadFilesystemView();
     return {};
 }
 
@@ -626,8 +819,29 @@ void MainWindow::runPatcher() {
         QMessageBox::information(this, "Run Patcher", "Open or import a ROM project first.");
         return;
     }
+    if (patcherPanel_->running()) {
+        log("NCPatcher is already running.");
+        return;
+    }
     if (!saveProject()) {
         return;
+    }
+
+    const auto config = nsmb::patching::detect_project_config(currentProject_.directory());
+    if (config.kind == nsmb::patching::ProjectConfigKind::None) {
+        QMessageBox::information(
+            this, "Run Patcher",
+            "This project has no ncpatcher.yaml, so there is nothing for NCPatcher to build.");
+        log("Run Patcher: no ncpatcher.yaml in the project directory.");
+        return;
+    }
+    if (config.kind == nsmb::patching::ProjectConfigKind::V1Json) {
+        // Offered rather than done silently: migrating rewrites how the project
+        // builds, and the old file stays put until a build has proved the new
+        // one works.
+        if (!offerNcpatcherMigration(config.file)) {
+            return;
+        }
     }
 
     auto executable = QStandardPaths::findExecutable("ncpatcher");
@@ -639,19 +853,89 @@ void MainWindow::runPatcher() {
         }
     }
 
-    log("Running NCPatcher: " + executable);
-    nsmb::patching::NCPatcherExternalTool patcher;
-    nsmb::core::Result<nsmb::patching::ExternalToolResult> result =
-        nsmb::core::make_error(nsmb::core::ErrorCode::ExternalToolFailed, "patcher did not start");
-    {
-        WaitCursor cursor;
-        result = patcher.run({currentProject_.directory(), std::filesystem::path(executable.toStdString()), true});
-    }
-    if (!result) {
-        QMessageBox::warning(this, "NCPatcher Failed", QString::fromStdString(result.error().message));
-        log("NCPatcher failed: " + QString::fromStdString(result.error().message));
+    patcherPanel_->setProjectDirectory(currentProject_.directory());
+    // A successful build replaces this tree, but only after its ROM has been
+    // validated and extracted in staging.
+    patcherPanel_->setExtractedDirectory(extractedProjectPath(currentProject_));
+    patcherPanel_->setExecutable(std::filesystem::path(executable.toStdString()));
+    patcherPanel_->setSelectedVariant(ncpatcherVariant_);
+
+    buildDock_->show();
+    buildDock_->raise();
+
+    if (!patcherPanel_->startBuild(true)) {
+        log("NCPatcher could not be started.");
         return;
     }
+    log("Running NCPatcher: " + executable);
+    updateEditState();
+}
+
+bool MainWindow::offerNcpatcherMigration(const std::filesystem::path& legacyConfig) {
+    const auto answer = QMessageBox::question(
+        this, "Legacy NCPatcher Project",
+        "This project still uses the legacy ncpatcher.json:\n\n" +
+            QString::fromStdString(legacyConfig.string()) +
+            "\n\nNCPatcher 2 builds from ncpatcher.yaml. Convert it now?\n"
+            "The original ncpatcher.json is left in place.",
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes);
+    if (answer != QMessageBox::Yes) {
+        log("Run Patcher cancelled: the project still uses ncpatcher.json.");
+        return false;
+    }
+
+    nsmb::patching::NCPatcherClient client;
+    nsmb::core::Result<nsmb::patching::RunSummary> migrated =
+        nsmb::core::make_error(nsmb::core::ErrorCode::ExternalToolFailed, "migrate did not run");
+    {
+        WaitCursor cursor;
+        migrated = client.migrate(currentProject_.directory(), true);
+    }
+    if (!migrated || !migrated.value().succeeded()) {
+        const QString reason = migrated
+                                   ? QString::fromStdString(std::string(
+                                         nsmb::patching::describe_stage(migrated.value().stage)))
+                                   : QString::fromStdString(migrated.error().message);
+        QMessageBox::warning(this, "Migration Failed",
+                             "NCPatcher could not convert the project:\n" + reason);
+        log("NCPatcher migration failed: " + reason);
+        return false;
+    }
+    log("Converted ncpatcher.json to ncpatcher.yaml. The original file was left in place.");
+    return true;
+}
+
+void MainWindow::openDiagnosticLocation(const QString& file, int line, int column) {
+    // Big Star has no YAML editor of its own yet, so the honest thing is to say
+    // exactly where the problem is rather than pretend to navigate there.
+    log(QString("Diagnostic at %1:%2:%3").arg(file).arg(line).arg(column));
+    QMessageBox::information(this, "Diagnostic Location",
+                             QString("%1\n\nLine %2, column %3").arg(file).arg(line).arg(column));
+}
+
+void MainWindow::onPatcherFinished(bool ok, int exitCode, const QString& stage, int errors,
+                                   int warnings) {
+    updateEditState();
+
+    if (!ok) {
+        const QString detail = QString("%1 (exit code %2, %3 error(s), %4 warning(s))")
+                                   .arg(stage)
+                                   .arg(exitCode)
+                                   .arg(errors)
+                                   .arg(warnings);
+        log("NCPatcher failed: " + detail);
+        QMessageBox::warning(this, "NCPatcher Failed",
+                             "NCPatcher did not finish:\n\n" + detail +
+                                 "\n\nSee the Build Output dock for the diagnostics.");
+        return;
+    }
+
+    // The apply replaced the extracted tree wholesale, so every cached level
+    // session now points at bytes that are no longer on disk.
+    clearDocuments();
+    levelSessions_.clear();
+    currentLevel_ = nullptr;
+
     auto refreshed = currentProject_;
     auto indexed = nsmb::project::index_project_files(refreshed, extractedProjectPath(refreshed));
     if (!indexed) {
@@ -674,8 +958,335 @@ void MainWindow::runPatcher() {
     }
     refreshed.mark_clean();
     setProject(refreshed);
-    log("NCPatcher completed successfully.");
-    QMessageBox::information(this, "NCPatcher Complete", "NCPatcher completed successfully.");
+
+    const QString summary = warnings > 0
+                                ? QString("NCPatcher completed with %1 warning(s).").arg(warnings)
+                                : QString("NCPatcher completed successfully.");
+    log(summary);
+    QMessageBox::information(this, "NCPatcher Complete", summary);
+}
+
+LevelPreviewWidget* MainWindow::activeLevelView() const {
+    if (auto* view = qobject_cast<LevelPreviewWidget*>(tabs_->currentWidget()); view && view != preview_) return view;
+    for (const auto& [key, document] : documents_) { (void)key; if (document.view->level() == currentLevel_) return document.view; }
+    return nullptr;
+}
+
+void MainWindow::exportLevelPackage() {
+    if (!currentLevel_) { QMessageBox::information(this, "Export Level", "Open an editable level first."); return; }
+    auto course=currentLevel_->serialize_course(),bgdat=currentLevel_->serialize_bgdat();if(!course||!bgdat){QMessageBox::warning(this,"Export Level",QString::fromStdString(!course?course.error().message:bgdat.error().message));return;}
+    nsmb::project::LevelPackage package; package.course=std::move(course.value()); package.bgdat=std::move(bgdat.value());
+    QString suggested="level.nml";
+    for(const auto& [key,document]:documents_)if(document.view->level()==currentLevel_){suggested=document.name+".nml";for(auto [path,id]:{std::pair{document.course_path,&package.course_file_id},std::pair{document.bgdat_path,&package.bgdat_file_id}}){auto rom=romPathForProjectFile(path.toStdString());if(rom)if(const auto* entry=filesystemView_.find(rom.value());entry&&entry->id&&*entry->id>=0&&*entry->id<=65535)*id=static_cast<std::uint16_t>(*entry->id);}break;}
+    auto encoded=nsmb::project::encode_nml(package);if(!encoded){QMessageBox::warning(this,"Export Level",QString::fromStdString(encoded.error().message));return;}
+    const auto path=QFileDialog::getSaveFileName(this,"Export Level",suggested,"NSMB levels (*.nml)");if(path.isEmpty())return;auto result=nsmb::core::write_file_atomically(path.toStdString(),encoded.value());if(!result)QMessageBox::warning(this,"Export Level",QString::fromStdString(result.error().message));
+}
+
+void MainWindow::importLevelPackage() {
+    if(!currentLevel_){QMessageBox::information(this,"Import Level","Open an editable level first.");return;}const auto path=QFileDialog::getOpenFileName(this,"Import Level",{},"NSMB levels (*.nml)");if(path.isEmpty())return;auto bytes=nsmb::core::read_file(path.toStdString());if(!bytes){QMessageBox::warning(this,"Import Level",QString::fromStdString(bytes.error().message));return;}auto package=nsmb::project::decode_nml(bytes.value());if(!package){QMessageBox::warning(this,"Import Level",QString::fromStdString(package.error().message));return;}auto result=currentLevel_->replace_serialized(package.value().course,package.value().bgdat,&moduleData_,"Import level");if(!result){QMessageBox::warning(this,"Import Level",QString::fromStdString(result.error().message));return;}if(auto* view=activeLevelView())view->refreshLevelState();levelProperties_->refresh();levelData_->refresh();updateEditState();
+}
+
+void MainWindow::editLevelHex() {
+    if(!currentLevel_){QMessageBox::information(this,"Level Hex Editor","Open an editable level first.");return;}auto course=currentLevel_->serialize_course(),bgdat=currentLevel_->serialize_bgdat();if(!course||!bgdat)return;
+    QDialog dialog(this);dialog.setWindowTitle("Level Hex Editor");dialog.resize(900,600);auto* layout=new QVBoxLayout(&dialog);auto* pages=new QTabWidget(&dialog);auto editor=[&](QString name,const auto& data){auto* text=new QPlainTextEdit(pages);text->setLineWrapMode(QPlainTextEdit::NoWrap);text->setPlainText(hexBytes(data));pages->addTab(text,name);return text;};auto* course_editor=editor("Course",course.value());auto* bgdat_editor=editor("BGDat",bgdat.value());layout->addWidget(pages);auto* buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,&dialog);layout->addWidget(buttons);connect(buttons,&QDialogButtonBox::accepted,&dialog,&QDialog::accept);connect(buttons,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);if(dialog.exec()!=QDialog::Accepted)return;auto edited_course=unhexBytes(course_editor->toPlainText()),edited_bgdat=unhexBytes(bgdat_editor->toPlainText());if(!edited_course||!edited_bgdat){QMessageBox::warning(this,"Level Hex Editor","Hex data contains an invalid or incomplete byte.");return;}auto result=currentLevel_->replace_serialized(*edited_course,*edited_bgdat,&moduleData_,"Hex edit level");if(!result){QMessageBox::warning(this,"Level Hex Editor",QString::fromStdString(result.error().message));return;}if(auto* view=activeLevelView())view->refreshLevelState();levelProperties_->refresh();levelData_->refresh();updateEditState();
+}
+
+void MainWindow::findEntity(bool sprites) {
+    if(currentProject_.directory().empty())return;bool ok=false;const auto id=QInputDialog::getInt(this,sprites?"Find Sprite":"Find Object",sprites?"Placement type":"Object ID",0,0,sprites?65535:4095,1,&ok);if(!ok)return;
+    QDialog dialog(this);dialog.setWindowTitle(sprites?"Sprite Finder":"Object Finder");dialog.resize(760,480);auto* layout=new QVBoxLayout(&dialog);auto* results=new QTreeWidget(&dialog);results->setHeaderLabels({"Level","Index","X","Y","Settings"});layout->addWidget(results);auto* close=new QDialogButtonBox(QDialogButtonBox::Close,&dialog);layout->addWidget(close);connect(close,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);
+    WaitCursor wait;std::function<void(const QModelIndex&)> scan=[&](const QModelIndex& parent){for(int row=0;row<projectModel_->rowCount(parent);++row){const auto index=projectModel_->index(row,0,parent);const auto kind=projectModel_->data(index,ProjectTreeModel::NodeKindRole).toInt();if((kind==ProjectTreeModel::AreaNode||kind==ProjectTreeModel::OtherNode)&&projectModel_->data(index,ProjectTreeModel::AvailableRole).toBool()){const auto course_path=projectModel_->data(index,ProjectTreeModel::CoursePathRole).toString(),bgdat_path=projectModel_->data(index,ProjectTreeModel::BgdatPathRole).toString();auto level=levelSession(course_path,bgdat_path);if(level){if(sprites){const auto& values=level.value()->course().sprites;for(std::size_t i=0;i<values.size();++i)if(values[i].id==id){auto* item=new QTreeWidgetItem(results,{projectModel_->data(index,Qt::DisplayRole).toString(),QString::number(i),QString::number(values[i].x),QString::number(values[i].y),QString("0x%1").arg(values[i].settings,8,16,QLatin1Char('0'))});item->setData(0,Qt::UserRole,course_path);item->setData(0,Qt::UserRole+1,bgdat_path);item->setData(0,Qt::UserRole+2,static_cast<int>(i));}}else{const auto& values=level.value()->objects();for(std::size_t i=0;i<values.size();++i)if(values[i].object_id==id){auto* item=new QTreeWidgetItem(results,{projectModel_->data(index,Qt::DisplayRole).toString(),QString::number(i),QString::number(values[i].x),QString::number(values[i].y),{}});item->setData(0,Qt::UserRole,course_path);item->setData(0,Qt::UserRole+1,bgdat_path);item->setData(0,Qt::UserRole+2,static_cast<int>(i));}}}}scan(index);}};scan({});
+    connect(results,&QTreeWidget::itemDoubleClicked,&dialog,[&](QTreeWidgetItem* item){const auto index=findLevelIndex(item->data(0,Qt::UserRole).toString(),item->data(0,Qt::UserRole+1).toString());if(index.isValid()){openLevelEditor(index);levelProperties_->select(sprites?LevelPropertiesWidget::Kind::Sprite:LevelPropertiesWidget::Kind::Object,item->data(0,Qt::UserRole+2).toInt());if(auto* view=activeLevelView())view->setSelection(sprites?2:1,item->data(0,Qt::UserRole+2).toInt(),-1);}dialog.accept();});dialog.exec();
+}
+
+void MainWindow::showSpriteEvents() {
+    if(!currentLevel_){QMessageBox::information(this,"Sprite Events","Open an editable level first.");return;}std::unordered_map<std::uint16_t,QString> names;auto resources=nsmb::project::resolve_level_graphics(currentProject_,currentLevel_->tileset_references());if(resources)for(const auto& actor:resources.value().actors)names.emplace(actor.type,QString::fromStdString(actor.name));
+    QDialog dialog(this);dialog.setWindowTitle("Sprite Event Viewer");dialog.resize(620,420);auto* layout=new QVBoxLayout(&dialog);auto* table=new QTreeWidget(&dialog);table->setHeaderLabels({"Event","Sprite","Type","Name"});for(std::size_t i=0;i<currentLevel_->course().sprites.size();++i){const auto& sprite=currentLevel_->course().sprites[i];for(const auto event:sprite.events)if(event){auto* item=new QTreeWidgetItem(table,{QString::number(event),QString::number(i),QString::number(sprite.id),names.contains(sprite.id)?names.at(sprite.id):QString("Actor %1").arg(sprite.id)});item->setData(0,Qt::UserRole,static_cast<int>(i));}}table->sortItems(0,Qt::AscendingOrder);layout->addWidget(table);auto* close=new QDialogButtonBox(QDialogButtonBox::Close,&dialog);layout->addWidget(close);connect(close,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);connect(table,&QTreeWidget::itemDoubleClicked,&dialog,[&](QTreeWidgetItem* item){const auto index=item->data(0,Qt::UserRole).toInt();levelProperties_->select(LevelPropertiesWidget::Kind::Sprite,index);if(auto* view=activeLevelView())view->setSelection(2,index,-1);});dialog.exec();
+}
+
+void MainWindow::exportPatch() {
+    if(currentProject_.directory().empty()||!saveProject())return;std::vector<nsmb::project::NsmbPatchEntry> entries;for(const auto& file:filesystemView_.entries)if(file.status!=nsmb::project::FilesystemStatus::Vanilla&&file.status!=nsmb::project::FilesystemStatus::Orphaned&&!file.source.empty()){auto data=nsmb::core::read_file(file.source);if(!data){QMessageBox::warning(this,"Export Patch",QString::fromStdString(data.error().message));return;}entries.push_back({file.path,file.id?static_cast<std::int32_t>(*file.id):-1,std::move(data.value())});}if(entries.empty()){QMessageBox::information(this,"Export Patch","There are no module changes to distribute.");return;}auto encoded=nsmb::project::encode_nsmbpatch(entries);if(!encoded){QMessageBox::warning(this,"Export Patch",QString::fromStdString(encoded.error().message));return;}const auto path=QFileDialog::getSaveFileName(this,"Export Patch",QString::fromStdString(currentProject_.name())+".nsmbpatch","Big Star patches (*.nsmbpatch)");if(path.isEmpty())return;auto written=nsmb::core::write_file_atomically(path.toStdString(),encoded.value());if(!written)QMessageBox::warning(this,"Export Patch",QString::fromStdString(written.error().message));
+}
+
+void MainWindow::importPatch() {
+    if(currentProject_.directory().empty())return;const auto path=QFileDialog::getOpenFileName(this,"Import Patch",{},"Big Star patches (*.nsmbpatch)");if(path.isEmpty())return;auto bytes=nsmb::core::read_file(path.toStdString());if(!bytes){QMessageBox::warning(this,"Import Patch",QString::fromStdString(bytes.error().message));return;}auto patch=nsmb::project::decode_nsmbpatch(bytes.value());if(!patch){QMessageBox::warning(this,"Import Patch",QString::fromStdString(patch.error().message));return;}
+    struct Write{std::filesystem::path target,backup;const nsmb::project::NsmbPatchEntry* entry{};bool existed{};};std::vector<Write> writes;bool id_warning=false;const auto backup_root=currentProject_.directory()/".big-star-backups"/("patch-import-"+QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz").toStdString());
+    for(const auto& entry:patch.value()){const auto* current=filesystemView_.find(entry.path);if(current&&current->id&&entry.expected_file_id>=0&&*current->id!=entry.expected_file_id)id_warning=true;const auto module_name=current&&!current->module.empty()?current->module:activeModule_.toStdString();const auto* module=moduleGraph_.find(module_name);if(!module){QMessageBox::warning(this,"Import Patch","Choose an active module in the Filesystem dock first.");return;}auto target=nsmb::project::module_file_target(*module,activeVariant_.toStdString(),entry.path,activeModuleMappings());if(!target){QMessageBox::warning(this,"Import Patch",QString::fromStdString(target.error().message));return;}writes.push_back({target.value(),backup_root/std::filesystem::path(entry.path),&entry});}
+    if(id_warning&&QMessageBox::warning(this,"Import Patch","One or more file IDs differ from the patch's source ROM. Apply by path anyway?",QMessageBox::Yes|QMessageBox::No,QMessageBox::No)!=QMessageBox::Yes)return;
+    std::error_code ec;for(auto& write:writes){std::filesystem::create_directories(write.target.parent_path(),ec);if(ec){QMessageBox::warning(this,"Import Patch","Could not create a module directory.");return;}write.existed=std::filesystem::is_regular_file(write.target,ec);if(write.existed){std::filesystem::create_directories(write.backup.parent_path(),ec);std::filesystem::copy_file(write.target,write.backup,std::filesystem::copy_options::overwrite_existing,ec);if(ec){QMessageBox::warning(this,"Import Patch","Could not back up an existing module file.");return;}}}
+    std::size_t written=0;for(;written<writes.size();++written){auto result=nsmb::core::write_file_atomically(writes[written].target,writes[written].entry->contents);if(!result){for(std::size_t i=0;i<written;++i){if(writes[i].existed)std::filesystem::copy_file(writes[i].backup,writes[i].target,std::filesystem::copy_options::overwrite_existing,ec);else std::filesystem::remove(writes[i].target,ec);}QMessageBox::warning(this,"Import Patch",QString::fromStdString(result.error().message));return;}}
+    reloadFilesystemView();log(QString("Imported %1 patch file(s) transactionally.").arg(patch.value().size()));
+}
+
+void MainWindow::runXdelta(bool create) {
+    auto executable=QStandardPaths::findExecutable("xdelta3");if(executable.isEmpty())executable=QFileDialog::getOpenFileName(this,"Select xdelta3 Executable");if(executable.isEmpty())return;QStringList inputs;if(create){inputs<<QFileDialog::getOpenFileName(this,"Select Clean ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getOpenFileName(this,"Select Modified ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getSaveFileName(this,"Save xdelta Patch",{},"xdelta patches (*.xdelta)");}else{inputs<<QFileDialog::getOpenFileName(this,"Select Clean ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getOpenFileName(this,"Select xdelta Patch",{},"xdelta patches (*.xdelta)")<<QFileDialog::getSaveFileName(this,"Save Patched ROM",{},"Nintendo DS ROMs (*.nds)");}if(std::ranges::any_of(inputs,[](const auto& value){return value.isEmpty();}))return;nsmb::patching::ProcessRequest request;request.executable=executable.toStdString();request.arguments=create?std::vector<std::string>{"-e","-f","-s",inputs[0].toStdString(),inputs[1].toStdString(),inputs[2].toStdString()}:std::vector<std::string>{"-d","-f","-s",inputs[0].toStdString(),inputs[1].toStdString(),inputs[2].toStdString()};QString errors;WaitCursor wait;auto result=nsmb::patching::run_process(request,{},[&](std::string_view line){errors+=QString::fromUtf8(line.data(),static_cast<qsizetype>(line.size()))+'\n';});if(!result||result.value().exit_code!=0)QMessageBox::warning(this,"xdelta3",result?errors:QString::fromStdString(result.error().message));else QMessageBox::information(this,"xdelta3",create?"Patch created successfully.":"Patched ROM created successfully.");
+}
+
+void MainWindow::runLegacyPatch(bool fireflower) {
+    if (!currentProject_.rom()) {
+        QMessageBox::information(this, "Legacy Code Patcher", "Open or import a ROM project first.");
+        return;
+    }
+    if (!fireflower) QMessageBox::information(this, "NSMBe Wrapper",
+        "Select an external clean-room NSMBe-compatible wrapper. Big Star passes `--project <dir> --filesystem <dir>/__tmp`; no GPL NSMBe code is embedded.");
+    auto executable = fireflower ? QStandardPaths::findExecutable("fireflower") : QString{};
+    if (executable.isEmpty()) executable = QFileDialog::getOpenFileName(
+        this, fireflower ? "Select Fireflower Executable" : "Select NSMBe Wrapper Executable");
+    if (executable.isEmpty()) return;
+    const auto project = QFileDialog::getExistingDirectory(
+        this, fireflower ? "Select Fireflower Project" : "Select Legacy NSMBe Project",
+        QString::fromStdString(currentProject_.directory().string()));
+    if (project.isEmpty()) return;
+    const auto suggested = QString::fromStdString(
+        (currentProject_.directory() / (fireflower ? "fireflower.nds" : "nsmbe-legacy.nds")).string());
+    const auto output = QFileDialog::getSaveFileName(
+        this, "Save Patched Nintendo DS ROM", suggested, "Nintendo DS ROMs (*.nds)");
+    if (output.isEmpty()) return;
+
+    QTemporaryDir temporary(QDir::tempPath() + "/big-star-legacy-XXXXXX");
+    if (!temporary.isValid()) {
+        QMessageBox::warning(this, "Legacy Code Patcher", "Could not create an isolated build directory.");
+        return;
+    }
+    nsmb::patching::LegacyPatchRequest request;
+    request.backend = fireflower ? nsmb::patching::LegacyPatchBackend::Fireflower
+                                 : nsmb::patching::LegacyPatchBackend::NsmbeWrapper;
+    request.executable = executable.toStdString();
+    request.project_dir = project.toStdString();
+    request.extracted_dir = extractedProjectPath(currentProject_);
+    request.output_dir = std::filesystem::path(temporary.path().toStdString()) / "extracted";
+    std::string tool_output;
+    auto capture = [&tool_output](std::string_view line) {
+        tool_output.append(line); tool_output.push_back('\n');
+    };
+    nsmb::core::Result<void> patched;
+    {
+        WaitCursor wait;
+        patched = nsmb::patching::run_legacy_patch(request, capture, capture);
+    }
+    if (!patched) {
+        const auto detail = tool_output.empty() ? patched.error().message
+            : patched.error().message + "\n\n" + tool_output;
+        QMessageBox::warning(this, "Legacy Code Patcher", QString::fromStdString(detail));
+        return;
+    }
+    nsmb::nds::NitroRomService service;
+    nsmb::core::Result<void> built;
+    {
+        WaitCursor wait;
+        built = service.build(request.output_dir, output.toStdString());
+    }
+    if (!built) {
+        QMessageBox::warning(this, "Legacy Code Patcher", QString::fromStdString(built.error().message));
+        return;
+    }
+    if (!tool_output.empty()) log(QString::fromStdString(tool_output));
+    log(QString("Built %1 legacy ROM: %2").arg(fireflower ? "Fireflower" : "NSMBe-wrapper", output));
+    QMessageBox::information(this, "Legacy Code Patcher", "The patched ROM was written successfully.");
+}
+
+void MainWindow::writeRecoverySnapshots() {
+    if (currentProject_.directory().empty()) return;
+    const auto root = currentProject_.directory() / ".big-star-autosave";
+    std::error_code ec; std::filesystem::create_directories(root, ec);
+    if (ec) { log("Autosave: could not create recovery directory."); return; }
+    std::unordered_set<std::string> keep;
+    for (const auto& [key, level] : levelSessions_) {
+        if (!level->dirty()) continue;
+        const auto separator = key.find('\n'); if (separator == std::string::npos) continue;
+        auto course = level->serialize_course(), bgdat = level->serialize_bgdat(); if (!course || !bgdat) continue;
+        nsmb::project::LevelRecoverySnapshot snapshot{key.substr(0, separator), key.substr(separator + 1),
+            {0, 0, std::move(course.value()), std::move(bgdat.value())}};
+        auto encoded = nsmb::project::encode_level_recovery(snapshot); if (!encoded) continue;
+        const auto key_bytes = QByteArray(key.data(), static_cast<qsizetype>(key.size()));
+        const auto name = key_bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals).toStdString() + ".bsrecover";
+        keep.insert(name); auto result = nsmb::core::write_file_atomically(root / name, encoded.value());
+        if (!result) log("Autosave: " + QString::fromStdString(result.error().message));
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+        if (entry.is_regular_file() && entry.path().extension() == ".bsrecover" && !keep.contains(entry.path().filename().string()))
+            std::filesystem::remove(entry.path(), ec);
+}
+
+void MainWindow::restoreRecoverySnapshots() {
+    if (currentProject_.directory().empty()) return;
+    const auto root = currentProject_.directory() / ".big-star-autosave"; std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) return;
+    std::vector<nsmb::project::LevelRecoverySnapshot> snapshots;
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec)) if (entry.is_regular_file() && entry.path().extension() == ".bsrecover") {
+        auto bytes = nsmb::core::read_file(entry.path()); if (!bytes) { log("Recovery: " + QString::fromStdString(bytes.error().message)); continue; }
+        auto decoded = nsmb::project::decode_level_recovery(bytes.value()); if (!decoded) { log("Recovery: " + QString::fromStdString(decoded.error().message)); continue; }
+        snapshots.push_back(std::move(decoded.value()));
+    }
+    if (snapshots.empty()) return;
+    if (QMessageBox::question(this, "Recover Autosaved Levels",
+                              QString("Big Star found %1 autosaved level(s) from an interrupted or unsaved session. Recover them?").arg(snapshots.size()),
+                              QMessageBox::Yes | QMessageBox::No, QMessageBox::Yes) == QMessageBox::No) { clearRecoverySnapshots(); return; }
+    int restored = 0;
+    for (auto& snapshot : snapshots) {
+        auto session = levelSession(QString::fromStdString(snapshot.course_path), QString::fromStdString(snapshot.bgdat_path));
+        if (!session) { log("Recovery: " + QString::fromStdString(session.error().message)); continue; }
+        auto result = session.value()->replace_serialized(snapshot.package.course, snapshot.package.bgdat, &moduleData_, "Recover autosave");
+        if (!result) { log("Recovery: " + QString::fromStdString(result.error().message)); continue; }
+        ++restored;
+    }
+    if (restored) log(QString("Recovered %1 autosaved level(s). Save the project to keep them.").arg(restored));
+    updateEditState();
+}
+
+void MainWindow::clearRecoverySnapshots() {
+    if (currentProject_.directory().empty()) return;
+    const auto root = currentProject_.directory() / ".big-star-autosave"; std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) return;
+    for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+        if (entry.is_regular_file() && entry.path().extension() == ".bsrecover") std::filesystem::remove(entry.path(), ec);
+}
+
+void MainWindow::openTilesetEditor() {
+    if (!currentLevel_) {
+        QMessageBox::information(this, "Tilesets and Backgrounds", "Open an editable level first.");
+        return;
+    }
+    auto resources = nsmb::project::resolve_level_graphics(currentProject_, currentLevel_->tileset_references());
+    if (!resources) { QMessageBox::warning(this, "Tilesets and Backgrounds", QString::fromStdString(resources.error().message)); return; }
+    auto read = [](const std::filesystem::path& path) -> nsmb::core::Result<std::vector<std::uint8_t>> {
+        return path.empty() ? nsmb::core::Result<std::vector<std::uint8_t>>(std::vector<std::uint8_t>{}) : nsmb::core::read_file(path);
+    };
+    std::array<nsmb::formats::TilesetResourceData, 3> source_tilesets;
+    std::array<nsmb::formats::EditableTileset, 3> tilesets;
+    for (std::size_t slot = 0; slot < tilesets.size(); ++slot) {
+        const auto& files = resources.value().tilesets[slot];
+        auto graphics=read(files.graphics),palette=read(files.palette),map16=read(files.map16),objects=read(files.objects),index=read(files.object_index),behaviors=read(files.behaviors);
+        if(!graphics||!palette||!map16||!objects||!index||!behaviors){const auto message=!graphics?graphics.error().message:!palette?palette.error().message:!map16?map16.error().message:!objects?objects.error().message:!index?index.error().message:behaviors.error().message;QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(message));return;}
+        source_tilesets[slot]={std::move(graphics.value()),std::move(palette.value()),std::move(map16.value()),std::move(objects.value()),std::move(index.value()),std::move(behaviors.value())};
+        auto parsed=nsmb::formats::parse_tileset(source_tilesets[slot],files.tile_offset,files.palette_offset,files.tile_page_offset);
+        if(!parsed){QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(parsed.error().message));return;}tilesets[slot]=std::move(parsed.value());
+    }
+    auto load_map=[&](const nsmb::project::BackgroundResourceFiles& files,nsmb::formats::TilemapResourceData& source)->nsmb::core::Result<nsmb::formats::EditableTilemap>{auto graphics=read(files.graphics),palette=read(files.palette),screen=read(files.screen);if(!graphics)return graphics.error();if(!palette)return palette.error();if(!screen)return screen.error();source={std::move(graphics.value()),std::move(palette.value()),std::move(screen.value())};return nsmb::formats::parse_tilemap(source);};
+    nsmb::formats::TilemapResourceData source_background,source_foreground;
+    auto background=load_map(resources.value().background,source_background),foreground=load_map(resources.value().foreground,source_foreground);
+    if(!background||!foreground){QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(!background?background.error().message:foreground.error().message));return;}
+    TilesetEditorDialog dialog(std::move(tilesets),std::move(background.value()),std::move(foreground.value()),currentLevel_->tileset_references(),this);
+    if(dialog.exec()!=QDialog::Accepted)return;
+    std::array<nsmb::formats::TilesetResourceData,3> encoded_tilesets;
+    for(std::size_t slot=0;slot<encoded_tilesets.size();++slot){auto value=dialog.tilesetData(slot);if(!value){QMessageBox::warning(this,"Save tileset",QString::fromStdString(value.error().message));return;}encoded_tilesets[slot]=std::move(value.value());}
+    auto encoded_background=dialog.backgroundData(),encoded_foreground=dialog.foregroundData();
+    if(!encoded_background||!encoded_foreground){QMessageBox::warning(this,"Save backgrounds",QString::fromStdString(!encoded_background?encoded_background.error().message:encoded_foreground.error().message));return;}
+    struct Write { std::filesystem::path source; std::vector<std::uint8_t> bytes; std::filesystem::path target; };
+    std::vector<Write> writes;
+    auto queue=[&](const std::filesystem::path& source,const std::vector<std::uint8_t>& before,std::vector<std::uint8_t> after)->nsmb::core::Result<void>{if(before==after)return{};if(source.empty())return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument,"edited resource has no ROM file target");std::error_code ec;auto relative=std::filesystem::relative(source,currentProject_.directory(),ec);if(ec)return nsmb::core::make_error(nsmb::core::ErrorCode::IoError,"could not resolve the edited resource path");auto target=moduleSaveTarget(relative);if(!target)return target.error();writes.push_back({source,std::move(after),std::move(target.value())});return{};};
+    auto queue_tileset=[&](std::size_t slot)->nsmb::core::Result<void>{const auto& paths=resources.value().tilesets[slot];const auto& before=source_tilesets[slot];auto& after=encoded_tilesets[slot];if(auto r=queue(paths.graphics,before.graphics,std::move(after.graphics));!r)return r;if(auto r=queue(paths.palette,before.palette,std::move(after.palette));!r)return r;if(auto r=queue(paths.map16,before.map16,std::move(after.map16));!r)return r;if(auto r=queue(paths.objects,before.objects,std::move(after.objects));!r)return r;if(auto r=queue(paths.object_index,before.object_index,std::move(after.object_index));!r)return r;return queue(paths.behaviors,before.behaviors,std::move(after.behaviors));};
+    for(std::size_t slot=0;slot<3;++slot)if(auto result=queue_tileset(slot);!result){QMessageBox::warning(this,"Save tileset",QString::fromStdString(result.error().message));return;}
+    auto queue_map=[&](const nsmb::project::BackgroundResourceFiles& paths,const nsmb::formats::TilemapResourceData& before,nsmb::formats::TilemapResourceData after)->nsmb::core::Result<void>{if(auto r=queue(paths.graphics,before.graphics,std::move(after.graphics));!r)return r;if(auto r=queue(paths.palette,before.palette,std::move(after.palette));!r)return r;return queue(paths.screen,before.screen,std::move(after.screen));};
+    if(auto result=queue_map(resources.value().background,source_background,std::move(encoded_background.value()));!result){QMessageBox::warning(this,"Save background",QString::fromStdString(result.error().message));return;}
+    if(auto result=queue_map(resources.value().foreground,source_foreground,std::move(encoded_foreground.value()));!result){QMessageBox::warning(this,"Save foreground",QString::fromStdString(result.error().message));return;}
+    for(auto& write:writes){std::error_code ec;std::filesystem::create_directories(write.target.parent_path(),ec);if(ec){QMessageBox::warning(this,"Save graphics","Could not create the module target directory.");return;}auto result=nsmb::core::write_file_atomically(write.target,write.bytes);if(!result){QMessageBox::warning(this,"Save graphics",QString::fromStdString(result.error().message));return;}}
+    if(dialog.references()!=currentLevel_->tileset_references())if(auto result=currentLevel_->set_tileset_references(dialog.references());!result){QMessageBox::warning(this,"Save slots",QString::fromStdString(result.error().message));return;}
+    reloadFilesystemView();refreshGraphics();levelProperties_->refresh();updateEditState();log(QString("Saved %1 edited graphics resource(s) to module targets.").arg(writes.size()));
+}
+
+void MainWindow::editRomBanner() {
+    if (!currentProject_.rom()) {
+        QMessageBox::information(this, "ROM Banner", "Open or import a ROM project first.");
+        return;
+    }
+
+    std::filesystem::path target;
+    if (patcherConfig_) {
+        const auto variant = std::ranges::find(
+            patcherConfig_->variants, activeVariant_.toStdString(), &nsmb::patching::BuildVariant::name);
+        target = variant != patcherConfig_->variants.end() && !variant->banner.empty()
+            ? variant->banner : patcherConfig_->rom_banner;
+        if (target.empty()) {
+            const auto selected = QFileDialog::getOpenFileName(this,
+                "Select the banner source configured by rom.banner",
+                QString::fromStdString(currentProject_.directory().string()), "DS banners (*.bin);;All files (*)");
+            if (selected.isEmpty()) return;
+            target = selected.toStdString();
+        }
+        if (target.is_relative()) target = currentProject_.directory() / target;
+    } else {
+        target = extractedProjectPath(currentProject_) / "banner.bin";
+    }
+
+    const auto extracted = extractedProjectPath(currentProject_) / "banner.bin";
+    const auto source = std::filesystem::is_regular_file(target) ? target : extracted;
+    auto bytes = nsmb::core::read_file(source);
+    if (!bytes) {
+        QMessageBox::warning(this, "ROM Banner", QString::fromStdString(bytes.error().message));
+        return;
+    }
+    UiResourceEditorDialog dialog("banner.bin", bytes.value(), false, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    auto encoded = dialog.editedBytes();
+    if (!encoded) {
+        QMessageBox::warning(this, "ROM Banner", QString::fromStdString(encoded.error().message));
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) {
+        QMessageBox::warning(this, "ROM Banner", "Could not create the configured banner directory.");
+        return;
+    }
+    auto saved = writeBinaryFileAtomically(target, encoded.value());
+    if (!saved) {
+        QMessageBox::warning(this, "ROM Banner", QString::fromStdString(saved.error().message));
+        return;
+    }
+    log("Saved ROM banner: " + QString::fromStdString(target.string()));
+}
+
+void MainWindow::editRomUserMetadata() {
+    const auto found = std::ranges::find_if(filesystemView_.entries, [](const auto& entry) {
+        return entry.id && *entry.id == 131;
+    });
+    if (found == filesystemView_.entries.end()) {
+        QMessageBox::information(this, "ROM User Metadata", "NitroFS file ID 131 is not present in this ROM.");
+        return;
+    }
+    const auto source = !found->source.empty() ? found->source : found->extracted;
+    auto bytes = nsmb::core::read_file(source);
+    if (!bytes) {
+        QMessageBox::warning(this, "ROM User Metadata", QString::fromStdString(bytes.error().message));
+        return;
+    }
+    UiResourceEditorDialog dialog(found->path, bytes.value(), true, this);
+    if (dialog.exec() != QDialog::Accepted) return;
+    auto encoded = dialog.editedBytes();
+    if (!encoded) {
+        QMessageBox::warning(this, "ROM User Metadata", QString::fromStdString(encoded.error().message));
+        return;
+    }
+
+    std::filesystem::path target = found->extracted;
+    if (!moduleGraph_.modules.empty()) {
+        std::string key = found->module.empty() ? activeModule_.toStdString() : found->module;
+        const auto* module = moduleGraph_.find(key);
+        if (!module) {
+            QMessageBox::information(this, "ROM User Metadata", "Choose an active module in the Filesystem dock before saving.");
+            return;
+        }
+        auto resolved = nsmb::project::module_file_target(
+            *module, activeVariant_.toStdString(), found->path, activeModuleMappings());
+        if (!resolved) {
+            QMessageBox::warning(this, "ROM User Metadata", QString::fromStdString(resolved.error().message));
+            return;
+        }
+        target = std::move(resolved.value());
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(target.parent_path(), ec);
+    if (ec) {
+        QMessageBox::warning(this, "ROM User Metadata", "Could not create the metadata target directory.");
+        return;
+    }
+    auto saved = nsmb::core::write_file_atomically(target, encoded.value());
+    if (!saved) {
+        QMessageBox::warning(this, "ROM User Metadata", QString::fromStdString(saved.error().message));
+        return;
+    }
+    reloadFilesystemView();
+    log("Saved ROM user metadata: " + QString::fromStdString(target.string()));
 }
 
 void MainWindow::buildRom() {
@@ -719,13 +1330,54 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
         graphicsWatcher_->removePaths(graphicsWatcher_->files());
     }
     levelProperties_->setLevel(nullptr);
+    levelData_->setLevel(nullptr, &moduleData_);
     currentLevel_ = nullptr;
     clearDocuments();
     graphicsFiles_.clear();
     changedGraphicsFiles_.clear();
     levelSessions_.clear();
     currentProject_ = project;
+    moduleGraph_ = {};
+    patcherConfig_.reset();
+    fileManifest_.reset();
+    filesystemView_ = {};
+    projectVariants_.clear();
+    activeModule_.clear();
+    activeVariant_.clear();
+    moduleData_={};
+    spriteDefinitions_={};
+    const auto generated=QSettings().value("NCPatcherGeneratedPath","build/generated").toString().toStdString();
+    auto module_data=nsmb::project::load_module_data_catalog(currentProject_.directory(),generated);
+    if(module_data){moduleData_=std::move(module_data.value());if(moduleData_.stage_object_id_base!=326)log(QString("Stage-object catalog base %1 disagrees with Big Star's vanilla count 326.").arg(moduleData_.stage_object_id_base));}
+    else log("Module data: "+QString::fromStdString(module_data.error().message));
+    std::vector<nsmb::project::SpriteDefinitionLayer> definition_layers;
+    const auto plugins = currentProject_.directory() / "plugins";
+    std::error_code definitions_ec;
+    if (std::filesystem::is_directory(plugins, definitions_ec)) {
+        std::vector<std::filesystem::path> plugin_files;
+        for (const auto& entry : std::filesystem::directory_iterator(plugins, definitions_ec)) {
+            const auto path = entry.path() / "sprite-definitions.json";
+            if (entry.is_directory() && std::filesystem::exists(path)) plugin_files.push_back(path);
+        }
+        std::ranges::sort(plugin_files);
+        for (const auto& path : plugin_files) definition_layers.push_back({"plugin " + path.parent_path().filename().string(), path});
+    }
+    definition_layers.push_back({"project", currentProject_.directory() / "sprite-definitions.json"});
+    definition_layers.push_back({"local", std::filesystem::path(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation).toStdString()) / "sprite-definitions.json"});
+    definition_layers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "sprite-definitions.json"});
+    auto definitions = nsmb::project::load_sprite_definition_layers(definition_layers);
+    if (definitions) spriteDefinitions_ = std::move(definitions.value());
+    else log("Sprite definitions: " + QString::fromStdString(definitions.error().message));
+    levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
+    levelData_->setLevel(nullptr, &moduleData_);
+    levelProperties_->setObjectBankOverlays(std::nullopt);
+    if(currentProject_.rom()){
+        const auto arm9=nsmb::core::read_file(extractedProjectPath(currentProject_)/"arm9.bin");
+        if(arm9){const auto decoded=nsmb::formats::decompress_blz_overlay(arm9.value());if(decoded){auto table=nsmb::project::find_object_bank_overlays(decoded.value());if(table)levelProperties_->setObjectBankOverlays(table.value());}}
+    }
     projectModel_->setProject(currentProject_);
+    reloadFilesystemView();
+    restoreRecoverySnapshots();
     if (levelTree_) {
         levelTree_->expandToDepth(1);
     }
@@ -733,6 +1385,145 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     updateProjectSummary();
     restoreWorkspaceState();
     updateEditState();
+}
+
+std::vector<nsmb::project::ModuleVariantMapping> MainWindow::activeModuleMappings() const {
+    const auto found = std::ranges::find(projectVariants_, activeVariant_.toStdString(), &nsmb::project::ProjectVariantLayers::name);
+    return found == projectVariants_.end() ? std::vector<nsmb::project::ModuleVariantMapping>{} : found->mappings;
+}
+
+void MainWindow::reloadFilesystemView() {
+    if (!filesystemPanel_) return;
+    if (moduleWatcher_ && !moduleWatcher_->directories().empty()) moduleWatcher_->removePaths(moduleWatcher_->directories());
+    if (currentProject_.directory().empty() || !currentProject_.rom()) {
+        moduleGraph_ = {}; fileManifest_.reset(); filesystemView_ = {};
+        filesystemPanel_->setData({}, {}, {}, {}, {}, {});
+        return;
+    }
+
+    const auto configured = std::filesystem::path(QSettings().value("NCPatcherGeneratedPath", "build/generated").toString().toStdString());
+    const auto generated = configured.is_absolute() ? configured : currentProject_.directory() / configured;
+    const auto modulesFile = generated / "modules.json";
+    const auto filesFile = generated / "files.json";
+    const auto executable = patcherPanel_ && !patcherPanel_->executable().empty()
+        ? QString::fromStdString(patcherPanel_->executable().string())
+        : QStandardPaths::findExecutable("ncpatcher");
+    if (moduleGraph_.modules.empty()) {
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(modulesFile, ec)) {
+            auto text = readTextFile(modulesFile);
+            auto parsed = text ? nsmb::patching::parse_module_graph(text.value())
+                               : nsmb::core::Result<nsmb::patching::ModuleGraph>(text.error());
+            if (parsed) moduleGraph_ = std::move(parsed.value()); else log("Filesystem modules: " + QString::fromStdString(parsed.error().message));
+        } else if (!executable.isEmpty()) {
+            nsmb::patching::NCPatcherClient client(executable.toStdString());
+            auto parsed = client.dump_modules(currentProject_.directory());
+            if (parsed) moduleGraph_ = std::move(parsed.value()); else log("Filesystem modules: " + QString::fromStdString(parsed.error().message));
+        }
+        const auto localModules = currentProject_.directory() / "modules";
+        if (std::filesystem::is_directory(localModules, ec)) moduleGraph_.dir = localModules;
+        for (auto& module : moduleGraph_.modules) {
+            const auto local = localModules / module.key;
+            if (std::filesystem::is_directory(local, ec)) {
+                module.dir = local; module.file = local / "module.yaml";
+                if (module.nitrofs) module.nitrofs->dir = local / "nitrofs";
+            }
+        }
+    }
+
+    patcherConfig_.reset();
+    if (!executable.isEmpty()) {
+        nsmb::patching::NCPatcherClient client(executable.toStdString());
+        auto parsed = client.dump_config(currentProject_.directory());
+        if (parsed) patcherConfig_ = std::move(parsed.value());
+        else log("Filesystem config: " + QString::fromStdString(parsed.error().message));
+    }
+
+    fileManifest_.reset();
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(filesFile, ec)) {
+        auto text = readTextFile(filesFile);
+        auto parsed = text ? nsmb::patching::parse_file_manifest(text.value())
+                           : nsmb::core::Result<nsmb::patching::FileManifest>(text.error());
+        if (parsed) fileManifest_ = std::move(parsed.value());
+        else log("Filesystem manifest: " + QString::fromStdString(parsed.error().message));
+    }
+
+    projectVariants_.clear();
+    const auto configFile = currentProject_.directory() / "ncpatcher.yaml";
+    if (std::filesystem::is_regular_file(configFile, ec)) {
+        auto text = readTextFile(configFile);
+        auto parsed = text ? nsmb::project::parse_project_variant_layers(text.value())
+                           : nsmb::core::Result<std::vector<nsmb::project::ProjectVariantLayers>>(text.error());
+        if (parsed) projectVariants_ = std::move(parsed.value()); else log("Filesystem variants: " + QString::fromStdString(parsed.error().message));
+    }
+    QStringList variants;
+    if (patcherConfig_) for (const auto& variant : patcherConfig_->variants) variants.push_back(QString::fromStdString(variant.name));
+    else for (const auto& variant : projectVariants_) variants.push_back(QString::fromStdString(variant.name));
+    if (activeVariant_.isEmpty()) {
+        activeVariant_ = !ncpatcherVariant_.isEmpty() ? ncpatcherVariant_
+            : fileManifest_ && !fileManifest_->variant.empty() ? QString::fromStdString(fileManifest_->variant)
+            : variants.isEmpty() ? QString{} : variants.front();
+    }
+    if (activeModule_.isEmpty()) for (const auto& module : moduleGraph_.modules) if (module.enabled && module.nitrofs) {
+        activeModule_ = QString::fromStdString(module.key); break;
+    }
+
+    nsmb::project::FilesystemViewRequest request;
+    request.extracted_rom = extractedProjectPath(currentProject_);
+    request.project_dir = currentProject_.directory();
+    request.modules = moduleGraph_;
+    request.manifest = fileManifest_;
+    request.variant = activeVariant_.toStdString();
+    request.module_variants = activeModuleMappings();
+    request.has_current_config = patcherConfig_.has_value();
+    if (patcherConfig_) {
+        std::map<std::string, std::filesystem::path> explicitFiles;
+        for (const auto& [path, source] : patcherConfig_->files) explicitFiles[path] = source;
+        const auto selected = std::ranges::find(patcherConfig_->variants, request.variant, &nsmb::patching::BuildVariant::name);
+        if (selected != patcherConfig_->variants.end()) for (const auto& [path, source] : selected->files) explicitFiles[path] = source;
+        for (const auto& [path, source] : explicitFiles) request.explicit_files.push_back({path, source, {}, {}, {}});
+    }
+    auto built = nsmb::project::build_filesystem_view(std::move(request));
+    if (!built) { log("Filesystem view: " + QString::fromStdString(built.error().message)); filesystemView_ = {}; }
+    else filesystemView_ = std::move(built.value());
+    filesystemPanel_->setData(currentProject_.directory(), moduleGraph_, filesystemView_, variants, activeModule_, activeVariant_, activeModuleMappings());
+    if (hubFilesystemTree_) {
+        hubFilesystemTree_->clear();
+        for (const auto& entry : filesystemView_.entries) {
+            const auto status = nsmb::project::filesystem_status_name(entry.status);
+            auto* item = new QTreeWidgetItem(hubFilesystemTree_, {QString::fromStdString(entry.path),
+                QString::fromUtf8(status.data(), static_cast<qsizetype>(status.size())),
+                QString::fromStdString(entry.module), QString::fromStdString(entry.variant), QString::number(entry.size)});
+            item->setToolTip(0, QString::fromStdString(entry.source.string()));
+        }
+        for (int column = 0; column < hubFilesystemTree_->columnCount(); ++column) hubFilesystemTree_->resizeColumnToContents(column);
+    }
+    if (moduleWatcher_) {
+        QStringList watch; for (const auto& path : filesystemView_.watched_directories) if (std::filesystem::is_directory(path, ec)) watch.push_back(QString::fromStdString(path.string()));
+        if (!watch.isEmpty()) moduleWatcher_->addPaths(watch);
+    }
+}
+
+nsmb::core::Result<std::string> MainWindow::romPathForProjectFile(const std::filesystem::path& projectRelative) const {
+    if (!currentProject_.rom()) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "no extracted ROM is open");
+    const auto root = (currentProject_.rom()->extracted_path / "root").lexically_normal();
+    const auto relative = projectRelative.lexically_normal();
+    auto file = relative.begin(), prefix = root.begin();
+    for (; prefix != root.end(); ++prefix, ++file) if (file == relative.end() || *file != *prefix)
+        return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "edited file is outside the extracted NitroFS root");
+    std::filesystem::path romPath; for (; file != relative.end(); ++file) romPath /= *file;
+    if (romPath.empty()) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "edited file has no ROM path");
+    return romPath.generic_string();
+}
+
+nsmb::core::Result<std::filesystem::path> MainWindow::moduleSaveTarget(const std::filesystem::path& projectRelative) const {
+    auto romPath = romPathForProjectFile(projectRelative); if (!romPath) return romPath.error();
+    std::string moduleKey = activeModule_.toStdString();
+    if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->module.empty()) moduleKey = entry->module;
+    const auto* module = moduleGraph_.find(moduleKey);
+    if (!module) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "choose an active module in the Filesystem dock before saving");
+    return nsmb::project::module_file_target(*module, activeVariant_.toStdString(), romPath.value(), activeModuleMappings());
 }
 
 void MainWindow::updateProjectSummary() {
@@ -743,6 +1534,7 @@ void MainWindow::updateProjectSummary() {
     preview_->showProjectSummary(currentProject_, projectModel_->levelCount(), projectModel_->availableLevelCount());
     currentLevel_ = nullptr;
     levelProperties_->setLevel(nullptr);
+    levelData_->setLevel(nullptr, &moduleData_);
 
     QString text;
     text += "Project: " + QString::fromStdString(currentProject_.name()) + "\n";
@@ -781,6 +1573,7 @@ void MainWindow::updateSelectedLevel(const QModelIndex& index) {
     auto session = levelSession(course_path, bgdat_path);
     currentLevel_ = nullptr;
     levelProperties_->setLevel(nullptr);
+    levelData_->setLevel(nullptr, &moduleData_);
     if (preview_) {
         preview_->showLevel(name, world, area_name, course_path, bgdat_path, source_token, session ? session.value() : nullptr);
         configureGraphics(preview_);
@@ -814,7 +1607,7 @@ void MainWindow::updateSelectedLevel(const QModelIndex& index) {
 void MainWindow::showPreview() {
     auto index = tabs_->indexOf(preview_);
     if (index < 0) {
-        index = tabs_->insertTab(0, preview_, "Preview");
+        index = tabs_->insertTab(tabs_->indexOf(hub_) + 1, preview_, "Preview");
     }
     tabs_->setCurrentIndex(index);
     if (previewAction_) {
@@ -871,17 +1664,23 @@ void MainWindow::openLevelEditor(const QModelIndex& source_index) {
     auto* view = document.view;
     documents_.emplace(key, std::move(document));
     connect(view, &LevelPreviewWidget::selectionRequested, this, [this, view](int kind, int item, int node) {
-        if ((tabs_->currentWidget() == view || view->window()->isActiveWindow()) && kind >= 0 && kind <= 6) {
+        if ((tabs_->currentWidget() == view || view->window()->isActiveWindow()) && kind >= 0 && kind <= 7) {
             levelProperties_->select(static_cast<LevelPropertiesWidget::Kind>(kind), item, node);
         }
     });
     connect(view, &LevelPreviewWidget::multiSelectionRequested, this, [this, view](int kind, const QList<int>& items) {
-        if ((tabs_->currentWidget() == view || view->window()->isActiveWindow()) && !items.empty()) {
+        if ((tabs_->currentWidget() == view || view->window()->isActiveWindow()) && kind >= 0 && kind <= 7 && !items.empty()) {
             levelProperties_->selectMany(static_cast<LevelPropertiesWidget::Kind>(kind), items);
         }
     });
+    connect(view, &LevelPreviewWidget::kindShortcutRequested, this, [this, view](int kind) {
+        if (view->level() != currentLevel_) return;
+        levelProperties_->select(static_cast<LevelPropertiesWidget::Kind>(kind), 0);
+        propertiesDock_->show(); propertiesDock_->raise();
+    });
     connect(view, &LevelPreviewWidget::levelChanged, this, [this] {
         levelProperties_->refresh();
+        levelData_->refresh();
         preview_->update();
         updateEditState();
     });
@@ -900,6 +1699,7 @@ void MainWindow::openLevelEditor(const QModelIndex& source_index) {
 
 void MainWindow::closeTab(int index) {
     auto* widget = tabs_->widget(index);
+    if (widget == hub_) return;
     if (widget == preview_) {
         tabs_->removeTab(index);
         previewAction_->setChecked(false);
@@ -923,6 +1723,7 @@ void MainWindow::activateCurrentDocument() {
         if (levelProperties_) {
             levelProperties_->setLevel(nullptr);
         }
+        levelData_->setLevel(nullptr, &moduleData_);
         updateEditState();
         refreshPalette();
         return;
@@ -935,6 +1736,7 @@ void MainWindow::activateCurrentDocument() {
             currentLevel_ = found->second.get();
         }
         levelProperties_->setLevel(currentLevel_);
+        levelData_->setLevel(currentLevel_, &moduleData_);
         propertiesLabel_->setText("Level: " + document.name + "\nWorld: " + document.world + "\nCourse: " + document.course_path +
                                   "\nBGDat: " + document.bgdat_path);
         break;
@@ -971,6 +1773,7 @@ void MainWindow::detachEditor(const std::string& key) {
     found->second.view->show();
     currentLevel_ = levelSessions_.contains(key) ? levelSessions_.at(key).get() : nullptr;
     levelProperties_->setLevel(currentLevel_);
+    levelData_->setLevel(currentLevel_, &moduleData_);
     updateEditState();
 }
 
@@ -1033,11 +1836,14 @@ void MainWindow::saveWorkspaceState() {
     settings.setValue("geometry", saveGeometry());
     settings.setValue("docks", saveState());
     settings.setValue("previewVisible", tabs_->indexOf(preview_) >= 0);
+    settings.setValue("ncpatcherVariant", ncpatcherVariant_);
+    settings.setValue("activeModule", activeModule_);
+    settings.setValue("activeVariant", activeVariant_);
     settings.setValue("previewZoom", preview_->zoom());
     settings.setValue("previewPan", preview_->pan());
     QStringList open;
     QStringList detached;
-    QString active = tabs_->currentWidget() == preview_ ? "preview" : QString{};
+    QString active = tabs_->currentWidget() == hub_ ? "hub" : tabs_->currentWidget() == preview_ ? "preview" : QString{};
     for (const auto& [document_key, document] : documents_) {
         const auto text = QString::fromStdString(document_key);
         open.push_back(text);
@@ -1072,6 +1878,13 @@ void MainWindow::restoreWorkspaceState() {
     restoreState(settings.value("docks").toByteArray());
     preview_->setZoom(settings.value("previewZoom", 1.0).toDouble());
     preview_->setPan(settings.value("previewPan", QPointF{}).toPointF());
+    ncpatcherVariant_ = settings.value("ncpatcherVariant").toString();
+    activeModule_ = settings.value("activeModule", activeModule_).toString();
+    activeVariant_ = settings.value("activeVariant", ncpatcherVariant_).toString();
+    if (patcherPanel_) {
+        patcherPanel_->setSelectedVariant(ncpatcherVariant_);
+    }
+    reloadFilesystemView();
     const auto detached = settings.value("detached").toStringList();
     for (const auto& document_key : settings.value("documents").toStringList()) {
         const auto separator = document_key.indexOf('\n');
@@ -1105,7 +1918,10 @@ void MainWindow::restoreWorkspaceState() {
     if (!preview_visible && tabs_->indexOf(preview_) >= 0) {
         tabs_->removeTab(tabs_->indexOf(preview_));
         previewAction_->setChecked(false);
-    } else if (active == "preview") {
+    }
+    if (active == "hub") {
+        tabs_->setCurrentWidget(hub_);
+    } else if (active == "preview" && preview_visible) {
         showPreview();
     } else if (const auto found = documents_.find(active.toStdString()); found != documents_.end() && !found->second.window) {
         tabs_->setCurrentWidget(found->second.view);
@@ -1115,7 +1931,7 @@ void MainWindow::restoreWorkspaceState() {
 
 void MainWindow::resetWorkspaceLayout() {
     restoreState(defaultDockState_);
-    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, logDock_}) {
+    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, logDock_, buildDock_}) {
         dock->show();
     }
     showPreview();
@@ -1125,6 +1941,8 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
     if (!view || !view->level()) {
         return;
     }
+    view->setCustomActors(moduleData_);
+    view->setSpriteDefinitions(spriteDefinitions_);
     const auto references = view->level()->tileset_references();
     if (view->graphicsMatch(references)) return;
     auto resources = nsmb::project::resolve_level_graphics(currentProject_, references);
@@ -1132,6 +1950,9 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         log("Graphics fallback: " + QString::fromStdString(resources.error().message));
         return;
     }
+    std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids;
+    for (const auto& actor : resources.value().actors) actor_object_ids.emplace(actor.type, actor.object_id);
+    if (view->level() == currentLevel_) levelProperties_->setSpriteDefinitions(spriteDefinitions_, std::move(actor_object_ids));
     QStringList watch;
     QStringList add;
     for (const auto& path : resources.value().watched_files) {
@@ -1176,48 +1997,59 @@ void MainWindow::refreshChangedGraphics() {
 }
 
 void MainWindow::refreshPalette() {
-    if (!paletteList_) return;
-    paletteList_->clear();
+    if (!paletteToolbox_) return;
+    paletteButtons_.clear(); while(paletteToolbox_->count()){auto* widget=paletteToolbox_->widget(0);paletteToolbox_->removeItem(0);delete widget;}
+    customPaletteTree_->clear();
     LevelPreviewWidget* view = nullptr;
     for (auto& [key, document] : documents_) {
         (void)key;
         if (document.view->level() == currentLevel_) view = document.view;
     }
+    std::map<std::string, std::vector<LevelPreviewWidget::PaletteEntry>> groups;
+    bool has_objects = false;
+    bool has_sprites = false;
     if (view) {
         for (auto& entry : view->paletteEntries()) {
-            auto* item = new QListWidgetItem(entry.label, paletteList_);
-            item->setData(Qt::UserRole, static_cast<int>(entry.tool));
-            item->setData(Qt::UserRole + 1, entry.id);
-            item->setData(Qt::UserRole + 2, entry.slot);
-            if (!entry.image.isNull()) item->setIcon(QIcon(QPixmap::fromImage(entry.image.scaled(32, 32, Qt::KeepAspectRatio))));
+            has_objects |= entry.tool == LevelPreviewWidget::Tool::Object;
+            has_sprites |= entry.tool == LevelPreviewWidget::Tool::Sprite;
+            groups[entry.category.toStdString()].push_back(std::move(entry));
         }
+        std::unordered_map<std::string, QTreeWidgetItem*> modules;
+        std::unordered_map<std::string, QTreeWidgetItem*> components;
+        for (const auto& actor : moduleData_.stage_objects) {
+            auto*& module = modules[actor.module];
+            if (!module) module = new QTreeWidgetItem(customPaletteTree_, {QString::fromStdString(actor.module)});
+            const auto componentKey = actor.module + "\n" + actor.component;
+            auto*& component = components[componentKey];
+            if (!component) component = new QTreeWidgetItem(module, {QString::fromStdString(actor.component)});
+            auto* item = new QTreeWidgetItem(component, {QString::fromStdString(actor.name) +
+                QString("  [object %1]").arg(actor.object_id)});
+            item->setData(0, Qt::UserRole, static_cast<qulonglong>(actor.hash));
+        }
+        customPaletteTree_->expandAll();
     }
-    const bool has_objects = paletteList_->findItems("Object ", Qt::MatchStartsWith).size() > 0;
-    const bool has_sprites = paletteList_->count() > 0 && paletteList_->count() !=
-        paletteList_->findItems("Object ", Qt::MatchStartsWith).size();
-    const std::array utilities{
-        std::pair{LevelPreviewWidget::Tool::Entrance, "Entrance"},
-        std::pair{LevelPreviewWidget::Tool::Zone, "Zone"},
-        std::pair{LevelPreviewWidget::Tool::Path, "Path"},
-        std::pair{LevelPreviewWidget::Tool::ProgressPath, "Progress Path"},
-    };
-    if (!has_objects) {
-        auto* item = new QListWidgetItem("Object", paletteList_);
-        item->setData(Qt::UserRole, static_cast<int>(LevelPreviewWidget::Tool::Object));
+    if (!has_objects) groups["Tilesets"].push_back({LevelPreviewWidget::Tool::Object, 0, 0, "Object", "Tilesets", {}});
+    if (!has_sprites) groups["Other actors"].push_back({LevelPreviewWidget::Tool::Sprite, 0, 0, "Sprite", "Other actors", {}});
+    for (const auto& [tool, name] : std::array{
+             std::pair{LevelPreviewWidget::Tool::Entrance, "Entrance"},
+             std::pair{LevelPreviewWidget::Tool::Zone, "Zone"},
+             std::pair{LevelPreviewWidget::Tool::Path, "Path"},
+             std::pair{LevelPreviewWidget::Tool::ProgressPath, "Progress Path"}})
+        groups["Tools"].push_back({tool, 0, 0, name, "Tools", {}});
+
+    for (auto& [category, entries] : groups) {
+        auto* page=new QScrollArea(paletteToolbox_);page->setWidgetResizable(true);page->setFrameShape(QFrame::NoFrame);
+        auto* content=new QWidget(page);auto* grid=new QGridLayout(content);grid->setAlignment(Qt::AlignTop);int cell=0;
+        for (auto& entry : entries) {
+            auto* button=new QToolButton(content);button->setText(entry.label);button->setToolTip(entry.label);button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);button->setIconSize({40,40});button->setMinimumSize(82,72);button->setProperty("category",QString::fromStdString(category));
+            if(!entry.image.isNull())button->setIcon(QIcon(QPixmap::fromImage(entry.image.scaled(40,40,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
+            connect(button,&QToolButton::clicked,this,[this,tool=entry.tool,id=entry.id,slot=entry.slot]{auto* view=activeLevelView();if(!view)return;if(tool==LevelPreviewWidget::Tool::Object)view->setPlacementObject(slot,id);else if(tool==LevelPreviewWidget::Tool::Sprite)view->setPlacementSprite(id);else view->setPlacementTool(tool);view->setFocus();});
+            grid->addWidget(button,cell/3,cell%3);paletteButtons_.push_back(button);++cell;
+        }
+        page->setWidget(content);
+        paletteToolbox_->addItem(page,QString::fromStdString(category));
     }
-    if (!has_sprites) {
-        auto* item = new QListWidgetItem("Sprite", paletteList_);
-        item->setData(Qt::UserRole, static_cast<int>(LevelPreviewWidget::Tool::Sprite));
-    }
-    for (const auto& [tool, name] : utilities) {
-        auto* item = new QListWidgetItem(name, paletteList_);
-        item->setData(Qt::UserRole, static_cast<int>(tool));
-    }
-    const auto filter = paletteSearch_->text();
-    for (int row = 0; row < paletteList_->count(); ++row) {
-        auto* item = paletteList_->item(row);
-        item->setHidden(!item->text().contains(filter, Qt::CaseInsensitive));
-    }
+    emit paletteSearch_->textChanged(paletteSearch_->text());
 }
 
 nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const QString& course_path, const QString& bgdat_path) {
@@ -1229,8 +2061,17 @@ nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const
         return found->second.get();
     }
 
-    const auto course_file = currentProject_.directory() / std::filesystem::path(course_path.toStdString());
-    const auto bgdat_file = currentProject_.directory() / std::filesystem::path(bgdat_path.toStdString());
+    auto effective = [this](const QString& path) {
+        const auto relative = std::filesystem::path(path.toStdString());
+        auto fallback = currentProject_.directory() / relative;
+        auto romPath = romPathForProjectFile(relative);
+        if (romPath) if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->source.empty()) {
+            std::error_code ec; if (std::filesystem::is_regular_file(entry->source, ec)) return entry->source;
+        }
+        return fallback;
+    };
+    const auto course_file = effective(course_path);
+    const auto bgdat_file = effective(bgdat_path);
     auto course_data = readBinaryFile(course_file);
     if (!course_data) {
         return course_data.error();
@@ -1239,10 +2080,17 @@ nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const
     if (!bgdat_data) {
         return bgdat_data.error();
     }
-    auto level = nsmb::project::EditableLevel::load(course_data.value(), bgdat_data.value());
+    auto level = nsmb::project::EditableLevel::load(course_data.value(), bgdat_data.value(), &moduleData_);
     if (!level) {
         return level.error();
     }
+    const auto registration = level.value().registration_hashes();
+    if (registration.size() > moduleData_.stage_objects.size())
+        log(QString("Glue warning: level registers %1 custom objects, but this build declares only %2.")
+                .arg(registration.size()).arg(moduleData_.stage_objects.size()));
+    for (const auto hash : registration) if (!moduleData_.stage_object_by_hash(hash))
+        log(QString("Glue warning: custom object 0x%1 is not declared by this build; it will spawn nothing.")
+                .arg(hash, 8, 16, QLatin1Char('0')));
     auto session = std::make_unique<nsmb::project::EditableLevel>(std::move(level.value()));
     auto* pointer = session.get();
     levelSessions_.emplace(key, std::move(session));
@@ -1261,6 +2109,7 @@ void MainWindow::undo() {
     }
     log("Undid " + QString::fromStdString(name) + ".");
     levelProperties_->refresh();
+    levelData_->refresh();
     preview_->update();
     preview_->refreshLevelState();
     for (auto& [key, document] : documents_) {
@@ -1282,6 +2131,7 @@ void MainWindow::redo() {
     }
     log("Redid " + QString::fromStdString(name) + ".");
     levelProperties_->refresh();
+    levelData_->refresh();
     preview_->update();
     preview_->refreshLevelState();
     for (auto& [key, document] : documents_) {
@@ -1331,10 +2181,9 @@ bool MainWindow::confirmDiscardLevelEdits() {
                                              "Save changes to the current project?",
                                              QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
                                              QMessageBox::Save);
-    if (choice == QMessageBox::Save) {
-        return saveProject();
-    }
-    return choice == QMessageBox::Discard;
+    if (choice == QMessageBox::Save) return saveProject();
+    if (choice == QMessageBox::Discard) { clearRecoverySnapshots(); return true; }
+    return false;
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {

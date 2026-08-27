@@ -1,26 +1,88 @@
-# NCPatcher integration
+# NCPatcher 2.x integration
 
-## Current M4 approach
+Big Star drives NCPatcher as an external process through its versioned CLI and
+JSON documents. It does not embed NCPatcher, parse `ncpatcher.yaml`, invoke a
+shell, or change the editor process's working directory.
 
-`nsmb-patching` exposes a `PatcherService` interface and an `NCPatcherExternalTool` implementation. The implementation validates a project directory, creates a minimal `ncpatcher.json` when missing, safely quotes arguments, and runs the external executable in a controlled working directory. The CLI and Qt File menu both use this boundary.
+## Project contract
 
-ROM extraction and building are represented by `RomExtractionService`, `RomBuildService`, and the built-in `NitroRomService` implementation in `nsmb-nds`. `import-rom` extracts the ROM directly and writes project-relative YAML metadata. After a successful patcher run, the Qt editor reindexes the extracted tree, atomically refreshes the manifest, and clears cached level sessions before the next edit or build.
+The Big Star project directory is also the NCPatcher project directory. It
+contains `ncpatcher.yaml` (or `.yml`), the pristine input ROM, and `modules/`.
+The editor renders `extracted-rom/`, which is a derived view of the most recent
+successful build and is never an input to NCPatcher.
 
-## Current constraints observed in references
+Legacy `ncpatcher.json` projects are not built directly. The Qt frontend offers
+`ncpatcher migrate --write`; migration is explicit and leaves the old JSON file
+in place.
 
-- NCPatcher expects `ncpatcher.json` in the current working directory.
-- The NSMB code template asks users to avoid whitespace in paths and to use forward slashes in JSON paths.
-- The existing editor integration creates a `__tmp` filesystem directory, runs the patcher from the ROM/project directory, and imports changed binaries/overlays back into the editor.
-- Standalone workflows require extract -> patch -> build sequencing.
+All commands name the project with `-C <project>`. Arguments are passed directly
+as an argv vector, so spaces and quotes in paths do not need shell escaping.
+Standard output and standard error are captured separately and can be streamed
+line by line.
 
-## M5 NCPatcher improvements
+## Commands and documents used
 
-- Stable CLI flags for config, filesystem input, output/build directory, backup directory, and target files.
-- Explicit input/output paths instead of current-working-directory assumptions.
-- Machine-readable JSON diagnostics.
-- Progress reporting for editor UI integration.
-- Dry-run/validate mode for checking `ncpatcher.json` and toolchain availability.
-- Stable error codes.
-- Schema/version reporting for `ncpatcher.json`.
-- Library/API mode or embeddable core for future tighter integration.
-- Path handling that supports whitespace and native platform separators.
+`NCPatcherClient` uses these NCPatcher 2.x commands:
+
+- `version`, `config path`, and `config validate` for preflight checks.
+- `config dump --json` for project paths, toolchain, and build variants. The
+  reader also accepts resolved project/per-variant banner inputs when a newer
+  NCPatcher exposes them.
+- `modules dump` for enabled modules, components, and NitroFS layering.
+- `rom files --json` for the file table and build provenance.
+- `build [--variant NAME] --message-format json --result <path>` for builds.
+- `migrate [--write]` for legacy projects.
+
+The client accepts `ncpatcher.config/1`, `ncpatcher.modules/1`,
+`ncpatcher.files/1`, and `ncpatcher.result/1`. Every reader refuses an unknown
+`schema` value instead of partially interpreting a newer contract. JSON object
+members preserve declaration order because variant order is user-visible.
+
+Structured build events expose progress, artifacts, diagnostics (including
+source locations), and the final result. Exit codes 0 through 10 are mapped to
+named stages so configuration, module resolution, toolchain, compile, link,
+patch, ROM I/O, and hook failures remain distinguishable.
+
+## Transactional apply
+
+The Qt editor applies a successful build as one transaction:
+
+1. Build a ROM into the project's staging area, optionally for one selected
+   variant.
+2. Validate the staged ROM and extract it into a staged directory.
+3. Move the current `extracted-rom/` into the backup area.
+4. Move the staged extraction into place.
+5. Clear open documents and cached level sessions, then reindex the project.
+
+A failed build or rejected ROM leaves the live extracted tree untouched. The
+successful staged ROM is retained for launching in an emulator, and the Build
+Output dock logs both it and the backup path.
+
+The variant list is loaded only when its selector is opened. A remembered
+variant that is absent from a later query is kept visibly rather than silently
+changed. An empty configured list is distinct from a failed query.
+
+## Deliberate limits
+
+- Only one variant can be applied at a time because the editor has one live
+  extracted tree.
+- Cancellation remains disabled until NCPatcher documents a graceful
+  process-tree cancellation signal and exit code.
+- Big Star does not provide a graphical YAML editor.
+- Pending module files cannot show a prospective file ID until NCPatcher offers
+  a build-free file-manifest planning command.
+
+## Banner and legacy patchers
+
+The config reader accepts optional `rom-banner` and per-variant `banner` paths.
+NCPatcher 2.0 does not yet include those values in `config dump --json`, so the
+editor asks the user to choose the source named by `rom.banner` when they are
+absent. Banner data is not a NitroFS file and is therefore never routed into a
+module tree or guessed by parsing YAML.
+
+Fireflower and the optional NSMBe-compatible wrapper are separate legacy
+actions, not NCPatcher modes. They receive an isolated historical `__tmp`
+workspace, never modify `extracted-rom/`, and feed a copied extraction into the
+built-in ROM builder. The NSMBe action requires an external clean-room wrapper
+accepting `--project <dir> --filesystem <dir>/__tmp`; Big Star does not embed or
+port GPL NSMBe patcher code.

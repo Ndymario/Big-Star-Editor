@@ -67,4 +67,16 @@ std::string CommandHistory::redo_name() const {
     return can_redo() ? std::string(commands_[position_]->name()) : std::string{};
 }
 
+std::vector<std::string> CommandHistory::undo_names() const {
+    std::vector<std::string> result; result.reserve(position_);
+    for (std::size_t i = position_; i > 0; --i) result.emplace_back(commands_[i - 1]->name());
+    return result;
+}
+
+std::vector<std::string> CommandHistory::redo_names() const {
+    std::vector<std::string> result; result.reserve(commands_.size() - position_);
+    for (std::size_t i = position_; i < commands_.size(); ++i) result.emplace_back(commands_[i]->name());
+    return result;
+}
+
 } // namespace nsmb::core

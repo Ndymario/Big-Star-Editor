@@ -6,12 +6,12 @@ Big Star Editor is a modern, portable C++ rewrite/rearchitecture of the New Supe
 
 - `libs/nsmb-core`: result/error types, byte buffers, endian utilities, atomic file I/O, logging, and command interfaces.
 - `libs/nsmb-nds`: GBATEK-backed Nintendo DS ROM/header/FNT/FAT/overlay structures plus built-in extraction/build services.
-- `libs/nsmb-formats`: defensive NSMB level and Nitro graphics parsing helpers.
+- `libs/nsmb-formats`: defensive NSMB level, Nitro 2D/TEX0, and DS compression codecs.
 - `libs/nsmb-project`: frontend-agnostic project model, manifest load/save, editable level sessions, and undo/redo commands.
 - `libs/nsmb-patching`: narrow service wrapper for NCPatcher.
 - `apps/nsmb-cli`: minimal CLI for inspection and service command construction.
 - `apps/nsmb-qt`: optional Qt 6 Widgets editor with project/ROM file workflows, level listing, property editing, selection highlighting, undo/redo, safe saves, patching, and ROM builds.
-- `apps/nsmb-web`: documented placeholder for a future WebAssembly/web adapter.
+- `apps/nsmb-web`: dependency-free browser level editor over an explicit C ABI and WebAssembly adapter.
 
 Project manifests are YAML files named `big-star-project.yaml`. They store project-relative paths only; the project directory is implied by where the manifest is opened.
 
@@ -23,6 +23,7 @@ Project manifests are YAML files named `big-star-project.yaml`. They store proje
   - Linux: GCC 11+ or Clang 14+.
   - macOS: AppleClang from a recent Xcode.
 - Optional: Qt 6 Widgets development package for `apps/nsmb-qt`.
+- Optional: Emscripten for the browser frontend.
 
 ## Configure, build, and test
 
@@ -37,6 +38,20 @@ If Qt 6 is unavailable, CMake skips `nsmb-qt` automatically. To disable Qt probi
 ```sh
 cmake -S . -B build -DBSE_BUILD_QT=OFF
 ```
+
+## WebAssembly frontend
+
+```sh
+emcmake cmake -S . -B build-wasm \
+  -DBSE_BUILD_TESTS=OFF -DBSE_BUILD_QT=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build-wasm --target nsmb-web
+python3 -m http.server --directory build-wasm/apps/nsmb-web
+```
+
+Open `http://127.0.0.1:8000/`. The browser editor keeps the selected course and
+BGDat files local, supports the main level entity tables plus undo/redo, and
+downloads the serialized pair. See `apps/nsmb-web/README.md` for its ABI and
+scope.
 
 ## Platform notes
 
@@ -80,4 +95,4 @@ ctest --test-dir build --output-on-failure
 
 `import-rom` uses the built-in DS ROM service to extract ARM binaries, overlay tables, FNT/FAT data, banner data, and the NitroFS tree, then atomically writes `big-star-project.yaml` with validated project-relative paths. It refuses to overwrite an existing project or a nonempty extraction directory. `build-rom` rebuilds a ROM from the extracted path recorded in that manifest and atomically replaces the chosen output.
 
-The Qt editor can create and open projects, import `.nds` files, edit objects, sprites, entrances, zones, paths, progress paths, and tileset references, run NCPatcher, and build a new ROM. The level canvas is currently an accurate schematic of parsed entity placement, not a rendered in-game tileset view. Save validates edited course/BGDat data before atomically replacing files and preserves the originals under the project's `.big-star-backups` directory.
+The Qt editor can create and open projects, import `.nds` files, edit levels and Nitro graphics, inspect the module-aware filesystem, run NCPatcher, and build a new ROM. Its graphics dialog views NCLR/NCGR/NSCR/NCER/NANR and TEX0 resources, paints indexed character pixels, and edits BGR555 palettes with the native colour picker. The tileset workspace edits graphics, Map16, objects, behaviours, background/foreground NSC maps and slot IDs, with quantized PNG and `.bstileset` import/export. Sprite definitions use Big Star's strict, zero-based JSON schema to supply names, categories, property fields, render shapes, and grab bounds; layers load in plugin, project, local, then shipped order with the first object ID winning. The M12 desktop workspace adds a five-tab Project Hub, visual actor grids, minimap and canvas overlays, compressed entity clipboard, named history, `.nml`/`.nsmbpatch`/xdelta exchange, level search and event tools, crash recovery, and five-language shell localization. Level and graphics saves target module NitroFS files so the derived extracted tree is never mistaken for authoritative data.

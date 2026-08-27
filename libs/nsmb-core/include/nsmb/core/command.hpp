@@ -30,6 +30,8 @@ public:
     [[nodiscard]] bool dirty() const noexcept;
     [[nodiscard]] std::string undo_name() const;
     [[nodiscard]] std::string redo_name() const;
+    [[nodiscard]] std::vector<std::string> undo_names() const;
+    [[nodiscard]] std::vector<std::string> redo_names() const;
 
 private:
     static constexpr std::size_t no_clean_position = static_cast<std::size_t>(-1);

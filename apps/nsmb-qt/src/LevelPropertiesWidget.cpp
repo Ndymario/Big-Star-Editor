@@ -7,11 +7,13 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QTabBar>
 #include <QVBoxLayout>
 
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <limits>
 #include <set>
 #include <string>
 #include <utility>
@@ -35,15 +37,14 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
     auto* layout = new QVBoxLayout(this);
     auto* form = new QFormLayout;
 
-    kindBox_ = new QComboBox(this);
-    kindBox_->addItem("Level settings", static_cast<int>(Kind::Level));
-    kindBox_->addItem("Objects", static_cast<int>(Kind::Object));
-    kindBox_->addItem("Sprites", static_cast<int>(Kind::Sprite));
-    kindBox_->addItem("Entrances", static_cast<int>(Kind::Entrance));
-    kindBox_->addItem("Zones", static_cast<int>(Kind::Zone));
-    kindBox_->addItem("Paths", static_cast<int>(Kind::Path));
-    kindBox_->addItem("Progress paths", static_cast<int>(Kind::ProgressPath));
-    form->addRow("Edit", kindBox_);
+    kindTabs_ = new QTabBar(this); kindTabs_->setExpanding(false); kindTabs_->setUsesScrollButtons(true);
+    for (const auto& [name, value] : std::array{
+             std::pair{"Course", Kind::Level}, std::pair{"Banks", Kind::ObjectBanks}, std::pair{"Objects", Kind::Object},
+             std::pair{"Sprites", Kind::Sprite}, std::pair{"Entrances", Kind::Entrance}, std::pair{"Views", Kind::View},
+             std::pair{"Zones", Kind::Zone}, std::pair{"Paths", Kind::Path}, std::pair{"Progress", Kind::ProgressPath}}) {
+        const auto tab = kindTabs_->addTab(name); kindTabs_->setTabData(tab, static_cast<int>(value));
+    }
+    form->addRow(kindTabs_);
 
     itemBox_ = new QSpinBox(this);
     itemBox_->setMinimum(0);
@@ -82,7 +83,7 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
     layout->addLayout(nodeButtons);
     layout->addStretch();
 
-    connect(kindBox_, &QComboBox::currentIndexChanged, this, [this] {
+    connect(kindTabs_, &QTabBar::currentChanged, this, [this] {
         selected_items_.clear();
         refresh();
     });
@@ -106,13 +107,22 @@ void LevelPropertiesWidget::setLevel(nsmb::project::EditableLevel* level) {
     refresh();
 }
 
+void LevelPropertiesWidget::setObjectBankOverlays(std::optional<nsmb::project::ObjectBankOverlayTable> overlays) { object_bank_overlays_=std::move(overlays);refresh(); }
+
+void LevelPropertiesWidget::setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog,
+                                                 std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids) {
+    sprite_definitions_ = catalog;
+    actor_object_ids_ = std::move(actor_object_ids);
+    refresh();
+}
+
 std::vector<std::size_t> LevelPropertiesWidget::selectedIndices() const {
     if (!selected_items_.empty()) return selected_items_;
     return itemCount() == 0 ? std::vector<std::size_t>{} : std::vector<std::size_t>{static_cast<std::size_t>(itemBox_->value())};
 }
 
 LevelPropertiesWidget::Kind LevelPropertiesWidget::kind() const {
-    return static_cast<Kind>(kindBox_->currentData().toInt());
+    return static_cast<Kind>(kindTabs_->tabData(kindTabs_->currentIndex()).toInt());
 }
 
 std::size_t LevelPropertiesWidget::itemCount() const {
@@ -123,12 +133,16 @@ std::size_t LevelPropertiesWidget::itemCount() const {
     switch (kind()) {
     case Kind::Level:
         return 1;
+    case Kind::ObjectBanks:
+        return course.object_banks.size();
     case Kind::Object:
         return level_->objects().size();
     case Kind::Sprite:
         return course.sprites.size();
     case Kind::Entrance:
         return course.entrances.size();
+    case Kind::View:
+        return course.views.size();
     case Kind::Zone:
         return course.zones.size();
     case Kind::Path:
@@ -141,9 +155,12 @@ std::size_t LevelPropertiesWidget::itemCount() const {
 
 void LevelPropertiesWidget::refresh() {
     refreshing_ = true;
+    visible_sprite_fields_.clear();
     for (auto& field : fields_) {
         field.label->hide();
         field.value->hide();
+        field.label->setToolTip({});
+        field.value->setToolTip({});
     }
 
     const auto count = itemCount();
@@ -162,8 +179,8 @@ void LevelPropertiesWidget::refresh() {
     nodeBox_->setVisible(path_kind);
     addNodeButton_->setVisible(path_kind);
     deleteNodeButton_->setVisible(path_kind);
-    addButton_->setVisible(kind() != Kind::Level);
-    deleteButton_->setVisible(kind() != Kind::Level);
+    addButton_->setVisible(kind() != Kind::Level && kind() != Kind::ObjectBanks);
+    deleteButton_->setVisible(kind() != Kind::Level && kind() != Kind::ObjectBanks);
     addButton_->setEnabled(level_);
     deleteButton_->setEnabled(level_ && count != 0);
 
@@ -198,6 +215,13 @@ void LevelPropertiesWidget::refresh() {
             field("BG graphics", refs.background_graphics_id, 0, 255);
             field("BG screen", refs.background_screen_id, 0, 255);
             field("FG graphics", refs.foreground_graphics_id, 0, 255);
+            field("FG screen", refs.foreground_screen_id, 0, 255);
+            break;
+        }
+        case Kind::ObjectBanks: {
+            const auto bank=course.object_banks[index];
+            const auto label=object_bank_overlays_&&bank>0&&bank<=10 ? "Bank ID (overlay "+std::to_string((*object_bank_overlays_)[index][bank-1])+")" : "Bank ID";
+            field(label.c_str(), bank, 0, 10);
             break;
         }
         case Kind::Object: {
@@ -210,11 +234,33 @@ void LevelPropertiesWidget::refresh() {
             break;
         }
         case Kind::Sprite: {
-            field("Type", common([&](auto i) { return course.sprites[i].type; }));
+            field("Object ID", common([&](auto i) { return course.sprites[i].id; }));
             field("X (tiles)", common([&](auto i) { return course.sprites[i].x; }));
             field("Y (tiles)", common([&](auto i) { return course.sprites[i].y; }));
-            for (std::size_t data = 0; data < course.sprites[index].data.size(); ++data) {
-                field(("Data " + std::to_string(data + 1U)).c_str(), common([&](auto i) { return course.sprites[i].data[data]; }), 0, 255);
+            field("Event 1", common([&](auto i) { return course.sprites[i].events[0]; }), 0, 255);
+            field("Event 2", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
+            const nsmb::project::SpriteDefinition* definition = nullptr;
+            if (!multi && !level_->sprite_hash(index)) {
+                if (const auto object = actor_object_ids_.find(course.sprites[index].id); object != actor_object_ids_.end())
+                    definition = sprite_definitions_.by_object_id(object->second);
+            }
+            if (definition && !definition->fields.empty()) {
+                for (const auto& named : definition->fields) {
+                    if (row >= fields_.size()) break;
+                    const auto maximum = static_cast<int>((std::uint32_t{1} << named.bit_width) - 1U);
+                    field(named.label.c_str(), static_cast<int>(nsmb::project::read_sprite_field(course.sprites[index].settings, named)), 0, maximum);
+                    visible_sprite_fields_.push_back(&named);
+                    if (!named.choices.empty()) {
+                        QStringList choices;
+                        for (const auto& choice : named.choices)
+                            choices.push_back(QString("%1 = %2").arg(choice.value).arg(QString::fromStdString(choice.label)));
+                        fields_[row - 1].label->setToolTip(choices.join("\n"));
+                        fields_[row - 1].value->setToolTip(choices.join("\n"));
+                    }
+                }
+            } else {
+                field("Settings low", common([&](auto i) { return course.sprites[i].settings & 0xffff; }));
+                field("Settings high", common([&](auto i) { return course.sprites[i].settings >> 16; }));
             }
             break;
         }
@@ -223,23 +269,33 @@ void LevelPropertiesWidget::refresh() {
             field("Y", common([&](auto i) { return course.entrances[i].y; }));
             field("Camera X", common([&](auto i) { return course.entrances[i].camera_x; }));
             field("Camera Y", common([&](auto i) { return course.entrances[i].camera_y; }));
-            field("Number", common([&](auto i) { return course.entrances[i].number; }), 0, 255);
-            field("Destination area", common([&](auto i) { return course.entrances[i].destination_area; }), 0, 255);
-            field("Pipe ID", common([&](auto i) { return course.entrances[i].connected_pipe_id; }), 0, 255);
-            field("Destination entrance", common([&](auto i) { return course.entrances[i].destination_entrance; }), 0, 255);
+            field("ID", common([&](auto i) { return course.entrances[i].id; }), 0, 255);
+            field("Target area", common([&](auto i) { return course.entrances[i].target_stage_area; }), 0, 255);
+            field("Target stage / pipe path", common([&](auto i) { return course.entrances[i].target_stage_index; }), 0, 255);
+            field("Target group", common([&](auto i) { return course.entrances[i].target_stage_group; }), 0, 255);
+            field("Target entrance", common([&](auto i) { return course.entrances[i].target_entrance; }), 0, 255);
+            field("Camera zoom", common([&](auto i) { return course.entrances[i].camera_zoom; }), 0, 255);
             field("Type", common([&](auto i) { return course.entrances[i].type; }), 0, 255);
-            field("Settings", common([&](auto i) { return course.entrances[i].settings; }), 0, 255);
-            field("Unknown 1", common([&](auto i) { return course.entrances[i].unknown1; }), 0, 255);
-            field("Entry view", common([&](auto i) { return course.entrances[i].entry_view; }), 0, 255);
-            field("Unknown 2", common([&](auto i) { return course.entrances[i].unknown2; }), 0, 255);
+            field("Flags", common([&](auto i) { return course.entrances[i].flags; }), 0, 255);
+            field("Unknown 0x10", common([&](auto i) { return course.entrances[i].unknown_10; }), 0, 255);
+            field("Unknown 0x11", common([&](auto i) { return course.entrances[i].unknown_11; }), 0, 255);
+            field("View ID", common([&](auto i) { return course.entrances[i].view_id; }), 0, 255);
+            field("World-map node", common([&](auto i) { return course.entrances[i].target_worldmap_node; }), 0, 255);
             break;
+        }
+        case Kind::View: {
+            const auto& v=course.views[index];
+            field("X",v.x);field("Y",v.y);field("Width",v.width,1);field("Height",v.height,1);
+            field("ID",v.id,0,255);field("Camera settings",v.camera_settings_id,0,255);field("BGM",v.bgm_id,0,255);
+            field("Background",v.background_id,0,255);field("Tileset",v.tileset_id,0,255);field("Foreground",v.foreground_id,0,255);
+            field("Light",v.light_type,0,255);field("Progress path",v.progress_path_id,0,255);break;
         }
         case Kind::Zone: {
             field("X", common([&](auto i) { return course.zones[i].x; }));
             field("Y", common([&](auto i) { return course.zones[i].y; }));
             field("Width", common([&](auto i) { return course.zones[i].width; }), 1);
             field("Height", common([&](auto i) { return course.zones[i].height; }), 1);
-            field("Number", common([&](auto i) { return course.zones[i].number; }), 0, 255);
+            field("ID", common([&](auto i) { return course.zones[i].id; }), 0, 255);
             break;
         }
         case Kind::Path:
@@ -256,9 +312,9 @@ void LevelPropertiesWidget::refresh() {
                 const auto& node = path.nodes[static_cast<std::size_t>(nodeBox_->value())];
                 field("X", node.x);
                 field("Y", node.y);
-                for (std::size_t i = 0; i < node.values.size(); ++i) {
-                    field(("Value " + std::to_string(i + 1U)).c_str(), node.values[i]);
-                }
+                field("Speed (fx32 raw)",node.speed.raw(),-2147483647,2147483647);
+                field("Acceleration (fx32 raw)",node.acceleration.raw(),-2147483647,2147483647);
+                field("Delay",node.delay);field("Flags",node.flags);
             }
             deleteNodeButton_->setEnabled(!path.nodes.empty());
             break;
@@ -301,12 +357,12 @@ void LevelPropertiesWidget::applyFields() {
         case Kind::Sprite:
             for (const auto selected : indices) {
                 auto sprite = level_->course().sprites[selected];
-                sprite.type = static_cast<std::uint16_t>(changed(0, sprite.type));
+                sprite.id = static_cast<std::uint16_t>(changed(0, sprite.id));
                 sprite.x = static_cast<std::uint16_t>(changed(1, sprite.x));
                 sprite.y = static_cast<std::uint16_t>(changed(2, sprite.y));
-                for (std::size_t data = 0; data < sprite.data.size(); ++data) {
-                    sprite.data[data] = static_cast<std::uint8_t>(changed(data + 3U, sprite.data[data]));
-                }
+                sprite.events[0]=static_cast<std::uint8_t>(changed(3,sprite.events[0]));
+                sprite.events[1]=static_cast<std::uint8_t>(changed(4,sprite.events[1]));
+                sprite.settings=static_cast<std::uint32_t>(changed(5,sprite.settings&0xffff)) | (static_cast<std::uint32_t>(changed(6,sprite.settings>>16))<<16);
                 edits.sprites.push_back({selected, sprite});
             }
             break;
@@ -317,15 +373,12 @@ void LevelPropertiesWidget::applyFields() {
                 entrance.y = static_cast<std::uint16_t>(changed(1, entrance.y));
                 entrance.camera_x = static_cast<std::uint16_t>(changed(2, entrance.camera_x));
                 entrance.camera_y = static_cast<std::uint16_t>(changed(3, entrance.camera_y));
-                entrance.number = static_cast<std::uint8_t>(changed(4, entrance.number));
-                entrance.destination_area = static_cast<std::uint8_t>(changed(5, entrance.destination_area));
-                entrance.connected_pipe_id = static_cast<std::uint8_t>(changed(6, entrance.connected_pipe_id));
-                entrance.destination_entrance = static_cast<std::uint8_t>(changed(7, entrance.destination_entrance));
-                entrance.type = static_cast<std::uint8_t>(changed(8, entrance.type));
-                entrance.settings = static_cast<std::uint8_t>(changed(9, entrance.settings));
-                entrance.unknown1 = static_cast<std::uint8_t>(changed(10, entrance.unknown1));
-                entrance.entry_view = static_cast<std::uint8_t>(changed(11, entrance.entry_view));
-                entrance.unknown2 = static_cast<std::uint8_t>(changed(12, entrance.unknown2));
+                entrance.id=static_cast<std::uint8_t>(changed(4,entrance.id));entrance.target_stage_area=static_cast<std::uint8_t>(changed(5,entrance.target_stage_area));
+                entrance.target_stage_index=static_cast<std::uint8_t>(changed(6,entrance.target_stage_index));entrance.target_stage_group=static_cast<std::uint8_t>(changed(7,entrance.target_stage_group));
+                entrance.target_entrance=static_cast<std::uint8_t>(changed(8,entrance.target_entrance));entrance.camera_zoom=static_cast<std::uint8_t>(changed(9,entrance.camera_zoom));
+                entrance.type=static_cast<std::uint8_t>(changed(10,entrance.type));entrance.flags=static_cast<std::uint8_t>(changed(11,entrance.flags));
+                entrance.unknown_10=static_cast<std::uint8_t>(changed(12,entrance.unknown_10));entrance.unknown_11=static_cast<std::uint8_t>(changed(13,entrance.unknown_11));
+                entrance.view_id=static_cast<std::uint8_t>(changed(14,entrance.view_id));entrance.target_worldmap_node=static_cast<std::uint8_t>(changed(15,entrance.target_worldmap_node));
                 edits.entrances.push_back({selected, entrance});
             }
             break;
@@ -336,7 +389,7 @@ void LevelPropertiesWidget::applyFields() {
                 zone.y = static_cast<std::uint16_t>(changed(1, zone.y));
                 zone.width = static_cast<std::uint16_t>(changed(2, zone.width));
                 zone.height = static_cast<std::uint16_t>(changed(3, zone.height));
-                zone.number = static_cast<std::uint8_t>(changed(4, zone.number));
+                zone.id = static_cast<std::uint8_t>(changed(4, zone.id));
                 edits.zones.push_back({selected, zone});
             }
             break;
@@ -349,10 +402,10 @@ void LevelPropertiesWidget::applyFields() {
 
     switch (kind()) {
     case Kind::Level:
-        result = level_->set_tileset_references({static_cast<std::uint8_t>(value(0)),
-                                                 static_cast<std::uint8_t>(value(1)),
-                                                 static_cast<std::uint8_t>(value(2)),
-                                                 static_cast<std::uint8_t>(value(3))});
+        result = level_->set_tileset_references({static_cast<std::uint16_t>(value(0)),static_cast<std::uint16_t>(value(1)),static_cast<std::uint16_t>(value(2)),static_cast<std::uint16_t>(value(3)),static_cast<std::uint16_t>(value(4))});
+        break;
+    case Kind::ObjectBanks:
+        result=level_->set_object_bank(index,static_cast<std::uint8_t>(value(0)));
         break;
     case Kind::Object: {
         auto object = level_->objects()[index];
@@ -367,11 +420,16 @@ void LevelPropertiesWidget::applyFields() {
     }
     case Kind::Sprite: {
         auto sprite = level_->course().sprites[index];
-        sprite.type = static_cast<std::uint16_t>(value(0));
+        sprite.id = static_cast<std::uint16_t>(value(0));
         sprite.x = static_cast<std::uint16_t>(value(1));
         sprite.y = static_cast<std::uint16_t>(value(2));
-        for (std::size_t i = 0; i < sprite.data.size(); ++i) {
-            sprite.data[i] = static_cast<std::uint8_t>(value(i + 3U));
+        sprite.events={static_cast<std::uint8_t>(value(3)),static_cast<std::uint8_t>(value(4))};
+        if (visible_sprite_fields_.empty()) {
+            sprite.settings=static_cast<std::uint32_t>(value(5))|(static_cast<std::uint32_t>(value(6))<<16);
+        } else {
+            for (std::size_t field = 0; field < visible_sprite_fields_.size(); ++field)
+                sprite.settings = nsmb::project::write_sprite_field(sprite.settings, *visible_sprite_fields_[field],
+                                                                    static_cast<std::uint32_t>(value(field + 5)));
         }
         result = level_->update_sprite(index, sprite);
         break;
@@ -382,15 +440,9 @@ void LevelPropertiesWidget::applyFields() {
         entrance.y = static_cast<std::uint16_t>(value(1));
         entrance.camera_x = static_cast<std::uint16_t>(value(2));
         entrance.camera_y = static_cast<std::uint16_t>(value(3));
-        entrance.number = static_cast<std::uint8_t>(value(4));
-        entrance.destination_area = static_cast<std::uint8_t>(value(5));
-        entrance.connected_pipe_id = static_cast<std::uint8_t>(value(6));
-        entrance.destination_entrance = static_cast<std::uint8_t>(value(7));
-        entrance.type = static_cast<std::uint8_t>(value(8));
-        entrance.settings = static_cast<std::uint8_t>(value(9));
-        entrance.unknown1 = static_cast<std::uint8_t>(value(10));
-        entrance.entry_view = static_cast<std::uint8_t>(value(11));
-        entrance.unknown2 = static_cast<std::uint8_t>(value(12));
+        entrance.id=static_cast<std::uint8_t>(value(4));entrance.target_stage_area=static_cast<std::uint8_t>(value(5));entrance.target_stage_index=static_cast<std::uint8_t>(value(6));entrance.target_stage_group=static_cast<std::uint8_t>(value(7));
+        entrance.target_entrance=static_cast<std::uint8_t>(value(8));entrance.camera_zoom=static_cast<std::uint8_t>(value(9));entrance.type=static_cast<std::uint8_t>(value(10));entrance.flags=static_cast<std::uint8_t>(value(11));
+        entrance.unknown_10=static_cast<std::uint8_t>(value(12));entrance.unknown_11=static_cast<std::uint8_t>(value(13));entrance.view_id=static_cast<std::uint8_t>(value(14));entrance.target_worldmap_node=static_cast<std::uint8_t>(value(15));
         result = level_->update_entrance(index, entrance);
         break;
     }
@@ -400,7 +452,7 @@ void LevelPropertiesWidget::applyFields() {
         zone.y = static_cast<std::uint16_t>(value(1));
         zone.width = static_cast<std::uint16_t>(value(2));
         zone.height = static_cast<std::uint16_t>(value(3));
-        zone.number = static_cast<std::uint8_t>(value(4));
+        zone.id = static_cast<std::uint8_t>(value(4));
         result = level_->update_zone(index, zone);
         break;
     }
@@ -412,15 +464,13 @@ void LevelPropertiesWidget::applyFields() {
         path.id = static_cast<std::uint16_t>(value(0));
         if (!path.nodes.empty()) {
             auto& node = path.nodes[static_cast<std::size_t>(nodeBox_->value())];
-            node.x = static_cast<std::uint16_t>(value(1));
-            node.y = static_cast<std::uint16_t>(value(2));
-            for (std::size_t i = 0; i < node.values.size(); ++i) {
-                node.values[i] = static_cast<std::uint16_t>(value(i + 3U));
-            }
+            node.x = static_cast<std::int16_t>(value(1));node.y = static_cast<std::int16_t>(value(2));
+            node.speed=nsmb::core::Fx32::from_raw(value(3));node.acceleration=nsmb::core::Fx32::from_raw(value(4));node.delay=static_cast<std::uint16_t>(value(5));node.flags=static_cast<std::uint16_t>(value(6));
         }
         result = level_->update_path(progress, index, std::move(path));
         break;
     }
+    case Kind::View: { auto v=level_->course().views[index];v.x=value(0);v.y=value(1);v.width=value(2);v.height=value(3);v.id=value(4);v.camera_settings_id=value(5);v.bgm_id=value(6);v.background_id=value(7);v.tileset_id=value(8);v.foreground_id=value(9);v.light_type=value(10);v.progress_path_id=value(11);result=level_->update_view(index,v);break; }
     }
     emitChange(result);
 }
@@ -432,6 +482,7 @@ void LevelPropertiesWidget::addEntity() {
     nsmb::core::Result<std::size_t> result = nsmb::core::make_error(nsmb::core::ErrorCode::Unsupported, "cannot add this item");
     switch (kind()) {
     case Kind::Level:
+    case Kind::ObjectBanks:
         return;
     case Kind::Object:
         result = level_->add_object({0, 0, 0, 0, 1, 1});
@@ -441,13 +492,14 @@ void LevelPropertiesWidget::addEntity() {
         break;
     case Kind::Entrance: {
         nsmb::formats::NsmbLevelEntrance entrance;
-        entrance.number = static_cast<std::uint8_t>(firstUnusedNumber(level_->course().entrances, 0, [](const auto& e) { return e.number; }));
+        entrance.id = static_cast<std::uint8_t>(firstUnusedNumber(level_->course().entrances, 0, [](const auto& e) { return e.id; }));
         result = level_->add_entrance(entrance);
         break;
     }
+    case Kind::View: { nsmb::formats::NsmbLevelView view{0,0,256,192}; view.id=static_cast<std::uint8_t>(firstUnusedNumber(level_->course().views,0,[](const auto& v){return v.id;})); result=level_->add_view(view); break; }
     case Kind::Zone: {
         nsmb::formats::NsmbLevelZone zone{0, 0, 256, 192, 0};
-        zone.number = static_cast<std::uint8_t>(firstUnusedNumber(level_->course().zones, 0, [](const auto& z) { return z.number; }));
+        zone.id = static_cast<std::uint8_t>(firstUnusedNumber(level_->course().zones, 0, [](const auto& z) { return z.id; }));
         result = level_->add_zone(zone);
         break;
     }
@@ -456,7 +508,7 @@ void LevelPropertiesWidget::addEntity() {
         const bool progress = kind() == Kind::ProgressPath;
         const auto& paths = progress ? level_->course().progress_paths : level_->course().paths;
         nsmb::formats::NsmbLevelPath path;
-        path.id = static_cast<std::uint16_t>(firstUnusedNumber(paths, progress ? 90 : 0, [](const auto& p) { return p.id; }));
+        path.id = static_cast<std::uint8_t>(firstUnusedNumber(paths, progress ? 90 : 0, [](const auto& p) { return p.id; }));
         path.nodes.push_back({});
         result = level_->add_path(progress, std::move(path));
         break;
@@ -483,6 +535,7 @@ void LevelPropertiesWidget::deleteEntity() {
         auto* target = kind() == Kind::Object     ? &selection.objects
                        : kind() == Kind::Sprite   ? &selection.sprites
                        : kind() == Kind::Entrance ? &selection.entrances
+                       : kind() == Kind::View    ? &selection.views
                        : kind() == Kind::Zone     ? &selection.zones
                        : kind() == Kind::Path     ? &selection.paths
                                                   : &selection.progress_paths;
@@ -496,6 +549,7 @@ void LevelPropertiesWidget::deleteEntity() {
     nsmb::core::Result<void> result;
     switch (kind()) {
     case Kind::Level:
+    case Kind::ObjectBanks:
         return;
     case Kind::Object:
         result = level_->remove_object(index);
@@ -505,6 +559,9 @@ void LevelPropertiesWidget::deleteEntity() {
         break;
     case Kind::Entrance:
         result = level_->remove_entrance(index);
+        break;
+    case Kind::View:
+        result = level_->remove_view(index);
         break;
     case Kind::Zone:
         result = level_->remove_zone(index);
@@ -528,7 +585,7 @@ void LevelPropertiesWidget::addNode() {
     const auto& paths = progress ? level_->course().progress_paths : level_->course().paths;
     auto path = paths[index];
     auto node = path.nodes.empty() ? nsmb::formats::NsmbLevelPathNode{} : path.nodes.back();
-    node.x = static_cast<std::uint16_t>(node.x + 16U);
+    node.x = static_cast<std::int16_t>(node.x + 16);
     path.nodes.push_back(node);
     auto result = level_->update_path(progress, index, std::move(path));
     if (result) {
@@ -564,9 +621,9 @@ void LevelPropertiesWidget::emitChange(const nsmb::core::Result<void>& result) {
 
 void LevelPropertiesWidget::select(Kind selected_kind, int item_index, int node_index) {
     selected_items_.clear();
-    const auto box_index = kindBox_->findData(static_cast<int>(selected_kind));
+    int box_index = -1; for (int i = 0; i < kindTabs_->count(); ++i) if (kindTabs_->tabData(i).toInt() == static_cast<int>(selected_kind)) box_index = i;
     if (box_index >= 0) {
-        kindBox_->setCurrentIndex(box_index);
+        kindTabs_->setCurrentIndex(box_index);
     }
     itemBox_->setValue(std::max(0, item_index));
     nodeBox_->setValue(std::max(0, node_index));
@@ -580,11 +637,11 @@ void LevelPropertiesWidget::selectMany(Kind selected_kind, const QList<int>& ite
     }
     std::sort(selected_items_.begin(), selected_items_.end());
     selected_items_.erase(std::unique(selected_items_.begin(), selected_items_.end()), selected_items_.end());
-    const auto box_index = kindBox_->findData(static_cast<int>(selected_kind));
-    const QSignalBlocker kind_blocker(kindBox_);
+    int box_index = -1; for (int i = 0; i < kindTabs_->count(); ++i) if (kindTabs_->tabData(i).toInt() == static_cast<int>(selected_kind)) box_index = i;
+    const QSignalBlocker kind_blocker(kindTabs_);
     const QSignalBlocker item_blocker(itemBox_);
     if (box_index >= 0) {
-        kindBox_->setCurrentIndex(box_index);
+        kindTabs_->setCurrentIndex(box_index);
     }
     if (!selected_items_.empty()) itemBox_->setValue(static_cast<int>(selected_items_.front()));
     refresh();

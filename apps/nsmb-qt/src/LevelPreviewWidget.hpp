@@ -18,6 +18,7 @@
 #include "nsmb/project/editable_level.hpp"
 #include "nsmb/project/graphics_resources.hpp"
 #include "nsmb/project/project.hpp"
+#include "nsmb/project/sprite_definitions.hpp"
 
 class QtEditorTests;
 
@@ -48,6 +49,8 @@ public:
     [[nodiscard]] QPointF pan() const noexcept;
     void setPan(QPointF pan);
     void setGraphicsResources(nsmb::project::LevelGraphicsResources resources, nsmb::project::LevelTilesetReferences references);
+    void setCustomActors(const nsmb::project::ModuleDataCatalog& catalog);
+    void setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog);
     void clearGraphics();
     void invalidateGraphics();
     [[nodiscard]] bool graphicsMatch(nsmb::project::LevelTilesetReferences references) const noexcept;
@@ -58,14 +61,21 @@ public:
         int id{};
         int slot{};
         QString label;
+        QString category;
         QImage image;
     };
     [[nodiscard]] std::vector<PaletteEntry> paletteEntries();
     void setPlacementObject(int slot, int object_id);
     void setPlacementSprite(int sprite_type);
+    void setPlacementCustomSprite(std::uint32_t hash);
     void setPlacementTool(Tool tool);
     void clearPlacement();
     void refreshLevelState();
+    void copySelection();
+    void cutSelection();
+    void pasteSelection();
+    void cloneSelection();
+    void reorderSelection(bool forward);
 
 signals:
     void selectionRequested(int kind, int item_index, int node_index);
@@ -74,6 +84,7 @@ signals:
     void errorOccurred(const QString& message);
     void graphicsLoaded();
     void graphicsWarning(const QString& message);
+    void kindShortcutRequested(int kind);
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -117,6 +128,7 @@ private:
     void commitMove(const QPointF& delta);
     void commitResize(const QPointF& delta);
     void deleteSelection();
+    void rebuildSpriteDefinitions();
 
     std::optional<Scene> scene_;
     QString message_;
@@ -136,9 +148,17 @@ private:
     bool marquee_selecting_{};
     bool space_pan_{};
     bool grid_snap_{true};
+    bool show_minimap_{true};
+    bool show_grid_{true};
+    bool show_ds_screen_{};
+    bool dragging_reference_{};
+    int snap_size_{16};
+    QImage reference_image_;
+    QPointF reference_offset_;
     int placement_object_id_{};
     int placement_tileset_slot_{};
     int placement_sprite_type_{};
+    std::optional<std::uint32_t> placement_sprite_hash_;
     Tool placement_tool_{Tool::Select};
     bool placement_selected_{};
     std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3> tilesets_;
@@ -147,6 +167,10 @@ private:
     std::unordered_map<std::uint64_t, QImage> object_images_;
     std::unordered_map<std::uint16_t, QImage> actor_images_;
     std::unordered_map<std::uint16_t, QString> actor_labels_;
+    std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids_;
+    std::unordered_map<std::uint16_t, nsmb::project::SpriteDefinition> sprite_definitions_;
+    nsmb::project::SpriteDefinitionCatalog sprite_definition_catalog_;
+    std::unordered_map<std::uint32_t, QString> custom_actor_labels_;
     std::uint64_t graphics_generation_{};
     std::optional<nsmb::project::LevelTilesetReferences> graphics_references_;
 };

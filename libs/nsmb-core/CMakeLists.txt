@@ -3,6 +3,8 @@ add_library(nsmb-core
   src/command.cpp
   src/endian.cpp
   src/file_io.cpp
+  src/json.cpp
+  src/logging.cpp
 )
 add_library(nsmb::core ALIAS nsmb-core)
 target_include_directories(nsmb-core PUBLIC include)

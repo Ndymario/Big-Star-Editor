@@ -3,7 +3,10 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <cstddef>
 #include <limits>
+#include <map>
+#include <numeric>
 #include <string>
 
 #include "nsmb/core/endian.hpp"
@@ -32,6 +35,121 @@ std::uint8_t expand_5_to_8(std::uint16_t value) {
     return static_cast<std::uint8_t>((value << 3U) | (value >> 2U));
 }
 
+struct LzMatch {
+    std::size_t length{};
+    std::size_t displacement{};
+};
+
+class ForwardMatcher {
+public:
+    explicit ForwardMatcher(std::span<const std::uint8_t> data)
+        : data_(data), head_(65536, -1), previous_(data.size(), -1) {}
+
+    void insert(std::size_t position) {
+        if (position + 2U >= data_.size()) return;
+        const auto bucket = key(position);
+        previous_[position] = head_[bucket];
+        head_[bucket] = static_cast<std::ptrdiff_t>(position);
+    }
+
+    LzMatch find(std::size_t position, std::size_t maximum) const {
+        if (position + 2U >= data_.size()) return {};
+        const auto lower = position > 4096U ? position - 4096U : 0U;
+        LzMatch best;
+        for (auto candidate = head_[key(position)]; candidate >= static_cast<std::ptrdiff_t>(lower);
+             candidate = previous_[static_cast<std::size_t>(candidate)]) {
+            const auto start = static_cast<std::size_t>(candidate);
+            std::size_t length = 0;
+            const auto limit = std::min(maximum, data_.size() - position);
+            while (length < limit && data_[start + length] == data_[position + length]) ++length;
+            if (length > best.length) best = {length, position - start};
+            if (best.length == limit) break;
+        }
+        if (best.length < 3U) return {};
+        return best;
+    }
+
+private:
+    std::size_t key(std::size_t position) const {
+        return (static_cast<std::size_t>(data_[position]) * 251U * 251U +
+                static_cast<std::size_t>(data_[position + 1U]) * 251U + data_[position + 2U]) & 0xFFFFU;
+    }
+
+    std::span<const std::uint8_t> data_;
+    std::vector<std::ptrdiff_t> head_;
+    std::vector<std::ptrdiff_t> previous_;
+};
+
+core::Result<std::vector<std::uint8_t>> compress_nitro_lz(std::span<const std::uint8_t> data, bool lz11) {
+    if ((!lz11 && data.size() > 0xFFFFFFU) || data.size() > std::numeric_limits<std::uint32_t>::max()) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "input is too large for the selected Nitro LZ header");
+    }
+    std::vector<std::uint8_t> output;
+    output.reserve(data.size() + data.size() / 8U + 8U);
+    output.push_back(lz11 ? 0x11 : 0x10);
+    if (lz11 && (data.empty() || data.size() > 0xFFFFFFU)) {
+        output.insert(output.end(), 3, 0);
+        const auto size = static_cast<std::uint32_t>(data.size());
+        for (int shift = 0; shift < 32; shift += 8) output.push_back(static_cast<std::uint8_t>(size >> shift));
+    } else {
+        for (int shift = 0; shift < 24; shift += 8) output.push_back(static_cast<std::uint8_t>(data.size() >> shift));
+    }
+
+    ForwardMatcher matcher(data);
+    std::size_t position = 0;
+    while (position < data.size()) {
+        const auto flag_offset = output.size(); output.push_back(0);
+        for (int bit = 7; bit >= 0 && position < data.size(); --bit) {
+            auto match = matcher.find(position, lz11 ? 0x10110U : 18U);
+            const auto consumed = match.length ? match.length : 1U;
+            if (!match.length) {
+                output.push_back(data[position]);
+            } else {
+                output[flag_offset] |= static_cast<std::uint8_t>(1U << bit);
+                const auto displacement = match.displacement - 1U;
+                if (!lz11) {
+                    output.push_back(static_cast<std::uint8_t>(((match.length - 3U) << 4U) | (displacement >> 8U)));
+                    output.push_back(static_cast<std::uint8_t>(displacement));
+                } else if (match.length <= 16U) {
+                    output.push_back(static_cast<std::uint8_t>(((match.length - 1U) << 4U) | (displacement >> 8U)));
+                    output.push_back(static_cast<std::uint8_t>(displacement));
+                } else if (match.length <= 272U) {
+                    const auto length = match.length - 0x11U;
+                    output.push_back(static_cast<std::uint8_t>(length >> 4U));
+                    output.push_back(static_cast<std::uint8_t>((length << 4U) | (displacement >> 8U)));
+                    output.push_back(static_cast<std::uint8_t>(displacement));
+                } else {
+                    const auto length = match.length - 0x111U;
+                    output.push_back(static_cast<std::uint8_t>(0x10U | (length >> 12U)));
+                    output.push_back(static_cast<std::uint8_t>(length >> 4U));
+                    output.push_back(static_cast<std::uint8_t>((length << 4U) | (displacement >> 8U)));
+                    output.push_back(static_cast<std::uint8_t>(displacement));
+                }
+            }
+            for (std::size_t i = 0; i < consumed; ++i) matcher.insert(position + i);
+            position += consumed;
+        }
+    }
+    return output;
+}
+
+std::size_t backward_match(std::span<const std::uint8_t> data, std::size_t remaining, std::size_t& match_position) {
+    const auto maximum = std::min<std::size_t>(remaining, 18U);
+    const auto available = std::min<std::size_t>(data.size() - remaining, 4098U);
+    std::size_t best = 0;
+    for (std::size_t i = 0; i < available; ++i) {
+        if (data[remaining + i] != data[remaining - 1U]) continue;
+        const auto limit = std::min(maximum, i + 1U); std::size_t length = 0;
+        while (length < limit && data[remaining - 1U - length] == data[remaining + i - length]) ++length;
+        if (length > best) { best = length; match_position = i; }
+    }
+    return best;
+}
+
+void put_u32_le(std::vector<std::uint8_t>& data, std::size_t offset, std::uint32_t value) {
+    for (int shift = 0; shift < 32; shift += 8) data[offset++] = static_cast<std::uint8_t>(value >> shift);
+}
+
 } // namespace
 
 GraphicsFormatKind identify_graphics_format(std::span<const std::uint8_t> data, std::string_view path_hint) {
@@ -47,7 +165,13 @@ GraphicsFormatKind identify_graphics_format(std::span<const std::uint8_t> data, 
     if (has_magic(data, "JNCL")) {
         return GraphicsFormatKind::NitroCellLayout;
     }
+    if (has_magic(data, "RECN")) {
+        return GraphicsFormatKind::NitroCellLayout;
+    }
     if (has_magic(data, "JNCD")) {
+        return GraphicsFormatKind::NitroCellAnimation;
+    }
+    if (has_magic(data, "RNAN")) {
         return GraphicsFormatKind::NitroCellAnimation;
     }
     if (has_magic(data, "BTX0")) {
@@ -157,6 +281,18 @@ core::Result<std::vector<Bgr555Color>> decode_bgr555_palette(std::span<const std
     return colors;
 }
 
+core::Result<std::vector<std::uint8_t>> encode_bgr555_palette(std::span<const Bgr555Color> colors) {
+    if (colors.size() > std::numeric_limits<std::size_t>::max() / 2U) return core::make_error(core::ErrorCode::OutOfBounds, "palette is too large");
+    std::vector<std::uint8_t> output(colors.size() * 2U);
+    const auto shrink = [](std::uint8_t value) { return static_cast<std::uint16_t>((static_cast<unsigned>(value) * 31U + 127U) / 255U); };
+    for (std::size_t i = 0; i < colors.size(); ++i) {
+        const auto packed = static_cast<std::uint16_t>(shrink(colors[i].red) | (shrink(colors[i].green) << 5U) | (shrink(colors[i].blue) << 10U));
+        output[i * 2U] = static_cast<std::uint8_t>(packed);
+        output[i * 2U + 1U] = static_cast<std::uint8_t>(packed >> 8U);
+    }
+    return output;
+}
+
 core::Result<std::vector<IndexedTile4Bpp>> decode_4bpp_tiles(std::span<const std::uint8_t> data) {
     constexpr std::size_t tile_size = 32;
     constexpr std::size_t tile_width = 8;
@@ -181,6 +317,16 @@ core::Result<std::vector<IndexedTile4Bpp>> decode_4bpp_tiles(std::span<const std
         tiles.push_back(tile);
     }
     return tiles;
+}
+
+core::Result<std::vector<std::uint8_t>> encode_4bpp_tiles(std::span<const IndexedTile4Bpp> tiles) {
+    std::vector<std::uint8_t> output(tiles.size() * 32U);
+    for (std::size_t tile = 0; tile < tiles.size(); ++tile) for (std::size_t pixel = 0; pixel < 64U; pixel += 2U) {
+        if (tiles[tile].pixels[pixel] > 15U || tiles[tile].pixels[pixel + 1U] > 15U)
+            return core::make_error(core::ErrorCode::InvalidArgument, "4bpp tile contains a palette index above 15");
+        output[tile * 32U + pixel / 2U] = static_cast<std::uint8_t>(tiles[tile].pixels[pixel] | (tiles[tile].pixels[pixel + 1U] << 4U));
+    }
+    return output;
 }
 
 core::Result<std::vector<std::uint8_t>> decompress_nitro_lz(std::span<const std::uint8_t> data) {
@@ -261,6 +407,61 @@ core::Result<std::vector<std::uint8_t>> decompress_nitro_lz(std::span<const std:
     return output;
 }
 
+core::Result<std::vector<std::uint8_t>> compress_nitro_lz10(std::span<const std::uint8_t> data) {
+    return compress_nitro_lz(data, false);
+}
+
+core::Result<std::vector<std::uint8_t>> compress_nitro_lz11(std::span<const std::uint8_t> data) {
+    return compress_nitro_lz(data, true);
+}
+
+core::Result<std::vector<std::uint8_t>> decompress_yaz0(std::span<const std::uint8_t> data) {
+    if (data.size() < 16U || !has_magic(data, "Yaz0")) return core::make_error(core::ErrorCode::ParseError, "Yaz0 header is missing or truncated");
+    const auto output_size = (static_cast<std::size_t>(data[4]) << 24U) | (static_cast<std::size_t>(data[5]) << 16U) |
+                             (static_cast<std::size_t>(data[6]) << 8U) | data[7];
+    if (output_size > 256U * 1024U * 1024U) return core::make_error(core::ErrorCode::InvalidArgument, "Yaz0 output exceeds the safety limit");
+    std::vector<std::uint8_t> output; output.reserve(output_size); std::size_t input = 16U;
+    while (output.size() < output_size) {
+        if (input >= data.size()) return core::make_error(core::ErrorCode::OutOfBounds, "Yaz0 flag byte is truncated");
+        const auto flags = data[input++];
+        for (int bit = 7; bit >= 0 && output.size() < output_size; --bit) {
+            if ((flags & (1U << bit)) != 0) {
+                if (input >= data.size()) return core::make_error(core::ErrorCode::OutOfBounds, "Yaz0 literal is truncated");
+                output.push_back(data[input++]); continue;
+            }
+            if (input + 1U >= data.size()) return core::make_error(core::ErrorCode::OutOfBounds, "Yaz0 back-reference is truncated");
+            const auto first = data[input++]; const auto second = data[input++];
+            const auto displacement = (static_cast<std::size_t>(first & 0x0FU) << 8U | second) + 1U;
+            std::size_t length = first >> 4U;
+            if (length == 0) { if (input >= data.size()) return core::make_error(core::ErrorCode::OutOfBounds, "Yaz0 long token is truncated"); length = static_cast<std::size_t>(data[input++]) + 0x12U; }
+            else length += 2U;
+            if (displacement > output.size()) return core::make_error(core::ErrorCode::ParseError, "Yaz0 back-reference precedes the output buffer");
+            for (std::size_t i = 0; i < length && output.size() < output_size; ++i) output.push_back(output[output.size() - displacement]);
+        }
+    }
+    return output;
+}
+
+core::Result<std::vector<std::uint8_t>> compress_yaz0(std::span<const std::uint8_t> data) {
+    if (data.size() > std::numeric_limits<std::uint32_t>::max()) return core::make_error(core::ErrorCode::InvalidArgument, "input is too large for Yaz0");
+    std::vector<std::uint8_t> output{'Y','a','z','0'}; const auto size = static_cast<std::uint32_t>(data.size());
+    output.push_back(static_cast<std::uint8_t>(size >> 24U)); output.push_back(static_cast<std::uint8_t>(size >> 16U));
+    output.push_back(static_cast<std::uint8_t>(size >> 8U)); output.push_back(static_cast<std::uint8_t>(size)); output.insert(output.end(), 8, 0);
+    ForwardMatcher matcher(data); std::size_t position = 0;
+    while (position < data.size()) {
+        const auto flag_offset = output.size(); output.push_back(0);
+        for (int bit = 7; bit >= 0 && position < data.size(); --bit) {
+            const auto match = matcher.find(position, 0x111U); const auto consumed = match.length ? match.length : 1U;
+            if (!match.length) { output[flag_offset] |= static_cast<std::uint8_t>(1U << bit); output.push_back(data[position]); }
+            else { const auto displacement = match.displacement - 1U;
+                if (match.length >= 0x12U) { output.push_back(static_cast<std::uint8_t>(displacement >> 8U)); output.push_back(static_cast<std::uint8_t>(displacement)); output.push_back(static_cast<std::uint8_t>(match.length - 0x12U)); }
+                else { output.push_back(static_cast<std::uint8_t>(((match.length - 2U) << 4U) | (displacement >> 8U))); output.push_back(static_cast<std::uint8_t>(displacement)); }}
+            for (std::size_t i = 0; i < consumed; ++i) matcher.insert(position + i); position += consumed;
+        }
+    }
+    while (output.size() % 4U) output.push_back(0); return output;
+}
+
 core::Result<std::vector<std::uint8_t>> decompress_blz_overlay(std::span<const std::uint8_t> data) {
     if (data.size() < 8) {
         return core::make_error(core::ErrorCode::OutOfBounds, "BLZ overlay footer is truncated");
@@ -311,6 +512,28 @@ core::Result<std::vector<std::uint8_t>> decompress_blz_overlay(std::span<const s
     return output;
 }
 
+core::Result<std::vector<std::uint8_t>> compress_blz_overlay(std::span<const std::uint8_t> data) {
+    if (data.size() < 16U || data.size() > 0xFFFFFFU) return std::vector<std::uint8_t>{};
+    std::vector<std::uint8_t> work(data.size()); std::size_t source = data.size(), target = data.size();
+    while (source > 0) {
+        if (target == 0) return std::vector<std::uint8_t>{};
+        const auto flag_offset = --target; std::uint8_t flags = 0;
+        for (int token = 0; token < 8; ++token) {
+            flags <<= 1U; if (source == 0) continue;
+            std::size_t match_position = 0; const auto length = backward_match(data, source, match_position);
+            if (length <= 2U) { if (target == 0) return std::vector<std::uint8_t>{}; work[--target] = data[--source]; }
+            else { if (target < 2U) return std::vector<std::uint8_t>{}; source -= length; const auto packed = static_cast<std::uint16_t>((match_position - 2U) & 0x0FFFU) | static_cast<std::uint16_t>((length - 3U) << 12U);
+                --target; work[target--] = static_cast<std::uint8_t>(packed >> 8U); work[target] = static_cast<std::uint8_t>(packed); flags |= 1U; }
+        }
+        work[flag_offset] = flags;
+    }
+    const auto body_size = data.size() - target; auto total = body_size + 8U; const auto padding = (4U - total % 4U) % 4U; total += padding;
+    if (total >= data.size()) return std::vector<std::uint8_t>{};
+    std::vector<std::uint8_t> output(total, 0); std::copy(work.begin() + static_cast<std::ptrdiff_t>(target), work.end(), output.begin());
+    const auto offset_in = static_cast<std::uint32_t>(total) | (static_cast<std::uint32_t>(8U + padding) << 24U);
+    put_u32_le(output, total - 8U, offset_in); put_u32_le(output, total - 4U, static_cast<std::uint32_t>(data.size() - total)); return output;
+}
+
 core::Result<std::vector<IndexedTile8Bpp>> decode_8bpp_tiles(std::span<const std::uint8_t> data) {
     if (data.size() % 64U != 0) {
         return core::make_error(core::ErrorCode::ParseError, "8bpp tile data must be a multiple of 64 bytes");
@@ -320,6 +543,13 @@ core::Result<std::vector<IndexedTile8Bpp>> decode_8bpp_tiles(std::span<const std
         std::copy_n(data.begin() + static_cast<std::ptrdiff_t>(tile * 64U), 64U, tiles[tile].pixels.begin());
     }
     return tiles;
+}
+
+core::Result<std::vector<std::uint8_t>> encode_8bpp_tiles(std::span<const IndexedTile8Bpp> tiles) {
+    std::vector<std::uint8_t> output(tiles.size() * 64U);
+    for (std::size_t tile = 0; tile < tiles.size(); ++tile)
+        std::copy(tiles[tile].pixels.begin(), tiles[tile].pixels.end(), output.begin() + static_cast<std::ptrdiff_t>(tile * 64U));
+    return output;
 }
 
 core::Result<std::vector<ScreenMapEntry>> decode_screen_map(std::span<const std::uint8_t> data,
@@ -357,6 +587,31 @@ core::Result<std::vector<Map16Tile>> decode_map16(std::span<const std::uint8_t> 
         std::copy_n(entries.value().begin() + static_cast<std::ptrdiff_t>(i * 4U), 4U, result[i].tiles.begin());
     }
     return result;
+}
+
+core::Result<std::vector<std::uint8_t>> encode_screen_map(std::span<const ScreenMapEntry> entries,
+                                                          std::uint16_t tile_offset,
+                                                          std::uint8_t palette_offset) {
+    std::vector<std::uint8_t> output(entries.size() * 2U);
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const auto tile = static_cast<unsigned>(entries[i].tile) + tile_offset;
+        const auto palette = static_cast<unsigned>(entries[i].palette) + palette_offset;
+        if (tile > 0x3ffU || palette > 15U) return core::make_error(core::ErrorCode::InvalidArgument, "screen-map tile or palette index is not representable");
+        const auto packed = static_cast<std::uint16_t>(tile | (entries[i].horizontal_flip ? 0x400U : 0U) |
+                                                       (entries[i].vertical_flip ? 0x800U : 0U) | (palette << 12U));
+        output[i * 2U] = static_cast<std::uint8_t>(packed);
+        output[i * 2U + 1U] = static_cast<std::uint8_t>(packed >> 8U);
+    }
+    return output;
+}
+
+core::Result<std::vector<std::uint8_t>> encode_map16(std::span<const Map16Tile> tiles,
+                                                     std::uint16_t tile_offset,
+                                                     std::uint8_t palette_offset) {
+    std::vector<ScreenMapEntry> entries;
+    entries.reserve(tiles.size() * 4U);
+    for (const auto& tile : tiles) entries.insert(entries.end(), tile.tiles.begin(), tile.tiles.end());
+    return encode_screen_map(entries, tile_offset, palette_offset);
 }
 
 core::Result<RgbaImage> render_screen_map(std::span<const ScreenMapEntry> map,
@@ -445,6 +700,90 @@ core::Result<std::vector<ObjectLayout>> decode_object_layouts(std::span<const st
         objects.push_back(std::move(layout));
     }
     return objects;
+}
+
+core::Result<EncodedObjectLayouts> encode_object_layouts(std::span<const ObjectLayout> objects,
+                                                          std::uint8_t tile_page_offset,
+                                                          std::span<const std::uint8_t> index_template) {
+    if (!index_template.empty() && index_template.size() != objects.size() * 4U)
+        return core::make_error(core::ErrorCode::InvalidArgument, "object index template has the wrong size");
+    EncodedObjectLayouts output;
+    output.index.resize(objects.size() * 4U);
+    if (!index_template.empty()) output.index.assign(index_template.begin(), index_template.end());
+    for (std::size_t object_index = 0; object_index < objects.size(); ++object_index) {
+        if (output.definitions.size() > 0xffffU) return core::make_error(core::ErrorCode::OutOfBounds, "object definitions exceed the 16-bit index range");
+        const auto offset = static_cast<std::uint16_t>(output.definitions.size());
+        output.index[object_index * 4U] = static_cast<std::uint8_t>(offset);
+        output.index[object_index * 4U + 1U] = static_cast<std::uint8_t>(offset >> 8U);
+        const auto& object = objects[object_index];
+        if (object.rows.empty()) return core::make_error(core::ErrorCode::InvalidArgument, "object layout has no rows");
+        if (object.slope) output.definitions.push_back(static_cast<std::uint8_t>(0x80U | (object.slope_left ? 1U : 0U) | (object.slope_down ? 2U : 0U)));
+        for (std::size_t row_index = 0; row_index < object.rows.size(); ++row_index) {
+            if (row_index) output.definitions.push_back(0xfeU);
+            for (const auto& entry : object.rows[row_index]) {
+                if ((entry.control & 0x80U) != 0 || entry.control == 0xfeU || entry.control == 0xffU)
+                    return core::make_error(core::ErrorCode::InvalidArgument, "object tile control collides with a layout marker");
+                output.definitions.push_back(entry.control);
+                if (entry.tile < 0) { output.definitions.push_back(0); output.definitions.push_back(0); continue; }
+                auto tile = entry.tile - ((entry.control & 0x40U) ? 768 : 0);
+                if (tile < 0 || tile > 0xffff) return core::make_error(core::ErrorCode::InvalidArgument, "object tile is outside the representable page range");
+                const auto page = (tile >> 8) + tile_page_offset;
+                if (page < 0 || page > 255 || (tile & 0xff) == 0 && page == 0)
+                    return core::make_error(core::ErrorCode::InvalidArgument, "object tile is outside the representable page range");
+                output.definitions.push_back(static_cast<std::uint8_t>(tile));
+                output.definitions.push_back(static_cast<std::uint8_t>(page));
+            }
+        }
+        output.definitions.push_back(0xffU);
+    }
+    return output;
+}
+
+core::Result<IndexedImage> quantize_bgr555(const RgbaImage& image, std::size_t maximum_colors, std::uint8_t alpha_threshold) {
+    if (!image.width || !image.height || image.width > std::numeric_limits<std::size_t>::max() / image.height ||
+        image.pixels.size() != image.width * image.height * 4U)
+        return core::make_error(core::ErrorCode::InvalidArgument, "quantization needs a complete RGBA image");
+    if (maximum_colors < 2U || maximum_colors > 256U) return core::make_error(core::ErrorCode::InvalidArgument, "palette size must be 2 through 256");
+    struct Sample { std::uint8_t r{}, g{}, b{}; std::size_t count{}; };
+    std::map<std::uint16_t, std::size_t> frequency;
+    const auto pack5 = [](std::uint8_t r, std::uint8_t g, std::uint8_t b) { return static_cast<std::uint16_t>(((r * 31U + 127U) / 255U) | (((g * 31U + 127U) / 255U) << 5U) | (((b * 31U + 127U) / 255U) << 10U)); };
+    bool transparent = false;
+    for (std::size_t i = 0; i < image.width * image.height; ++i) {
+        if (image.pixels[i * 4U + 3U] < alpha_threshold) { transparent = true; continue; }
+        ++frequency[pack5(image.pixels[i * 4U], image.pixels[i * 4U + 1U], image.pixels[i * 4U + 2U])];
+    }
+    std::vector<Sample> samples; samples.reserve(frequency.size());
+    const auto expand = [](unsigned value) { return static_cast<std::uint8_t>((value << 3U) | (value >> 2U)); };
+    for (const auto& [packed, count] : frequency) samples.push_back({expand(packed & 31U), expand((packed >> 5U) & 31U), expand((packed >> 10U) & 31U), count});
+    const auto available = maximum_colors - (transparent ? 1U : 0U);
+    struct Box { std::vector<std::size_t> values; };
+    std::vector<Box> boxes;
+    if (!samples.empty()) { boxes.push_back({{}}); boxes.front().values.resize(samples.size()); std::iota(boxes.front().values.begin(), boxes.front().values.end(), 0U); }
+    auto range = [&](const Box& box, int channel) { if (box.values.empty()) return 0; auto [low, high] = std::minmax_element(box.values.begin(), box.values.end(), [&](auto a, auto b) { const auto ca = channel == 0 ? samples[a].r : channel == 1 ? samples[a].g : samples[a].b; const auto cb = channel == 0 ? samples[b].r : channel == 1 ? samples[b].g : samples[b].b; return ca < cb; }); const auto value = [&](auto i) { return channel == 0 ? samples[*i].r : channel == 1 ? samples[*i].g : samples[*i].b; }; return static_cast<int>(value(high)) - value(low); };
+    while (boxes.size() < available) {
+        auto found = std::max_element(boxes.begin(), boxes.end(), [&](const Box& a, const Box& b) { return std::max({range(a,0),range(a,1),range(a,2)}) < std::max({range(b,0),range(b,1),range(b,2)}); });
+        if (found == boxes.end() || found->values.size() < 2U) break;
+        const std::array ranges{range(*found,0),range(*found,1),range(*found,2)}; const auto channel = static_cast<int>(std::max_element(ranges.begin(), ranges.end()) - ranges.begin());
+        std::sort(found->values.begin(), found->values.end(), [&](auto a, auto b) { return channel == 0 ? samples[a].r < samples[b].r : channel == 1 ? samples[a].g < samples[b].g : samples[a].b < samples[b].b; });
+        std::size_t total = 0; for (auto value : found->values) total += samples[value].count; std::size_t seen = 0, split = 1;
+        for (; split < found->values.size(); ++split) { seen += samples[found->values[split - 1U]].count; if (seen * 2U >= total) break; }
+        split = std::min(split, found->values.size() - 1U);
+        Box right{{found->values.begin() + static_cast<std::ptrdiff_t>(split), found->values.end()}}; found->values.erase(found->values.begin() + static_cast<std::ptrdiff_t>(split), found->values.end()); boxes.push_back(std::move(right));
+    }
+    IndexedImage output{image.width, image.height, std::vector<std::uint8_t>(image.width * image.height), {}};
+    if (transparent) output.palette.push_back({0,0,0,true});
+    for (const auto& box : boxes) {
+        std::size_t count = 0, r = 0, g = 0, b = 0; for (auto value : box.values) { count += samples[value].count; r += samples[value].r * samples[value].count; g += samples[value].g * samples[value].count; b += samples[value].b * samples[value].count; }
+        if (count) output.palette.push_back({static_cast<std::uint8_t>(r / count), static_cast<std::uint8_t>(g / count), static_cast<std::uint8_t>(b / count), false});
+    }
+    if (output.palette.empty()) output.palette.push_back({0,0,0,true});
+    for (std::size_t i = 0; i < image.width * image.height; ++i) {
+        if (transparent && image.pixels[i * 4U + 3U] < alpha_threshold) { output.pixels[i] = 0; continue; }
+        std::size_t best = transparent ? 1U : 0U; unsigned best_error = std::numeric_limits<unsigned>::max();
+        for (std::size_t candidate = transparent ? 1U : 0U; candidate < output.palette.size(); ++candidate) { const auto dr = static_cast<int>(image.pixels[i*4U])-output.palette[candidate].red, dg = static_cast<int>(image.pixels[i*4U+1U])-output.palette[candidate].green, db = static_cast<int>(image.pixels[i*4U+2U])-output.palette[candidate].blue; const auto error = static_cast<unsigned>(dr*dr+dg*dg+db*db); if (error < best_error) { best_error = error; best = candidate; } }
+        output.pixels[i] = static_cast<std::uint8_t>(best);
+    }
+    return output;
 }
 
 core::Result<std::vector<std::int32_t>> render_object_layout(const ObjectLayout& object,

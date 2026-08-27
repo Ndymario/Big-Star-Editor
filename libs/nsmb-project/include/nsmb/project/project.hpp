@@ -3,59 +3,12 @@
 #include <filesystem>
 #include <optional>
 #include <string>
-#include <utility>
 #include <vector>
 
 #include "nsmb/core/result.hpp"
 #include "nsmb/nds/rom.hpp"
 
 namespace nsmb::project {
-
-struct TilesetRef {
-    std::string id;
-    std::filesystem::path file;
-};
-
-struct Sprite {
-    int id{};
-    int x{};
-    int y{};
-    std::string type;
-};
-
-struct Entrance {
-    int id{};
-    int x{};
-    int y{};
-};
-
-struct Path {
-    std::string name;
-    std::vector<std::pair<int, int>> points;
-};
-
-struct Zone {
-    int id{};
-    int x{};
-    int y{};
-    int width{};
-    int height{};
-};
-
-struct Area {
-    std::string id;
-    std::vector<Zone> zones;
-    std::vector<Sprite> sprites;
-    std::vector<Entrance> entrances;
-    std::vector<Path> paths;
-};
-
-struct Level {
-    std::string id;
-    std::string display_name;
-    std::vector<Area> areas;
-    std::vector<TilesetRef> tilesets;
-};
 
 struct GameFile {
     std::filesystem::path path;

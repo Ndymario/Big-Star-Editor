@@ -5,8 +5,26 @@
 
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/nds/rom.hpp"
+#include "nsmb/formats/g2d.hpp"
+#include "nsmb/formats/tex0.hpp"
 
 namespace nsmb::project {
+
+core::Result<ObjectBankOverlayTable> find_object_bank_overlays(std::span<const std::uint8_t> arm9) {
+    constexpr std::array<std::array<std::uint32_t,10>,16> expected{{
+        {{22,23,24,25,26,27,28,29,30,31}},{{32,33,34,35,36,37,38,39,40,41}},{{56,57,58,59,60,61,62,63,64,65}},{{66,67,68,69,70,71,72,73,74,75}},
+        {{42,43,44,45,46,47,48,49,50,51}},{{76,77,78,79,80,81,82,83,84,85}},{{86,87,88,89,90,91,92,93,94,95}},{{96,97,98,99,100,101,102,103,104,105}},
+        {{106,107,108,109,110,111,112,113,114,115}},{{116,117,118,119,120,121,122,123,124,125}},{{0,0,0,0,0,0,0,0,0,0}},{{0,0,0,0,0,0,0,0,0,0}},
+        {{0,0,0,0,0,0,0,0,0,0}},{{0,0,0,0,0,0,0,0,0,0}},{{0,0,0,0,0,0,0,0,0,0}},{{12,13,14,15,16,17,18,19,20,21}}
+    }};
+    constexpr auto bytes=sizeof(expected);
+    for(std::size_t offset=0;offset+bytes<=arm9.size();offset+=4){
+        ObjectBankOverlayTable found{};bool match=true;
+        for(std::size_t slot=0;slot<16&&match;++slot)for(std::size_t bank=0;bank<10;++bank){const auto o=offset+(slot*10+bank)*4;const auto v=static_cast<std::uint32_t>(arm9[o])|(static_cast<std::uint32_t>(arm9[o+1])<<8)|(static_cast<std::uint32_t>(arm9[o+2])<<16)|(static_cast<std::uint32_t>(arm9[o+3])<<24);found[slot][bank]=v;if(v!=expected[slot][bank]){match=false;break;}}
+        if(match)return found;
+    }
+    return core::make_error(core::ErrorCode::NotFound,"could not locate the object-bank overlay table in ARM9");
+}
 
 namespace {
 
@@ -99,6 +117,14 @@ void copy_image(const formats::RgbaImage& source,
                         destination.pixels.begin() + static_cast<std::ptrdiff_t>(destination_pixel));
         }
     }
+}
+
+formats::RgbaImage trim_image(const formats::RgbaImage& source) {
+    if (!source.width || !source.height) return source;
+    std::size_t left=source.width,top=source.height,right=0,bottom=0;bool found=false;
+    for(std::size_t y=0;y<source.height;++y)for(std::size_t x=0;x<source.width;++x)if(source.pixels[(y*source.width+x)*4U+3]){found=true;left=std::min(left,x);top=std::min(top,y);right=std::max(right,x);bottom=std::max(bottom,y);}
+    if(!found)return source;formats::RgbaImage result{right-left+1U,bottom-top+1U,{}};result.pixels.resize(result.width*result.height*4U);
+    for(std::size_t y=0;y<result.height;++y)for(std::size_t x=0;x<result.width;++x)std::copy_n(source.pixels.begin()+static_cast<std::ptrdiff_t>(((top+y)*source.width+left+x)*4U),4,result.pixels.begin()+static_cast<std::ptrdiff_t>((y*result.width+x)*4U));return result;
 }
 
 } // namespace
@@ -202,11 +228,11 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
                                      profile->background_screen, references.background_graphics_id, references.background_screen_id);
         !value) return value.error();
     if (auto value = fill_background(result.foreground, profile->foreground_graphics, profile->foreground_palette,
-                                     profile->foreground_screen, references.foreground_graphics_id, references.foreground_graphics_id);
+                                     profile->foreground_screen, references.foreground_graphics_id, references.foreground_screen_id);
         !value) return value.error();
     result.watched_files.push_back(root / "fnt.bin");
     result.watched_files.push_back(root / "overlay9" / nds::overlay_file_name(0));
-    // ponytail: actor art stays schematic until each class has a verified ROM OAM or model layout.
+    // ponytail: only classes with a verified ROM sprite sheet or model are decoded; the rest keep the labelled fallback.
     constexpr std::uint16_t actor_type_count = 326;
     for (std::uint16_t type = 0; type < actor_type_count; ++type) {
         const auto class_offset = profile->sprite_object_ids + static_cast<std::size_t>(type) * 2U;
@@ -215,10 +241,14 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
         const auto definition = std::find_if(actor_definitions.begin(), actor_definitions.end(), [&](const auto& actor) { return actor.type == class_id; });
         ActorResourceFiles actor;
         actor.type = type;
+        actor.object_id = class_id;
         actor.name = definition == actor_definitions.end() ? "Actor " + std::to_string(type) + " (class " + std::to_string(class_id) + ")"
                                                             : std::string(definition->name);
-        if (definition != actor_definitions.end() && !definition->model.empty()) {
-            actor.model = definition->model;
+        if (definition != actor_definitions.end()) {
+            if (!definition->graphics.empty()) actor.graphics = find_named_file(entries.value(), root, definition->graphics);
+            if (!definition->palette.empty()) actor.palette = find_named_file(entries.value(), root, definition->palette);
+            if (!definition->model.empty()) actor.model = find_named_file(entries.value(), root, definition->model);
+            for(const auto& path:{actor.graphics,actor.palette,actor.model})if(!path.empty())result.watched_files.push_back(path);
         }
         result.actors.push_back(std::move(actor));
     }
@@ -293,6 +323,13 @@ core::Result<formats::RgbaImage> load_background_graphics(const BackgroundResour
     if (!screen) return screen.error();
     const auto width = screen.value().size() % 64U == 0 ? 64U : 32U;
     return formats::render_screen_map(screen.value(), width, tiles.value(), palette.value());
+}
+
+core::Result<formats::RgbaImage> load_actor_graphics(const ActorResourceFiles& files) {
+    if(!files.model.empty()){
+        auto bytes=read_resource(files.model);if(!bytes)return bytes.error();auto tex0=formats::parse_tex0(bytes.value());if(!tex0)return tex0.error();if(tex0.value().textures.empty()||tex0.value().palettes.empty())return core::make_error(core::ErrorCode::NotFound,"actor model has no texture and palette");auto image=formats::render_tex0_texture(tex0.value().textures.front(),tex0.value().palettes.front());if(!image)return image.error();return trim_image(image.value());
+    }
+    if(files.graphics.empty()||files.palette.empty())return core::make_error(core::ErrorCode::NotFound,"actor has no supported 2D or 3D graphics");auto characters=read_resource(files.graphics);auto palette_data=read_resource(files.palette);if(!characters)return characters.error();if(!palette_data)return palette_data.error();auto palette=formats::decode_bgr555_palette(palette_data.value(),false);if(!palette)return palette.error();formats::Ncer cells;cells.mapping_mode=0;cells.cells.push_back({0,{{0x2000,0x8000,0}},std::nullopt});auto image=formats::render_ncer_cell(cells,0,characters.value(),palette.value());if(!image)return image.error();return trim_image(image.value());
 }
 
 } // namespace nsmb::project

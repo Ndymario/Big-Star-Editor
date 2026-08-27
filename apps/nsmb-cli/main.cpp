@@ -1,7 +1,7 @@
 #include "nsmb/formats/graphics.hpp"
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/nds/rom.hpp"
-#include "nsmb/patching/external_tools.hpp"
+#include "nsmb/patching/ncpatcher.hpp"
 #include "nsmb/project/manifest.hpp"
 
 #include <filesystem>
@@ -17,7 +17,8 @@ void usage() {
               << "  --version\n"
               << "  inspect-rom <path>\n"
               << "  import-rom <rom> <project-dir>\n"
-              << "  run-patcher <project-dir>\n"
+              << "  run-patcher <project-dir> [--variant <name>]\n"
+              << "  patcher-info <project-dir>\n"
               << "  build-rom <project-dir> <output-rom>\n";
 }
 
@@ -123,14 +124,91 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    if (command == "run-patcher" && argc == 3) {
-        nsmb::patching::NCPatcherExternalTool patcher;
-        auto result = patcher.run({argv[2]});
+    if (command == "run-patcher" && (argc == 3 || argc == 5)) {
+        nsmb::patching::BuildRequest request;
+        request.project_dir = argv[2];
+        // `run-patcher <project> --variant <name>`. A project that configures
+        // variants requires an explicit one, so NCPatcher cannot silently build
+        // the wrong language.
+        if (argc == 5) {
+            if (std::string(argv[3]) != "--variant") {
+                usage();
+                return 2;
+            }
+            request.variant = argv[4];
+        }
+
+        nsmb::core::CallbackLogger logger([](nsmb::core::LogLevel level, std::string_view message) {
+            std::cerr << '[' << nsmb::core::log_level_name(level) << "] " << message << '\n';
+        });
+        nsmb::patching::NCPatcherClient client("ncpatcher", logger);
+
+        nsmb::patching::BuildObserver observer;
+        observer.on_progress = [](const nsmb::patching::BuildProgress& progress) {
+            std::cerr << progress.phase << ' ' << progress.current << '/' << progress.total
+                      << "  " << progress.item << '\n';
+        };
+        observer.on_diagnostic = [](const nsmb::patching::Diagnostic& diagnostic) {
+            std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+        };
+        observer.on_log = [](std::string_view line) { std::cerr << line << '\n'; };
+
+        auto result = client.build(request, observer);
         if (!result) {
             std::cerr << result.error().message << '\n';
             return 10;
         }
-        return result.value().exit_code;
+        const auto& summary = result.value();
+        if (!summary.succeeded()) {
+            std::cerr << "NCPatcher: " << describe_stage(summary.stage) << " ("
+                      << summary.errors << " error(s), " << summary.warnings << " warning(s))\n";
+        }
+        return summary.exit_code;
+    }
+
+    if (command == "patcher-info" && argc == 3) {
+        // What the project says about itself, without building it.
+        nsmb::patching::NCPatcherClient client;
+        const fs::path project_dir = argv[2];
+
+        auto version = client.version();
+        if (!version) {
+            std::cerr << version.error().message << '\n';
+            return 10;
+        }
+        std::cout << version.value() << '\n';
+
+        auto config = client.dump_config(project_dir);
+        if (!config) {
+            std::cerr << config.error().message << '\n';
+            return 10;
+        }
+        std::cout << "Config: " << config.value().config_file << '\n'
+                  << "ROM: " << config.value().rom_file << '\n'
+                  << "Toolchain: " << config.value().toolchain << '\n';
+        std::cout << "Variants: ";
+        if (config.value().variants.empty()) {
+            std::cout << "(this project configures none)";
+        } else {
+            for (const auto& variant : config.value().variants) {
+                std::cout << variant.name << ' ';
+            }
+        }
+        std::cout << '\n';
+
+        auto graph = client.dump_modules(project_dir);
+        if (graph) {
+            std::cout << "Modules (" << graph.value().modules.size() << "):\n";
+            for (const auto& module : graph.value().modules) {
+                std::cout << "  " << module.key << (module.enabled ? "" : " (disabled)");
+                if (module.nitrofs) {
+                    std::cout << " nitrofs=" << module.nitrofs->dir
+                              << (module.nitrofs->layered ? " [layered]" : "");
+                }
+                std::cout << '\n';
+            }
+        }
+        return 0;
     }
 
     if (command == "build-rom" && argc == 4) {

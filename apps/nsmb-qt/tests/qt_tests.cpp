@@ -1,16 +1,32 @@
 #include "LevelPreviewWidget.hpp"
+#include "FilesystemDock.hpp"
+#include "GraphicsEditorDialog.hpp"
+#include "UiResourceEditorDialog.hpp"
+#include "TilesetEditorDialog.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "MainWindow.hpp"
+#include "PatcherPanel.hpp"
+#include "nsmb/core/file_io.hpp"
+#include "nsmb/project/level_exchange.hpp"
 
 #include <QAction>
+#include <QApplication>
+#include <QClipboard>
 #include <QDockWidget>
 #include <QFile>
 #include <QFileSystemWatcher>
 #include <QSaveFile>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QPlainTextEdit>
+#include <QListWidget>
+#include <QLineEdit>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QTreeWidget>
+#include <QToolBox>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -30,6 +46,8 @@ nsmb::project::EditableLevel make_level() {
     for (std::size_t i = 0; i < nsmb::formats::nsmb_level_block_count; ++i) {
         put_u32(course, i * 8U, static_cast<std::uint32_t>(course.size()));
     }
+    put_u32(course,4,32);course.resize(course.size()+32);
+    put_u32(course,2*8,static_cast<std::uint32_t>(course.size()));put_u32(course,2*8+4,20);course.resize(course.size()+20);
     return std::move(nsmb::project::EditableLevel::load(course, {}).value());
 }
 
@@ -63,8 +81,38 @@ class QtEditorTests final : public QObject {
 private slots:
     void initTestCase() {
         QCoreApplication::setOrganizationName("BigStarEditorTests");
-        QCoreApplication::setApplicationName("M4WorkspaceTests");
+        QCoreApplication::setApplicationName("BigStarEditorTests");
         QSettings().clear();
+    }
+
+    void uiResourceEditorsPreserveUntouchedFiles() {
+        const std::vector<std::uint8_t> bnbl{
+            'J','N','B','L',0,0,1,0, 1,0,2,0,16,12
+        };
+        QVERIFY(UiResourceEditorDialog::supports(bnbl, "touch.bnbl"));
+        UiResourceEditorDialog layout("touch.bnbl", bnbl, false);
+        auto* table = layout.findChild<QTableWidget*>("BnxlTable");
+        QVERIFY(table);
+        QCOMPARE(table->rowCount(), 1);
+        auto layoutOutput = layout.editedBytes();
+        QVERIFY(layoutOutput);
+        QCOMPARE(layoutOutput.value(), bnbl);
+
+        std::vector<std::uint8_t> enpg(0x10200U);
+        QVERIFY(UiResourceEditorDialog::supports(enpg, "loading.enpg"));
+        UiResourceEditorDialog image("loading.enpg", enpg, false);
+        QVERIFY(image.findChild<QWidget*>("UiResourceCanvas"));
+        auto imageOutput = image.editedBytes();
+        QVERIFY(imageOutput);
+        QCOMPARE(imageOutput.value(), enpg);
+
+        const std::string text = "[Music]\n0=Overworld\n";
+        const std::vector<std::uint8_t> metadata(text.begin(), text.end());
+        UiResourceEditorDialog notes("NSMBeUD", metadata, true);
+        QVERIFY(notes.findChild<QTreeWidget*>("MetadataTree"));
+        auto metadataOutput = notes.editedBytes();
+        QVERIFY(metadataOutput);
+        QCOMPARE(metadataOutput.value(), metadata);
     }
 
     void previewAndDocksAreRecoverable() {
@@ -73,20 +121,207 @@ private slots:
         QTest::qWait(20);
         auto* tabs = window.findChild<QTabWidget*>("DocumentTabs");
         auto* preview = window.findChild<QAction*>("PreviewAction");
+        QVERIFY(window.findChild<QAction*>("RomBannerAction"));
+        QVERIFY(window.findChild<QAction*>("RomUserMetadataAction"));
+        QVERIFY(window.findChild<QAction*>("FireflowerBuildAction"));
+        QVERIFY(window.findChild<QAction*>("NsmbeWrapperBuildAction"));
         auto* levels = window.findChild<QDockWidget*>("LevelsDock");
         QVERIFY(tabs);
         QVERIFY(preview);
         QVERIFY(levels);
+        QCOMPARE(tabs->count(), 2);
+        auto* hub = window.findChild<QTabWidget*>("ProjectHubTabs");
+        QVERIFY(hub);
+        QCOMPARE(hub->count(), 5);
+        auto* palette = window.findChild<QToolBox*>("VanillaPaletteToolbox");
+        QVERIFY(palette);
+        tabs->tabCloseRequested(tabs->indexOf(window.hub_));
+        QCOMPARE(tabs->count(), 2);
+        tabs->tabCloseRequested(tabs->indexOf(window.preview_));
         QCOMPARE(tabs->count(), 1);
-        tabs->tabCloseRequested(0);
-        QCOMPARE(tabs->count(), 0);
         QVERIFY(!preview->isChecked());
         preview->trigger();
-        QCOMPARE(tabs->count(), 1);
+        QCOMPARE(tabs->count(), 2);
         levels->close();
         QVERIFY(levels->isHidden());
         levels->toggleViewAction()->trigger();
         QVERIFY(levels->isVisible());
+
+        // The Build Output dock is recoverable the same way. It is tabbed with
+        // the Log rather than given its own strip, so closing it must not be a
+        // one-way door.
+        auto* buildOutput = window.findChild<QDockWidget*>("BuildOutputDock");
+        QVERIFY(buildOutput);
+        buildOutput->close();
+        QVERIFY(buildOutput->isHidden());
+        buildOutput->toggleViewAction()->trigger();
+        QVERIFY(buildOutput->isVisible());
+        auto* filesystem = window.findChild<QDockWidget*>("FilesystemDock");
+        QVERIFY(filesystem);
+        filesystem->close();
+        QVERIFY(filesystem->isHidden());
+        filesystem->toggleViewAction()->trigger();
+        QVERIFY(filesystem->isVisible());
+    }
+
+    void patcherPanelWithoutAProjectRefusesToBuild() {
+        // With no project there is nothing to query and nothing to build, so
+        // this must not launch anything.
+        PatcherPanel panel;
+        QVERIFY(panel.selectedVariant().isEmpty());
+        QVERIFY(!panel.running());
+        QVERIFY(!panel.startBuild(false));
+    }
+
+    void patcherPanelReportsAFailedRunInsteadOfHanging() {
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+
+        PatcherPanel panel;
+        panel.setProjectDirectory(project.path().toStdString());
+        // Deliberately not a real tool: the point is that a run which cannot
+        // even start still reaches the UI as a reported failure rather than
+        // leaving the panel spinning.
+        panel.setExecutable("big-star-no-such-tool-anywhere");
+
+        QSignalSpy finished(&panel, &PatcherPanel::buildFinished);
+        QVERIFY(panel.startBuild(false));
+        QVERIFY(finished.wait(10000));
+        QCOMPARE(finished.count(), 1);
+        QCOMPARE(finished.at(0).at(0).toBool(), false);
+
+        // And the panel is idle again afterwards, so a second attempt is
+        // possible rather than blocked by a run that never ended.
+        QTRY_VERIFY(!panel.running());
+    }
+
+    void patcherPanelKeepsAVariantTheProjectNoLongerLists() {
+        // A stored variant survives a project that cannot confirm it. Silently
+        // resetting to "none" would switch the next build to a different
+        // language without saying so.
+        QTemporaryDir project;
+        QVERIFY(project.isValid());
+
+        PatcherPanel panel;
+        panel.setSelectedVariant("fr");
+        panel.setProjectDirectory(project.path().toStdString());
+        panel.setSelectedVariant("fr");
+        QCOMPARE(panel.selectedVariant(), QString("fr"));
+    }
+
+    void graphicsEditorPaintsRawCharacterPixels() {
+        std::vector<std::uint8_t> tile(32);
+        QVERIFY(GraphicsEditorDialog::supports(tile, "root/enemy/test_ncg.bin"));
+        GraphicsEditorDialog dialog("root/enemy/test_ncg.bin", tile);
+        dialog.show();
+        QTest::qWait(10);
+        auto* palette = dialog.findChild<QListWidget*>("GraphicsPalette");
+        auto* canvas = dialog.findChild<QWidget*>("GraphicsCanvas");
+        QVERIFY(palette);
+        QVERIFY(canvas);
+        QCOMPARE(palette->count(), 16);
+        palette->setCurrentRow(3);
+        QTest::mouseClick(canvas, Qt::LeftButton, {}, QPoint(8, 8));
+        const auto edited = dialog.editedBytes();
+        QVERIFY(edited);
+        QCOMPARE(edited.value().size(), tile.size());
+        QCOMPARE(edited.value().front() & 0x0fU, 3U);
+    }
+
+    void tilesetEditorExposesAllM10SurfacesAndPreservesResources() {
+        nsmb::formats::IndexedTile8Bpp tile;
+        const auto graphics = nsmb::formats::encode_8bpp_tiles(std::span{&tile, 1}).value();
+        const std::array colors{nsmb::formats::Bgr555Color{0,0,0,true}, nsmb::formats::Bgr555Color{255,255,255,false}};
+        const auto palette = nsmb::formats::encode_bgr555_palette(colors).value();
+        nsmb::formats::Map16Tile map16_tile;
+        const auto map16 = nsmb::formats::encode_map16(std::span{&map16_tile, 1}).value();
+        nsmb::formats::TilesetResourceData files{graphics,palette,map16,{0,0,0,0xff},{0,0,0,0},{0,0,0,0}};
+        auto parsed = nsmb::formats::parse_tileset(files);
+        QVERIFY(parsed);
+        std::array tilesets{parsed.value(), parsed.value(), parsed.value()};
+        nsmb::formats::TilemapResourceData map_files{graphics,palette,{0,0}};
+        auto tilemap = nsmb::formats::parse_tilemap(map_files, 1);
+        QVERIFY(tilemap);
+        TilesetEditorDialog dialog(std::move(tilesets), tilemap.value(), tilemap.value(), {1,2,3,4});
+        dialog.show();
+        QTest::qWait(10);
+        auto* tabs = dialog.findChild<QTabWidget*>("TilesetTabs");
+        auto* id = dialog.findChild<QSpinBox*>("TilesetId");
+        QVERIFY(tabs);
+        QVERIFY(id);
+        QCOMPARE(tabs->count(), 7);
+        id->setValue(42);
+        QCOMPARE(dialog.references().tileset_id, 42);
+        const auto unchanged = dialog.tilesetData(1);
+        QVERIFY(unchanged);
+        QCOMPARE(unchanged.value().graphics, files.graphics);
+        QCOMPARE(unchanged.value().objects, files.objects);
+        auto* map16Index = dialog.findChild<QSpinBox*>("Map16TileIndex");
+        auto* objectTable = dialog.findChild<QTableWidget*>("TilesetObjectTable");
+        auto* behaviorRaw = dialog.findChild<QLineEdit*>("BehaviorRaw");
+        QVERIFY(map16Index);
+        QVERIFY(objectTable);
+        QVERIFY(behaviorRaw);
+        map16Index->setValue(1);
+        objectTable->item(0, 0)->setText("1");
+        behaviorRaw->setText("89abcdef");
+        QMetaObject::invokeMethod(behaviorRaw, "editingFinished", Qt::DirectConnection);
+        const auto changed = dialog.tilesetData(1);
+        QVERIFY(changed);
+        const auto reparsed = nsmb::formats::parse_tileset(changed.value());
+        QVERIFY(reparsed);
+        QCOMPARE(reparsed.value().map16[0].tiles[0].tile, 1);
+        QCOMPARE(reparsed.value().objects[0].rows[0][0].tile, 1);
+        QCOMPARE(reparsed.value().behaviors[0], 0x89abcdefU);
+
+        MainWindow window;
+        QVERIFY(window.findChild<QAction*>("TilesetEditorAction"));
+    }
+
+    void patcherPanelRendersDiagnosticsAndLog() {
+        PatcherPanel panel;
+        panel.show();
+        QTest::qWait(10);
+
+        auto* diagnostics = panel.findChild<QTreeWidget*>();
+        auto* log = panel.findChild<QPlainTextEdit*>();
+        QVERIFY(diagnostics);
+        QVERIFY(log);
+        QCOMPARE(diagnostics->topLevelItemCount(), 0);
+
+        QString openedFile;
+        int openedLine = -1;
+        connect(&panel, &PatcherPanel::diagnosticActivated, &panel,
+                [&](const QString& file, int line, int) {
+                    openedFile = file;
+                    openedLine = line;
+                });
+
+        // NCPatcher's message carries the location and a source excerpt under
+        // the headline. The list shows the claim; the detail belongs in the
+        // tooltip rather than in a one-line column.
+        const QString message =
+            "\"rom.backup\" was not found.\n        at \"ncpatcher.yaml:3:3\", in \"rom\"";
+        QMetaObject::invokeMethod(&panel, "onDiagnostic", Qt::DirectConnection,
+                                  Q_ARG(int, 2), Q_ARG(QString, "NCP0001"),
+                                  Q_ARG(QString, message), Q_ARG(QString, "/p/ncpatcher.yaml"),
+                                  Q_ARG(int, 3), Q_ARG(int, 3));
+
+        QCOMPARE(diagnostics->topLevelItemCount(), 1);
+        auto* item = diagnostics->topLevelItem(0);
+        QCOMPARE(item->text(0), QString("NCP0001"));
+        QCOMPARE(item->text(1), QString("\"rom.backup\" was not found."));
+        QCOMPARE(item->text(2), QString("/p/ncpatcher.yaml:3:3"));
+        QCOMPARE(item->toolTip(1), message);
+        QVERIFY(log->toPlainText().contains("NCP0001"));
+
+        diagnostics->itemDoubleClicked(item, 0);
+        QCOMPARE(openedFile, QString("/p/ncpatcher.yaml"));
+        QCOMPARE(openedLine, 3);
+
+        panel.clearOutput();
+        QCOMPARE(diagnostics->topLevelItemCount(), 0);
+        QVERIFY(log->toPlainText().isEmpty());
     }
 
     void canvasRequiresPaletteAndRightClickToPlace() {
@@ -114,6 +349,21 @@ private slots:
         canvas.refreshLevelState();
         QVERIFY(level.objects().empty());
         QVERIFY(canvas.selections_.empty());
+    }
+
+    void customPalettePlacementCarriesHash() {
+        auto level = make_level();
+        LevelPreviewWidget canvas;
+        canvas.resize(800, 600);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.setPlacementCustomSprite(0xf46a44b9U);
+        canvas.show();
+        QTest::qWait(20);
+        QTest::mouseClick(&canvas, Qt::RightButton, {}, QPoint(400, 350));
+        QCOMPARE(level.course().sprites.size(), 1U);
+        QCOMPARE(level.sprite_hash(0), std::optional<std::uint32_t>(0xf46a44b9U));
+        QCOMPARE(level.course().sprites[0].id, 326);
     }
 
     void objectResizeHandleCommitsAndEscapeCancels() {
@@ -185,6 +435,94 @@ private slots:
         QCOMPARE(level.objects()[1].object_id, 2);
     }
 
+    void spriteDefinitionsDriveFieldsAndGrabBounds() {
+        auto level = make_level();
+        nsmb::formats::NsmbLevelSprite sprite;
+        sprite.id = 7; sprite.x = 10; sprite.y = 10; sprite.settings = 0xfffffff0U;
+        QVERIFY(level.add_sprite(sprite));
+        nsmb::project::SpriteDefinition definition;
+        definition.object_id = 42;
+        definition.name = "Synthetic actor";
+        definition.grab_bounds = {-32, -16, 64, 32};
+        definition.render_bounds = definition.grab_bounds;
+        definition.fields.push_back({"speed", "Speed", 4, 3, {}});
+        nsmb::project::SpriteDefinitionCatalog catalog{{definition}};
+
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+        QCOMPARE(properties.fields_[5].label->text(), QString("Speed"));
+        properties.fields_[5].value->setValue(2);
+        QCOMPARE(level.course().sprites[0].settings, 0xffffffA0U);
+
+        LevelPreviewWidget canvas;
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setTool(LevelPreviewWidget::Tool::Sprite);
+        canvas.actor_object_ids_.emplace(7, 42);
+        canvas.setSpriteDefinitions(catalog);
+        const auto hit = canvas.hitTest({130, 150});
+        QVERIFY(hit);
+        QCOMPARE(hit->kind, 2);
+    }
+
+    void clipboardCloneAndZOrderAreCompoundEdits() {
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 2, 3, 1, 1}));
+        QVERIFY(level.add_object({2, 0, 5, 6, 1, 1}));
+        QVERIFY(level.add_custom_sprite(0x12345678U, {326, 7, 8, {}, 9}));
+        level.mark_clean();
+        LevelPreviewWidget canvas;
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.selections_ = {{1, 0, -1}, {2, 0, -1}};
+        canvas.copySelection();
+        QVERIFY(QApplication::clipboard()->text().startsWith("BigStar-Entities/1\n"));
+        canvas.pasteSelection();
+        QCOMPARE(level.objects().size(), 3U);
+        QCOMPARE(level.course().sprites.size(), 2U);
+        QCOMPARE(level.objects().back().x, 3);
+        QCOMPARE(level.sprite_hash(1), std::optional<std::uint32_t>(0x12345678U));
+        QCOMPARE(level.undo_name(), std::string_view("Paste selection"));
+        QVERIFY(level.undo());
+        QCOMPARE(level.objects().size(), 2U);
+        QCOMPARE(level.course().sprites.size(), 1U);
+        auto moved = level.reorder_entity(1, 0, true);
+        QVERIFY(moved);
+        QCOMPARE(moved.value(), 1U);
+        QCOMPARE(level.objects()[1].object_id, 1);
+        QVERIFY(level.undo());
+        QCOMPARE(level.objects()[0].object_id, 1);
+        QCOMPARE(level.undo_names().front(), std::string("Add custom sprite"));
+        QCOMPARE(level.redo_names().front(), std::string("Bring forward"));
+
+        auto replacement = make_level();
+        QVERIFY(replacement.add_object({77,0,1,1,1,1}));
+        const auto replacement_course = replacement.serialize_course().value();
+        const auto replacement_bgdat = replacement.serialize_bgdat().value();
+        QVERIFY(level.replace_serialized(replacement_course, replacement_bgdat, nullptr, "Import level"));
+        QCOMPARE(level.objects()[0].object_id, 77);
+        QVERIFY(level.undo());
+        QCOMPARE(level.objects()[0].object_id, 1);
+
+        nsmb::formats::NsmbLevelPath signed_path;
+        signed_path.nodes.push_back({-20, -30, {}, {}, 0, 0});
+        QVERIFY(level.add_path(false, signed_path));
+        canvas.selections_ = {{5, 0, 0}};
+        canvas.commitMove({-8, -8});
+        QCOMPARE(level.course().paths[0].nodes[0].x, -28);
+        QCOMPARE(level.course().paths[0].nodes[0].y, -38);
+    }
+
+    void autosaveSnapshotIsWrittenAndClearedWhenClean() {
+        QTemporaryDir directory; QVERIFY(directory.isValid()); const auto project=make_project(directory.path().toStdString());
+        MainWindow window; window.setProject(project);
+        auto session=window.levelSession("extracted-rom/root/course/A01_1.bin","extracted-rom/root/course/A01_1_bgdat.bin");QVERIFY(session);QVERIFY(session.value()->add_object({4,0,1,1,1,1}));
+        window.writeRecoverySnapshots(); const auto recovery=std::filesystem::path(directory.path().toStdString())/".big-star-autosave";
+        std::size_t count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover"){auto bytes=nsmb::core::read_file(entry.path());QVERIFY(bytes);auto decoded=nsmb::project::decode_level_recovery(bytes.value());QVERIFY(decoded);++count;}QCOMPARE(count,1U);
+        session.value()->mark_clean();window.writeRecoverySnapshots();count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover")++count;QCOMPARE(count,0U);
+    }
+
     void uniqueEditorsDetachAndRestore() {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -198,11 +536,13 @@ private slots:
         const auto index = first.findLevelIndex(course, bgdat);
         QVERIFY(index.isValid());
         first.updateSelectedLevel(index);
-        QCOMPARE(first.tabs_->count(), 1);
+        QCOMPARE(first.tabs_->count(), 2);
         first.openLevelEditor(index);
         first.openLevelEditor(index);
         QCOMPARE(first.documents_.size(), 1U);
-        QCOMPARE(first.tabs_->count(), 2);
+        QCOMPARE(first.tabs_->count(), 3);
+        QVERIFY(first.paletteToolbox_->count() > 0);
+        QVERIFY(qobject_cast<QScrollArea*>(first.paletteToolbox_->widget(0)));
         auto& document = first.documents_.at(key);
         document.view->setZoom(2.0);
         document.view->setPan({12, 34});
@@ -210,7 +550,7 @@ private slots:
         first.detachEditor(key);
         QVERIFY(document.window);
         QVERIFY(document.view->isVisible());
-        QCOMPARE(first.tabs_->count(), 1);
+        QCOMPARE(first.tabs_->count(), 2);
         first.saveWorkspaceState();
 
         MainWindow restored;
@@ -224,7 +564,41 @@ private slots:
 
         restored.reattachEditor(key);
         QVERIFY(!restored.documents_.at(key).window);
-        QCOMPARE(restored.tabs_->count(), 2);
+        QCOMPARE(restored.tabs_->count(), 3);
+    }
+
+    void levelSavesGoToTheActiveModuleTree() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto root = std::filesystem::path(directory.path().toStdString());
+        auto project = make_project(root);
+        const auto nitrofs = root / "modules/levels/nitrofs";
+        std::filesystem::create_directories(nitrofs / "en");
+        std::filesystem::create_directories(root / "build/generated");
+        std::ofstream(root / "ncpatcher.yaml") << "version: 2\nvariants:\n  en:\n    defines: TEST\n";
+        std::ofstream(root / "build/generated/modules.json")
+            << "{\"schema\":\"ncpatcher.modules/1\",\"dir\":\"" << (root / "modules").generic_string()
+            << "\",\"modules\":[{\"key\":\"levels\",\"id\":\"Levels\",\"name\":\"Levels\",\"enabled\":true,"
+               "\"dir\":\"" << (root / "modules/levels").generic_string()
+            << "\",\"file\":\"" << (root / "modules/levels/module.yaml").generic_string()
+            << "\",\"nitrofs\":{\"dir\":\"" << nitrofs.generic_string()
+            << "\",\"layered\":true,\"base-variant\":\"en\"},\"components\":[]}]}";
+
+        const auto extractedCourse = root / "extracted-rom/root/course/A01_1.bin";
+        const auto before = nsmb::core::read_file(extractedCourse).value();
+        MainWindow window;
+        window.setProject(project);
+        auto session = window.levelSession("extracted-rom/root/course/A01_1.bin", "extracted-rom/root/course/A01_1_bgdat.bin");
+        QVERIFY(session);
+        QVERIFY(session.value()->add_object({7, 0, 1, 2, 1, 1}));
+        QVERIFY(window.saveEditedLevels());
+        const auto moduleCourse = nitrofs / "en/course/A01_1.bin";
+        const auto moduleBgdat = nitrofs / "en/course/A01_1_bgdat.bin";
+        QVERIFY(std::filesystem::is_regular_file(moduleCourse));
+        QVERIFY(std::filesystem::is_regular_file(moduleBgdat));
+        QCOMPARE(nsmb::core::read_file(extractedCourse).value(), before);
+        QVERIFY(window.filesystemView_.find("course/A01_1.bin"));
+        QCOMPARE(window.filesystemView_.find("course/A01_1.bin")->status, nsmb::project::FilesystemStatus::Pending);
     }
 
     void fileWatcherSeesDirectAndAtomicReplacement() {

@@ -67,3 +67,9 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Private cross-check references (SDK, code reference, module projects) — never committed
+deps/
+
+# macOS
+.DS_Store
