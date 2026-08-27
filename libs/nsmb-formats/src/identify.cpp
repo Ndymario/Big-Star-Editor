@@ -1,5 +1,7 @@
 #include "nsmb/formats/identify.hpp"
 
+#include "nsmb/formats/message.hpp"
+
 namespace nsmb::formats {
 
 namespace {
@@ -18,6 +20,9 @@ FormatKind identify_format(std::span<const std::uint8_t> data, std::string_view 
     if (identify_graphics_format(data, path_hint) != GraphicsFormatKind::Unknown) {
         return FormatKind::Graphics;
     }
+    if (is_bmg(data, path_hint)) {
+        return FormatKind::MessageBundle;
+    }
     if (path_hint.find("bgdat") != std::string_view::npos) {
         return FormatKind::BgdatCandidate;
     }
@@ -33,6 +38,8 @@ std::string_view format_name(FormatKind kind) {
         return "NARC archive";
     case FormatKind::Graphics:
         return "graphics";
+    case FormatKind::MessageBundle:
+        return "BMG message bundle";
     case FormatKind::BgdatCandidate:
         return "NSMB bgdat candidate";
     case FormatKind::LevelCandidate:

@@ -1,12 +1,16 @@
 #include "LevelPreviewWidget.hpp"
 #include "FilesystemDock.hpp"
+#include "FileEditors.hpp"
 #include "GraphicsEditorDialog.hpp"
+#include "MessageEditorDialog.hpp"
 #include "UiResourceEditorDialog.hpp"
 #include "TilesetEditorDialog.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "MainWindow.hpp"
 #include "PatcherPanel.hpp"
 #include "nsmb/core/file_io.hpp"
+#include "nsmb/formats/graphics.hpp"
+#include "nsmb/formats/message.hpp"
 #include "nsmb/project/level_exchange.hpp"
 #include "nsmb/project/manifest.hpp"
 
@@ -26,6 +30,7 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QPlainTextEdit>
+#include <QPushButton>
 #include <QListWidget>
 #include <QLineEdit>
 #include <QTabWidget>
@@ -83,6 +88,17 @@ nsmb::project::Project make_project(const std::filesystem::path& root) {
     return project;
 }
 
+// A BMG the message editor can be pointed at: two messages, MID1 IDs, INF1 attributes.
+std::vector<std::uint8_t> sampleBmg() {
+    nsmb::formats::Bmg bmg;
+    bmg.attribute_size = 4;
+    bmg.has_mid1 = true;
+    bmg.messages.push_back({{{true, {}, 255, {0, 0, 1, 0}}, {false, " Luigi has appeared!", 0, {}}}, {1, 0, 0, 0}, 40});
+    bmg.messages.push_back({{{false, "Welcome!", 0, {}}}, {2, 0, 0, 0}, 41});
+    auto written = nsmb::formats::write_bmg(bmg);
+    return written ? written.value() : std::vector<std::uint8_t>{};
+}
+
 } // namespace
 
 class QtEditorTests final : public QObject {
@@ -123,6 +139,110 @@ private slots:
         auto metadataOutput = notes.editedBytes();
         QVERIFY(metadataOutput);
         QCOMPARE(metadataOutput.value(), metadata);
+    }
+
+    void messageEditorRoundTripsAndEditsBmgMessages() {
+        const auto bytes = sampleBmg();
+        QVERIFY(!bytes.empty());
+        QVERIFY(MessageEditorDialog::supports(bytes, "script/course.bmg"));
+
+        MessageEditorDialog dialog("script/course.bmg", bytes);
+        auto* list = dialog.findChild<QTableWidget*>("MessageList");
+        auto* editor = dialog.findChild<QPlainTextEdit*>("MessageText");
+        auto* filter = dialog.findChild<QLineEdit*>("MessageFilter");
+        QVERIFY(list && editor && filter);
+        QCOMPARE(list->rowCount(), 2);
+        // The list previews plain text; escapes belong in the editor, spelled the way the
+        // NDS BMG Editor spells them.
+        QCOMPARE(list->item(0, 2)->text(), QString(" Luigi has appeared!"));
+        QCOMPARE(list->item(0, 1)->text(), QString("40"));
+        QCOMPARE(editor->toPlainText(), QString("[255:00000100] Luigi has appeared!"));
+
+        // Untouched in, untouched out.
+        auto untouched = dialog.editedBytes();
+        QVERIFY(untouched);
+        QCOMPARE(untouched.value(), bytes);
+
+        filter->setText("Welcome");
+        QVERIFY(list->isRowHidden(0));
+        QVERIFY(!list->isRowHidden(1));
+        filter->clear();
+
+        list->setCurrentCell(1, 2);
+        editor->setPlainText("Bye![1:0A]");
+        auto edited = dialog.editedBytes();
+        QVERIFY(edited);
+        auto parsed = nsmb::formats::parse_bmg(edited.value());
+        QVERIFY(parsed);
+        QCOMPARE(parsed.value().messages.size(), std::size_t{2});
+        QCOMPARE(nsmb::formats::bmg_message_text(parsed.value().messages[1]), std::string("Bye![1:0A]"));
+        // The edit must not disturb the other message, its attributes, or its MID1 ID.
+        QCOMPARE(parsed.value().messages[0], nsmb::formats::parse_bmg(bytes).value().messages[0]);
+        QCOMPARE(parsed.value().messages[1].attributes, std::vector<std::uint8_t>({2, 0, 0, 0}));
+        QCOMPARE(parsed.value().messages[1].id.value_or(0), std::uint32_t{41});
+    }
+
+    void openingAFileChoosesOneEditorThroughAnyLzWrapper() {
+        using bse::editors::Kind;
+        const QByteArray pad(28, '\0');
+        const auto bytes = [](const QByteArray& value) {
+            return std::vector<std::uint8_t>(value.begin(), value.end());
+        };
+        QCOMPARE(bse::editors::classify(sampleBmg(), "script/course.bmg"), Kind::Messages);
+        QCOMPARE(bse::editors::classify(bytes(QByteArray("JNBL") + QByteArray("\0\0\1\0\1\0\2\0\x10\x0c", 10)),
+                                        "uiStudio/a.bnbl"),
+                 Kind::UiResource);
+        QCOMPARE(bse::editors::classify(bytes(QByteArray(64, '\0')), "BG_ncg/a_ncg.bin"), Kind::Graphics);
+        QCOMPARE(bse::editors::classify(bytes(QByteArray("nothing here at all")), "notes.txt"), Kind::None);
+
+        // Compression is the dispatcher's business, not each editor's: an LZ-wrapped file must
+        // reach the same editor as the plain one, whatever that editor happens to be.
+        auto compressed = nsmb::formats::compress_nitro_lz10(sampleBmg());
+        QVERIFY(compressed);
+        QCOMPARE(bse::editors::classify(compressed.value(), "script/course.bmg"), Kind::Messages);
+        QVERIFY(!MessageEditorDialog::supports(compressed.value(), "script/course.bmg"));
+    }
+
+    void filesystemDockOffersOneOpenActionForEveryEditableFile() {
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        nsmb::project::FilesystemView view;
+        const auto add = [&](const char* romPath, const std::vector<std::uint8_t>& body) {
+            const auto onDisk = files.filePath(QString::fromLatin1(romPath).replace('/', '_'));
+            QFile file(onDisk);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            file.write(reinterpret_cast<const char*>(body.data()), static_cast<qint64>(body.size()));
+            file.close();
+            nsmb::project::FilesystemEntry entry;
+            entry.path = romPath;
+            entry.extracted = onDisk.toStdString();
+            view.entries.push_back(std::move(entry));
+        };
+        add("script/course.bmg", sampleBmg());
+        add("BG_unt/a.bin", std::vector<std::uint8_t>(16, 0));  // nothing edits raw tileset data
+
+        FilesystemDock dock;
+        dock.setData({}, {}, std::move(view), {}, {}, {});
+        // The two format-specific buttons are gone; one Open button covers every editor.
+        QVERIFY(!dock.findChild<QPushButton*>("GraphicsEdit"));
+        QVERIFY(!dock.findChild<QPushButton*>("UiResourceEdit"));
+        auto* open = dock.findChild<QPushButton*>("OpenFile");
+        auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+        auto* details = dock.findChild<QLabel*>("FilesystemDetails");
+        QVERIFY(open && tree && details);
+
+        const auto select = [&](const QString& romPath) {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it)
+                if ((*it)->data(0, Qt::UserRole).toString() == romPath) { tree->setCurrentItem(*it); return true; }
+            return false;
+        };
+        QVERIFY(select("script/course.bmg"));
+        QVERIFY(open->isEnabled());
+        QVERIFY(details->text().contains("Opens in: Messages"));
+
+        QVERIFY(select("BG_unt/a.bin"));
+        QVERIFY(!open->isEnabled());
+        QVERIFY(!details->text().contains("Opens in:"));
     }
 
     void previewAndDocksAreRecoverable() {

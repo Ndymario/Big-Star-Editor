@@ -2,6 +2,8 @@
 
 #include <QWidget>
 
+#include "FileEditors.hpp"
+
 #include "nsmb/project/filesystem_view.hpp"
 
 class QComboBox;
@@ -10,6 +12,10 @@ class QMenu;
 class QPoint;
 class QPushButton;
 class QTreeWidget;
+
+// NSMB keeps its ROM user metadata in NitroFS file 131; that one file needs the metadata
+// reader rather than the uiStudio one, so the ID travels with the dispatch call.
+inline constexpr std::uint32_t rom_user_metadata_id = 131;
 
 class FilesystemDock final : public QWidget {
     Q_OBJECT
@@ -48,8 +54,8 @@ private:
     void removeFile();
     void extractFile();
     void hexEditFile();
-    void graphicsEditFile();
-    void uiResourceEditFile();
+    void openFile();
+    [[nodiscard]] bse::editors::Kind editorFor(const nsmb::project::FilesystemEntry* entry) const;
     [[nodiscard]] const nsmb::project::FilesystemEntry* selectedEntry() const;
     [[nodiscard]] const nsmb::patching::ModuleInfo* targetModule(const nsmb::project::FilesystemEntry* entry = nullptr) const;
     [[nodiscard]] nsmb::core::Result<std::filesystem::path> targetPath(std::string_view romPath,
@@ -73,7 +79,7 @@ private:
     QPushButton* remove_{};
     QPushButton* extract_{};
     QPushButton* hex_{};
-    QPushButton* graphics_{};
-    QPushButton* uiResource_{};
+    QPushButton* open_{};
+    bse::editors::Kind selectedEditor_{bse::editors::Kind::None};
     QPushButton* run_{};
 };

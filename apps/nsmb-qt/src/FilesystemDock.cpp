@@ -1,7 +1,6 @@
 #include "FilesystemDock.hpp"
 #include "ThemeColors.hpp"
-#include "GraphicsEditorDialog.hpp"
-#include "UiResourceEditorDialog.hpp"
+#include "FileEditors.hpp"
 
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/formats/identify.hpp"
@@ -293,8 +292,8 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
 
     auto* actions = new QHBoxLayout;
     add_ = new QPushButton("Add file", this); replace_ = new QPushButton("Replace", this); remove_ = new QPushButton("Remove", this);
-    extract_ = new QPushButton("Extract", this); graphics_ = new QPushButton("Graphics edit", this); graphics_->setObjectName("GraphicsEdit"); uiResource_ = new QPushButton("UI resource edit", this); uiResource_->setObjectName("UiResourceEdit"); hex_ = new QPushButton("Hex edit", this);
-    for (auto* button : {add_, replace_, remove_, extract_, graphics_, uiResource_, hex_}) actions->addWidget(button);
+    extract_ = new QPushButton("Extract", this); open_ = new QPushButton("Open", this); open_->setObjectName("OpenFile"); hex_ = new QPushButton("Hex edit", this);
+    for (auto* button : {add_, replace_, remove_, extract_, open_, hex_}) actions->addWidget(button);
     layout->addLayout(actions);
 
     auto changed = [this] { emit activeTargetChanged(activeModule(), activeVariant()); };
@@ -305,14 +304,18 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     connect(replace_, &QPushButton::clicked, this, &FilesystemDock::replaceFile);
     connect(remove_, &QPushButton::clicked, this, &FilesystemDock::removeFile);
     connect(extract_, &QPushButton::clicked, this, &FilesystemDock::extractFile);
-    connect(graphics_, &QPushButton::clicked, this, &FilesystemDock::graphicsEditFile);
-    connect(uiResource_, &QPushButton::clicked, this, &FilesystemDock::uiResourceEditFile);
+    connect(open_, &QPushButton::clicked, this, &FilesystemDock::openFile);
     connect(hex_, &QPushButton::clicked, this, &FilesystemDock::hexEditFile);
+    // Double-clicking a file opens it in whichever editor understands it, the way NSMB Editor does.
+    connect(tree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
+        if (item->childCount()) return;  // a directory row only expands
+        openFile();
+    });
     connect(tree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         const auto* entry = selectedEntry(); replace_->setEnabled(entry); extract_->setEnabled(entry); hex_->setEnabled(entry);
+        selectedEditor_ = editorFor(entry);
         updateDetails();
-        graphics_->setEnabled(false); uiResource_->setEnabled(false);
-        if (entry) { const auto source = !entry->source.empty() ? entry->source : entry->extracted; const auto data = nsmb::core::read_file(source); const bool metadata=entry->id&&*entry->id==131; graphics_->setEnabled(data && GraphicsEditorDialog::supports(data.value(), entry->path)); uiResource_->setEnabled(data&&UiResourceEditorDialog::supports(data.value(),entry->path,metadata)); }
+        open_->setEnabled(selectedEditor_ != bse::editors::Kind::None);
         remove_->setEnabled(entry && !entry->source.empty() && !entry->module.empty());
     });
 }
@@ -395,7 +398,8 @@ void FilesystemDock::rebuildTree() {
     const bool hasPending = view_.has_pending();
     pending_->setVisible(hasPending); run_->setVisible(hasPending);
     pending_->setText(hasPending ? "⏳ Module files differ from the last build. Run NCPatcher to assign IDs and refresh the extracted ROM." : QString{});
-    const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); graphics_->setEnabled(false); uiResource_->setEnabled(false); hex_->setEnabled(false);
+    const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); open_->setEnabled(false); hex_->setEnabled(false);
+    selectedEditor_ = bse::editors::Kind::None;
     updateDetails();
 }
 
@@ -423,6 +427,7 @@ void FilesystemDock::updateDetails() {
     QStringList fields{QString::fromStdString(entry->path)};
     fields << "File ID: " + (entry->id ? QString::number(*entry->id) : QString("unassigned"));
     fields << "Size: " + QLocale().toString(static_cast<qlonglong>(entry->size)) + " bytes";
+    if (selectedEditor_ != bse::editors::Kind::None) fields << "Opens in: " + bse::editors::editorName(selectedEditor_);
     if (const auto from = provenance(*entry); !from.isEmpty()) fields << "From: " + from;
     if (!entry->variant.empty()) fields << "Variant: " + QString::fromStdString(entry->variant);
     details_->setText(fields.join("   \u00b7   "));
@@ -525,15 +530,33 @@ void FilesystemDock::hexEditFile() {
     auto result = writeTarget(entry->path, *decoded, entry); if (!result) emit errorOccurred(QString::fromStdString(result.error().message)); else emit filesChanged();
 }
 
-void FilesystemDock::graphicsEditFile() {
-    const auto* entry = selectedEntry(); if (!entry) return; const auto source = !entry->source.empty() ? entry->source : entry->extracted;
-    auto data = nsmb::core::read_file(source); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
-    GraphicsEditorDialog dialog(entry->path, data.value(), this); if (dialog.exec() != QDialog::Accepted) return;
-    auto encoded = dialog.editedBytes(); if (!encoded) { emit errorOccurred(QString::fromStdString(encoded.error().message)); return; }
-    auto result = writeTarget(entry->path, encoded.value(), entry); if (!result) emit errorOccurred(QString::fromStdString(result.error().message)); else emit filesChanged();
+// Which editor claims the selected file, if any. Read straight from the bytes so the answer is
+// the same one the Open button acts on.
+bse::editors::Kind FilesystemDock::editorFor(const nsmb::project::FilesystemEntry* entry) const {
+    if (!entry) return bse::editors::Kind::None;
+    const auto source = !entry->source.empty() ? entry->source : entry->extracted;
+    const auto data = nsmb::core::read_file(source);
+    if (!data) return bse::editors::Kind::None;
+    return bse::editors::classify(data.value(), entry->path, entry->id && *entry->id == rom_user_metadata_id);
 }
 
-void FilesystemDock::uiResourceEditFile() {
-    const auto* entry=selectedEntry();if(!entry)return;const auto source=!entry->source.empty()?entry->source:entry->extracted;auto data=nsmb::core::read_file(source);if(!data){emit errorOccurred(QString::fromStdString(data.error().message));return;}
-    const bool metadata=entry->id&&*entry->id==131;UiResourceEditorDialog dialog(entry->path,data.value(),metadata,this);if(dialog.exec()!=QDialog::Accepted)return;auto encoded=dialog.editedBytes();if(!encoded){emit errorOccurred(QString::fromStdString(encoded.error().message));return;}auto result=writeTarget(entry->path,encoded.value(),entry);if(!result)emit errorOccurred(QString::fromStdString(result.error().message));else emit filesChanged();
+void FilesystemDock::openFile() {
+    const auto* entry = selectedEntry(); if (!entry) return;
+    const auto source = !entry->source.empty() ? entry->source : entry->extracted;
+    auto data = nsmb::core::read_file(source); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
+    const auto outcome = bse::editors::edit(this, entry->path, data.value(), entry->id && *entry->id == rom_user_metadata_id);
+    switch (outcome.status) {
+    case bse::editors::Outcome::Status::Unsupported:
+        emit errorOccurred("No editor understands " + QString::fromStdString(entry->path) + ". Use Hex edit instead.");
+        return;
+    case bse::editors::Outcome::Status::Failed:
+        emit errorOccurred(outcome.error);
+        return;
+    case bse::editors::Outcome::Status::Cancelled:
+        return;
+    case bse::editors::Outcome::Status::Edited:
+        break;
+    }
+    auto result = writeTarget(entry->path, outcome.bytes, entry);
+    if (!result) emit errorOccurred(QString::fromStdString(result.error().message)); else emit filesChanged();
 }

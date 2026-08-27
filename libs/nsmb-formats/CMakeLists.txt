@@ -4,6 +4,7 @@ add_library(nsmb-formats
   src/glue.cpp
   src/identify.cpp
   src/level.cpp
+  src/message.cpp
   src/narc.cpp
   src/tex0.cpp
   src/tileset.cpp
@@ -30,6 +31,9 @@ if(BSE_BUILD_TESTS)
   add_executable(nsmb-tileset-tests tests/tileset_tests.cpp)
   target_link_libraries(nsmb-tileset-tests PRIVATE nsmb-formats)
   add_test(NAME nsmb-tileset-tests COMMAND nsmb-tileset-tests)
+  add_executable(nsmb-message-tests tests/message_tests.cpp)
+  target_link_libraries(nsmb-message-tests PRIVATE nsmb-formats)
+  add_test(NAME nsmb-message-tests COMMAND nsmb-message-tests)
   add_executable(nsmb-ui-resources-tests tests/ui_resources_tests.cpp)
   target_link_libraries(nsmb-ui-resources-tests PRIVATE nsmb-formats)
   add_test(NAME nsmb-ui-resources-tests COMMAND nsmb-ui-resources-tests)

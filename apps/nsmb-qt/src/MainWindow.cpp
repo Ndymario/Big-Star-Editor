@@ -5,6 +5,7 @@
 #include "PatcherPanel.hpp"
 #include "FilesystemDock.hpp"
 #include "TilesetEditorDialog.hpp"
+#include "FileEditors.hpp"
 #include "UiResourceEditorDialog.hpp"
 #include "nsmb/patching/ncpatcher.hpp"
 #include "nsmb/project/manifest.hpp"
@@ -306,6 +307,8 @@ void MainWindow::createMenus() {
         log("File > Save Project selected.");
         saveProject();
     });
+    auto* openFile = file->addAction("Open File...", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O), this, &MainWindow::openFileInEditor);
+    openFile->setObjectName("OpenFileAction");
     file->addAction("Export Level (.nml)…", this, &MainWindow::exportLevelPackage);
     file->addAction("Import Level (.nml)…", this, &MainWindow::importLevelPackage);
     file->addSeparator();
@@ -1263,6 +1266,36 @@ void MainWindow::openTilesetEditor() {
     for(auto& write:writes){std::error_code ec;std::filesystem::create_directories(write.target.parent_path(),ec);if(ec){QMessageBox::warning(this,"Save graphics","Could not create the module target directory.");return;}auto result=nsmb::core::write_file_atomically(write.target,write.bytes);if(!result){QMessageBox::warning(this,"Save graphics",QString::fromStdString(result.error().message));return;}}
     if(dialog.references()!=currentLevel_->tileset_references())if(auto result=currentLevel_->set_tileset_references(dialog.references());!result){QMessageBox::warning(this,"Save slots",QString::fromStdString(result.error().message));return;}
     reloadFilesystemView();refreshGraphics();levelProperties_->refresh();updateEditState();log(QString("Saved %1 edited graphics resource(s) to module targets.").arg(writes.size()));
+}
+
+// Opens any file the editors understand straight off disk, the way NSMB Editor's own file
+// list does, and writes it back where it came from. Files inside the project's NitroFS are
+// better opened from the filesystem dock, which routes the save through the module target.
+void MainWindow::openFileInEditor() {
+    const auto start = currentProject_.directory().empty() ? QString{} : QString::fromStdString(currentProject_.directory().string());
+    const auto source = QFileDialog::getOpenFileName(this, "Open File", start);
+    if (source.isEmpty()) return;
+    auto data = nsmb::core::read_file(source.toStdString());
+    if (!data) { log("Open File: " + QString::fromStdString(data.error().message)); return; }
+    const auto path = source.toStdString();
+    const auto outcome = bse::editors::edit(this, path, data.value());
+    switch (outcome.status) {
+    case bse::editors::Outcome::Status::Unsupported:
+        QMessageBox::information(this, "Open File", "No editor understands " + QFileInfo(source).fileName() + ".");
+        return;
+    case bse::editors::Outcome::Status::Failed:
+        QMessageBox::warning(this, "Open File", outcome.error);
+        return;
+    case bse::editors::Outcome::Status::Cancelled:
+        log("Open File: " + QFileInfo(source).fileName() + " closed without saving.");
+        return;
+    case bse::editors::Outcome::Status::Edited:
+        break;
+    }
+    auto written = nsmb::core::write_file_atomically(path, outcome.bytes);
+    if (!written) { QMessageBox::warning(this, "Open File", QString::fromStdString(written.error().message)); return; }
+    log("Open File: saved " + QFileInfo(source).fileName() + ".");
+    refreshGraphics();
 }
 
 void MainWindow::editRomBanner() {

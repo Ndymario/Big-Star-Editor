@@ -12,6 +12,7 @@ enum class FormatKind {
     Unknown,
     NarcArchive,
     Graphics,
+    MessageBundle,
     BgdatCandidate,
     LevelCandidate,
 };

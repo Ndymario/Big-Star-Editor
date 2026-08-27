@@ -7,8 +7,12 @@ add_executable(nsmb-qt
   src/LevelPropertiesWidget.hpp
   src/FilesystemDock.cpp
   src/FilesystemDock.hpp
+  src/FileEditors.cpp
+  src/FileEditors.hpp
   src/GraphicsEditorDialog.cpp
   src/GraphicsEditorDialog.hpp
+  src/MessageEditorDialog.cpp
+  src/MessageEditorDialog.hpp
   src/TilesetEditorDialog.cpp
   src/TilesetEditorDialog.hpp
   src/UiResourceEditorDialog.cpp
@@ -35,7 +39,9 @@ if(BSE_BUILD_TESTS)
       tests/qt_tests.cpp
       src/LevelPreviewWidget.cpp src/LevelPreviewWidget.hpp
       src/FilesystemDock.cpp src/FilesystemDock.hpp
+      src/FileEditors.cpp src/FileEditors.hpp
       src/GraphicsEditorDialog.cpp src/GraphicsEditorDialog.hpp
+      src/MessageEditorDialog.cpp src/MessageEditorDialog.hpp
       src/TilesetEditorDialog.cpp src/TilesetEditorDialog.hpp
       src/UiResourceEditorDialog.cpp src/UiResourceEditorDialog.hpp
       src/LevelPropertiesWidget.cpp src/LevelPropertiesWidget.hpp

@@ -108,12 +108,6 @@ struct GraphicsEditorDialog::Impl {
 
     explicit Impl(GraphicsEditorDialog* owner, std::string_view path, std::span<const std::uint8_t> source)
         : owner(owner), path(path), body(source.begin(), source.end()) {
-        if (!body.empty() && (body[0] == 0x10 || body[0] == 0x11)) {
-            compression = body[0];
-            auto decoded = decompress_nitro_lz(body);
-            if (!decoded) { error = decoded.error(); return; }
-            body = std::move(decoded.value());
-        }
         kind = identify_graphics_format(body, path);
         parse();
     }
@@ -341,8 +335,7 @@ struct GraphicsEditorDialog::Impl {
         case Mode::Tex0: result = write_tex0(*tex0); break;
         default: break;
         }
-        if (!result || !compression) return result;
-        return compression == 0x10 ? compress_nitro_lz10(result.value()) : compress_nitro_lz11(result.value());
+        return result;
     }
 
     void fail(nsmb::core::Error value) { error = std::move(value); mode = Mode::Unsupported; }
@@ -350,7 +343,6 @@ struct GraphicsEditorDialog::Impl {
     GraphicsEditorDialog* owner;
     std::string path;
     std::vector<std::uint8_t> body;
-    std::uint8_t compression{};
     GraphicsFormatKind kind{GraphicsFormatKind::Unknown};
     Mode mode{Mode::Unsupported};
     std::optional<nsmb::core::Error> error;

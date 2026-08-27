@@ -67,6 +67,7 @@ private:
     void openDiagnosticLocation(const QString& file, int line, int column);
     void onPatcherFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
     void buildRom();
+    void openFileInEditor();
     void openTilesetEditor();
     void editRomBanner();
     void editRomUserMetadata();
