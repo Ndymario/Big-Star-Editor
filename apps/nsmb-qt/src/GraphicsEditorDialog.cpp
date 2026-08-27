@@ -1,4 +1,5 @@
 #include "GraphicsEditorDialog.hpp"
+#include "ThemeColors.hpp"
 
 #include "nsmb/formats/g2d.hpp"
 #include "nsmb/formats/graphics.hpp"
@@ -75,7 +76,7 @@ protected:
         painter.setRenderHint(QPainter::SmoothPixmapTransform, false);
         if (!image_.isNull()) painter.drawImage(rect(), image_);
         if (editable_ && zoom_ >= 8) {
-            painter.setPen(QColor(0, 0, 0, 45));
+            painter.setPen(bse::theme::pixelGrid(palette()));
             for (int x = 0; x <= image_.width(); ++x) painter.drawLine(x * zoom_, 0, x * zoom_, height());
             for (int y = 0; y <= image_.height(); ++y) painter.drawLine(0, y * zoom_, width(), y * zoom_);
         }

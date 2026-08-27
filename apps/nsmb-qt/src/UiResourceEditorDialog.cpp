@@ -1,4 +1,5 @@
 #include "UiResourceEditorDialog.hpp"
+#include "ThemeColors.hpp"
 
 #include "nsmb/formats/graphics.hpp"
 #include "nsmb/formats/ui_resources.hpp"
@@ -48,7 +49,7 @@ public:
     void setImage(QImage image,bool editable=true){image_=std::move(image);editable_=editable;const auto longest=std::max(image_.width(),image_.height());zoom_=std::clamp(longest?512/longest:1,1,16);setFixedSize(std::max(1,image_.width()*zoom_),std::max(1,image_.height()*zoom_));update();}
     std::function<void(int,int)> clicked;
 protected:
-    void paintEvent(QPaintEvent*)override{QPainter painter(this);painter.fillRect(rect(),palette().brush(QPalette::Base));painter.setRenderHint(QPainter::SmoothPixmapTransform,false);if(!image_.isNull())painter.drawImage(rect(),image_);if(editable_&&zoom_>=8){painter.setPen(QColor(0,0,0,45));for(int x=0;x<=image_.width();++x)painter.drawLine(x*zoom_,0,x*zoom_,height());for(int y=0;y<=image_.height();++y)painter.drawLine(0,y*zoom_,width(),y*zoom_);}}
+    void paintEvent(QPaintEvent*)override{QPainter painter(this);painter.fillRect(rect(),palette().brush(QPalette::Base));painter.setRenderHint(QPainter::SmoothPixmapTransform,false);if(!image_.isNull())painter.drawImage(rect(),image_);if(editable_&&zoom_>=8){painter.setPen(bse::theme::pixelGrid(palette()));for(int x=0;x<=image_.width();++x)painter.drawLine(x*zoom_,0,x*zoom_,height());for(int y=0;y<=image_.height();++y)painter.drawLine(0,y*zoom_,width(),y*zoom_);}}
     void mousePressEvent(QMouseEvent* event)override{if(!editable_||!clicked||image_.isNull())return;const auto x=static_cast<int>(event->position().x())/zoom_,y=static_cast<int>(event->position().y())/zoom_;if(x>=0&&y>=0&&x<image_.width()&&y<image_.height())clicked(x,y);}
 private:QImage image_;int zoom_{1};bool editable_{};
 };

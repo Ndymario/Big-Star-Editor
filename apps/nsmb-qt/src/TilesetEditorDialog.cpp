@@ -1,4 +1,5 @@
 #include "TilesetEditorDialog.hpp"
+#include "ThemeColors.hpp"
 
 #include "nsmb/core/file_io.hpp"
 
@@ -57,7 +58,7 @@ public:
     }
     std::function<void(int,int)> clicked;
 protected:
-    void paintEvent(QPaintEvent*) override { QPainter painter(this); painter.fillRect(rect(), palette().brush(QPalette::Base)); painter.setRenderHint(QPainter::SmoothPixmapTransform, false); if (!image_.isNull()) painter.drawImage(rect(), image_); if (cell_ * zoom_ >= 16) { painter.setPen(QColor(0,0,0,45)); for (int x=0;x<=image_.width();x+=cell_) painter.drawLine(x*zoom_,0,x*zoom_,height()); for(int y=0;y<=image_.height();y+=cell_) painter.drawLine(0,y*zoom_,width(),y*zoom_); } }
+    void paintEvent(QPaintEvent*) override { QPainter painter(this); painter.fillRect(rect(), palette().brush(QPalette::Base)); painter.setRenderHint(QPainter::SmoothPixmapTransform, false); if (!image_.isNull()) painter.drawImage(rect(), image_); if (cell_ * zoom_ >= 16) { painter.setPen(bse::theme::pixelGrid(palette())); for (int x=0;x<=image_.width();x+=cell_) painter.drawLine(x*zoom_,0,x*zoom_,height()); for(int y=0;y<=image_.height();y+=cell_) painter.drawLine(0,y*zoom_,width(),y*zoom_); } }
     void mousePressEvent(QMouseEvent* event) override { if (!clicked || image_.isNull()) return; clicked(static_cast<int>(event->position().x()) / zoom_, static_cast<int>(event->position().y()) / zoom_); }
 private:
     QImage image_; int cell_{1}, zoom_{1};

@@ -20,7 +20,11 @@ signals:
     void levelChanged();
     void errorOccurred(const QString& message);
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
+    void applyThemeColors();
     void editCell(int row, int column);
 
     nsmb::project::EditableLevel* level_{};

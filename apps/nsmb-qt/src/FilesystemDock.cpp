@@ -1,8 +1,10 @@
 #include "FilesystemDock.hpp"
+#include "ThemeColors.hpp"
 #include "GraphicsEditorDialog.hpp"
 #include "UiResourceEditorDialog.hpp"
 
 #include "nsmb/core/file_io.hpp"
+#include "nsmb/formats/identify.hpp"
 
 #include <QComboBox>
 #include <QColor>
@@ -10,7 +12,10 @@
 #include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
+#include <QFileIconProvider>
 #include <QFileInfo>
+#include <QIcon>
+#include <QEvent>
 #include <QHeaderView>
 #include <QHBoxLayout>
 #include <QInputDialog>
@@ -21,9 +26,13 @@
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <limits>
 #include <map>
+#include <vector>
 
 namespace {
 constexpr auto path_role = Qt::UserRole;
@@ -35,6 +44,165 @@ QString provenance(const nsmb::project::FilesystemEntry& entry) {
 
 QString hex(std::span<const std::uint8_t> bytes) {
     return QByteArray(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())).toHex(' ').toUpper();
+}
+
+int compare_names(QStringView left, QStringView right) {
+    // Natural, case-insensitive ordering: "w2map" before "w10map", and "bomthrow.narc"
+    // next to "Dat_2D.narc" instead of after every upper-case name in the directory.
+    qsizetype l = 0, r = 0;
+    while (l < left.size() && r < right.size()) {
+        if (left[l].isDigit() && right[r].isDigit()) {
+            const auto leftStart = l, rightStart = r;
+            while (l < left.size() && left[l].isDigit()) ++l;
+            while (r < right.size() && right[r].isDigit()) ++r;
+            auto leftDigits = left.sliced(leftStart, l - leftStart);
+            auto rightDigits = right.sliced(rightStart, r - rightStart);
+            qsizetype leftZeros = 0, rightZeros = 0;
+            while (leftZeros + 1 < leftDigits.size() && leftDigits[leftZeros] == u'0') ++leftZeros;
+            while (rightZeros + 1 < rightDigits.size() && rightDigits[rightZeros] == u'0') ++rightZeros;
+            leftDigits = leftDigits.sliced(leftZeros); rightDigits = rightDigits.sliced(rightZeros);
+            if (leftDigits.size() != rightDigits.size()) return leftDigits.size() < rightDigits.size() ? -1 : 1;
+            if (const auto order = leftDigits.compare(rightDigits); order != 0) return order < 0 ? -1 : 1;
+            continue;
+        }
+        const auto leftChar = left[l].toLower(), rightChar = right[r].toLower();
+        if (leftChar != rightChar) return leftChar < rightChar ? -1 : 1;
+        ++l; ++r;
+    }
+    if (l < left.size()) return 1;
+    if (r < right.size()) return -1;
+    const auto exact = left.compare(right, Qt::CaseSensitive);  // stable tie-break
+    return exact == 0 ? 0 : (exact < 0 ? -1 : 1);
+}
+
+enum class EntryIcon { File, Folder, Archive, Image, Palette, ScreenMap, Model, Animation, Audio, Level, Text, Particle, TouchHitbox, OamPositions };
+
+// Icons come from the desktop's own theme, so the tree matches every other file list on the
+// system. Each category names the theme icons it prefers; the first one installed wins, and
+// a category with nothing suitable falls back to the system's own generic file icon -- which
+// is also what platforms without a theme (Windows, macOS) get for everything but folders.
+// The cache lives for one rebuild rather than the session, so icons follow a theme change.
+QIcon entry_icon(EntryIcon kind, std::map<EntryIcon, QIcon>& resolved) {
+    const auto cached = resolved.find(kind);
+    if (cached != resolved.end()) return cached->second;
+
+    const QFileIconProvider provider;
+    if (kind == EntryIcon::Folder) return resolved.emplace(kind, provider.icon(QFileIconProvider::Folder)).first->second;
+
+    static const std::map<EntryIcon, QStringList> preferred{
+        {EntryIcon::Archive, {"package-x-generic", "application-x-archive"}},
+        {EntryIcon::Image, {"image-x-generic"}},
+        {EntryIcon::Palette, {"color-picker", "preferences-desktop-color", "image-x-generic"}},
+        {EntryIcon::ScreenMap, {"x-office-drawing", "image-x-generic"}},
+        {EntryIcon::Model, {"applications-graphics", "image-x-generic"}},
+        {EntryIcon::Animation, {"video-x-generic"}},
+        {EntryIcon::Audio, {"audio-x-generic"}},
+        {EntryIcon::Level, {"applications-games", "input-gaming"}},
+        {EntryIcon::Text, {"text-x-generic"}},
+        {EntryIcon::Particle, {"preferences-desktop-effects"}},
+        {EntryIcon::TouchHitbox, {"input-touchpad"}},
+        {EntryIcon::OamPositions, {"snap-bounding-box", "transform-move"}},
+    };
+    QIcon icon;
+    if (const auto names = preferred.find(kind); names != preferred.end())
+        for (const auto& name : names->second) if (icon = QIcon::fromTheme(name); !icon.isNull()) break;
+    if (icon.isNull()) icon = provider.icon(QFileIconProvider::File);
+    return resolved.emplace(kind, std::move(icon)).first->second;
+}
+
+bool has_magic(std::span<const std::uint8_t> header, std::string_view magic, std::size_t offset) {
+    return header.size() >= offset + magic.size() && std::equal(magic.begin(), magic.end(), header.begin() + offset);
+}
+
+// Where a magic can still be read in a compressed file. NSMB stores plenty of NSBCA and
+// player data LZ-compressed, and the first block flag is usually zero, so the header bytes
+// survive verbatim right after it -- offset 5 for a bare LZ stream, 9 behind an LZ77 header.
+// Anything whose first block is actually compressed stays unidentified, as it does in NSMBe.
+std::vector<std::size_t> magic_offsets(std::span<const std::uint8_t> header) {
+    std::vector<std::size_t> offsets{0};
+    if (!header.empty() && header[0] == 0x10) offsets.push_back(5);
+    if (has_magic(header, "LZ77", 0)) offsets.push_back(9);
+    return offsets;
+}
+
+// Classifies an entry for its icon only. Formats the shared identifier knows come from there.
+// Magic wins over the file name throughout: the identifier's own name hints treat any path
+// containing "course" as a level, which would otherwise mislabel script/course.bmg and friends.
+EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry) {
+    const auto& source = !entry.source.empty() ? entry.source : entry.extracted;
+    std::vector<std::uint8_t> header;
+    if (!source.empty()) if (auto prefix = nsmb::core::read_file_prefix(source, 32)) header = std::move(prefix.value());
+
+    using nsmb::formats::FormatKind;
+    using nsmb::formats::GraphicsFormatKind;
+    const auto graphics = [](GraphicsFormatKind kind) -> std::optional<EntryIcon> {
+        switch (kind) {
+        case GraphicsFormatKind::NitroPalette:
+        case GraphicsFormatKind::RawPaletteCandidate: return EntryIcon::Palette;
+        case GraphicsFormatKind::NitroScreenMap:
+        case GraphicsFormatKind::RawScreenMapCandidate: return EntryIcon::ScreenMap;
+        case GraphicsFormatKind::NitroModel: return EntryIcon::Model;
+        case GraphicsFormatKind::NitroCellAnimation: return EntryIcon::Animation;
+        case GraphicsFormatKind::NitroCharacterGraphics:
+        case GraphicsFormatKind::RawCharacterGraphicsCandidate:
+        case GraphicsFormatKind::NitroCellLayout:
+        case GraphicsFormatKind::NitroTexture: return EntryIcon::Image;
+        case GraphicsFormatKind::Unknown: break;
+        }
+        return std::nullopt;
+    };
+
+    for (const auto offset : magic_offsets(header)) {
+        const auto body = std::span(header).subspan(std::min(offset, header.size()));
+        if (nsmb::formats::identify_format(body) == FormatKind::NarcArchive) return EntryIcon::Archive;
+
+        // NSMB's own uiStudio formats, read before the graphics identifier because that one
+        // mistakes BNCL and BNCD for the NitroSystem cell formats NCER and NANR. No NitroSDK
+        // or NitroSystem header defines any of them: BNBL holds touch hit boxes, BNCL holds
+        // OAM positions, and BNCD holds OAM plus the graphics themselves. BNLL stays
+        // unidentified -- it is recognised only so its name cannot reach the level hint below.
+        if (has_magic(body, "JNBL", 0)) return EntryIcon::TouchHitbox;
+        if (has_magic(body, "JNCL", 0)) return EntryIcon::OamPositions;
+        if (has_magic(body, "JNCD", 0)) return EntryIcon::Image;
+        if (has_magic(body, "JNLL", 0)) return EntryIcon::File;
+
+        if (const auto icon = graphics(nsmb::formats::identify_graphics_format(body))) return *icon;
+        // Other NSMB formats the shared identifier does not model yet.
+        if (has_magic(body, "SDAT", 0)) return EntryIcon::Audio;
+        if (has_magic(body, "MESG", 0)) return EntryIcon::Text;
+        if (has_magic(body, " APS22_1", 0)) return EntryIcon::Particle;
+        for (const auto* animation : {"BCA0", "BTP0", "BTA0", "BMA0", "BVA0"})
+            if (has_magic(body, animation, 0)) return EntryIcon::Animation;
+    }
+
+    // Nothing identified the bytes, so fall back to the name.
+    if (QString::fromStdString(entry.path).endsWith(".enpg", Qt::CaseInsensitive)) return EntryIcon::Image;
+    if (const auto icon = graphics(nsmb::formats::identify_graphics_format({}, entry.path))) return *icon;
+    const auto named = nsmb::formats::identify_format({}, entry.path);
+    if (named == FormatKind::BgdatCandidate || named == FormatKind::LevelCandidate) return EntryIcon::Level;
+    return EntryIcon::File;
+}
+
+// A file has no ID until a build assigns one, so pending insertions trail their siblings.
+constexpr auto unassigned_id = std::numeric_limits<qint64>::max();
+
+struct TreeRow {
+    QStringList parts;
+    QList<qint64> order;  // per segment: the lowest file ID at or beneath that prefix
+    const nsmb::project::FilesystemEntry* entry;
+};
+
+// NitroFS lists files in file-ID order, which is the order the FNT defines and the order
+// the game sees, so the tree follows it rather than sorting names. Every directory owns a
+// contiguous ID range, so a directory sorts by the lowest ID it contains -- which puts
+// 00DUMMY above ARCHIVE. Names only break ties between entries with no ID (a project
+// NCPatcher has not built yet has none at all, and then this is a plain natural sort).
+bool path_precedes(const TreeRow& left, const TreeRow& right) {
+    for (qsizetype i = 0; i < left.parts.size() && i < right.parts.size(); ++i) {
+        if (left.order[i] != right.order[i]) return left.order[i] < right.order[i];
+        if (const auto order = compare_names(left.parts[i], right.parts[i]); order != 0) return order < 0;
+    }
+    return left.parts.size() < right.parts.size();
 }
 
 std::optional<std::vector<std::uint8_t>> unhex(QString text) {
@@ -56,7 +224,7 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     layout->addLayout(target);
 
     auto* banner = new QHBoxLayout;
-    pending_ = new QLabel(this); pending_->setWordWrap(true); pending_->setStyleSheet("color:#9a5b00"); banner->addWidget(pending_, 1);
+    pending_ = new QLabel(this); pending_->setWordWrap(true); applyThemeColors(); banner->addWidget(pending_, 1);
     run_ = new QPushButton("Run NCPatcher", this); run_->setObjectName("RunPendingPatcher"); banner->addWidget(run_);
     layout->addLayout(banner);
 
@@ -115,13 +283,43 @@ QString FilesystemDock::activeVariant() const { return variant_->currentData().t
 
 void FilesystemDock::rebuildTree() {
     tree_->clear();
+    std::map<EntryIcon, QIcon> icons;
     auto* root = new QTreeWidgetItem(tree_, {"root"});
+    root->setIcon(0, entry_icon(EntryIcon::Folder, icons));
     std::map<QString, QTreeWidgetItem*> directories{{{}, root}};
-    for (const auto& entry : view_.entries) {
-        const auto path = QString::fromStdString(entry.path); const auto parts = path.split('/'); QString parentPath; auto* parent = root;
+    std::vector<TreeRow> rows; rows.reserve(view_.entries.size());
+    for (const auto& entry : view_.entries) rows.push_back({QString::fromStdString(entry.path).split('/'), {}, &entry});
+
+    std::map<QString, qint64> lowestId;
+    for (const auto& row : rows) {
+        if (!row.entry->id) continue;
+        const auto id = static_cast<qint64>(*row.entry->id); QString prefix;
+        for (const auto& part : row.parts) {
+            if (!prefix.isEmpty()) prefix += '/';
+            prefix += part;
+            const auto slot = lowestId.try_emplace(prefix, id).first;
+            slot->second = std::min(slot->second, id);
+        }
+    }
+    for (auto& row : rows) {
+        QString prefix; row.order.reserve(row.parts.size());
+        for (const auto& part : row.parts) {
+            if (!prefix.isEmpty()) prefix += '/';
+            prefix += part;
+            const auto found = lowestId.find(prefix);
+            row.order.push_back(found == lowestId.end() ? unassigned_id : found->second);
+        }
+    }
+    std::ranges::sort(rows, path_precedes);
+
+    for (const auto& [parts, order, entryPointer] : rows) {
+        const auto& entry = *entryPointer; const auto path = parts.join('/'); QString parentPath; auto* parent = root;
         for (int i = 0; i + 1 < parts.size(); ++i) {
             const auto directoryPath = parentPath.isEmpty() ? parts[i] : parentPath + "/" + parts[i];
-            if (!directories.contains(directoryPath)) directories[directoryPath] = new QTreeWidgetItem(parent, {parts[i]});
+            if (!directories.contains(directoryPath)) {
+                directories[directoryPath] = new QTreeWidgetItem(parent, {parts[i]});
+                directories[directoryPath]->setIcon(0, entry_icon(EntryIcon::Folder, icons));
+            }
             parent = directories[directoryPath]; parentPath = directoryPath;
         }
         const auto statusName = entry.status == nsmb::project::FilesystemStatus::Pending
@@ -131,14 +329,46 @@ void FilesystemDock::rebuildTree() {
         auto* item = new QTreeWidgetItem(parent, {parts.back(), statusName,
             provenance(entry), QString::fromStdString(entry.variant), entry.id ? QString::number(*entry.id) : QString("—"), QString::number(entry.size)});
         item->setData(0, path_role, path);
-        if (entry.status == nsmb::project::FilesystemStatus::Pending) item->setForeground(1, QColor(190, 116, 0));
-        if (entry.status == nsmb::project::FilesystemStatus::Orphaned) item->setForeground(1, QColor(180, 45, 45));
+        item->setIcon(0, entry_icon(classify_entry(entry), icons));
+        if (entry.status == nsmb::project::FilesystemStatus::Pending) item->setForeground(1, bse::theme::warning(palette()));
+        if (entry.status == nsmb::project::FilesystemStatus::Orphaned) item->setForeground(1, bse::theme::danger(palette()));
     }
     root->setExpanded(true);
     const bool hasPending = view_.has_pending();
     pending_->setVisible(hasPending); run_->setVisible(hasPending);
     pending_->setText(hasPending ? "⏳ Module files differ from the last build. Run NCPatcher to assign IDs and refresh the extracted ROM." : QString{});
     const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); graphics_->setEnabled(false); uiResource_->setEnabled(false); hex_->setEnabled(false);
+}
+
+void FilesystemDock::applyThemeColors() {
+    if (pending_) {
+        auto label = pending_->palette();
+        label.setColor(QPalette::WindowText, bse::theme::warning(palette()));
+        pending_->setPalette(label);
+    }
+    if (!tree_) return;
+    for (QTreeWidgetItemIterator item(tree_); *item; ++item) {
+        const auto path = (*item)->data(0, path_role).toString();
+        if (path.isEmpty()) continue;
+        const auto* entry = view_.find(path.toStdString());
+        if (!entry) continue;
+        if (entry->status == nsmb::project::FilesystemStatus::Pending) (*item)->setForeground(1, bse::theme::warning(palette()));
+        if (entry->status == nsmb::project::FilesystemStatus::Orphaned) (*item)->setForeground(1, bse::theme::danger(palette()));
+    }
+}
+
+void FilesystemDock::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    switch (event->type()) {
+    case QEvent::PaletteChange:
+    case QEvent::ApplicationPaletteChange:
+    case QEvent::ThemeChange:
+    case QEvent::StyleChange:
+        applyThemeColors();
+        break;
+    default:
+        break;
+    }
 }
 
 const nsmb::project::FilesystemEntry* FilesystemDock::selectedEntry() const {

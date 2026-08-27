@@ -31,7 +31,11 @@ signals:
     void runPatcherRequested();
     void errorOccurred(const QString& message);
 
+protected:
+    void changeEvent(QEvent* event) override;
+
 private:
+    void applyThemeColors();
     void rebuildTree();
     void addFile();
     void replaceFile();

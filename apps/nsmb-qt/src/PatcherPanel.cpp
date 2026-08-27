@@ -1,4 +1,5 @@
 #include "PatcherPanel.hpp"
+#include "ThemeColors.hpp"
 
 #include <QComboBox>
 #include <QHBoxLayout>
@@ -403,9 +404,9 @@ void PatcherPanel::onDiagnostic(int level,
 
     const auto levelValue = static_cast<nsmb::patching::DiagnosticLevel>(level);
     if (levelValue == nsmb::patching::DiagnosticLevel::Error) {
-        item->setForeground(0, QBrush(QColor(200, 60, 60)));
+        item->setForeground(0, QBrush(bse::theme::danger(palette())));
     } else if (levelValue == nsmb::patching::DiagnosticLevel::Warning) {
-        item->setForeground(0, QBrush(QColor(190, 140, 40)));
+        item->setForeground(0, QBrush(bse::theme::warning(palette())));
     }
 
     appendLog(code + ": " + message);

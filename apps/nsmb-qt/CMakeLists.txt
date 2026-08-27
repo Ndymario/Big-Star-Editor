@@ -17,6 +17,7 @@ add_executable(nsmb-qt
   src/LevelDataWidget.hpp
   src/MainWindow.cpp
   src/MainWindow.hpp
+  src/ThemeColors.hpp
   src/PatcherPanel.cpp
   src/PatcherPanel.hpp
   src/ProjectTreeModel.cpp
@@ -39,7 +40,7 @@ if(BSE_BUILD_TESTS)
       src/UiResourceEditorDialog.cpp src/UiResourceEditorDialog.hpp
       src/LevelPropertiesWidget.cpp src/LevelPropertiesWidget.hpp
       src/LevelDataWidget.cpp src/LevelDataWidget.hpp
-      src/MainWindow.cpp src/MainWindow.hpp
+      src/MainWindow.cpp src/MainWindow.hpp src/ThemeColors.hpp
       src/PatcherPanel.cpp src/PatcherPanel.hpp
       src/ProjectTreeModel.cpp src/ProjectTreeModel.hpp
     )

@@ -1,4 +1,7 @@
 #include "LevelDataWidget.hpp"
+#include "ThemeColors.hpp"
+
+#include <QEvent>
 
 #include <QByteArray>
 #include <QHeaderView>
@@ -38,7 +41,7 @@ LevelDataWidget::LevelDataWidget(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(4, 4, 4, 4);
     error_ = new QLabel(this);
     error_->setWordWrap(true);
-    error_->setStyleSheet("color:#a33");
+    applyThemeColors();
     keys_ = new QTableWidget(this);
     keys_->setColumnCount(3);
     keys_->setHorizontalHeaderLabels({"Key", "Shape", "Value / raw bytes"});
@@ -59,6 +62,27 @@ LevelDataWidget::LevelDataWidget(QWidget* parent) : QWidget(parent) {
 
 void LevelDataWidget::setLevel(nsmb::project::EditableLevel* level, const nsmb::project::ModuleDataCatalog* catalog) {
     level_ = level; catalog_ = catalog; refresh();
+}
+
+void LevelDataWidget::applyThemeColors() {
+    if (!error_) return;
+    auto label = error_->palette();
+    label.setColor(QPalette::WindowText, bse::theme::danger(palette()));
+    error_->setPalette(label);
+}
+
+void LevelDataWidget::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    switch (event->type()) {
+    case QEvent::PaletteChange:
+    case QEvent::ApplicationPaletteChange:
+    case QEvent::ThemeChange:
+    case QEvent::StyleChange:
+        applyThemeColors();
+        break;
+    default:
+        break;
+    }
 }
 
 void LevelDataWidget::refresh() {

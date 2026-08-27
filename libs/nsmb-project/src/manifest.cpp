@@ -7,7 +7,6 @@
 #include <cctype>
 #include <fstream>
 #include <optional>
-#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -100,16 +99,6 @@ core::Result<std::filesystem::path> parse_manifest_path(std::string value, std::
     return path;
 }
 
-bool path_starts_with(const std::filesystem::path& path, const std::filesystem::path& prefix) {
-    auto path_part = path.begin();
-    for (auto prefix_part = prefix.begin(); prefix_part != prefix.end(); ++prefix_part, ++path_part) {
-        if (path_part == path.end() || *path_part != *prefix_part) {
-            return false;
-        }
-    }
-    return true;
-}
-
 core::Result<std::uintmax_t> parse_size(std::string value) {
     value = trim(std::move(value));
     std::uintmax_t parsed{};
@@ -148,7 +137,7 @@ core::Result<void> save_manifest(const Project& project, const std::filesystem::
     std::ostringstream out;
 
     out << "format: big-star-editor-project\n";
-    out << "version: 1\n";
+    out << "version: " << manifest_version << "\n";
     out << yaml_scalar("name", project.name());
 
     if (project.rom()) {
@@ -161,18 +150,6 @@ core::Result<void> save_manifest(const Project& project, const std::filesystem::
         if (project.rom()->header) {
             out << "  " << yaml_scalar("game_title", project.rom()->header->game_title);
             out << "  " << yaml_scalar("game_code", project.rom()->header->game_code);
-        }
-        out << "files:\n";
-        for (const auto& file : project.game_files()) {
-            auto relative = make_project_relative(project_dir, file.path);
-            if (!relative) {
-                return relative.error();
-            }
-            if (!path_starts_with(relative.value(), extracted_path.value())) {
-                return core::make_error(core::ErrorCode::InvalidArgument, "project file path is outside rom.extracted_path");
-            }
-            out << "  - " << yaml_scalar("path", path_to_manifest_string(relative.value()));
-            out << "    size: " << file.size << "\n";
         }
     }
 
@@ -192,28 +169,9 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     bool saw_version = false;
     bool saw_name = false;
     bool in_rom = false;
-    bool in_files = false;
     std::optional<nds::RomHeader> header;
     std::filesystem::path extracted_path;
-    struct PendingFile {
-        std::filesystem::path path;
-        std::optional<std::uintmax_t> size;
-    };
-    std::optional<PendingFile> pending_file;
-    std::vector<GameFile> files;
     std::string line;
-
-    auto flush_pending_file = [&files, &pending_file]() -> core::Result<void> {
-        if (!pending_file) {
-            return {};
-        }
-        if (pending_file->path.empty() || !pending_file->size) {
-            return core::make_error(core::ErrorCode::ParseError, "manifest file entry needs both path and size");
-        }
-        files.push_back({pending_file->path, pending_file->size.value()});
-        pending_file.reset();
-        return {};
-    };
 
     while (std::getline(in, line)) {
         const auto stripped = trim(line);
@@ -223,15 +181,13 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
         if (stripped == "format: big-star-editor-project") {
             saw_format = true;
             in_rom = false;
-            in_files = false;
         } else if (stripped.rfind("version:", 0) == 0) {
             auto version = parse_size(stripped.substr(8));
-            if (!version || version.value() != 1U) {
+            if (!version || version.value() == 0U || version.value() > manifest_version) {
                 return core::make_error(core::ErrorCode::ParseError, "unsupported project manifest version");
             }
             saw_version = true;
             in_rom = false;
-            in_files = false;
         } else if (stripped.rfind("name:", 0) == 0) {
             auto name = parse_scalar(stripped.substr(5));
             if (!name) {
@@ -240,13 +196,13 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
             project.set_name(std::move(name.value()));
             saw_name = true;
             in_rom = false;
-            in_files = false;
         } else if (stripped == "rom:") {
             in_rom = true;
-            in_files = false;
         } else if (stripped == "files:") {
+            // Version 1 mirrored the whole extracted tree here. That list is derived from
+            // the tree itself and carries no IDs, so it is neither written nor read now --
+            // its entries fall through unmatched and the tree is indexed below instead.
             in_rom = false;
-            in_files = true;
         } else if (in_rom && stripped.rfind("extracted_path:", 0) == 0) {
             auto parsed = parse_manifest_path(stripped.substr(15), "rom.extracted_path");
             if (!parsed) {
@@ -271,27 +227,7 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
                 return code.error();
             }
             header->game_code = std::move(code.value());
-        } else if (in_files && stripped.rfind("- path:", 0) == 0) {
-            auto flushed = flush_pending_file();
-            if (!flushed) {
-                return flushed.error();
-            }
-            auto parsed = parse_manifest_path(stripped.substr(7), "files.path");
-            if (!parsed) {
-                return parsed.error();
-            }
-            pending_file = PendingFile{std::move(parsed.value()), std::nullopt};
-        } else if (in_files && stripped.rfind("size:", 0) == 0 && pending_file) {
-            auto size = parse_size(stripped.substr(5));
-            if (!size) {
-                return size.error();
-            }
-            pending_file->size = size.value();
         }
-    }
-    auto flushed = flush_pending_file();
-    if (!flushed) {
-        return flushed.error();
     }
 
     if (!saw_format) {
@@ -303,23 +239,12 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     if (!saw_name || project.name().empty()) {
         return core::make_error(core::ErrorCode::ParseError, "project name is missing");
     }
-    if (!files.empty() && extracted_path.empty()) {
-        return core::make_error(core::ErrorCode::ParseError, "manifest files require rom.extracted_path");
-    }
-    std::set<std::filesystem::path> unique_paths;
-    if (std::any_of(files.begin(), files.end(), [&](const auto& file) { return !unique_paths.insert(file.path).second; })) {
-        return core::make_error(core::ErrorCode::ParseError, "manifest contains a duplicate file path");
-    }
-    if (!extracted_path.empty() && std::any_of(files.begin(), files.end(), [&](const auto& file) {
-            return !path_starts_with(file.path, extracted_path);
-        })) {
-        return core::make_error(core::ErrorCode::ParseError, "manifest file path is outside rom.extracted_path");
-    }
     if (!extracted_path.empty()) {
         project.attach_extracted_rom(extracted_path, header);
-    }
-    for (const auto& file : files) {
-        project.add_game_file(file);
+        // The file index is a cache of the extracted tree, so it is rebuilt on open rather
+        // than persisted. A project whose ROM has not been extracted yet still loads --
+        // it just has an empty index until the next import or NCPatcher build.
+        static_cast<void>(index_project_files(project, project.directory() / extracted_path));
     }
     project.mark_clean();
     return project;

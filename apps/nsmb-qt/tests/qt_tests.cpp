@@ -25,8 +25,13 @@
 #include <QLineEdit>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QDir>
+#include <QFileIconProvider>
+#include <QImage>
 #include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QToolBox>
+#include <QScopeGuard>
 #include <QTemporaryDir>
 #include <QtTest>
 
@@ -466,6 +471,39 @@ private slots:
         QCOMPARE(hit->kind, 2);
     }
 
+    void canvasChromeFollowsThePalette() {
+        auto level = make_level();
+        LevelPreviewWidget canvas;
+        canvas.resize(480, 360);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+
+        auto scheme = [](const QColor& window, const QColor& window_text, const QColor& base, const QColor& text) {
+            QPalette palette;
+            palette.setColor(QPalette::Window, window);
+            palette.setColor(QPalette::WindowText, window_text);
+            palette.setColor(QPalette::Base, base);
+            palette.setColor(QPalette::Text, text);
+            return palette;
+        };
+        auto render = [&canvas](const QPalette& palette) {
+            canvas.setPalette(palette);
+            QImage image(canvas.size(), QImage::Format_ARGB32);
+            image.fill(Qt::transparent);
+            canvas.render(&image);
+            return image;
+        };
+
+        const auto light = render(scheme(QColor(242, 245, 248), QColor(32, 38, 49), Qt::white, Qt::black));
+        const auto dark = render(scheme(QColor(30, 31, 34), QColor(234, 236, 239), QColor(22, 23, 26), QColor(234, 236, 239)));
+
+        // Page margin follows Window, the map surface follows Base: neither may stay light on a dark theme.
+        QVERIFY(QColor(light.pixel(4, 4)).lightness() > 200);
+        QVERIFY(QColor(dark.pixel(4, 4)).lightness() < 80);
+        QVERIFY(QColor(light.pixel(40, 140)).lightness() > 200);
+        QVERIFY(QColor(dark.pixel(40, 140)).lightness() < 80);
+    }
+
     void clipboardCloneAndZOrderAreCompoundEdits() {
         auto level = make_level();
         QVERIFY(level.add_object({1, 0, 2, 3, 1, 1}));
@@ -599,6 +637,172 @@ private slots:
         QCOMPARE(nsmb::core::read_file(extractedCourse).value(), before);
         QVERIFY(window.filesystemView_.find("course/A01_1.bin"));
         QCOMPARE(window.filesystemView_.find("course/A01_1.bin")->status, nsmb::project::FilesystemStatus::Pending);
+    }
+
+    void filesystemTreeFollowsFileIdOrder() {
+        // Real NSMB IDs. NitroFS lists in file-ID order, so 00DUMMY (131) sits above
+        // ARCHIVE (lowest member 135) -- the same listing NSMBe's browser produces.
+        nsmb::project::FilesystemView view;
+        const auto add = [&view](const char* path, std::optional<std::int64_t> id) {
+            nsmb::project::FilesystemEntry entry; entry.path = path; entry.id = id; view.entries.push_back(std::move(entry));
+        };
+        add("ARCHIVE/Dat_2D.narc", 139);
+        add("ARCHIVE/ARC0.narc", 135);
+        add("ARCHIVE/bomthrow.narc", 136);
+        add("map/w2_castle.nsbmd", 1727);
+        add("map/w1_castle.nsbmd", 1713);
+        add("mgvs_sound_data.sdat", 133);
+        add("00DUMMY", 131);
+        add("BUILDTIME", 132);
+        add("course/A01_1_bgdat.bin", 823);
+        add("course/A01_1.bin", 822);
+        add("z_new/pending.bin", std::nullopt);  // not built yet, so no ID
+
+        FilesystemDock dock;
+        dock.setData({}, {}, std::move(view), {}, {}, {});
+        auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree);
+        QCOMPARE(tree->topLevelItemCount(), 1);
+
+        const auto* root = tree->topLevelItem(0);
+        const auto childNames = [](const QTreeWidgetItem* parent) {
+            QStringList names;
+            for (int i = 0; i < parent->childCount(); ++i) names << parent->child(i)->text(0);
+            return names;
+        };
+        // Root files come first because they hold the lowest IDs; z_new has none, so it trails.
+        QCOMPARE(childNames(root), QStringList({"00DUMMY", "BUILDTIME", "mgvs_sound_data.sdat",
+                                                "ARCHIVE", "course", "map", "z_new"}));
+        QCOMPARE(childNames(root->child(3)), QStringList({"ARC0.narc", "bomthrow.narc", "Dat_2D.narc"}));
+        QCOMPARE(childNames(root->child(4)), QStringList({"A01_1.bin", "A01_1_bgdat.bin"}));
+        QCOMPARE(childNames(root->child(5)), QStringList({"w1_castle.nsbmd", "w2_castle.nsbmd"}));
+    }
+
+    void filesystemTreeFallsBackToNaturalOrderWithoutIds() {
+        // No NCPatcher manifest means no IDs at all; names then order the tree, and a
+        // natural compare keeps w10 after w2 and folds case so Dat_ does not lead.
+        nsmb::project::FilesystemView view;
+        for (const auto* path : {"map/w10_castle.nsbmd", "map/w2_castle.nsbmd", "map/w1_castle.nsbmd",
+                                 "ARCHIVE/bomthrow.narc", "ARCHIVE/Dat_2D.narc", "ARCHIVE/ARC0.narc",
+                                 "BUILDTIME", "00DUMMY"})
+            view.entries.push_back({.path = path});
+
+        FilesystemDock dock;
+        dock.setData({}, {}, std::move(view), {}, {}, {});
+        auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree);
+
+        const auto* root = tree->topLevelItem(0);
+        const auto childNames = [](const QTreeWidgetItem* parent) {
+            QStringList names;
+            for (int i = 0; i < parent->childCount(); ++i) names << parent->child(i)->text(0);
+            return names;
+        };
+        QCOMPARE(childNames(root), QStringList({"00DUMMY", "ARCHIVE", "BUILDTIME", "map"}));
+        QCOMPARE(childNames(root->child(1)), QStringList({"ARC0.narc", "bomthrow.narc", "Dat_2D.narc"}));
+        QCOMPARE(childNames(root->child(3)), QStringList({"w1_castle.nsbmd", "w2_castle.nsbmd", "w10_castle.nsbmd"}));
+    }
+
+    void filesystemTreeIconsFollowTheDetectedFormat() {
+        // The offscreen platform has no icon theme, so install a throwaway one holding just
+        // the names the dock asks for. That keeps the assertions about the format -> icon
+        // mapping rather than about whatever theme happens to be on the build machine.
+        QTemporaryDir themeRoot;
+        QVERIFY(themeRoot.isValid());
+        const QStringList iconNames{"package-x-generic", "image-x-generic", "color-picker",
+                                    "x-office-drawing", "applications-graphics", "video-x-generic",
+                                    "audio-x-generic", "applications-games", "text-x-generic",
+                                    "preferences-desktop-effects", "input-touchpad", "snap-bounding-box"};
+        const auto sizeDir = themeRoot.filePath("bse-test/16x16");
+        QVERIFY(QDir().mkpath(sizeDir));
+        {
+            QFile index(themeRoot.filePath("bse-test/index.theme"));
+            QVERIFY(index.open(QIODevice::WriteOnly));
+            index.write("[Icon Theme]\nName=bse-test\nDirectories=16x16\n\n[16x16]\nSize=16\nType=Fixed\n");
+        }
+        QImage swatch(16, 16, QImage::Format_ARGB32);
+        swatch.fill(Qt::red);
+        for (const auto& name : iconNames) QVERIFY(swatch.save(sizeDir + "/" + name + ".png"));
+
+        const auto previousPaths = QIcon::themeSearchPaths();
+        const auto previousTheme = QIcon::themeName();
+        QIcon::setThemeSearchPaths({themeRoot.path()});
+        QIcon::setThemeName("bse-test");
+        const auto restore = qScopeGuard([&] { QIcon::setThemeName(previousTheme); QIcon::setThemeSearchPaths(previousPaths); });
+        QVERIFY2(!QIcon::fromTheme("image-x-generic").isNull(), "test theme did not load");
+
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        nsmb::project::FilesystemView view;
+        const auto add = [&](const char* romPath, const QByteArray& header) {
+            const auto onDisk = files.filePath(QString::fromLatin1(romPath).replace('/', '_'));
+            QFile file(onDisk);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+            QCOMPARE(file.write(header), header.size());
+            file.close();
+            nsmb::project::FilesystemEntry entry;
+            entry.path = romPath;
+            entry.extracted = onDisk.toStdString();
+            view.entries.push_back(std::move(entry));
+        };
+        const QByteArray pad(24, '\0');
+        add("ARCHIVE/a.narc", QByteArray("NARC") + pad);
+        add("BG_ncg/a_ncg.bin", QByteArray("RGCN") + pad);
+        add("BG_ncl/a_ncl.bin", QByteArray("RLCN") + pad);
+        add("BG_nsc/a_nsc.bin", QByteArray("RCSN") + pad);
+        add("map/a.nsbmd", QByteArray("BMD0") + pad);
+        add("demo/a.nsbca", QByteArray("BCA0") + pad);
+        add("a.sdat", QByteArray("SDAT") + pad);
+        add("script/course.bmg", QByteArray("MESG") + pad);          // magic must beat the "course" name hint
+        add("particle/a.spa", QByteArray(" APS22_1") + pad);
+        add("uiStudio/a.bnbl", QByteArray("JNBL") + pad);            // touch hit boxes
+        add("uiStudio/a.bncl", QByteArray("JNCL") + pad);            // OAM positions, not a cell layout
+        add("uiStudio/a.bncd", QByteArray("JNCD") + pad);            // OAM plus graphics
+        add("uiStudio/course_select.bnll", QByteArray("JNLL") + pad);// undocumented, must not read as a level
+        add("demo/a.enpg", QByteArray("\x10\x00\x02\x01\x3f", 5) + pad);  // LZ, identified by name
+        add("enemy/a.nsbca", QByteArray("LZ77\x10\xd4\x09\x00\x00" "BCA0", 13) + pad);  // magic behind an LZ77 header
+        add("player/cap_LZ.bin", QByteArray("\x10\xf0\x25\x00\x00" "BCA0", 9) + pad);   // magic behind a bare LZ header
+        add("course/A01_1.bin", QByteArray(16, '\x00'));            // no magic, so the name decides
+        add("BG_unt/a.bin", QByteArray(16, '\x00'));                // tileset data: nothing identifies it
+
+        FilesystemDock dock;
+        dock.setData({}, {}, std::move(view), {}, {}, {});
+        auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree);
+
+        QMap<QString, QString> iconByPath;
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+            const auto path = (*it)->data(0, Qt::UserRole).toString();
+            if (!path.isEmpty()) iconByPath[path] = (*it)->icon(0).name();
+        }
+        QCOMPARE(iconByPath["ARCHIVE/a.narc"], QString("package-x-generic"));
+        QCOMPARE(iconByPath["BG_ncg/a_ncg.bin"], QString("image-x-generic"));
+        QCOMPARE(iconByPath["BG_ncl/a_ncl.bin"], QString("color-picker"));
+        QCOMPARE(iconByPath["BG_nsc/a_nsc.bin"], QString("x-office-drawing"));
+        QCOMPARE(iconByPath["map/a.nsbmd"], QString("applications-graphics"));
+        QCOMPARE(iconByPath["demo/a.nsbca"], QString("video-x-generic"));
+        QCOMPARE(iconByPath["a.sdat"], QString("audio-x-generic"));
+        QCOMPARE(iconByPath["script/course.bmg"], QString("text-x-generic"));
+        QCOMPARE(iconByPath["particle/a.spa"], QString("preferences-desktop-effects"));
+        QCOMPARE(iconByPath["uiStudio/a.bnbl"], QString("input-touchpad"));
+        QCOMPARE(iconByPath["uiStudio/a.bncl"], QString("snap-bounding-box"));
+        QCOMPARE(iconByPath["uiStudio/a.bncd"], QString("image-x-generic"));
+        QCOMPARE(iconByPath["demo/a.enpg"], QString("image-x-generic"));
+        QCOMPARE(iconByPath["enemy/a.nsbca"], QString("video-x-generic"));
+        QCOMPARE(iconByPath["player/cap_LZ.bin"], QString("video-x-generic"));
+        QCOMPARE(iconByPath["course/A01_1.bin"], QString("applications-games"));
+        // Unidentified entries fall back to the system's own generic file icon rather than
+        // going bare -- BNLL included, so its name can never be read as a level.
+        const auto generic = QFileIconProvider().icon(QFileIconProvider::File).name();
+        QCOMPARE(iconByPath["uiStudio/course_select.bnll"], generic);
+        QCOMPARE(iconByPath["BG_unt/a.bin"], generic);
+
+        // Directories, including the root node, carry the system folder icon.
+        for (int i = 0; i < tree->topLevelItem(0)->childCount(); ++i) {
+            const auto* child = tree->topLevelItem(0)->child(i);
+            if (child->childCount() > 0) QVERIFY(!child->icon(0).isNull());
+        }
+        QVERIFY(!tree->topLevelItem(0)->icon(0).isNull());
     }
 
     void fileWatcherSeesDirectAndAtomicReplacement() {

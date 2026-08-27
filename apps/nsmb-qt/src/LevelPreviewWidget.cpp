@@ -2,6 +2,7 @@
 
 #include <QApplication>
 #include <QClipboard>
+#include <QEvent>
 #include <QFontMetrics>
 #include <QFileDialog>
 #include <QActionGroup>
@@ -12,6 +13,7 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QPalette>
 #include <QPointer>
 #include <QResizeEvent>
 #include <QStringList>
@@ -147,6 +149,60 @@ QColor objectColor(std::uint8_t tileset_slot) {
     }
 }
 
+// The canvas paints itself instead of relying on widget styling, so every chrome colour is
+// derived from the active palette to keep the editor legible in light and dark themes alike.
+struct CanvasColors {
+    bool dark{};
+    QColor page;
+    QColor surface;
+    QColor frame;
+    QColor coarse_grid;
+    QColor fine_grid;
+    QColor title_text;
+    QColor body_text;
+    QColor outline;
+    QColor label_text;
+    QColor marker;
+    QColor highlight;
+};
+
+QColor blend(const QColor& from, const QColor& to, double ratio) {
+    return QColor::fromRgbF(from.redF() + (to.redF() - from.redF()) * ratio,
+                            from.greenF() + (to.greenF() - from.greenF()) * ratio,
+                            from.blueF() + (to.blueF() - from.blueF()) * ratio);
+}
+
+QColor withAlpha(QColor color, int alpha) {
+    color.setAlpha(alpha);
+    return color;
+}
+
+CanvasColors canvasColors(const QPalette& palette) {
+    const auto window = palette.color(QPalette::Window);
+    const auto window_text = palette.color(QPalette::WindowText);
+    const auto base = palette.color(QPalette::Base);
+    const auto text = palette.color(QPalette::Text);
+    CanvasColors colors;
+    colors.dark = window.lightness() < 128;
+    colors.page = window;
+    colors.surface = base;
+    colors.frame = palette.color(QPalette::Mid);
+    colors.coarse_grid = blend(base, text, colors.dark ? 0.24 : 0.12);
+    colors.fine_grid = withAlpha(blend(base, text, 0.55), 70);
+    colors.title_text = window_text;
+    colors.body_text = blend(window, window_text, 0.78);
+    colors.outline = blend(base, text, 0.82);
+    colors.label_text = text;
+    colors.marker = colors.dark ? QColor(246, 248, 251) : QColor(Qt::white);
+    colors.highlight = palette.color(QPalette::Highlight);
+    return colors;
+}
+
+// Semantic entity colours keep their hue; on dark canvases they are lifted so the strokes stay visible.
+QColor entityStroke(const QColor& color, const CanvasColors& colors) {
+    return colors.dark ? color.lighter(140) : color.darker(160);
+}
+
 QTransform mapTransform(const QRectF& target,
                         const LevelPreviewWidget::Scene& scene,
                         const SpriteDefinitions& definitions,
@@ -221,11 +277,12 @@ void drawMap(QPainter& painter,
              const std::unordered_map<std::uint16_t, QString>& actor_labels,
              const std::unordered_map<std::uint32_t, QString>& custom_actor_labels,
              const SpriteDefinitions& sprite_definitions,
-             bool resizing) {
+             bool resizing,
+             const CanvasColors& colors) {
     const auto& course = scene.level->course();
     painter.save();
-    painter.setPen(QPen(QColor(190, 198, 208)));
-    painter.setBrush(QColor(248, 250, 252));
+    painter.setPen(QPen(colors.frame));
+    painter.setBrush(colors.surface);
     painter.drawRect(target);
 
     const auto bounds = sceneBounds(scene, sprite_definitions);
@@ -241,7 +298,7 @@ void drawMap(QPainter& painter,
         painter.drawImage(bounds, background);
         painter.setOpacity(1.0);
     }
-    painter.setPen(QPen(QColor(226, 231, 237), 0));
+    painter.setPen(QPen(colors.coarse_grid, 0));
     const auto grid = 256.0;
     const auto x_start = std::floor(bounds.left() / grid) * grid;
     const auto y_start = std::floor(bounds.top() / grid) * grid;
@@ -265,7 +322,7 @@ void drawMap(QPainter& painter,
             painter.setPen(QPen(QColor(24, 111, 58), 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(rect);
-            painter.setBrush(Qt::white);
+            painter.setBrush(colors.marker);
             painter.drawEllipse(QRectF(rect.bottomRight() - QPointF(7.0 / scale, 7.0 / scale), QSizeF(14.0 / scale, 14.0 / scale)));
         }
     }
@@ -281,7 +338,7 @@ void drawMap(QPainter& painter,
         auto rect = objectRect(object);
         if (!resizing && selected(selections, 1, static_cast<int>(i))) rect.translate(drag_delta);
         if (resizing && selected(selections, 1, static_cast<int>(i))) rect.setBottomRight(rect.bottomRight() + drag_delta);
-        painter.setPen(QPen(QColor(38, 46, 58), 0));
+        painter.setPen(QPen(colors.outline, 0));
         bool rendered = false;
         if (object.tileset_slot < tilesets.size() && tilesets[object.tileset_slot]) {
             const auto image_key = (static_cast<std::uint64_t>(object.tileset_slot) << 56U) |
@@ -313,10 +370,10 @@ void drawMap(QPainter& painter,
             painter.drawRoundedRect(rect, 2.0 / scale, 2.0 / scale);
         }
         if (selected(selections, 1, static_cast<int>(i))) {
-            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setPen(QPen(colors.marker, 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(rect);
-            painter.setBrush(Qt::white);
+            painter.setBrush(colors.marker);
             painter.drawEllipse(QRectF(rect.bottomRight() - QPointF(7.0 / scale, 7.0 / scale), QSizeF(14.0 / scale, 14.0 / scale)));
         }
     }
@@ -332,13 +389,13 @@ void drawMap(QPainter& painter,
         } else {
             const auto* definition = spriteDefinition(sprite, false, sprite_definitions);
             const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(238, 178, 75);
-            painter.setPen(QPen(color.darker(160), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
+            painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
             if (definition && definition->shape == nsmb::project::SpriteShape::Box) painter.drawRoundedRect(render_rect, 2, 2);
             else if (definition && definition->shape == nsmb::project::SpriteShape::Ellipse) painter.drawEllipse(render_rect);
             else { QPolygonF diamond; const auto render_center = render_rect.center(); diamond << QPointF(render_center.x(), render_rect.top()) << QPointF(render_rect.right(), render_center.y()) << QPointF(render_center.x(), render_rect.bottom()) << QPointF(render_rect.left(), render_center.y()); painter.drawPolygon(diamond); }
             const auto label = definition ? QString::fromStdString(definition->name)
                                           : (actor_labels.contains(sprite.id) ? actor_labels.at(sprite.id) : QString("Actor %1").arg(sprite.id));
-            painter.setPen(QPen(QColor(100, 55, 20), 0));
+            painter.setPen(QPen(colors.label_text, 0));
             painter.drawText(QRectF(render_rect.right() + 2.0, render_rect.top() - 2.0, 120.0, 20.0), label);
         }
         else {
@@ -346,10 +403,11 @@ void drawMap(QPainter& painter,
             painter.setPen(QPen(QColor(112, 47, 132), 0)); painter.setBrush(QColor(191, 112, 215, 190)); painter.drawRect(rect);
             const auto label = custom_actor_labels.contains(*custom_hash) ? custom_actor_labels.at(*custom_hash)
                 : QString("0x%1 (foreign)").arg(*custom_hash, 8, 16, QLatin1Char('0'));
+            painter.setPen(QPen(colors.label_text, 0));
             painter.drawText(QRectF(rect.right() + 2.0, rect.top() - 2.0, 180.0, 20.0), label);
         }
         if (selected(selections, 2, static_cast<int>(i))) {
-            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setPen(QPen(colors.marker, 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(rect.adjusted(-3.0, -3.0, 3.0, 3.0));
         }
@@ -362,7 +420,7 @@ void drawMap(QPainter& painter,
         painter.setBrush(QColor(92, 190, 214, 190));
         painter.drawEllipse(rect);
         if (selected(selections, 3, static_cast<int>(i))) {
-            painter.setPen(QPen(Qt::white, 3.0 / scale));
+            painter.setPen(QPen(colors.marker, 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawEllipse(rect.adjusted(-3.0, -3.0, 3.0, 3.0));
         }
@@ -394,7 +452,7 @@ void drawMap(QPainter& painter,
                 painter.setBrush(node_index == 0 ? QColor(79, 178, 98) : QColor(235, 105, 95));
                 painter.drawEllipse(rect);
                 if (selected(selections, progress ? 6 : 5, static_cast<int>(path_index), static_cast<int>(node_index))) {
-                    painter.setPen(QPen(Qt::white, 3.0 / scale));
+                    painter.setPen(QPen(colors.marker, 3.0 / scale));
                     painter.setBrush(Qt::NoBrush);
                     painter.drawEllipse(rect.adjusted(-3.0, -3.0, 3.0, 3.0));
                 }
@@ -508,11 +566,12 @@ void LevelPreviewWidget::showLevel(const QString& level_name,
 void LevelPreviewWidget::paintEvent(QPaintEvent*) {
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
-    painter.fillRect(rect(), QColor(242, 245, 248));
+    const auto colors = canvasColors(palette());
+    painter.fillRect(rect(), colors.page);
 
     const QRectF outer = QRectF(rect()).adjusted(18, editable_ ? 52 : 18, -18, -18);
     if (!scene_) {
-        painter.setPen(QColor(63, 72, 86));
+        painter.setPen(colors.body_text);
         painter.drawText(outer, Qt::AlignCenter | Qt::TextWordWrap, message_);
         return;
     }
@@ -533,26 +592,27 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
-                resizing_);
+                resizing_,
+                colors);
         if (show_grid_ || show_ds_screen_ || !reference_image_.isNull()) {
             painter.save(); painter.setClipRect(outer); painter.setTransform(sceneTransform(), true);
             if (!reference_image_.isNull()) { painter.setOpacity(0.35); painter.drawImage(QRectF(reference_offset_, reference_image_.size()), reference_image_); painter.setOpacity(1.0); }
-            if (show_grid_) { bool ok=false;const auto visible=sceneTransform().inverted(&ok).mapRect(outer);if(ok){painter.setPen(QPen(QColor(120,130,145,70),0));const auto left=std::floor(visible.left()/16)*16,top=std::floor(visible.top()/16)*16;for(double x=left;x<=visible.right();x+=16)painter.drawLine(QPointF(x,visible.top()),QPointF(x,visible.bottom()));for(double y=top;y<=visible.bottom();y+=16)painter.drawLine(QPointF(visible.left(),y),QPointF(visible.right(),y));}}
+            if (show_grid_) { bool ok=false;const auto visible=sceneTransform().inverted(&ok).mapRect(outer);if(ok){painter.setPen(QPen(colors.fine_grid,0));const auto left=std::floor(visible.left()/16)*16,top=std::floor(visible.top()/16)*16;for(double x=left;x<=visible.right();x+=16)painter.drawLine(QPointF(x,visible.top()),QPointF(x,visible.bottom()));for(double y=top;y<=visible.bottom();y+=16)painter.drawLine(QPointF(visible.left(),y),QPointF(visible.right(),y));}}
             if (show_ds_screen_) { painter.setPen(QPen(QColor(220,45,55),0));painter.setBrush(QColor(220,45,55,18));painter.drawRect(QRectF(0,0,256,192));painter.drawRect(QRectF(0,192,256,192)); }
             painter.restore();
         }
         if (marquee_selecting_) {
-            painter.setPen(QPen(QColor(45, 125, 210), 1, Qt::DashLine));
-            painter.setBrush(QColor(45, 125, 210, 35));
+            painter.setPen(QPen(colors.highlight, 1, Qt::DashLine));
+            painter.setBrush(withAlpha(colors.highlight, 35));
             painter.drawRect(marquee_.normalized());
         }
         if (show_minimap_) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
             drawMap(painter, mini, *scene_, {}, {}, 1.0, {}, tilesets_, background_, foreground_, object_images_,
-                    actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false);
+                    actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, colors);
             bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, zoom_, pan_).inverted(&invertible).mapRect(outer);
-            if (invertible) { painter.setPen(QPen(QColor(32, 111, 210), 2)); painter.setBrush(QColor(32, 111, 210, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, 1.0, {}).mapRect(visible)); }
-            painter.setPen(QPen(QColor(35, 45, 60), 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
+            if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, 1.0, {}).mapRect(visible)); }
+            painter.setPen(QPen(colors.outline, 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
         }
         return;
     }
@@ -562,7 +622,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
     font.setBold(true);
     painter.setFont(font);
     const QFontMetrics title_metrics(font);
-    painter.setPen(QColor(32, 38, 49));
+    painter.setPen(colors.title_text);
     painter.drawText(outer.adjusted(0, 0, 0, -outer.height() + 32),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      elided(title_metrics, scene_->title, static_cast<int>(outer.width())));
@@ -571,7 +631,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
     font.setBold(false);
     painter.setFont(font);
     const QFontMetrics body_metrics(font);
-    painter.setPen(QColor(72, 83, 99));
+    painter.setPen(colors.body_text);
 
     const QString location = scene_->area_name == scene_->title ? scene_->world : scene_->world + " / " + scene_->area_name;
     painter.drawText(outer.adjusted(0, 34, 0, -outer.height() + 56),
@@ -601,11 +661,12 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
-                resizing_);
+                resizing_,
+                colors);
     }
     if (marquee_selecting_) {
-        painter.setPen(QPen(QColor(45, 125, 210), 1, Qt::DashLine));
-        painter.setBrush(QColor(45, 125, 210, 35));
+        painter.setPen(QPen(colors.highlight, 1, Qt::DashLine));
+        painter.setBrush(withAlpha(colors.highlight, 35));
         painter.drawRect(marquee_.normalized());
     }
 }
@@ -655,6 +716,14 @@ QPointF LevelPreviewWidget::pan() const noexcept { return pan_; }
 void LevelPreviewWidget::setPan(QPointF pan) {
     pan_ = pan;
     update();
+}
+
+void LevelPreviewWidget::changeEvent(QEvent* event) {
+    QWidget::changeEvent(event);
+    if (event->type() == QEvent::PaletteChange || event->type() == QEvent::ApplicationPaletteChange ||
+        event->type() == QEvent::ThemeChange || event->type() == QEvent::StyleChange) {
+        update();
+    }
 }
 
 void LevelPreviewWidget::resizeEvent(QResizeEvent* event) {

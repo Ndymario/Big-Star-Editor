@@ -6,20 +6,23 @@ The manifest intentionally avoids absolute paths. Paths are stored relative to t
 
 ```yaml
 format: big-star-editor-project
-version: 1
+version: 2
 name: "Example Project"
 rom:
   extracted_path: "extracted-rom"
   game_title: "NEW MARIO"
   game_code: "A2DE"
-files:
-  - path: "extracted-rom/root/course/course1.bin"
-    size: 1234
 ```
 
-The backend owns a deliberately small YAML subset without a third-party YAML dependency. `format`, `version: 1`, and a nonempty `name` are required. Quoted strings support `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
+The backend owns a deliberately small YAML subset without a third-party YAML dependency. `format`, a supported `version`, and a nonempty `name` are required. Quoted strings support `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
 
-`rom.extracted_path` and every indexed file path must remain inside the project directory. Absolute paths, parent traversal, Windows drive prefixes, backslashes, duplicate file entries, invalid sizes, and files outside the configured extracted-ROM root are rejected. Manifest writes use an adjacent temporary file followed by atomic replacement, so a failed write does not leave a partially written manifest.
+`rom.extracted_path` must remain inside the project directory. Absolute paths, parent traversal, Windows drive prefixes, and backslashes are rejected. Manifest writes use an adjacent temporary file followed by atomic replacement, so a failed write does not leave a partially written manifest.
+
+## The file index is not serialized
+
+The extracted ROM is derived output that NCPatcher rewrites on every build, so the manifest does not describe its contents. Opening a project walks `rom.extracted_path` and builds the index in memory; a project whose ROM has not been extracted yet still opens, with an empty index, until the next import or build.
+
+Version 1 stored that walk as a `files:` list of `path`/`size` pairs — for a full NSMB tree, roughly 4,000 lines that had to be rewritten on every build and carried no file IDs. File IDs come from NCPatcher's `files-dump` manifest (`RomFileEntry.id`), which is also the only source of provenance, and is what the Filesystem dock shows. Version 2 drops the list. A version 1 manifest still opens — its `files:` block is ignored rather than parsed — and is rewritten as version 2 on the next save.
 
 ## Module edit targets
 
