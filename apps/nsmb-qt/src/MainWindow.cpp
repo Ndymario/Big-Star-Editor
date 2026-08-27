@@ -147,6 +147,17 @@ QString workspaceKey(const nsmb::project::Project& project) {
     return path.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
 }
 
+constexpr int max_recent_projects = 10;
+constexpr auto recent_projects_key = "RecentProjects";
+
+QStringList recentProjects() {
+    return QSettings().value(recent_projects_key).toStringList();
+}
+
+void storeRecentProjects(const QStringList& projects) {
+    QSettings().setValue(recent_projects_key, projects);
+}
+
 QString uiText(std::string_view english) {
     struct Translation { std::string_view english, nl, pt, es, fr; };
     static constexpr std::array translations{
@@ -289,6 +300,8 @@ void MainWindow::createMenus() {
         log("File > Open Project selected.");
         openProject();
     });
+    recentMenu_ = file->addMenu("Open &Recent");
+    updateRecentMenu();
     file->addAction(uiText("Save Project"), QKeySequence::Save, this, [this] {
         log("File > Save Project selected.");
         saveProject();
@@ -669,17 +682,85 @@ void MainWindow::openProject() {
         return;
     }
 
-    const auto project_dir = std::filesystem::path(directory.toStdString());
-    const auto manifest_path = project_dir / nsmb::project::manifest_file_name;
+    openProjectPath(std::filesystem::path(directory.toStdString()));
+}
+
+bool MainWindow::openProjectPath(const std::filesystem::path& directory) {
+    const auto manifest_path = directory / nsmb::project::manifest_file_name;
     auto loaded = nsmb::project::load_manifest(manifest_path);
     if (!loaded) {
         QMessageBox::warning(this, "Open Project Failed", QString::fromStdString(loaded.error().message));
         log("Could not open project: " + QString::fromStdString(loaded.error().message));
-        return;
+        return false;
     }
 
     setProject(loaded.value());
     log("Opened project: " + QString::fromStdString(manifest_path.string()));
+    return true;
+}
+
+void MainWindow::openRecentProject(const QString& directory) {
+    if (!confirmDiscardLevelEdits()) {
+        return;
+    }
+    log("File > Open Recent: " + QDir::toNativeSeparators(directory));
+    if (!openProjectPath(std::filesystem::path(directory.toStdString()))) {
+        forgetRecentProject(directory);
+    }
+}
+
+void MainWindow::rememberRecentProject(const std::filesystem::path& directory) {
+    if (directory.empty()) {
+        return;
+    }
+    const auto path = QDir(QString::fromStdString(directory.string())).absolutePath();
+    auto projects = recentProjects();
+    projects.removeAll(path);
+    projects.prepend(path);
+    while (projects.size() > max_recent_projects) {
+        projects.removeLast();
+    }
+    storeRecentProjects(projects);
+    updateRecentMenu();
+}
+
+void MainWindow::forgetRecentProject(const QString& directory) {
+    auto projects = recentProjects();
+    if (projects.removeAll(directory) == 0) {
+        return;
+    }
+    storeRecentProjects(projects);
+    updateRecentMenu();
+    log("Removed a project that no longer opens from the recent list: " + QDir::toNativeSeparators(directory));
+}
+
+void MainWindow::updateRecentMenu() {
+    if (!recentMenu_) {
+        return;
+    }
+    recentMenu_->clear();
+    const auto projects = recentProjects();
+    recentMenu_->setEnabled(!projects.isEmpty());
+    int number = 0;
+    for (const auto& path : projects) {
+        const QDir directory(path);
+        // Menu text swallows a lone '&', and project folders may legitimately contain one.
+        auto label = directory.dirName() + " - " + QDir::toNativeSeparators(directory.absolutePath());
+        label.replace("&", "&&");
+        ++number;
+        if (number < 10) {
+            label = QString("&%1  %2").arg(number).arg(label);
+        }
+        auto* action = recentMenu_->addAction(label, this, [this, path] { openRecentProject(path); });
+        action->setStatusTip(QDir::toNativeSeparators(path));
+    }
+    recentMenu_->addSeparator();
+    auto* clear = recentMenu_->addAction("Clear Recent Projects", this, [this] {
+        storeRecentProjects({});
+        updateRecentMenu();
+        log("Cleared the recent project list.");
+    });
+    clear->setEnabled(!projects.isEmpty());
 }
 
 nsmb::core::Result<void> MainWindow::saveEditedLevels() {
@@ -1382,6 +1463,7 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
         levelTree_->expandToDepth(1);
     }
     setWindowTitle(projectTitle(currentProject_));
+    rememberRecentProject(currentProject_.directory());
     updateProjectSummary();
     restoreWorkspaceState();
     updateEditState();

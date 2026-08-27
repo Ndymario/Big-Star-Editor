@@ -55,6 +55,11 @@ private:
     bool newProject();
     bool importRom();
     void openProject();
+    bool openProjectPath(const std::filesystem::path& directory);
+    void openRecentProject(const QString& directory);
+    void rememberRecentProject(const std::filesystem::path& directory);
+    void forgetRecentProject(const QString& directory);
+    void updateRecentMenu();
     bool saveProject();
     nsmb::core::Result<void> saveEditedLevels();
     void runPatcher();
@@ -137,6 +142,7 @@ private:
     QToolButton* undoButton_{};
     QToolButton* redoButton_{};
     QMenu* viewMenu_{};
+    QMenu* recentMenu_{};
     QDockWidget* levelsDock_{};
     QDockWidget* propertiesDock_{};
     QDockWidget* paletteDock_{};

@@ -8,6 +8,7 @@
 #include "PatcherPanel.hpp"
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/project/level_exchange.hpp"
+#include "nsmb/project/manifest.hpp"
 
 #include <QAction>
 #include <QApplication>
@@ -563,6 +564,44 @@ private slots:
         window.writeRecoverySnapshots(); const auto recovery=std::filesystem::path(directory.path().toStdString())/".big-star-autosave";
         std::size_t count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover"){auto bytes=nsmb::core::read_file(entry.path());QVERIFY(bytes);auto decoded=nsmb::project::decode_level_recovery(bytes.value());QVERIFY(decoded);++count;}QCOMPARE(count,1U);
         session.value()->mark_clean();window.writeRecoverySnapshots();count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover")++count;QCOMPARE(count,0U);
+    }
+
+    void recentProjectsListMostRecentFirstAndDropWhatCannotOpen() {
+        QSettings().remove("RecentProjects");
+        const auto guard = qScopeGuard([] { QSettings().remove("RecentProjects"); });
+        QTemporaryDir first_directory; QVERIFY(first_directory.isValid());
+        QTemporaryDir second_directory; QVERIFY(second_directory.isValid());
+        const auto first_root = std::filesystem::path(first_directory.path().toStdString());
+        const auto second_root = std::filesystem::path(second_directory.path().toStdString());
+        const auto first_project = make_project(first_root);
+        const auto second_project = make_project(second_root);
+        for (const auto& root : {first_root, second_root}) {
+            QVERIFY(nsmb::project::save_manifest(root == first_root ? first_project : second_project,
+                                                 root / nsmb::project::manifest_file_name));
+        }
+
+        MainWindow window;
+        window.setProject(first_project);
+        window.setProject(second_project);
+        QCOMPARE(QSettings().value("RecentProjects").toStringList(),
+                 QStringList({second_directory.path(), first_directory.path()}));
+
+        // Reopening an older entry moves it back to the top rather than duplicating it.
+        window.openRecentProject(first_directory.path());
+        QCOMPARE(QString::fromStdString(window.currentProject_.directory().string()), first_directory.path());
+        QCOMPARE(QSettings().value("RecentProjects").toStringList(),
+                 QStringList({first_directory.path(), second_directory.path()}));
+
+        QCOMPARE(window.recentMenu_->actions().size(), qsizetype{4});
+        QVERIFY(window.recentMenu_->actions().at(0)->text().endsWith(QDir::toNativeSeparators(first_directory.path())));
+
+        // A folder that no longer opens is dropped. openRecentProject reports the failure through a
+        // modal warning first, so the removal it performs is exercised directly here.
+        std::filesystem::remove(first_root / nsmb::project::manifest_file_name);
+        QVERIFY(!nsmb::project::load_manifest(first_root / nsmb::project::manifest_file_name));
+        window.forgetRecentProject(first_directory.path());
+        QCOMPARE(QSettings().value("RecentProjects").toStringList(), QStringList({second_directory.path()}));
+        QCOMPARE(window.recentMenu_->actions().size(), qsizetype{3});
     }
 
     void uniqueEditorsDetachAndRestore() {
