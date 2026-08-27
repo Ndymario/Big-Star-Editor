@@ -71,7 +71,7 @@
 - Added a filesystem view that joins the extracted NitroFS tree, the last `ncpatcher.files/1` manifest, and the currently enabled module trees.
 - Reproduced NCPatcher's layer-before-module precedence, base-variant fallback, variant-to-module layer mappings, `into:` prefixes, component glob subtraction, current base/variant `files:` precedence from the resolved config, and outermost `_narc` convention.
 - Added Vanilla, Replaced, Added, Pending, and Orphaned states with byte-level stale detection, including NARC member comparison.
-- Added a Filesystem dock with active module/variant selection, path/status/provenance/variant/id/size columns, recoverable removal, and add/replace/extract/hex-edit actions.
+- Added a Filesystem dock with active module/variant selection, a path/status list whose columns are resizable and whose provenance/variant/id/size columns are opt-in from the header menu, a footer reporting those details for the selected file, recoverable removal, and add/replace/extract/hex-edit actions.
 - Routed level saves into the supplying module or active module target. The extracted ROM remains a derived view and pending writes receive no fabricated file ID.
 - Added a pending-build banner and debounced watchers for external changes throughout enabled module NitroFS trees.
 

@@ -7,6 +7,7 @@
 #include "nsmb/formats/identify.hpp"
 #include "nsmb/formats/ui_resources.hpp"
 
+#include <QAction>
 #include <QComboBox>
 #include <QColor>
 #include <QDialog>
@@ -22,9 +23,12 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
+#include <QLocale>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSettings>
 #include <QSignalBlocker>
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
@@ -37,6 +41,24 @@
 
 namespace {
 constexpr auto path_role = Qt::UserRole;
+
+// Path and Status are the list; everything else about a file lives in the footer, and is only
+// promoted to a column when the user asks for it through the header menu.
+enum Column { PathColumn, StatusColumn, ProvenanceColumn, VariantColumn, FileIdColumn, SizeColumn, ColumnCount };
+
+const QStringList& column_names() {
+    static const QStringList names{"Path", "Status", "Provenance", "Variant", "File ID", "Size"};
+    return names;
+}
+
+int default_column_width(int column) {
+    switch (column) {
+    case PathColumn: return 280;
+    case StatusColumn: return 150;
+    case FileIdColumn: return 80;
+    default: return 110;
+    }
+}
 
 QString provenance(const nsmb::project::FilesystemEntry& entry) {
     if (entry.module.empty()) return entry.source.empty() ? QString{} : QString("project");
@@ -235,10 +257,39 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     layout->addLayout(banner);
 
     tree_ = new QTreeWidget(this); tree_->setObjectName("FilesystemTree");
-    tree_->setHeaderLabels({"Path", "Status", "Provenance", "Variant", "File ID", "Size"});
-    tree_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
-    for (int column = 1; column < 6; ++column) tree_->header()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
+    tree_->setHeaderLabels(column_names());
+    auto* header = tree_->header();
+    // Every column is hand-resizable, so no automatic mode may fight the width the user drags.
+    header->setSectionResizeMode(QHeaderView::Interactive);
+    header->setStretchLastSection(false);
+    header->setContextMenuPolicy(Qt::CustomContextMenu);
+    for (int column = 0; column < ColumnCount; ++column) tree_->setColumnWidth(column, default_column_width(column));
+    for (int column = ProvenanceColumn; column < ColumnCount; ++column) tree_->setColumnHidden(column, true);
     layout->addWidget(tree_, 1);
+
+    columnMenu_ = new QMenu(this); columnMenu_->setObjectName("FilesystemColumns");
+    for (int column = 0; column < ColumnCount; ++column) {
+        auto* action = columnMenu_->addAction(column_names()[column]);
+        action->setCheckable(true);
+        action->setChecked(!tree_->isColumnHidden(column));
+        action->setEnabled(column != PathColumn);  // without the path a row names nothing
+        connect(action, &QAction::toggled, this, [this, column](bool visible) {
+            tree_->setColumnHidden(column, !visible);
+            if (visible && tree_->columnWidth(column) <= 0) tree_->setColumnWidth(column, default_column_width(column));
+            saveColumnState();
+        });
+    }
+    connect(header, &QWidget::customContextMenuRequested, this, &FilesystemDock::showColumnMenu);
+
+    // Everything the hidden columns would say about the selected file, the way NSMB Editor
+    // reports it: one line above the buttons that act on that file.
+    details_ = new QLabel(this); details_->setObjectName("FilesystemDetails");
+    details_->setWordWrap(true); details_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(details_);
+
+    restoreColumnState();
+    // Connected after the restore so replaying stored widths does not write them straight back.
+    connect(header, &QHeaderView::sectionResized, this, [this] { saveColumnState(); });
 
     auto* actions = new QHBoxLayout;
     add_ = new QPushButton("Add file", this); replace_ = new QPushButton("Replace", this); remove_ = new QPushButton("Remove", this);
@@ -259,6 +310,7 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     connect(hex_, &QPushButton::clicked, this, &FilesystemDock::hexEditFile);
     connect(tree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         const auto* entry = selectedEntry(); replace_->setEnabled(entry); extract_->setEnabled(entry); hex_->setEnabled(entry);
+        updateDetails();
         graphics_->setEnabled(false); uiResource_->setEnabled(false);
         if (entry) { const auto source = !entry->source.empty() ? entry->source : entry->extracted; const auto data = nsmb::core::read_file(source); const bool metadata=entry->id&&*entry->id==131; graphics_->setEnabled(data && GraphicsEditorDialog::supports(data.value(), entry->path)); uiResource_->setEnabled(data&&UiResourceEditorDialog::supports(data.value(),entry->path,metadata)); }
         remove_->setEnabled(entry && !entry->source.empty() && !entry->module.empty());
@@ -344,6 +396,36 @@ void FilesystemDock::rebuildTree() {
     pending_->setVisible(hasPending); run_->setVisible(hasPending);
     pending_->setText(hasPending ? "⏳ Module files differ from the last build. Run NCPatcher to assign IDs and refresh the extracted ROM." : QString{});
     const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); graphics_->setEnabled(false); uiResource_->setEnabled(false); hex_->setEnabled(false);
+    updateDetails();
+}
+
+void FilesystemDock::showColumnMenu(const QPoint& position) {
+    const auto actions = columnMenu_->actions();
+    for (int column = 0; column < ColumnCount && column < actions.size(); ++column) {
+        const QSignalBlocker block(actions[column]);
+        actions[column]->setChecked(!tree_->isColumnHidden(column));
+    }
+    columnMenu_->exec(tree_->header()->mapToGlobal(position));
+}
+
+void FilesystemDock::saveColumnState() {
+    QSettings().setValue("FilesystemDock/columns", tree_->header()->saveState());
+}
+
+void FilesystemDock::restoreColumnState() {
+    const auto state = QSettings().value("FilesystemDock/columns").toByteArray();
+    if (!state.isEmpty()) tree_->header()->restoreState(state);
+}
+
+void FilesystemDock::updateDetails() {
+    const auto* entry = selectedEntry();
+    if (!entry) { details_->setText("No file selected."); return; }
+    QStringList fields{QString::fromStdString(entry->path)};
+    fields << "File ID: " + (entry->id ? QString::number(*entry->id) : QString("unassigned"));
+    fields << "Size: " + QLocale().toString(static_cast<qlonglong>(entry->size)) + " bytes";
+    if (const auto from = provenance(*entry); !from.isEmpty()) fields << "From: " + from;
+    if (!entry->variant.empty()) fields << "Variant: " + QString::fromStdString(entry->variant);
+    details_->setText(fields.join("   \u00b7   "));
 }
 
 void FilesystemDock::applyThemeColors() {

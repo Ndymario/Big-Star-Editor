@@ -6,6 +6,8 @@
 
 class QComboBox;
 class QLabel;
+class QMenu;
+class QPoint;
 class QPushButton;
 class QTreeWidget;
 
@@ -37,6 +39,10 @@ protected:
 private:
     void applyThemeColors();
     void rebuildTree();
+    void showColumnMenu(const QPoint& position);
+    void saveColumnState();
+    void restoreColumnState();
+    void updateDetails();
     void addFile();
     void replaceFile();
     void removeFile();
@@ -60,6 +66,8 @@ private:
     QComboBox* variant_{};
     QLabel* pending_{};
     QTreeWidget* tree_{};
+    QMenu* columnMenu_{};
+    QLabel* details_{};
     QPushButton* add_{};
     QPushButton* replace_{};
     QPushButton* remove_{};

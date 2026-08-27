@@ -15,6 +15,10 @@
 #include <QDockWidget>
 #include <QFile>
 #include <QFileSystemWatcher>
+#include <QHeaderView>
+#include <QLabel>
+#include <QLocale>
+#include <QMenu>
 #include <QSaveFile>
 #include <QScrollArea>
 #include <QSettings>
@@ -701,6 +705,72 @@ private slots:
         QCOMPARE(childNames(root), QStringList({"00DUMMY", "ARCHIVE", "BUILDTIME", "map"}));
         QCOMPARE(childNames(root->child(1)), QStringList({"ARC0.narc", "bomthrow.narc", "Dat_2D.narc"}));
         QCOMPARE(childNames(root->child(3)), QStringList({"w1_castle.nsbmd", "w2_castle.nsbmd", "w10_castle.nsbmd"}));
+    }
+
+    void filesystemListShowsPathAndStatusWithOptionalColumns() {
+        // The list itself is Path + Status; the rest of what is known about a file belongs in
+        // the footer, and only becomes a column when the header menu is asked for it.
+        QSettings().remove("FilesystemDock/columns");
+        nsmb::project::FilesystemView view;
+        nsmb::project::FilesystemEntry entry;
+        entry.path = "ARCHIVE/Dat_2D.narc";
+        entry.status = nsmb::project::FilesystemStatus::Replaced;
+        entry.module = "levels"; entry.component = "nitrofs"; entry.variant = "en";
+        entry.id = 139; entry.size = 4096; entry.source = "modules/levels/en/ARCHIVE/Dat_2D.narc";
+        view.entries.push_back(std::move(entry));
+
+        {
+            FilesystemDock dock;
+            dock.setData({}, {}, view, {}, {}, {});
+            auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+            QVERIFY(tree);
+            QCOMPARE(tree->columnCount(), 6);
+            QVERIFY(!tree->isColumnHidden(0));
+            QVERIFY(!tree->isColumnHidden(1));
+            for (int column = 2; column < 6; ++column) QVERIFY(tree->isColumnHidden(column));
+            // Nothing may resize a column behind the user's back.
+            for (int column = 0; column < 6; ++column)
+                QCOMPARE(tree->header()->sectionResizeMode(column), QHeaderView::Interactive);
+            QVERIFY(!tree->header()->stretchLastSection());
+
+            auto* details = dock.findChild<QLabel*>("FilesystemDetails");
+            QVERIFY(details);
+            QCOMPARE(details->text(), QString("No file selected."));
+
+            auto* menu = dock.findChild<QMenu*>("FilesystemColumns");
+            QVERIFY(menu);
+            QCOMPARE(menu->actions().size(), 6);
+            QVERIFY(!menu->actions().at(0)->isEnabled());  // Path always stays
+            QVERIFY(menu->actions().at(4)->isEnabled());
+            QCOMPARE(menu->actions().at(4)->text(), QString("File ID"));
+            menu->actions().at(4)->setChecked(true);
+            QVERIFY(!tree->isColumnHidden(4));
+            QVERIFY(tree->columnWidth(4) > 0);
+
+            // The footer reports everything the hidden columns would have.
+            auto* item = tree->topLevelItem(0)->child(0)->child(0);
+            QVERIFY(item);
+            QCOMPARE(item->data(0, Qt::UserRole).toString(), QString("ARCHIVE/Dat_2D.narc"));
+            tree->setCurrentItem(item);
+            const auto text = details->text();
+            QVERIFY2(text.contains("ARCHIVE/Dat_2D.narc"), qPrintable(text));
+            QVERIFY2(text.contains("File ID: 139"), qPrintable(text));
+            QVERIFY2(text.contains("Size: " + QLocale().toString(4096) + " bytes"), qPrintable(text));
+            QVERIFY2(text.contains("From: levels / nitrofs"), qPrintable(text));
+            QVERIFY2(text.contains("Variant: en"), qPrintable(text));
+
+            tree->setCurrentItem(tree->topLevelItem(0));  // the root directory is not a file
+            QCOMPARE(details->text(), QString("No file selected."));
+        }
+
+        // Column choices and widths survive into the next dock.
+        FilesystemDock restored;
+        restored.setData({}, {}, view, {}, {}, {});
+        auto* tree = restored.findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree);
+        QVERIFY(!tree->isColumnHidden(4));
+        QVERIFY(tree->isColumnHidden(5));
+        QSettings().remove("FilesystemDock/columns");
     }
 
     void filesystemTreeIconsFollowTheDetectedFormat() {
