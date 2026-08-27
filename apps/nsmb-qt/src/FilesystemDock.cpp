@@ -5,6 +5,7 @@
 
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/formats/identify.hpp"
+#include "nsmb/formats/ui_resources.hpp"
 
 #include <QComboBox>
 #include <QColor>
@@ -156,14 +157,19 @@ EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry) {
         const auto body = std::span(header).subspan(std::min(offset, header.size()));
         if (nsmb::formats::identify_format(body) == FormatKind::NarcArchive) return EntryIcon::Archive;
 
-        // NSMB's own uiStudio formats, read before the graphics identifier because that one
-        // mistakes BNCL and BNCD for the NitroSystem cell formats NCER and NANR. No NitroSDK
-        // or NitroSystem header defines any of them: BNBL holds touch hit boxes, BNCL holds
-        // OAM positions, and BNCD holds OAM plus the graphics themselves. BNLL stays
-        // unidentified -- it is recognised only so its name cannot reach the level hint below.
-        if (has_magic(body, "JNBL", 0)) return EntryIcon::TouchHitbox;
-        if (has_magic(body, "JNCL", 0)) return EntryIcon::OamPositions;
-        if (has_magic(body, "JNCD", 0)) return EntryIcon::Image;
+        // NSMB's own uiStudio formats: BNBL holds touch hit boxes, BNCL holds OAM positions,
+        // and BNCD holds OAM plus the graphics themselves. ENPG and the banner need the whole
+        // file to confirm, which a header prefix cannot give, so those fall to the name below.
+        switch (nsmb::formats::identify_ui_resource(body, entry.path)) {
+        case nsmb::formats::UiResourceKind::Bnbl: return EntryIcon::TouchHitbox;
+        case nsmb::formats::UiResourceKind::Bncl: return EntryIcon::OamPositions;
+        case nsmb::formats::UiResourceKind::Bncd: return EntryIcon::Image;
+        case nsmb::formats::UiResourceKind::Enpg:
+        case nsmb::formats::UiResourceKind::Banner: return EntryIcon::Image;
+        case nsmb::formats::UiResourceKind::Unknown: break;
+        }
+        // BNLL is undocumented -- nothing models it, and it is recognised here only so its
+        // name cannot fall through to the level hint below.
         if (has_magic(body, "JNLL", 0)) return EntryIcon::File;
 
         if (const auto icon = graphics(nsmb::formats::identify_graphics_format(body))) return *icon;

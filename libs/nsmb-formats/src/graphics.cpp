@@ -162,14 +162,13 @@ GraphicsFormatKind identify_graphics_format(std::span<const std::uint8_t> data, 
     if (has_magic(data, "RCSN")) {
         return GraphicsFormatKind::NitroScreenMap;
     }
-    if (has_magic(data, "JNCL")) {
-        return GraphicsFormatKind::NitroCellLayout;
-    }
+    // BNCL (JNCL) and BNCD (JNCD) used to be claimed here as NCER and NANR. They are not
+    // NitroSystem formats at all -- no NitroSDK or NitroSystem header defines them. BNCL
+    // holds OAM positions and BNCD holds OAM plus graphics, both parsed by identify_ui_resource
+    // and the UI resource editor. parse_ncer and parse_nanr check their magic, so the graphics
+    // editor already refused them; the claim only ever produced a wrong name and format kind.
     if (has_magic(data, "RECN")) {
         return GraphicsFormatKind::NitroCellLayout;
-    }
-    if (has_magic(data, "JNCD")) {
-        return GraphicsFormatKind::NitroCellAnimation;
     }
     if (has_magic(data, "RNAN")) {
         return GraphicsFormatKind::NitroCellAnimation;
@@ -196,12 +195,6 @@ GraphicsFormatKind identify_graphics_format(std::span<const std::uint8_t> data, 
     }
     if (ends_with(hint, ".nsbmd")) {
         return GraphicsFormatKind::NitroModel;
-    }
-    if (ends_with(hint, ".bncl")) {
-        return GraphicsFormatKind::NitroCellLayout;
-    }
-    if (ends_with(hint, ".bncd")) {
-        return GraphicsFormatKind::NitroCellAnimation;
     }
 
     return GraphicsFormatKind::Unknown;
