@@ -120,8 +120,12 @@ struct MessageEditorDialog::Impl {
         attributes = new QLineEdit(lower);
         attributes->setObjectName("MessageAttributes");
         attributes->setPlaceholderText("INF1 attribute bytes, hexadecimal");
+        // A widget that never joins the form layout stays parented but unmanaged, which leaves
+        // it floating over the editor at its default position instead of hidden.
         if (bmg.has_mid1) fields->addRow("Message ID", identifier);
+        else identifier->hide();
         if (bmg.attribute_size) fields->addRow("Attributes", attributes);
+        else attributes->hide();
         lowerLayout->addLayout(fields);
 
         stats = new QLabel(lower);

@@ -182,6 +182,24 @@ private slots:
         QCOMPARE(parsed.value().messages[1].id.value_or(0), std::uint32_t{41});
     }
 
+    // A BMG with neither MID1 IDs nor INF1 attribute bytes: the Message ID and Attributes
+    // fields must not appear at all, rather than float unmanaged over the text editor.
+    void messageEditorHidesFieldsTheFileDoesNotCarry() {
+        nsmb::formats::Bmg bareBmg;
+        bareBmg.messages.push_back({{{false, "Hello!", 0, {}}}, {}, std::nullopt});
+        auto written = nsmb::formats::write_bmg(bareBmg);
+        QVERIFY(written);
+
+        MessageEditorDialog dialog("script/error.bmg", written.value());
+        dialog.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&dialog));
+        auto* identifier = dialog.findChild<QSpinBox*>("MessageId");
+        auto* attributes = dialog.findChild<QLineEdit*>("MessageAttributes");
+        QVERIFY(identifier && attributes);
+        QVERIFY(!identifier->isVisible());
+        QVERIFY(!attributes->isVisible());
+    }
+
     void openingAFileChoosesOneEditorThroughAnyLzWrapper() {
         using bse::editors::Kind;
         const QByteArray pad(28, '\0');
