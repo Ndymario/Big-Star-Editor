@@ -548,6 +548,18 @@ bse::editors::Companions FilesystemDock::companionsFor(const QString& romPath) c
     return companions;
 }
 
+bool FilesystemDock::revealPath(const QString& romPath) {
+    if (romPath.isEmpty() || !tree_) return false;
+    for (QTreeWidgetItemIterator item(tree_); *item; ++item) {
+        if ((*item)->data(0, path_role).toString() != romPath) continue;
+        for (auto* parent = (*item)->parent(); parent; parent = parent->parent()) parent->setExpanded(true);
+        tree_->setCurrentItem(*item);
+        tree_->scrollToItem(*item, QAbstractItemView::PositionAtCenter);
+        return true;
+    }
+    return false;
+}
+
 nsmb::core::Result<void> FilesystemDock::saveEditedFile(const QString& romPath, std::span<const std::uint8_t> bytes) {
     const auto* entry = view_.find(romPath.toStdString());
     auto result = writeTarget(romPath.toStdString(), bytes, entry);

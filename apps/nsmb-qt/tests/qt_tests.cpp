@@ -749,6 +749,37 @@ private slots:
             QVERIFY(!model.data(model.index(row, 0, versus), Qt::DisplayRole).toString().contains('('));
     }
 
+    void levelRowsNamePathsTheFilesystemWayAndCanJumpToThem() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto project = make_project(std::filesystem::path(directory.path().toStdString()));
+
+        MainWindow window;
+        window.setProject(project);
+        const QString course = "extracted-rom/root/course/A01_1.bin";
+        const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
+        const auto index = window.findLevelIndex(course, bgdat);
+        QVERIFY(index.isValid());
+
+        // The columns read the way the Filesystem tab reads: from the NitroFS
+        // root, not from the project directory.
+        const auto row = index.sibling(index.row(), 1);
+        QCOMPARE(window.projectModel_->data(row, Qt::DisplayRole).toString(), QString("course/A01_1.bin"));
+        QCOMPARE(window.projectModel_->data(index.sibling(index.row(), 2), Qt::DisplayRole).toString(),
+                 QString("course/A01_1_bgdat.bin"));
+        QCOMPARE(window.projectModel_->data(index, ProjectTreeModel::CourseRomPathRole).toString(),
+                 QString("course/A01_1.bin"));
+        // The path roles the rest of the window opens levels with are unchanged.
+        QCOMPARE(window.projectModel_->data(index, ProjectTreeModel::CoursePathRole).toString(), course);
+
+        // And the row can hand the user over to that file.
+        QVERIFY(window.filesystemPanel_->revealPath("course/A01_1.bin"));
+        auto* tree = window.filesystemPanel_->findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree && tree->currentItem());
+        QCOMPARE(tree->currentItem()->data(0, Qt::UserRole).toString(), QString("course/A01_1.bin"));
+        QVERIFY(!window.filesystemPanel_->revealPath("course/nothing_here.bin"));
+    }
+
     void objectPreviewsShowTheWholeObjectPerTilesetSlot() {
         // A pipe previewed at one tile is a corner, which says nothing about
         // what is being placed. Previews render at the object's own extent, and

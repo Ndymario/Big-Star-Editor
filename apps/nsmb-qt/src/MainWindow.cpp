@@ -415,6 +415,8 @@ void MainWindow::createDocks() {
         updateSelectedLevel(current);
     });
     connect(levelTree_, &QTreeView::doubleClicked, this, &MainWindow::openLevelEditor);
+    levelTree_->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(levelTree_, &QTreeView::customContextMenuRequested, this, &MainWindow::showLevelTreeMenu);
 
     propertiesDock_ = new QDockWidget("Properties", this);
     propertiesDock_->setObjectName("PropertiesDock");
@@ -1281,6 +1283,40 @@ void MainWindow::openTilesetEditor() {
 // Opens any file the editors understand straight off disk, the way NSMB Editor's own file
 // list does, and writes it back where it came from. Files inside the project's NitroFS are
 // better opened from the filesystem dock, which routes the save through the module target.
+// A level row names two files the Filesystem tab also lists, so it can hand the
+// user over to them rather than making them go and find the name themselves.
+void MainWindow::showLevelTreeMenu(const QPoint& position) {
+    const auto index = levelTree_->indexAt(position);
+    if (!index.isValid()) return;
+    if (projectModel_->data(index, ProjectTreeModel::NodeKindRole).toInt() != ProjectTreeModel::AreaNode) return;
+
+    QMenu menu(levelTree_);
+    menu.setObjectName("LevelTreeMenu");
+    auto* open = menu.addAction("Open Level", this, [this, index] { openLevelEditor(index); });
+    open->setObjectName("LevelTreeOpen");
+    open->setEnabled(projectModel_->data(index, ProjectTreeModel::AvailableRole).toBool());
+    menu.addSeparator();
+
+    for (const auto& [label, name, role] :
+         std::array{std::tuple{"Show Course in Filesystem", "LevelTreeShowCourse", ProjectTreeModel::CourseRomPathRole},
+                    std::tuple{"Show BGDat in Filesystem", "LevelTreeShowBgdat", ProjectTreeModel::BgdatRomPathRole}}) {
+        const auto path = projectModel_->data(index, role).toString();
+        auto* action = menu.addAction(label, this, [this, path] { showInFilesystem(path); });
+        action->setObjectName(name);
+        action->setEnabled(!path.isEmpty());
+    }
+    menu.exec(levelTree_->viewport()->mapToGlobal(position));
+}
+
+void MainWindow::showInFilesystem(const QString& romPath) {
+    if (!filesystemDock_ || !filesystemPanel_) return;
+    filesystemDock_->show();
+    filesystemDock_->raise();
+    if (!filesystemPanel_->revealPath(romPath))
+        log("Filesystem: " + romPath + " is not listed in the " +
+            (activeVariant_.isEmpty() ? QString("base") : activeVariant_) + " variant.");
+}
+
 void MainWindow::openFileInEditor() {
     const auto start = currentProject_.directory().empty() ? QString{} : QString::fromStdString(currentProject_.directory().string());
     const auto source = QFileDialog::getOpenFileName(this, "Open File", start);

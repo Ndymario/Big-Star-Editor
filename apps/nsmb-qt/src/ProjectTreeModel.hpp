@@ -21,6 +21,10 @@ public:
         AreaNameRole,
         AvailableRole,
         NodeKindRole,
+        // The same two files as the path roles above, but named the way the
+        // Filesystem tab names them: relative to the NitroFS root.
+        CourseRomPathRole,
+        BgdatRomPathRole,
     };
 
     enum NodeKind {
@@ -36,6 +40,9 @@ public:
     [[nodiscard]] const nsmb::project::Project& project() const noexcept;
     [[nodiscard]] int levelCount() const noexcept;
     [[nodiscard]] int availableLevelCount() const noexcept;
+    // Strips the extracted-ROM prefix from a project-relative path, so a level
+    // reads as `course/A01_1.bin` rather than `extracted-rom/root/course/...`.
+    [[nodiscard]] QString romRelative(const QString& projectRelative) const;
 
     QModelIndex index(int row, int column, const QModelIndex& parent = {}) const override;
     QModelIndex parent(const QModelIndex& child) const override;

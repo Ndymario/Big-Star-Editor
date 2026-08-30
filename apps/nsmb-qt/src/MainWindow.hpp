@@ -69,6 +69,9 @@ private:
     void openDiagnosticLocation(const QString& file, int line, int column);
     void onPatcherFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
     void buildRom();
+    void showLevelTreeMenu(const QPoint& position);
+    // Brings the Filesystem tab forward with `romPath` selected.
+    void showInFilesystem(const QString& romPath);
     void openFileInEditor();
     // Opens any file the editors understand in a document tab. `save` is how
     // that tab writes its result back, which differs between a NitroFS file and

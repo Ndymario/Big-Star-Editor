@@ -35,6 +35,9 @@ public:
     // The files a graphics editor may pair the opened one with: its NitroFS
     // siblings, read through the same module layering the dock itself shows.
     [[nodiscard]] bse::editors::Companions companionsFor(const QString& romPath) const;
+    // Selects and scrolls to a ROM path, expanding whatever holds it. False
+    // when this variant's tree has no such file.
+    bool revealPath(const QString& romPath);
     // Writes an editor's result back through the active module target.
     nsmb::core::Result<void> saveEditedFile(const QString& romPath, std::span<const std::uint8_t> bytes);
 

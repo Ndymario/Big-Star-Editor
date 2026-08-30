@@ -156,10 +156,10 @@ QVariant ProjectTreeModel::data(const QModelIndex& idx, int role) const {
             return QString("%1 areas").arg(node->children.size());
         }
         if (idx.column() == 1) {
-            return node->course_path;
+            return romRelative(node->course_path);
         }
         if (idx.column() == 2) {
-            return node->bgdat_path;
+            return romRelative(node->bgdat_path);
         }
     }
     if (role == CoursePathRole || role == PathRole) {
@@ -167,6 +167,12 @@ QVariant ProjectTreeModel::data(const QModelIndex& idx, int role) const {
     }
     if (role == BgdatPathRole) {
         return node->bgdat_path;
+    }
+    if (role == CourseRomPathRole) {
+        return romRelative(node->course_path);
+    }
+    if (role == BgdatRomPathRole) {
+        return romRelative(node->bgdat_path);
     }
     if (role == SizeRole) {
         return QVariant::fromValue<qulonglong>(static_cast<qulonglong>(node->size));
@@ -194,11 +200,18 @@ QVariant ProjectTreeModel::data(const QModelIndex& idx, int role) const {
         if (!node->source_token.isEmpty()) {
             text += "\nToken: " + node->source_token;
         }
-        text += "\nCourse: " + (node->course_path.isEmpty() ? QString("missing") : node->course_path);
-        text += "\nBGDat: " + (node->bgdat_path.isEmpty() ? QString("missing") : node->bgdat_path);
+        text += "\nCourse: " + (node->course_path.isEmpty() ? QString("missing") : romRelative(node->course_path));
+        text += "\nBGDat: " + (node->bgdat_path.isEmpty() ? QString("missing") : romRelative(node->bgdat_path));
         return text;
     }
     return {};
+}
+
+QString ProjectTreeModel::romRelative(const QString& projectRelative) const {
+    if (projectRelative.isEmpty() || !project_.rom()) return projectRelative;
+    const auto root = QString::fromStdString(
+        (project_.rom()->extracted_path / "root").lexically_normal().generic_string()) + "/";
+    return projectRelative.startsWith(root) ? projectRelative.mid(root.size()) : projectRelative;
 }
 
 QVariant ProjectTreeModel::headerData(int section, Qt::Orientation orientation, int role) const {
