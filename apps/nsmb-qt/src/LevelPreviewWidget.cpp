@@ -230,9 +230,21 @@ struct EntityRect {
     QRectF rect;
 };
 
+// Ordered back to front for picking: `hitTest` walks this list in reverse, so
+// whatever is pushed last is grabbed first. Views and zones lead precisely
+// because they are the big rectangles everything else sits inside -- were they
+// picked first, a click anywhere in a view could never reach the object under
+// the cursor, and the enclosing container would be the only thing selectable.
 std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, const SpriteDefinitions& definitions) {
     std::vector<EntityRect> entities;
     const auto& course = scene.level->course();
+    // Views are the largest, so they yield to everything, zones included.
+    for (std::size_t i = 0; i < course.views.size(); ++i) {
+        entities.push_back({{7, static_cast<int>(i), -1}, viewRect(course.views[i])});
+    }
+    for (std::size_t i = 0; i < course.zones.size(); ++i) {
+        entities.push_back({{4, static_cast<int>(i), -1}, zoneRect(course.zones[i])});
+    }
     for (std::size_t i = 0; i < scene.level->objects().size(); ++i) {
         entities.push_back({{1, static_cast<int>(i), -1}, objectRect(scene.level->objects()[i])});
     }
@@ -242,12 +254,6 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, cons
     }
     for (std::size_t i = 0; i < course.entrances.size(); ++i) {
         entities.push_back({{3, static_cast<int>(i), -1}, entranceRect(course.entrances[i])});
-    }
-    for (std::size_t i = 0; i < course.zones.size(); ++i) {
-        entities.push_back({{4, static_cast<int>(i), -1}, zoneRect(course.zones[i])});
-    }
-    for (std::size_t i = 0; i < course.views.size(); ++i) {
-        entities.push_back({{7, static_cast<int>(i), -1}, viewRect(course.views[i])});
     }
     auto add_paths = [&](const auto& paths, int kind) {
         for (std::size_t path = 0; path < paths.size(); ++path) {
@@ -264,6 +270,9 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, cons
 
 // Only rectangular entities can be resized: tile objects, zones and views.
 bool resizableKind(int kind) { return kind == 1 || kind == 4 || kind == 7; }
+
+// Paths and progress paths are the only kinds selected down to a node.
+bool pathKind(int kind) { return kind == 5 || kind == 6; }
 
 // The eight knob centres of a rectangle, in the order Handle enumerates them
 // after None: clockwise from the top left, corners alternating with edge
@@ -362,34 +371,49 @@ void drawMap(QPainter& painter,
     }
 
     painter.setRenderHint(QPainter::Antialiasing, true);
+    // Zones and views are containers, so they are drawn in two passes: the tint
+    // goes underneath, where it cannot wash out what it holds, and the boundary
+    // goes over everything at the end. An outline buried under the objects it
+    // encloses is not a boundary you can follow.
+    const auto zoneColor = QColor(84, 154, 110);
+    const auto viewColor = QColor(65, 122, 180);
+    painter.setPen(Qt::NoPen);
     for (std::size_t i = 0; i < course.zones.size(); ++i) {
-        const auto& zone = course.zones[i];
-        auto rect = zoneRect(zone);
+        auto rect = zoneRect(course.zones[i]);
         preview(rect, 4, static_cast<int>(i));
-        painter.setPen(QPen(QColor(84, 154, 110), 0));
-        painter.setBrush(QColor(84, 154, 110, 34));
+        painter.setBrush(withAlpha(zoneColor, 34));
         painter.drawRect(rect);
-        if (selected(selections, 4, static_cast<int>(i))) {
-            painter.setPen(QPen(QColor(24, 111, 58), 3.0 / scale));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRect(rect);
-            drawKnobs(rect);
-        }
     }
     for (std::size_t i = 0; i < course.views.size(); ++i) {
-        const auto& view = course.views[i];
-        auto rect = viewRect(view);
+        auto rect = viewRect(course.views[i]);
         preview(rect, 7, static_cast<int>(i));
-        painter.setPen(QPen(QColor(65, 122, 180), 0));
-        painter.setBrush(QColor(65, 122, 180, 25));
+        painter.setBrush(withAlpha(viewColor, 25));
         painter.drawRect(rect);
-        if (selected(selections, 7, static_cast<int>(i))) {
-            painter.setPen(QPen(QColor(35, 88, 145), 3.0 / scale));
-            painter.setBrush(Qt::NoBrush);
-            painter.drawRect(rect);
-            drawKnobs(rect);
-        }
     }
+    const auto drawContainerOutlines = [&] {
+        painter.setBrush(Qt::NoBrush);
+        const auto outline = [&](const QRectF& rect, int kind, int index, const QColor& color, const QColor& accent) {
+            if (selected(selections, kind, index)) {
+                painter.setPen(QPen(accent, 3.0 / scale));
+                painter.drawRect(rect);
+                drawKnobs(rect);
+                painter.setBrush(Qt::NoBrush);
+            } else {
+                painter.setPen(QPen(color, 0));
+                painter.drawRect(rect);
+            }
+        };
+        for (std::size_t i = 0; i < course.zones.size(); ++i) {
+            auto rect = zoneRect(course.zones[i]);
+            preview(rect, 4, static_cast<int>(i));
+            outline(rect, 4, static_cast<int>(i), zoneColor, QColor(24, 111, 58));
+        }
+        for (std::size_t i = 0; i < course.views.size(); ++i) {
+            auto rect = viewRect(course.views[i]);
+            preview(rect, 7, static_cast<int>(i));
+            outline(rect, 7, static_cast<int>(i), viewColor, QColor(35, 88, 145));
+        }
+    };
     for (std::size_t i = 0; i < scene.level->objects().size(); ++i) {
         const auto& object = scene.level->objects()[i];
         auto rect = objectRect(object);
@@ -522,6 +546,10 @@ void drawMap(QPainter& painter,
         painter.drawImage(bounds, foreground);
         painter.setOpacity(1.0);
     }
+
+    // Last, so nothing -- not even the foreground overlay -- dims the edges you
+    // size a zone or a view against.
+    drawContainerOutlines();
 
     painter.restore();
 }
@@ -721,10 +749,15 @@ void LevelPreviewWidget::setSelection(int kind, int item_index, int node_index) 
     if (!scene_) {
         return;
     }
+    // Only paths carry a node; everything else is addressed as -1 on the canvas.
+    // The properties panel's node spin box floors at 0, so it hands back 0 for
+    // nodeless kinds, and an unnormalised 0 would never compare equal to the
+    // entity's own selection -- which is what the resize knobs are looked up by.
+    const auto node = pathKind(kind) ? node_index : -1;
     scene_->selected_kind = kind;
     scene_->selected_item = item_index;
-    scene_->selected_node = node_index;
-    selections_ = {{kind, item_index, node_index}};
+    scene_->selected_node = node;
+    selections_ = {{kind, item_index, node}};
     update();
 }
 
@@ -1196,7 +1229,7 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
         emit errorOccurred(QString::fromStdString(result.error().message));
         return;
     }
-    selections_ = {{kind, static_cast<int>(result.value()), kind >= 5 ? 0 : -1}};
+    selections_ = {{kind, static_cast<int>(result.value()), pathKind(kind) ? 0 : -1}};
     publishSelection();
     emit levelChanged();
     update();

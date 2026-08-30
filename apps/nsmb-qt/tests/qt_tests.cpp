@@ -917,6 +917,34 @@ private slots:
         QVERIFY(!canvas.selectedResizableRect().has_value());
     }
 
+    void nodelessKindsStayResizableWhenTheNodeIndexArrivesAsZero() {
+        // The properties panel's node spin box floors at 0, so selecting a view
+        // on the canvas comes back through it as node 0 rather than -1. That
+        // must still be the same selection, or the knobs draw but cannot be
+        // grabbed.
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 10, 10, 4, 4}));
+        QVERIFY(level.add_zone({320, 320, 256, 192, 0}));
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 640; view.y = 640; view.width = 256; view.height = 192;
+        QVERIFY(level.add_view(view));
+
+        LevelPreviewWidget canvas;
+        canvas.resize(900, 700);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.show();
+        QTest::qWait(20);
+
+        for (const int kind : {1, 4, 7}) {
+            canvas.setSelection(kind, 0, 0);
+            const auto rect = canvas.selectedResizableRect();
+            QVERIFY2(rect.has_value(), qPrintable(QString("kind %1 lost its knobs to node 0").arg(kind)));
+            const auto screen = canvas.sceneTransform().mapRect(*rect);
+            QCOMPARE(canvas.handleAt(screen.bottomRight()), LevelPreviewWidget::Handle::BottomRight);
+        }
+    }
+
     void topLeftKnobMovesTheViewOriginRatherThanItsExtent() {
         auto level = make_level();
         nsmb::formats::NsmbLevelView view{};
@@ -985,6 +1013,39 @@ private slots:
             QVERIFY(sprite);
             QCOMPARE(sprite->kind, 2);
         }
+    }
+
+    void containersYieldTheClickToWhatTheyEnclose() {
+        // A view or a zone covers most of the level, so picking it first would
+        // make everything inside it unreachable. Overlapping entities pick in
+        // this order: paths, entrances, sprites, objects, zones, views.
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 16, 16, 4, 4}));
+        QVERIFY(level.add_zone({0, 0, 1024, 768, 0}));
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 0; view.y = 0; view.width = 1024; view.height = 768;
+        QVERIFY(level.add_view(view));
+
+        LevelPreviewWidget canvas;
+        canvas.resize(900, 700);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+
+        // Over the object, all three overlap and the object wins.
+        const auto over_object = canvas.hitTest({260, 260});
+        QVERIFY(over_object);
+        QCOMPARE(over_object->kind, 1);
+
+        // Clear of the object, the zone still beats the larger view.
+        const auto over_zone = canvas.hitTest({700, 600});
+        QVERIFY(over_zone);
+        QCOMPARE(over_zone->kind, 4);
+
+        // A view is reachable wherever nothing else covers it.
+        QVERIFY(level.update_zone(0, {0, 0, 64, 64, 0}));
+        const auto over_view = canvas.hitTest({700, 600});
+        QVERIFY(over_view);
+        QCOMPARE(over_view->kind, 7);
     }
 
     void multiPropertiesEditIsOneUndoStep() {
