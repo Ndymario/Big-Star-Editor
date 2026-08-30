@@ -66,8 +66,10 @@ private:
     bool running_{false};
 };
 
-// The Build Output dock: variant picker, progress, streamed log, and the run's
-// diagnostics as a list that can be clicked through to their source location.
+// The Output dock: progress, the window's log, the streamed build output, and
+// the run's diagnostics as a list that can be clicked through to their source
+// location. The variant is chosen on the window's toolbar, not here -- this
+// panel is told which one to build.
 class PatcherPanel final : public QWidget {
     Q_OBJECT
 
@@ -85,8 +87,8 @@ public:
     void setExecutable(const std::filesystem::path& executable);
     [[nodiscard]] const std::filesystem::path& executable() const { return executable_; }
 
-    [[nodiscard]] QString selectedVariant() const;
-    void setSelectedVariant(const QString& variant);
+    [[nodiscard]] QString selectedVariant() const { return variant_; }
+    void setSelectedVariant(const QString& variant) { variant_ = variant; }
 
     [[nodiscard]] bool running() const { return runner_->running(); }
 
@@ -101,7 +103,6 @@ signals:
     void buildFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
     void treeApplied(const QString& backupDir, const QString& builtRom);
     void diagnosticActivated(const QString& file, int line, int column);
-    void variantChanged(const QString& variant);
     void logMessage(const QString& message);
 
 private slots:
@@ -114,27 +115,15 @@ private slots:
     void onItemActivated(QTreeWidgetItem* item, int column);
 
 private:
-    void populateVariants();
-    void resetVariantItems();
-    void selectVariant(const QString& variant);
-
     std::filesystem::path projectDir_;
     std::filesystem::path extractedDir_;
     std::filesystem::path executable_;
 
-    QComboBox* variantBox_{};
+    QString variant_;
     QLabel* status_{};
     QProgressBar* progress_{};
     QPlainTextEdit* log_{};
     QTreeWidget* diagnostics_{};
     PatcherRunner* runner_{};
 
-    // Variants are queried by running NCPatcher, which loads the whole project.
-    // Doing that on every ROM load is a visible stall, so it happens the first
-    // time the picker is opened instead.
-    bool variantsLoaded_{false};
-
-    // A variant the project no longer lists is kept rather than silently reset,
-    // so an unreadable or half-edited project does not lose the choice.
-    QString pendingVariant_;
 };

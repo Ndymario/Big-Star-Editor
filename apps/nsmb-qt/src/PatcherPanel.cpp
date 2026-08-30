@@ -161,15 +161,6 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
     layout->setContentsMargins(4, 4, 4, 4);
 
     auto* header = new QHBoxLayout;
-    header->addWidget(new QLabel("Variant:", this));
-
-    variantBox_ = new QComboBox(this);
-    variantBox_->setMinimumContentsLength(12);
-    variantBox_->setToolTip(
-        "Which configured build variant to produce.\n"
-        "Loaded from the project the first time this is opened.");
-    header->addWidget(variantBox_);
-
     status_ = new QLabel("Idle", this);
     header->addWidget(status_, 1);
 
@@ -224,7 +215,6 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
             [this](bool ok, int exitCode, const QString& stage, int errors, int warnings) {
                 progress_->setRange(0, 100);
                 progress_->setValue(ok ? 100 : 0);
-                variantBox_->setEnabled(true);
                 if (ok) {
                     status_->setText(warnings > 0
                                          ? QString("Succeeded with %1 warning(s)").arg(warnings)
@@ -240,48 +230,10 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
 
     // Populating on demand rather than on every project load: the query runs
     // NCPatcher, which reads the whole project.
-    connect(variantBox_, &QComboBox::currentTextChanged, this,
-            [this](const QString& text) { emit variantChanged(text); });
 }
 
 void PatcherPanel::setProjectDirectory(const std::filesystem::path& projectDir) {
-    if (projectDir_ == projectDir) {
-        return;
-    }
     projectDir_ = projectDir;
-    variantsLoaded_ = false;
-    resetVariantItems();
-
-    // A variant remembered from the workspace is offered straight away, before
-    // any query has confirmed it. Waiting would mean a build started from a
-    // restored session ran with no variant at all.
-    if (!pendingVariant_.isEmpty()) {
-        selectVariant(pendingVariant_);
-    }
-}
-
-void PatcherPanel::resetVariantItems() {
-    const QSignalBlocker blocker(variantBox_);
-    variantBox_->clear();
-    // The value carried by an item is the bare variant name; the label may say
-    // more than that, and the two must not be confused when a build is started.
-    variantBox_->addItem("(none)", QString());
-}
-
-void PatcherPanel::selectVariant(const QString& variant) {
-    if (variant.isEmpty()) {
-        variantBox_->setCurrentIndex(0);
-        return;
-    }
-    const int existing = variantBox_->findData(variant);
-    if (existing >= 0) {
-        variantBox_->setCurrentIndex(existing);
-        return;
-    }
-    // Not one the project lists. Keep it, labelled, rather than silently
-    // switching the next build to a different language.
-    variantBox_->addItem(variant + "  (not configured)", variant);
-    variantBox_->setCurrentIndex(variantBox_->count() - 1);
 }
 
 void PatcherPanel::setExtractedDirectory(const std::filesystem::path& extractedDir) {
@@ -290,65 +242,6 @@ void PatcherPanel::setExtractedDirectory(const std::filesystem::path& extractedD
 
 void PatcherPanel::setExecutable(const std::filesystem::path& executable) {
     executable_ = executable;
-}
-
-QString PatcherPanel::selectedVariant() const {
-    return variantBox_->currentData().toString();
-}
-
-void PatcherPanel::setSelectedVariant(const QString& variant) {
-    pendingVariant_ = variant;
-    selectVariant(variant);
-}
-
-void PatcherPanel::populateVariants() {
-    if (variantsLoaded_ || projectDir_.empty()) {
-        return;
-    }
-    variantsLoaded_ = true;
-
-    nsmb::patching::NCPatcherClient client(
-        executable_.empty() ? std::filesystem::path("ncpatcher") : executable_);
-    auto config = client.dump_config(projectDir_);
-
-    const QString previous = pendingVariant_.isEmpty() ? selectedVariant() : pendingVariant_;
-    variantBox_->clear();
-    variantBox_->addItem("(none)");
-
-    if (!config) {
-        // A failed query is not the same as a project that configures none, and
-        // must not read like one.
-        emit logMessage("Could not read the project's build variants: " +
-                        QString::fromStdString(config.error().message));
-        if (!previous.isEmpty()) {
-            variantBox_->addItem(previous);
-            variantBox_->setCurrentIndex(variantBox_->count() - 1);
-        }
-        variantsLoaded_ = false;
-        return;
-    }
-
-    // Declaration order, exactly as the project wrote it.
-    for (const auto& variant : config.value().variants) {
-        variantBox_->addItem(QString::fromStdString(variant.name));
-    }
-
-    if (config.value().variants.empty()) {
-        variantBox_->setItemText(0, "(this project configures none)");
-        return;
-    }
-
-    if (!previous.isEmpty()) {
-        const int index = variantBox_->findText(previous);
-        if (index >= 0) {
-            variantBox_->setCurrentIndex(index);
-        } else {
-            // Keep a stored variant the project no longer lists rather than
-            // quietly switching the build to a different language.
-            variantBox_->addItem(previous + "  (not configured)");
-            variantBox_->setCurrentIndex(variantBox_->count() - 1);
-        }
-    }
 }
 
 void PatcherPanel::appendLog(const QString& line) {
@@ -367,15 +260,9 @@ bool PatcherPanel::startBuild(bool verbose) {
     if (projectDir_.empty() || runner_->running()) {
         return false;
     }
-    // The picker has to be right before the build starts, even if nobody opened
-    // it: a build that silently produced the wrong language would be worse than
-    // the stall.
-    populateVariants();
-
     clearOutput();
     status_->setText("Starting NCPatcher...");
     progress_->setRange(0, 0);
-    variantBox_->setEnabled(false);
     runner_->start(projectDir_, extractedDir_, executable_, selectedVariant(), verbose);
     return true;
 }

@@ -1,8 +1,7 @@
 # M13 manual checklist
 
 Automated tests cover loss-preserving round trips, malformed-input refusal,
-editable Qt surfaces, resolved banner configuration, and isolated legacy
-workspaces. Use user-provided ROMs and historical code projects for the checks
+editable Qt surfaces and resolved banner configuration. Use user-provided ROMs and historical code projects for the checks
 that require visual or game-runtime confirmation.
 
 ## UI resources
@@ -25,14 +24,11 @@ that require visual or game-runtime confirmation.
   Tools and the Filesystem dock. Confirm the save lands in the supplying or
   active module layer and survives an NCPatcher rebuild.
 
-## Legacy builds
+## Network and mounted trees
 
-- Build a historical Fireflower project. Confirm its project receives `__tmp`
-  only during the run, the current extracted ROM is unchanged, and the selected
-  output ROM boots.
-- Run the clean-room NSMBe-wrapper action and verify it receives
-  `--project <dir> --filesystem <dir>/__tmp`. Confirm nonzero exit output is
-  reported and a pre-existing `__tmp` is refused without modification.
+The Fireflower and NSMBe-wrapper build actions were removed in M15; the checks
+that covered them no longer apply.
+
 - Place a project or active module tree on an OS-mounted network volume and
   confirm ordinary watcher and atomic-save behavior. No editor-specific remote
   transport is expected or supported.

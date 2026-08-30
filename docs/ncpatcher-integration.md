@@ -72,7 +72,7 @@ changed. An empty configured list is distinct from a failed query.
 - Pending module files cannot show a prospective file ID until NCPatcher offers
   a build-free file-manifest planning command.
 
-## Banner and legacy patchers
+## Banner
 
 The config reader accepts optional `rom-banner` and per-variant `banner` paths.
 NCPatcher 2.0 does not yet include those values in `config dump --json`, so the
@@ -80,9 +80,5 @@ editor asks the user to choose the source named by `rom.banner` when they are
 absent. Banner data is not a NitroFS file and is therefore never routed into a
 module tree or guessed by parsing YAML.
 
-Fireflower and the optional NSMBe-compatible wrapper are separate legacy
-actions, not NCPatcher modes. They receive an isolated historical `__tmp`
-workspace, never modify `extracted-rom/`, and feed a copied extraction into the
-built-in ROM builder. The NSMBe action requires an external clean-room wrapper
-accepting `--project <dir> --filesystem <dir>/__tmp`; Big Star does not embed or
-port GPL NSMBe patcher code.
+The Fireflower and NSMBe-compatible wrapper build actions were removed in M15.
+NCPatcher is the only build path.

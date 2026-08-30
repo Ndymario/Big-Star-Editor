@@ -121,7 +121,6 @@
 - Added strict, loss-preserving BNBL/BNCL/BNCD and ENPG codecs with editable layout, cell/OAM, indexed-image, and palette surfaces; LZ10/LZ11 wrappers remain intact.
 - Added DS icon/title banner editing with all version-available languages, BGR555 palette editing, preserved extension bytes, and regenerated banner CRCs. The typed config reader accepts resolved project/per-variant banner targets when NCPatcher exposes them and otherwise prompts for the configured source.
 - Added the ASCII section/key/value `NSMBeUD` codec and a module-aware editor for NitroFS file ID 131, available both from Tools and the Filesystem dock.
-- Added isolated legacy build adapters: Fireflower retains its historical project-local `__tmp` contract, while NSMBe compatibility uses an explicit external clean-room wrapper contract instead of embedding GPL code. Both produce a separate extracted tree that is rebuilt into a chosen ROM.
 - Decided against an editor-specific network filesystem. Mounted/network-synchronised module directories already work through ordinary filesystem watching; a new remote protocol has no defined authentication, conflict, offline, or recovery contract and would duplicate the active-module workflow.
 - Added synthetic round-trip, malformed-input, Qt-surface, resolved-banner, and isolated legacy-workspace coverage; see `docs/m13-manual-checklist.md` for ROM-backed validation.
 
@@ -138,3 +137,38 @@
   types, adds/deletes rows, runs undo/redo, and downloads both serialized files.
 - Added native ABI tests and exercised the compiled WebAssembly bundle in the
   in-app browser against a real `J01_1` level; see `docs/m14-manual-checklist.md`.
+
+## M15: UI/UX overhaul
+
+- Removed the canvas tool modes. Left-click selects whatever is under it across
+  every layer, right-click creates the kind the Properties panel is showing, and
+  panning stays on middle-drag, Space and Alt-drag.
+- Gave objects, zones and views eight resize knobs with per-edge cursors; views
+  could not be resized at all before, and top/left knobs now move the origin
+  rather than only the extent.
+- Replaced the alphabetised palette toolbox with a permanent picker: one Objects
+  sub-tab per loaded tileset slot, a searchable sprite list, and the custom
+  actor tree. Object previews render at their natural size with id and slot
+  tooltips.
+- Made the build variant real project-wide state: one selector on the main
+  toolbar, level sessions and file-editor documents keyed by variant, open
+  documents closed and reopened on a switch, and graphics resolution redirected
+  through the active variant's module layers.
+- Collapsed the two graphics editors into one that pairs files the way NSMB
+  Editor does: a palette, graphics and tilemap chosen together, remembered per
+  file. NCGR renders through the chosen NCLR, NSCR composes a real tilemap, and
+  NCER draws its cells. `character_format` (NCBR bitmap sheets) and the `CPOS`
+  source size are honoured, and headerless `_ncg.bin` sheets take an explicit
+  tile width instead of a square-root guess.
+- Moved the graphics, message and hex editors out of modal dialogs into document
+  tabs, so the shell stays usable while a file is open. The tileset editor keeps
+  its dialog: its save spans many resources and does not fit the one-file
+  document model.
+- Merged the duplicated log and build-output docks into one Output dock,
+  removed the Project Hub and the Fireflower and NSMBe-wrapper build actions
+  along with the now-unused legacy patch adapter in `nsmb-patching`,
+  added a main toolbar, and folded the Language menu into Edit ▸ Preferences.
+- Added synthetic coverage for unified selection, the eight knobs, the single
+  variant selector, palette pairing, NCBR layout, explicit raw widths, the
+  merged editor and file document tabs; see `docs/m15-manual-checklist.md` for
+  ROM-backed validation.

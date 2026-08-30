@@ -9,11 +9,13 @@
 #include <QTreeView>
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 
+#include "FileEditors.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "LevelDataWidget.hpp"
 #include "nsmb/project/module_data.hpp"
@@ -68,9 +70,27 @@ private:
     void onPatcherFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
     void buildRom();
     void openFileInEditor();
+    // Opens any file the editors understand in a document tab. `save` is how
+    // that tab writes its result back, which differs between a NitroFS file and
+    // a loose one on disk.
+    void openFileDocument(const QString& key,
+                          const QString& subtitle,
+                          std::vector<std::uint8_t> bytes,
+                          bool romUserMetadata,
+                          bse::editors::Companions companions,
+                          std::function<nsmb::core::Result<void>(const std::vector<std::uint8_t>&)> save);
+    [[nodiscard]] bool raiseFileDocument(const QString& key);
+    void hostFileDocument(const QString& key,
+                          const QString& subtitle,
+                          bse::editors::EditorPanel* panel,
+                          std::vector<std::uint8_t> bytes,
+                          std::function<nsmb::core::Result<void>(const std::vector<std::uint8_t>&)> save,
+                          bool rewrap = true);
+    void saveFileDocument(const std::string& key);
     void openTilesetEditor();
     void editRomBanner();
     void editRomUserMetadata();
+    void editPreferences();
     void exportLevelPackage();
     void importLevelPackage();
     void editLevelHex();
@@ -79,7 +99,6 @@ private:
     void exportPatch();
     void importPatch();
     void runXdelta(bool create);
-    void runLegacyPatch(bool fireflower);
     void writeRecoverySnapshots();
     void restoreRecoverySnapshots();
     void clearRecoverySnapshots();
@@ -103,6 +122,11 @@ private:
     void reloadFilesystemView();
     [[nodiscard]] std::vector<nsmb::project::ModuleVariantMapping> activeModuleMappings() const;
     [[nodiscard]] nsmb::core::Result<std::string> romPathForProjectFile(const std::filesystem::path& projectRelative) const;
+    // Where a project-relative file actually lives once the active variant's
+    // module layers have had their say, falling back to the extracted tree.
+    [[nodiscard]] std::filesystem::path effectiveFile(const std::filesystem::path& projectRelative) const;
+    [[nodiscard]] std::string documentKey(const QString& course_path, const QString& bgdat_path) const;
+    void setActiveVariant(const QString& variant);
     [[nodiscard]] nsmb::core::Result<std::filesystem::path> moduleSaveTarget(const std::filesystem::path& projectRelative) const;
     [[nodiscard]] QModelIndex findLevelIndex(const QString& course_path, const QString& bgdat_path) const;
     nsmb::core::Result<nsmb::project::EditableLevel*> levelSession(const QString& course_path, const QString& bgdat_path);
@@ -129,14 +153,10 @@ private:
     ProjectTreeModel* projectModel_{};
     QTreeView* levelTree_{};
     QTabWidget* tabs_{};
-    QWidget* hub_{};
-    QTreeView* hubLevelTree_{};
-    QTreeWidget* hubFilesystemTree_{};
     LevelPreviewWidget* preview_{};
     LevelPropertiesWidget* levelProperties_{};
     LevelDataWidget* levelData_{};
     QLabel* propertiesLabel_{};
-    QTextEdit* logOutput_{};
     QAction* undoAction_{};
     QAction* redoAction_{};
     QAction* previewAction_{};
@@ -147,7 +167,6 @@ private:
     QDockWidget* levelsDock_{};
     QDockWidget* propertiesDock_{};
     QDockWidget* paletteDock_{};
-    QDockWidget* logDock_{};
     QDockWidget* buildDock_{};
     QDockWidget* filesystemDock_{};
     PatcherPanel* patcherPanel_{};
@@ -155,8 +174,12 @@ private:
     QString ncpatcherVariant_;
     QString activeModule_;
     QString activeVariant_;
+    class QComboBox* variantSelector_{};
     QLineEdit* paletteSearch_{};
-    QToolBox* paletteToolbox_{};
+    // One page per loaded tileset slot, the way NSMB Editor splits its object
+    // picker; sprites get their own categorised page beside it.
+    QTabWidget* objectTabs_{};
+    QToolBox* spriteToolbox_{};
     std::vector<QToolButton*> paletteButtons_;
     QTreeWidget* customPaletteTree_{};
     QFileSystemWatcher* graphicsWatcher_{};
@@ -181,4 +204,18 @@ private:
         QPointer<QMainWindow> window;
     };
     std::unordered_map<std::string, LevelDocument> documents_;
+
+    // File editors live in the same tab bar as levels rather than behind a
+    // modal dialog, so the rest of the shell stays usable while one is open.
+    struct FileDocument {
+        QString title;
+        QWidget* page{};
+        bse::editors::EditorPanel* panel{};
+        std::vector<std::uint8_t> original;
+        // The hex editor shows the file exactly as it sits on disk, wrapper and
+        // all, so its bytes must not be compressed again on the way back.
+        bool rewrap{true};
+        std::function<nsmb::core::Result<void>(const std::vector<std::uint8_t>&)> save;
+    };
+    std::unordered_map<std::string, FileDocument> fileDocuments_;
 };

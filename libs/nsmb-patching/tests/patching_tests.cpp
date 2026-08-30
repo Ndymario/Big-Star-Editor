@@ -1,6 +1,5 @@
 #include "nsmb/patching/ncpatcher.hpp"
 #include "nsmb/patching/process.hpp"
-#include "nsmb/patching/legacy.hpp"
 
 #include <cassert>
 #include <cstdio>
@@ -166,43 +165,6 @@ void test_missing_working_directory_is_reported() {
     request.working_directory = "/big-star-no-such-directory-anywhere";
     const auto result = run_process(request, nullptr, nullptr);
     assert(!result);
-}
-
-void test_legacy_wrapper_uses_isolated_workspace() {
-    namespace fs = std::filesystem;
-    const auto root = fs::temp_directory_path() / "big-star-legacy-patching-test";
-    fs::remove_all(root);
-    const auto project = root / "project";
-    const auto extracted = root / "extracted";
-    const auto output = root / "output";
-    fs::create_directories(project);
-    fs::create_directories(extracted / "overlay9");
-    fs::create_directories(extracted / "overlay7");
-    fs::create_directories(extracted / "root");
-    for (const auto* name : {"arm9.bin", "arm9ovt.bin", "arm7.bin", "arm7ovt.bin", "header.bin", "fnt.bin"})
-        std::ofstream(extracted / name, std::ios::binary) << name;
-    std::ofstream(extracted / "overlay9/overlay_0000.bin", std::ios::binary) << "overlay";
-    std::ofstream(extracted / "root/keep.bin", std::ios::binary) << "keep";
-
-    nsmb::patching::LegacyPatchRequest request;
-    request.backend = nsmb::patching::LegacyPatchBackend::NsmbeWrapper;
-    request.executable = self_path;
-    request.project_dir = project;
-    request.extracted_dir = extracted;
-    request.output_dir = output;
-    const auto result = nsmb::patching::run_legacy_patch(request);
-    assert(result);
-    assert(!fs::exists(project / "__tmp"));
-    assert(fs::exists(output / "root/keep.bin"));
-    std::ifstream arm9(output / "arm9.bin", std::ios::binary);
-    const std::string bytes((std::istreambuf_iterator<char>(arm9)), {});
-    assert(bytes.ends_with("patched"));
-
-    fs::create_directories(project / "__tmp");
-    request.output_dir = root / "refused";
-    const auto refused = nsmb::patching::run_legacy_patch(request);
-    assert(!refused && !fs::exists(request.output_dir));
-    fs::remove_all(root);
 }
 
 // ---------------------------------------------------------------------------
@@ -555,12 +517,6 @@ int run_child_fixture(int argc, char** argv) {
         return 0;
     }
 
-    if (mode == "--project" && argc == 5 && std::string(argv[3]) == "--filesystem") {
-        std::ofstream(std::filesystem::path(argv[4]) / "arm9.bin", std::ios::binary | std::ios::app)
-            << "patched";
-        return 0;
-    }
-
     return 99;
 }
 
@@ -581,7 +537,6 @@ int main(int argc, char** argv) {
     test_environment_overrides_reach_the_child();
     test_missing_executable_is_reported();
     test_missing_working_directory_is_reported();
-    test_legacy_wrapper_uses_isolated_workspace();
 
     test_parse_project_config();
     test_parse_module_graph();

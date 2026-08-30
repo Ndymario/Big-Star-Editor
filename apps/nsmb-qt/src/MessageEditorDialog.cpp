@@ -66,8 +66,8 @@ QString unescapeLine(const QString& text) {
 
 } // namespace
 
-struct MessageEditorDialog::Impl {
-    Impl(MessageEditorDialog* owner, std::string_view path, std::span<const std::uint8_t> source)
+struct MessageEditorPanel::Impl {
+    Impl(MessageEditorPanel* owner, std::string_view path, std::span<const std::uint8_t> source)
         : owner(owner), path(path), body(source.begin(), source.end()) {
         auto parsed = parse_bmg(body);
         if (!parsed) { error = parsed.error(); return; }
@@ -75,9 +75,8 @@ struct MessageEditorDialog::Impl {
     }
 
     void buildUi() {
-        owner->setWindowTitle(QString("Messages — %1").arg(toQt(path)));
-        owner->resize(940, 660);
         auto* root = new QVBoxLayout(owner);
+        root->setContentsMargins(0, 0, 0, 0);
 
         info = new QLabel(owner);
         info->setObjectName("MessageInfo");
@@ -153,11 +152,6 @@ struct MessageEditorDialog::Impl {
         for (auto* button : {add, duplicate, remove, insert, exportText, importText}) actions->addWidget(button);
         actions->addStretch(1);
         root->addLayout(actions);
-
-        buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, owner);
-        root->addWidget(buttons);
-        QObject::connect(buttons, &QDialogButtonBox::accepted, owner, &QDialog::accept);
-        QObject::connect(buttons, &QDialogButtonBox::rejected, owner, &QDialog::reject);
 
         QObject::connect(list, &QTableWidget::currentCellChanged, owner,
                          [this](int row, int, int previous, int) { commit(previous); load(row); });
@@ -394,7 +388,7 @@ struct MessageEditorDialog::Impl {
         return write_bmg(bmg);
     }
 
-    MessageEditorDialog* owner;
+    MessageEditorPanel* owner;
     std::string path;
     std::vector<std::uint8_t> body;
     std::optional<nsmb::core::Error> error;
@@ -408,17 +402,40 @@ struct MessageEditorDialog::Impl {
     QLineEdit* attributes{};
     QLabel* stats{};
     QPushButton* remove{};
-    QDialogButtonBox* buttons{};
 };
 
-MessageEditorDialog::MessageEditorDialog(std::string_view path, std::span<const std::uint8_t> bytes, QWidget* parent)
-    : QDialog(parent), impl_(std::make_unique<Impl>(this, path, bytes)) { impl_->buildUi(); }
+MessageEditorPanel::MessageEditorPanel(std::string_view path, std::span<const std::uint8_t> bytes, QWidget* parent)
+    : bse::editors::EditorPanel(parent), impl_(std::make_unique<Impl>(this, path, bytes)) { impl_->buildUi(); }
 
-MessageEditorDialog::~MessageEditorDialog() = default;
+MessageEditorPanel::~MessageEditorPanel() = default;
 
-bool MessageEditorDialog::supports(std::span<const std::uint8_t> bytes, std::string_view path) {
+bool MessageEditorPanel::supports(std::span<const std::uint8_t> bytes, std::string_view path) {
     Impl probe(nullptr, path, bytes);
     return !probe.error;
 }
 
-nsmb::core::Result<std::vector<std::uint8_t>> MessageEditorDialog::editedBytes() const { return impl_->output(); }
+QString MessageEditorPanel::title() const { return QString("Messages — %1").arg(toQt(impl_->path)); }
+
+bool MessageEditorPanel::usable() const { return !impl_->error; }
+
+nsmb::core::Result<std::vector<std::uint8_t>> MessageEditorPanel::editedBytes() const { return impl_->output(); }
+
+MessageEditorDialog::MessageEditorDialog(std::string_view path, std::span<const std::uint8_t> bytes, QWidget* parent)
+    : QDialog(parent) {
+    panel_ = new MessageEditorPanel(path, bytes, this);
+    setWindowTitle(panel_->title());
+    resize(940, 660);
+    auto* root = new QVBoxLayout(this);
+    root->addWidget(panel_, 1);
+    auto* buttons = new QDialogButtonBox(
+        panel_->usable() ? (QDialogButtonBox::Save | QDialogButtonBox::Cancel) : QDialogButtonBox::Cancel, this);
+    root->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, this, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+}
+
+bool MessageEditorDialog::supports(std::span<const std::uint8_t> bytes, std::string_view path) {
+    return MessageEditorPanel::supports(bytes, path);
+}
+
+nsmb::core::Result<std::vector<std::uint8_t>> MessageEditorDialog::editedBytes() const { return panel_->editedBytes(); }

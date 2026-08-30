@@ -12,7 +12,6 @@
 #include "nsmb/project/graphics_resources.hpp"
 #include "nsmb/project/level_exchange.hpp"
 #include "nsmb/patching/process.hpp"
-#include "nsmb/patching/legacy.hpp"
 
 #include <QApplication>
 #include <QActionGroup>
@@ -215,7 +214,9 @@ MainWindow::MainWindow() {
     moduleRefreshTimer_->setInterval(250);
     connect(moduleWatcher_, &QFileSystemWatcher::directoryChanged, moduleRefreshTimer_, qOverload<>(&QTimer::start));
     connect(moduleRefreshTimer_, &QTimer::timeout, this, &MainWindow::reloadFilesystemView);
-    autosaveTimer_ = new QTimer(this); autosaveTimer_->setInterval(60000); autosaveTimer_->start();
+    autosaveTimer_ = new QTimer(this);
+    autosaveTimer_->setInterval(std::clamp(QSettings().value("AutosaveMinutes", 1).toInt(), 1, 60) * 60000);
+    autosaveTimer_->start();
     connect(autosaveTimer_, &QTimer::timeout, this, &MainWindow::writeRecoverySnapshots);
 
     auto project = nsmb::project::create_empty_project("Empty Project", {}).value();
@@ -233,21 +234,9 @@ void MainWindow::createWorkspace() {
     tabs_->tabBar()->setContextMenuPolicy(Qt::CustomContextMenu);
     setCentralWidget(tabs_);
 
-    hub_ = new QWidget(tabs_); auto* hub_layout = new QVBoxLayout(hub_); auto* hub_tabs = new QTabWidget(hub_); hub_tabs->setObjectName("ProjectHubTabs"); hub_layout->addWidget(hub_tabs);
-    auto page = [&](QString name) { auto* widget=new QWidget(hub_tabs); auto* layout=new QVBoxLayout(widget); hub_tabs->addTab(widget,name); return std::pair{widget,layout}; };
-    auto [levels_page,levels_layout]=page(uiText("Level Listing"));hubLevelTree_=new QTreeView(levels_page);hubLevelTree_->setModel(projectModel_);hubLevelTree_->setRootIsDecorated(true);hubLevelTree_->setSelectionBehavior(QAbstractItemView::SelectRows);hubLevelTree_->setSelectionMode(QAbstractItemView::SingleSelection);hubLevelTree_->header()->setStretchLastSection(true);levels_layout->addWidget(hubLevelTree_);auto* level_buttons=new QHBoxLayout;auto* open_level=new QPushButton(uiText("Open Editor"),levels_page);auto* level_hex=new QPushButton(uiText("Hex Editor"),levels_page);auto* import_level=new QPushButton("Import .nml",levels_page);auto* export_level=new QPushButton("Export .nml",levels_page);for(auto* button:{open_level,level_hex,import_level,export_level})level_buttons->addWidget(button);levels_layout->addLayout(level_buttons);
-    auto [tileset_page,tileset_layout]=page(uiText("Tilesets"));tileset_layout->addWidget(new QLabel("Edit the current level's three tileset slots, Map16, objects, and behaviours.",tileset_page));auto* open_tilesets=new QPushButton("Open Tileset Editor",tileset_page);tileset_layout->addWidget(open_tilesets);tileset_layout->addStretch();
-    auto [background_page,background_layout]=page(uiText("Backgrounds"));background_layout->addWidget(new QLabel("Edit the current level's background and foreground graphics, palettes, and screen maps.",background_page));auto* open_backgrounds=new QPushButton("Open Background Editor",background_page);background_layout->addWidget(open_backgrounds);background_layout->addStretch();
-    auto [filesystem_page,filesystem_layout]=page(uiText("Filesystem"));hubFilesystemTree_=new QTreeWidget(filesystem_page);hubFilesystemTree_->setHeaderLabels({"Path","Status","Module","Variant","Size"});filesystem_layout->addWidget(hubFilesystemTree_);auto* show_filesystem=new QPushButton("Open Filesystem Dock",filesystem_page);filesystem_layout->addWidget(show_filesystem);
-    auto [tools_page,tools_layout]=page(uiText("Tools"));for(const auto& [name,callback]:std::array<std::pair<const char*,std::function<void()>>,9>{{{"Level Hex Editor",[this]{editLevelHex();}},{"Find Object",[this]{findEntity(false);}},{"Find Sprite",[this]{findEntity(true);}},{"Sprite Event Viewer",[this]{showSpriteEvents();}},{"ROM Banner",[this]{editRomBanner();}},{"ROM User Metadata",[this]{editRomUserMetadata();}},{"Export .nsmbpatch",[this]{exportPatch();}},{"Create xdelta",[this]{runXdelta(true);}},{"Run NCPatcher",[this]{runPatcher();}}}}){auto* button=new QPushButton(name,tools_page);connect(button,&QPushButton::clicked,this,callback);tools_layout->addWidget(button);}tools_layout->addStretch();
-    tabs_->addTab(hub_, uiText("Project Hub"));
-
     preview_ = new LevelPreviewWidget(tabs_);
     preview_->setEditable(false);
     tabs_->addTab(preview_, "Preview");
-    connect(hubLevelTree_->selectionModel(),&QItemSelectionModel::currentChanged,this,[this](const QModelIndex& index){updateSelectedLevel(index);});
-    connect(hubLevelTree_,&QTreeView::doubleClicked,this,[this](const QModelIndex& index){openLevelEditor(index);});
-    connect(open_level,&QPushButton::clicked,this,[this]{openLevelEditor(hubLevelTree_->currentIndex());});connect(level_hex,&QPushButton::clicked,this,&MainWindow::editLevelHex);connect(import_level,&QPushButton::clicked,this,&MainWindow::importLevelPackage);connect(export_level,&QPushButton::clicked,this,&MainWindow::exportLevelPackage);connect(open_tilesets,&QPushButton::clicked,this,&MainWindow::openTilesetEditor);connect(open_backgrounds,&QPushButton::clicked,this,&MainWindow::openTilesetEditor);connect(show_filesystem,&QPushButton::clicked,this,[this]{filesystemDock_->show();filesystemDock_->raise();});
     connect(tabs_, &QTabWidget::tabCloseRequested, this, &MainWindow::closeTab);
     connect(tabs_, &QTabWidget::currentChanged, this, [this] { activateCurrentDocument(); });
     connect(tabs_->tabBar(), &QTabBar::customContextMenuRequested, this, [this](const QPoint& position) {
@@ -288,6 +277,13 @@ void MainWindow::createMenus() {
     auto* bar = menuBar();
     bar->setNativeMenuBar(false);
 
+    // One toolbar for the things done constantly. Undo and redo used to be the
+    // only ones with a button; saving, opening a file and starting a build were
+    // menu-only, which is a lot of digging for a rebuild-and-test loop.
+    auto* main_bar = addToolBar("Main");
+    main_bar->setObjectName("MainToolbar");
+    main_bar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+
     auto* file = bar->addMenu("&" + uiText("File"));
     file->addAction("New Project...", QKeySequence::New, this, [this] {
         log("File > New Project selected.");
@@ -303,23 +299,26 @@ void MainWindow::createMenus() {
     });
     recentMenu_ = file->addMenu("Open &Recent");
     updateRecentMenu();
-    file->addAction(uiText("Save Project"), QKeySequence::Save, this, [this] {
+    auto* saveProjectAction = file->addAction(uiText("Save Project"), QKeySequence::Save, this, [this] {
         log("File > Save Project selected.");
         saveProject();
     });
+    saveProjectAction->setObjectName("SaveProjectAction");
     auto* openFile = file->addAction("Open File...", QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_O), this, &MainWindow::openFileInEditor);
     openFile->setObjectName("OpenFileAction");
     file->addAction("Export Level (.nml)…", this, &MainWindow::exportLevelPackage);
     file->addAction("Import Level (.nml)…", this, &MainWindow::importLevelPackage);
     file->addSeparator();
-    file->addAction("Run Patcher...", this, [this] {
+    auto* runPatcherAction = file->addAction("Run Patcher...", this, [this] {
         log("File > Run Patcher selected.");
         runPatcher();
     });
-    file->addAction("Build ROM...", this, [this] {
+    runPatcherAction->setObjectName("RunPatcherAction");
+    auto* buildRomAction = file->addAction("Build ROM...", this, [this] {
         log("File > Build ROM selected.");
         buildRom();
     });
+    buildRomAction->setObjectName("BuildRomAction");
     file->addSeparator();
     file->addAction("Exit", this, [this] {
         log("File > Exit selected.");
@@ -329,16 +328,53 @@ void MainWindow::createMenus() {
     auto* edit = bar->addMenu("&" + uiText("Edit"));
     undoAction_ = edit->addAction("Undo", QKeySequence::Undo, this, [this] { undo(); });
     redoAction_ = edit->addAction("Redo", QKeySequence::Redo, this, [this] { redo(); });
-    auto* history_bar=addToolBar("History");history_bar->setObjectName("HistoryToolbar");undoButton_=new QToolButton(history_bar);redoButton_=new QToolButton(history_bar);for(auto* button:{undoButton_,redoButton_}){button->setPopupMode(QToolButton::MenuButtonPopup);button->setMenu(new QMenu(button));history_bar->addWidget(button);}undoButton_->setDefaultAction(undoAction_);redoButton_->setDefaultAction(redoAction_);
+    main_bar->addAction(saveProjectAction);
+    main_bar->addAction(openFile);
+    main_bar->addSeparator();
+    undoButton_ = new QToolButton(main_bar);
+    redoButton_ = new QToolButton(main_bar);
+    for (auto* button : {undoButton_, redoButton_}) {
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+        button->setMenu(new QMenu(button));
+        button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        main_bar->addWidget(button);
+    }
+    undoButton_->setDefaultAction(undoAction_);
+    redoButton_->setDefaultAction(redoAction_);
     connect(undoButton_->menu(),&QMenu::aboutToShow,this,[this]{auto* menu=undoButton_->menu();menu->clear();if(!currentLevel_)return;const auto names=currentLevel_->undo_names();for(std::size_t i=0;i<names.size();++i)menu->addAction(QString::fromStdString(names[i]),this,[this,count=i+1]{for(std::size_t n=0;n<count&&currentLevel_&&currentLevel_->can_undo();++n)undo();});});
     connect(redoButton_->menu(),&QMenu::aboutToShow,this,[this]{auto* menu=redoButton_->menu();menu->clear();if(!currentLevel_)return;const auto names=currentLevel_->redo_names();for(std::size_t i=0;i<names.size();++i)menu->addAction(QString::fromStdString(names[i]),this,[this,count=i+1]{for(std::size_t n=0;n<count&&currentLevel_&&currentLevel_->can_redo();++n)redo();});});
     edit->addSeparator();
-    edit->addAction(uiText("Cut"), QKeySequence::Cut, this, [this] { if (auto* view=activeLevelView()) view->cutSelection(); });
-    edit->addAction(uiText("Copy"), QKeySequence::Copy, this, [this] { if (auto* view=activeLevelView()) view->copySelection(); });
-    edit->addAction(uiText("Paste"), QKeySequence::Paste, this, [this] { if (auto* view=activeLevelView()) view->pasteSelection(); });
-    edit->addAction("Duplicate", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { if (auto* view=activeLevelView()) view->cloneSelection(); });
-    edit->addAction("Bring Forward", QKeySequence(Qt::Key_PageUp), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(true); });
-    edit->addAction("Send Backward", QKeySequence(Qt::Key_PageDown), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(false); });
+    auto* cut = edit->addAction(uiText("Cut"), QKeySequence::Cut, this, [this] { if (auto* view=activeLevelView()) view->cutSelection(); });
+    auto* copy = edit->addAction(uiText("Copy"), QKeySequence::Copy, this, [this] { if (auto* view=activeLevelView()) view->copySelection(); });
+    auto* paste = edit->addAction(uiText("Paste"), QKeySequence::Paste, this, [this] { if (auto* view=activeLevelView()) view->pasteSelection(); });
+    auto* duplicate = edit->addAction("Duplicate", QKeySequence(Qt::CTRL | Qt::Key_D), this, [this] { if (auto* view=activeLevelView()) view->cloneSelection(); });
+    auto* forward = edit->addAction("Bring Forward", QKeySequence(Qt::Key_PageUp), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(true); });
+    auto* backward = edit->addAction("Send Backward", QKeySequence(Qt::Key_PageDown), this, [this] { if (auto* view=activeLevelView()) view->reorderSelection(false); });
+    main_bar->addSeparator();
+    for (auto* action : {cut, copy, paste, duplicate}) main_bar->addAction(action);
+    main_bar->addSeparator();
+    for (auto* action : {forward, backward}) main_bar->addAction(action);
+    main_bar->addSeparator();
+    main_bar->addAction(runPatcherAction);
+    main_bar->addAction(buildRomAction);
+    // One variant selector for the whole window. There used to be two, in the
+    // Filesystem and Build Output docks, kept in sync by hand and each showing
+    // only part of what a variant governs.
+    main_bar->addSeparator();
+    main_bar->addWidget(new QLabel(" Variant: ", main_bar));
+    variantSelector_ = new QComboBox(main_bar);
+    variantSelector_->setObjectName("VariantSelector");
+    variantSelector_->setMinimumContentsLength(12);
+    variantSelector_->setToolTip(
+        "Which configured build variant the editor is working in.\n"
+        "Switching reloads levels and graphics from that variant's module layers.");
+    variantSelector_->addItem("(none)", QString());
+    main_bar->addWidget(variantSelector_);
+    connect(variantSelector_, &QComboBox::currentIndexChanged, this,
+            [this](int) { setActiveVariant(variantSelector_->currentData().toString()); });
+    edit->addSeparator();
+    auto* preferences = edit->addAction("Preferences…", QKeySequence::Preferences, this, &MainWindow::editPreferences);
+    preferences->setObjectName("PreferencesAction");
     auto* tools = bar->addMenu("&" + uiText("Tools"));
     auto* tilesets = tools->addAction("Tilesets and Backgrounds…", this, &MainWindow::openTilesetEditor);
     tilesets->setObjectName("TilesetEditorAction");
@@ -355,13 +391,6 @@ void MainWindow::createMenus() {
     distribution->addAction("Import .nsmbpatch…", this, &MainWindow::importPatch);
     distribution->addAction("Create xdelta…", this, [this] { runXdelta(true); });
     distribution->addAction("Apply xdelta…", this, [this] { runXdelta(false); });
-    distribution->addSeparator();
-    auto* fireflower = distribution->addAction("Build with Fireflower…", this, [this] { runLegacyPatch(true); });
-    fireflower->setObjectName("FireflowerBuildAction");
-    auto* nsmbe = distribution->addAction("Build with NSMBe Wrapper…", this, [this] { runLegacyPatch(false); });
-    nsmbe->setObjectName("NsmbeWrapperBuildAction");
-    auto* language = bar->addMenu(uiText("Language")); auto* language_group = new QActionGroup(language); language_group->setExclusive(true);
-    for (const auto& [code, name] : std::array{std::pair{"en","English"},std::pair{"nl","Nederlands"},std::pair{"pt","Português"},std::pair{"es","Español"},std::pair{"fr","Français"}}) { auto* action=language->addAction(name);action->setCheckable(true);action->setChecked(QSettings().value("Language","en").toString()==code);language_group->addAction(action);connect(action,&QAction::triggered,this,[this,code]{QSettings().setValue("Language",code);QMessageBox::information(this,uiText("Language"),"The interface language will be applied the next time Big Star starts.");}); }
     viewMenu_ = bar->addMenu("&" + uiText("View"));
     updateEditState();
 }
@@ -416,6 +445,14 @@ void MainWindow::createDocks() {
         }
         updateEditState();
     });
+    // With no tool modes on the canvas, the panel's kind tab is what right-click
+    // creates. Selecting on the canvas switches the tab, which comes back here
+    // and keeps the two in step in both directions.
+    connect(levelProperties_, &LevelPropertiesWidget::currentKindChanged, this, [this](int kind) {
+        if (kind < 1 || kind > 7) return;
+        preview_->setCreateKind(kind);
+        for (auto& [key, document] : documents_) { (void)key; document.view->setCreateKind(kind); }
+    });
     connect(levelProperties_, &LevelPropertiesWidget::selectionChanged, this, [this](int kind, int item, int node) {
         for (auto& [key, document] : documents_) {
             (void)key;
@@ -444,18 +481,24 @@ void MainWindow::createDocks() {
     paletteSearch_ = new QLineEdit(paletteContainer);
     paletteSearch_->setPlaceholderText("Filter palette...");
     auto* paletteTabs = new QTabWidget(paletteContainer);
-    paletteToolbox_ = new QToolBox(paletteTabs);
-    paletteToolbox_->setObjectName("VanillaPaletteToolbox");
+    paletteTabs->setObjectName("PaletteTabs");
+    // Objects and sprites are different things picked in different ways, and
+    // flattening them into one alphabetised accordion made both hard to find.
+    objectTabs_ = new QTabWidget(paletteTabs);
+    objectTabs_->setObjectName("ObjectPickerTabs");
+    objectTabs_->setDocumentMode(true);
+    spriteToolbox_ = new QToolBox(paletteTabs);
+    spriteToolbox_->setObjectName("SpritePicker");
     customPaletteTree_ = new QTreeWidget(paletteTabs);
+    customPaletteTree_->setObjectName("CustomActorTree");
     customPaletteTree_->setHeaderHidden(true);
-    paletteTabs->addTab(paletteToolbox_, "Vanilla actors");
+    paletteTabs->addTab(objectTabs_, "Objects");
+    paletteTabs->addTab(spriteToolbox_, "Sprites");
     paletteTabs->addTab(customPaletteTree_, "Custom actors");
     paletteLayout->addWidget(paletteSearch_);
     paletteLayout->addWidget(paletteTabs, 1);
     paletteDock_->setWidget(paletteContainer);
     addDockWidget(Qt::LeftDockWidgetArea, paletteDock_);
-    tabifyDockWidget(levelsDock_, paletteDock_);
-    levelsDock_->raise();
     connect(paletteSearch_, &QLineEdit::textChanged, this, [this](const QString& text) {
         for (auto* button : paletteButtons_) button->setVisible(button->text().contains(text,Qt::CaseInsensitive)||button->property("category").toString().contains(text,Qt::CaseInsensitive));
         for (int module = 0; module < customPaletteTree_->topLevelItemCount(); ++module) {
@@ -488,10 +531,36 @@ void MainWindow::createDocks() {
     addDockWidget(Qt::LeftDockWidgetArea, filesystemDock_);
     tabifyDockWidget(levelsDock_, filesystemDock_);
     connect(filesystemPanel_, &FilesystemDock::activeTargetChanged, this, [this](const QString& module, const QString& variant) {
-        if (activeModule_ == module && activeVariant_ == variant) return;
-        activeModule_ = module; activeVariant_ = variant; ncpatcherVariant_ = variant;
-        patcherPanel_->setSelectedVariant(variant);
+        (void)variant;
+        if (activeModule_ == module) return;
+        activeModule_ = module;
         reloadFilesystemView();
+    });
+    connect(filesystemPanel_, &FilesystemDock::openInEditorRequested, this, [this](const QString& romPath) {
+        const auto* entry = filesystemView_.find(romPath.toStdString());
+        if (!entry) return;
+        auto data = nsmb::core::read_file(!entry->source.empty() ? entry->source : entry->extracted);
+        if (!data) { log("Open file: " + QString::fromStdString(data.error().message)); return; }
+        const auto metadata = entry->id && *entry->id == rom_user_metadata_id;
+        openFileDocument(activeVariant_ + "\n" + romPath, romPath, std::move(data.value()), metadata,
+                         filesystemPanel_->companionsFor(romPath),
+                         [this, romPath](const std::vector<std::uint8_t>& bytes) {
+                             return filesystemPanel_->saveEditedFile(romPath, bytes);
+                         });
+    });
+    connect(filesystemPanel_, &FilesystemDock::hexEditRequested, this, [this](const QString& romPath) {
+        const auto* entry = filesystemView_.find(romPath.toStdString());
+        if (!entry) return;
+        auto data = nsmb::core::read_file(!entry->source.empty() ? entry->source : entry->extracted);
+        if (!data) { log("Hex edit: " + QString::fromStdString(data.error().message)); return; }
+        const auto key = activeVariant_ + "\nhex\n" + romPath;
+        if (raiseFileDocument(key)) return;
+        auto* panel = new bse::editors::HexEditorPanel(romPath.toStdString(), data.value());
+        hostFileDocument(key, romPath, panel, std::move(data.value()),
+                         [this, romPath](const std::vector<std::uint8_t>& bytes) {
+                             return filesystemPanel_->saveEditedFile(romPath, bytes);
+                         },
+                         false);
     });
     connect(filesystemPanel_, &FilesystemDock::filesChanged, this, &MainWindow::reloadFilesystemView);
     connect(filesystemPanel_, &FilesystemDock::runPatcherRequested, this, &MainWindow::runPatcher);
@@ -499,30 +568,15 @@ void MainWindow::createDocks() {
         log("Filesystem: " + message); QMessageBox::warning(this, "Filesystem Operation Failed", message);
     });
 
-    logDock_ = new QDockWidget("Log", this);
-    logDock_->setObjectName("LogDock");
-    logOutput_ = new QTextEdit(logDock_);
-    logOutput_->setReadOnly(true);
-    logDock_->setWidget(logOutput_);
-    addDockWidget(Qt::BottomDockWidgetArea, logDock_);
-
-    buildDock_ = new QDockWidget("Build Output", this);
+    // One place output goes. There used to be two bottom docks tabbed over each
+    // other, and the patcher forwarded its log into the other one, so the same
+    // lines appeared twice and you could only ever read one copy.
+    buildDock_ = new QDockWidget("Output", this);
     buildDock_->setObjectName("BuildOutputDock");
     patcherPanel_ = new PatcherPanel(buildDock_);
     buildDock_->setWidget(patcherPanel_);
     addDockWidget(Qt::BottomDockWidgetArea, buildDock_);
-    // Sharing the bottom area with the Log, since a build is something you
-    // switch to rather than watch alongside the editor.
-    tabifyDockWidget(logDock_, buildDock_);
-    logDock_->raise();
-
-    connect(patcherPanel_, &PatcherPanel::logMessage, this, &MainWindow::log);
     // Remembered per project, alongside the rest of the workspace state.
-    connect(patcherPanel_, &PatcherPanel::variantChanged, this,
-            [this](const QString& variant) {
-                ncpatcherVariant_ = variant;
-                if (activeVariant_ != variant) { activeVariant_ = variant; reloadFilesystemView(); }
-            });
     connect(patcherPanel_, &PatcherPanel::diagnosticActivated, this,
             &MainWindow::openDiagnosticLocation);
     connect(patcherPanel_, &PatcherPanel::buildFinished, this, &MainWindow::onPatcherFinished);
@@ -534,7 +588,7 @@ void MainWindow::createDocks() {
                 }
             });
 
-    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, logDock_, buildDock_}) {
+    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, buildDock_}) {
         viewMenu_->addAction(dock->toggleViewAction());
     }
     viewMenu_->addSeparator();
@@ -766,6 +820,23 @@ void MainWindow::updateRecentMenu() {
     clear->setEnabled(!projects.isEmpty());
 }
 
+namespace {
+
+// documentKey() is "variant\ncourse\nbgdat". Everything that needs the two paths
+// back out of a session or document key goes through here rather than counting
+// separators for itself.
+struct DocumentKeyPaths { std::string course, bgdat; };
+
+std::optional<DocumentKeyPaths> documentKeyPaths(const std::string& key) {
+    const auto variant_end = key.find('\n');
+    if (variant_end == std::string::npos) return std::nullopt;
+    const auto separator = key.find('\n', variant_end + 1);
+    if (separator == std::string::npos) return std::nullopt;
+    return DocumentKeyPaths{key.substr(variant_end + 1, separator - variant_end - 1), key.substr(separator + 1)};
+}
+
+} // namespace
+
 nsmb::core::Result<void> MainWindow::saveEditedLevels() {
     struct PendingFile {
         std::filesystem::path target;
@@ -787,12 +858,12 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         if (!level->dirty()) {
             continue;
         }
-        const auto separator = key.find('\n');
-        if (separator == std::string::npos) {
+        const auto paths = documentKeyPaths(key);
+        if (!paths) {
             return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "level session path is invalid");
         }
-        auto course_relative = nsmb::project::make_project_relative(currentProject_.directory(), key.substr(0, separator));
-        auto bgdat_relative = nsmb::project::make_project_relative(currentProject_.directory(), key.substr(separator + 1U));
+        auto course_relative = nsmb::project::make_project_relative(currentProject_.directory(), paths->course);
+        auto bgdat_relative = nsmb::project::make_project_relative(currentProject_.directory(), paths->bgdat);
         if (!course_relative) {
             return course_relative.error();
         }
@@ -1105,69 +1176,6 @@ void MainWindow::runXdelta(bool create) {
     auto executable=QStandardPaths::findExecutable("xdelta3");if(executable.isEmpty())executable=QFileDialog::getOpenFileName(this,"Select xdelta3 Executable");if(executable.isEmpty())return;QStringList inputs;if(create){inputs<<QFileDialog::getOpenFileName(this,"Select Clean ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getOpenFileName(this,"Select Modified ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getSaveFileName(this,"Save xdelta Patch",{},"xdelta patches (*.xdelta)");}else{inputs<<QFileDialog::getOpenFileName(this,"Select Clean ROM",{},"Nintendo DS ROMs (*.nds)")<<QFileDialog::getOpenFileName(this,"Select xdelta Patch",{},"xdelta patches (*.xdelta)")<<QFileDialog::getSaveFileName(this,"Save Patched ROM",{},"Nintendo DS ROMs (*.nds)");}if(std::ranges::any_of(inputs,[](const auto& value){return value.isEmpty();}))return;nsmb::patching::ProcessRequest request;request.executable=executable.toStdString();request.arguments=create?std::vector<std::string>{"-e","-f","-s",inputs[0].toStdString(),inputs[1].toStdString(),inputs[2].toStdString()}:std::vector<std::string>{"-d","-f","-s",inputs[0].toStdString(),inputs[1].toStdString(),inputs[2].toStdString()};QString errors;WaitCursor wait;auto result=nsmb::patching::run_process(request,{},[&](std::string_view line){errors+=QString::fromUtf8(line.data(),static_cast<qsizetype>(line.size()))+'\n';});if(!result||result.value().exit_code!=0)QMessageBox::warning(this,"xdelta3",result?errors:QString::fromStdString(result.error().message));else QMessageBox::information(this,"xdelta3",create?"Patch created successfully.":"Patched ROM created successfully.");
 }
 
-void MainWindow::runLegacyPatch(bool fireflower) {
-    if (!currentProject_.rom()) {
-        QMessageBox::information(this, "Legacy Code Patcher", "Open or import a ROM project first.");
-        return;
-    }
-    if (!fireflower) QMessageBox::information(this, "NSMBe Wrapper",
-        "Select an external clean-room NSMBe-compatible wrapper. Big Star passes `--project <dir> --filesystem <dir>/__tmp`; no GPL NSMBe code is embedded.");
-    auto executable = fireflower ? QStandardPaths::findExecutable("fireflower") : QString{};
-    if (executable.isEmpty()) executable = QFileDialog::getOpenFileName(
-        this, fireflower ? "Select Fireflower Executable" : "Select NSMBe Wrapper Executable");
-    if (executable.isEmpty()) return;
-    const auto project = QFileDialog::getExistingDirectory(
-        this, fireflower ? "Select Fireflower Project" : "Select Legacy NSMBe Project",
-        QString::fromStdString(currentProject_.directory().string()));
-    if (project.isEmpty()) return;
-    const auto suggested = QString::fromStdString(
-        (currentProject_.directory() / (fireflower ? "fireflower.nds" : "nsmbe-legacy.nds")).string());
-    const auto output = QFileDialog::getSaveFileName(
-        this, "Save Patched Nintendo DS ROM", suggested, "Nintendo DS ROMs (*.nds)");
-    if (output.isEmpty()) return;
-
-    QTemporaryDir temporary(QDir::tempPath() + "/big-star-legacy-XXXXXX");
-    if (!temporary.isValid()) {
-        QMessageBox::warning(this, "Legacy Code Patcher", "Could not create an isolated build directory.");
-        return;
-    }
-    nsmb::patching::LegacyPatchRequest request;
-    request.backend = fireflower ? nsmb::patching::LegacyPatchBackend::Fireflower
-                                 : nsmb::patching::LegacyPatchBackend::NsmbeWrapper;
-    request.executable = executable.toStdString();
-    request.project_dir = project.toStdString();
-    request.extracted_dir = extractedProjectPath(currentProject_);
-    request.output_dir = std::filesystem::path(temporary.path().toStdString()) / "extracted";
-    std::string tool_output;
-    auto capture = [&tool_output](std::string_view line) {
-        tool_output.append(line); tool_output.push_back('\n');
-    };
-    nsmb::core::Result<void> patched;
-    {
-        WaitCursor wait;
-        patched = nsmb::patching::run_legacy_patch(request, capture, capture);
-    }
-    if (!patched) {
-        const auto detail = tool_output.empty() ? patched.error().message
-            : patched.error().message + "\n\n" + tool_output;
-        QMessageBox::warning(this, "Legacy Code Patcher", QString::fromStdString(detail));
-        return;
-    }
-    nsmb::nds::NitroRomService service;
-    nsmb::core::Result<void> built;
-    {
-        WaitCursor wait;
-        built = service.build(request.output_dir, output.toStdString());
-    }
-    if (!built) {
-        QMessageBox::warning(this, "Legacy Code Patcher", QString::fromStdString(built.error().message));
-        return;
-    }
-    if (!tool_output.empty()) log(QString::fromStdString(tool_output));
-    log(QString("Built %1 legacy ROM: %2").arg(fireflower ? "Fireflower" : "NSMBe-wrapper", output));
-    QMessageBox::information(this, "Legacy Code Patcher", "The patched ROM was written successfully.");
-}
-
 void MainWindow::writeRecoverySnapshots() {
     if (currentProject_.directory().empty()) return;
     const auto root = currentProject_.directory() / ".big-star-autosave";
@@ -1176,9 +1184,11 @@ void MainWindow::writeRecoverySnapshots() {
     std::unordered_set<std::string> keep;
     for (const auto& [key, level] : levelSessions_) {
         if (!level->dirty()) continue;
-        const auto separator = key.find('\n'); if (separator == std::string::npos) continue;
+        // A snapshot records the two paths; restoring re-keys them against
+        // whatever variant is active then.
+        const auto paths = documentKeyPaths(key); if (!paths) continue;
         auto course = level->serialize_course(), bgdat = level->serialize_bgdat(); if (!course || !bgdat) continue;
-        nsmb::project::LevelRecoverySnapshot snapshot{key.substr(0, separator), key.substr(separator + 1),
+        nsmb::project::LevelRecoverySnapshot snapshot{paths->course, paths->bgdat,
             {0, 0, std::move(course.value()), std::move(bgdat.value())}};
         auto encoded = nsmb::project::encode_level_recovery(snapshot); if (!encoded) continue;
         const auto key_bytes = QByteArray(key.data(), static_cast<qsizetype>(key.size()));
@@ -1277,25 +1287,87 @@ void MainWindow::openFileInEditor() {
     if (source.isEmpty()) return;
     auto data = nsmb::core::read_file(source.toStdString());
     if (!data) { log("Open File: " + QString::fromStdString(data.error().message)); return; }
+
+    // Palettes, graphics and tilemaps are separate files, so the editor is
+    // offered this file's neighbours to pair it with.
+    bse::editors::Companions companions;
+    const QFileInfo chosen(source);
+    for (const auto& sibling : QDir(chosen.absolutePath()).entryInfoList(QDir::Files, QDir::Name))
+        if (sibling.absoluteFilePath() != chosen.absoluteFilePath())
+            companions.paths << sibling.absoluteFilePath();
+    companions.load = [](const QString& file) -> nsmb::core::Result<std::vector<std::uint8_t>> {
+        auto bytes = nsmb::core::read_file(file.toStdString());
+        if (!bytes) return bytes.error();
+        return bse::editors::unwrapped(bytes.value());
+    };
+
     const auto path = source.toStdString();
-    const auto outcome = bse::editors::edit(this, path, data.value());
-    switch (outcome.status) {
-    case bse::editors::Outcome::Status::Unsupported:
-        QMessageBox::information(this, "Open File", "No editor understands " + QFileInfo(source).fileName() + ".");
+    openFileDocument("file\n" + source, chosen.fileName(), std::move(data.value()), false, std::move(companions),
+                     [this, path](const std::vector<std::uint8_t>& bytes) -> nsmb::core::Result<void> {
+                         auto written = nsmb::core::write_file_atomically(path, bytes);
+                         if (!written) return written.error();
+                         refreshGraphics();
+                         return {};
+                     });
+}
+
+void MainWindow::openFileDocument(const QString& key, const QString& subtitle, std::vector<std::uint8_t> bytes,
+                                  bool romUserMetadata, bse::editors::Companions companions,
+                                  std::function<nsmb::core::Result<void>(const std::vector<std::uint8_t>&)> save) {
+    if (raiseFileDocument(key)) return;
+    auto* panel = bse::editors::makePanel(nullptr, subtitle.toStdString(), bytes, romUserMetadata, std::move(companions));
+    if (!panel) {
+        QMessageBox::information(this, "Open File", "No editor understands " + subtitle + ".");
         return;
-    case bse::editors::Outcome::Status::Failed:
-        QMessageBox::warning(this, "Open File", outcome.error);
-        return;
-    case bse::editors::Outcome::Status::Cancelled:
-        log("Open File: " + QFileInfo(source).fileName() + " closed without saving.");
-        return;
-    case bse::editors::Outcome::Status::Edited:
-        break;
     }
-    auto written = nsmb::core::write_file_atomically(path, outcome.bytes);
-    if (!written) { QMessageBox::warning(this, "Open File", QString::fromStdString(written.error().message)); return; }
-    log("Open File: saved " + QFileInfo(source).fileName() + ".");
-    refreshGraphics();
+    hostFileDocument(key, subtitle, panel, std::move(bytes), std::move(save));
+}
+
+// True when the file already has a tab, which is then brought forward.
+bool MainWindow::raiseFileDocument(const QString& key) {
+    const auto found = fileDocuments_.find(key.toStdString());
+    if (found == fileDocuments_.end()) return false;
+    if (const auto index = tabs_->indexOf(found->second.page); index >= 0) { tabs_->setCurrentIndex(index); return true; }
+    fileDocuments_.erase(found);
+    return false;
+}
+
+void MainWindow::hostFileDocument(const QString& key, const QString& subtitle, bse::editors::EditorPanel* panel,
+                                  std::vector<std::uint8_t> bytes,
+                                  std::function<nsmb::core::Result<void>(const std::vector<std::uint8_t>&)> save,
+                                  bool rewrap) {
+    const auto identifier = key.toStdString();
+    auto* page = new QWidget(tabs_);
+    auto* layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+    panel->setParent(page);
+    layout->addWidget(panel, 1);
+    auto* actions = new QHBoxLayout;
+    auto* saveButton = new QPushButton("Save", page);
+    saveButton->setObjectName("FileDocumentSave");
+    saveButton->setEnabled(panel->usable());
+    actions->addStretch(1);
+    actions->addWidget(saveButton);
+    layout->addLayout(actions);
+    connect(saveButton, &QPushButton::clicked, this, [this, identifier] { saveFileDocument(identifier); });
+
+    fileDocuments_[identifier] = FileDocument{panel->title(), page, panel, std::move(bytes), rewrap, std::move(save)};
+    tabs_->setCurrentIndex(tabs_->addTab(page, subtitle));
+    log("Opened " + subtitle + " in " + panel->title() + ".");
+}
+
+void MainWindow::saveFileDocument(const std::string& key) {
+    const auto found = fileDocuments_.find(key);
+    if (found == fileDocuments_.end()) return;
+    auto edited = found->second.panel->editedBytes();
+    if (edited && found->second.rewrap) edited = bse::editors::rewrapped(found->second.original, std::move(edited.value()));
+    if (!edited) { QMessageBox::warning(this, "Save file", QString::fromStdString(edited.error().message)); return; }
+    if (auto written = found->second.save(edited.value()); !written) {
+        QMessageBox::warning(this, "Save file", QString::fromStdString(written.error().message));
+        return;
+    }
+    found->second.original = std::move(edited.value());
+    log("Saved " + found->second.title + ".");
 }
 
 void MainWindow::editRomBanner() {
@@ -1507,6 +1579,44 @@ std::vector<nsmb::project::ModuleVariantMapping> MainWindow::activeModuleMapping
     return found == projectVariants_.end() ? std::vector<nsmb::project::ModuleVariantMapping>{} : found->mappings;
 }
 
+void MainWindow::setActiveVariant(const QString& variant) {
+    if (activeVariant_ == variant) return;
+    // Everything loaded through the old variant's layers is now wrong: the
+    // sessions, their tabs, and the tileset graphics resolved alongside them.
+    // Leaving them open is what made switching look like it did nothing.
+    if (!documents_.empty() && !confirmDiscardLevelEdits()) {
+        if (variantSelector_) {
+            const QSignalBlocker blocker(variantSelector_);
+            const auto index = variantSelector_->findData(activeVariant_);
+            variantSelector_->setCurrentIndex(index >= 0 ? index : 0);
+        }
+        return;
+    }
+    const auto reopen = tabs_ && tabs_->currentWidget() ? activeLevelView() : nullptr;
+    QString course, bgdat;
+    for (auto& [key, document] : documents_) {
+        (void)key;
+        if (document.view == reopen) { course = document.course_path; bgdat = document.bgdat_path; }
+    }
+
+    activeVariant_ = variant;
+    ncpatcherVariant_ = variant;
+    if (patcherPanel_) patcherPanel_->setSelectedVariant(variant);
+    clearDocuments();
+    levelSessions_.clear();
+    currentLevel_ = nullptr;
+    levelProperties_->setLevel(nullptr);
+    levelData_->setLevel(nullptr, &moduleData_);
+    reloadFilesystemView();
+    refreshPalette();
+    updateEditState();
+
+    if (!course.isEmpty()) {
+        const auto index = findLevelIndex(course, bgdat);
+        if (index.isValid()) openLevelEditor(index);
+    }
+}
+
 void MainWindow::reloadFilesystemView() {
     if (!filesystemPanel_) return;
     if (moduleWatcher_ && !moduleWatcher_->directories().empty()) moduleWatcher_->removePaths(moduleWatcher_->directories());
@@ -1583,6 +1693,22 @@ void MainWindow::reloadFilesystemView() {
     if (activeModule_.isEmpty()) for (const auto& module : moduleGraph_.modules) if (module.enabled && module.nitrofs) {
         activeModule_ = QString::fromStdString(module.key); break;
     }
+    if (variantSelector_) {
+        // Repopulating is bookkeeping, not a choice: blocked so it cannot come
+        // back through setActiveVariant and reload everything again.
+        const QSignalBlocker blocker(variantSelector_);
+        variantSelector_->clear();
+        variantSelector_->addItem("(none)", QString());
+        for (const auto& name : variants) variantSelector_->addItem(name, name);
+        auto index = variantSelector_->findData(activeVariant_);
+        if (index < 0 && !activeVariant_.isEmpty()) {
+            // A variant the project no longer lists is kept, labelled, rather
+            // than quietly switching the work to a different language.
+            variantSelector_->addItem(activeVariant_ + "  (not configured)", activeVariant_);
+            index = variantSelector_->count() - 1;
+        }
+        variantSelector_->setCurrentIndex(std::max(0, index));
+    }
 
     nsmb::project::FilesystemViewRequest request;
     request.extracted_rom = extractedProjectPath(currentProject_);
@@ -1603,17 +1729,6 @@ void MainWindow::reloadFilesystemView() {
     if (!built) { log("Filesystem view: " + QString::fromStdString(built.error().message)); filesystemView_ = {}; }
     else filesystemView_ = std::move(built.value());
     filesystemPanel_->setData(currentProject_.directory(), moduleGraph_, filesystemView_, variants, activeModule_, activeVariant_, activeModuleMappings());
-    if (hubFilesystemTree_) {
-        hubFilesystemTree_->clear();
-        for (const auto& entry : filesystemView_.entries) {
-            const auto status = nsmb::project::filesystem_status_name(entry.status);
-            auto* item = new QTreeWidgetItem(hubFilesystemTree_, {QString::fromStdString(entry.path),
-                QString::fromUtf8(status.data(), static_cast<qsizetype>(status.size())),
-                QString::fromStdString(entry.module), QString::fromStdString(entry.variant), QString::number(entry.size)});
-            item->setToolTip(0, QString::fromStdString(entry.source.string()));
-        }
-        for (int column = 0; column < hubFilesystemTree_->columnCount(); ++column) hubFilesystemTree_->resizeColumnToContents(column);
-    }
     if (moduleWatcher_) {
         QStringList watch; for (const auto& path : filesystemView_.watched_directories) if (std::filesystem::is_directory(path, ec)) watch.push_back(QString::fromStdString(path.string()));
         if (!watch.isEmpty()) moduleWatcher_->addPaths(watch);
@@ -1722,7 +1837,7 @@ void MainWindow::updateSelectedLevel(const QModelIndex& index) {
 void MainWindow::showPreview() {
     auto index = tabs_->indexOf(preview_);
     if (index < 0) {
-        index = tabs_->insertTab(tabs_->indexOf(hub_) + 1, preview_, "Preview");
+        index = tabs_->insertTab(0, preview_, "Preview");
     }
     tabs_->setCurrentIndex(index);
     if (previewAction_) {
@@ -1741,7 +1856,7 @@ void MainWindow::openLevelEditor(const QModelIndex& source_index) {
     }
     const auto course_path = projectModel_->data(index, ProjectTreeModel::CoursePathRole).toString();
     const auto bgdat_path = projectModel_->data(index, ProjectTreeModel::BgdatPathRole).toString();
-    const auto key = course_path.toStdString() + "\n" + bgdat_path.toStdString();
+    const auto key = documentKey(course_path, bgdat_path);
     if (auto found = documents_.find(key); found != documents_.end()) {
         if (found->second.window) {
             found->second.window->show();
@@ -1814,11 +1929,19 @@ void MainWindow::openLevelEditor(const QModelIndex& source_index) {
 
 void MainWindow::closeTab(int index) {
     auto* widget = tabs_->widget(index);
-    if (widget == hub_) return;
     if (widget == preview_) {
         tabs_->removeTab(index);
         previewAction_->setChecked(false);
         return;
+    }
+    for (auto it = fileDocuments_.begin(); it != fileDocuments_.end(); ++it) {
+        if (it->second.page == widget) {
+            tabs_->removeTab(index);
+            delete widget;
+            fileDocuments_.erase(it);
+            activateCurrentDocument();
+            return;
+        }
     }
     for (auto it = documents_.begin(); it != documents_.end(); ++it) {
         if (it->second.view == widget) {
@@ -1922,6 +2045,13 @@ void MainWindow::clearDocuments() {
         graphicsFiles_.erase(document.view);
     }
     documents_.clear();
+    // File editors are keyed by variant too, so a switch has to take them with it.
+    for (auto& [key, document] : fileDocuments_) {
+        (void)key;
+        if (const auto index = tabs_->indexOf(document.page); index >= 0) tabs_->removeTab(index);
+        delete document.page;
+    }
+    fileDocuments_.clear();
 }
 
 QModelIndex MainWindow::findLevelIndex(const QString& course_path, const QString& bgdat_path) const {
@@ -1958,7 +2088,7 @@ void MainWindow::saveWorkspaceState() {
     settings.setValue("previewPan", preview_->pan());
     QStringList open;
     QStringList detached;
-    QString active = tabs_->currentWidget() == hub_ ? "hub" : tabs_->currentWidget() == preview_ ? "preview" : QString{};
+    QString active = tabs_->currentWidget() == preview_ ? "preview" : QString{};
     for (const auto& [document_key, document] : documents_) {
         const auto text = QString::fromStdString(document_key);
         open.push_back(text);
@@ -2002,11 +2132,11 @@ void MainWindow::restoreWorkspaceState() {
     reloadFilesystemView();
     const auto detached = settings.value("detached").toStringList();
     for (const auto& document_key : settings.value("documents").toStringList()) {
-        const auto separator = document_key.indexOf('\n');
-        if (separator < 0) {
+        const auto paths = documentKeyPaths(document_key.toStdString());
+        if (!paths) {
             continue;
         }
-        const auto index = findLevelIndex(document_key.left(separator), document_key.mid(separator + 1));
+        const auto index = findLevelIndex(QString::fromStdString(paths->course), QString::fromStdString(paths->bgdat));
         if (!index.isValid()) {
             continue;
         }
@@ -2034,9 +2164,7 @@ void MainWindow::restoreWorkspaceState() {
         tabs_->removeTab(tabs_->indexOf(preview_));
         previewAction_->setChecked(false);
     }
-    if (active == "hub") {
-        tabs_->setCurrentWidget(hub_);
-    } else if (active == "preview" && preview_visible) {
+    if (active == "preview" && preview_visible) {
         showPreview();
     } else if (const auto found = documents_.find(active.toStdString()); found != documents_.end() && !found->second.window) {
         tabs_->setCurrentWidget(found->second.view);
@@ -2046,7 +2174,7 @@ void MainWindow::restoreWorkspaceState() {
 
 void MainWindow::resetWorkspaceLayout() {
     restoreState(defaultDockState_);
-    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, logDock_, buildDock_}) {
+    for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, buildDock_}) {
         dock->show();
     }
     showPreview();
@@ -2065,6 +2193,16 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         log("Graphics fallback: " + QString::fromStdString(resources.error().message));
         return;
     }
+    // resolve_level_graphics walks the ROM's own file table, so it can only name
+    // files in the extracted tree. Point each one at the layer the active
+    // variant actually supplies it from, the same redirect levels already got.
+    nsmb::project::for_each_resource_path(resources.value(), [this](std::filesystem::path& path) {
+        if (path.empty()) return;
+        std::error_code ec;
+        const auto relative = std::filesystem::relative(path, currentProject_.directory(), ec);
+        if (ec || relative.empty() || *relative.begin() == "..") return;
+        path = effectiveFile(relative);
+    });
     std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids;
     for (const auto& actor : resources.value().actors) actor_object_ids.emplace(actor.type, actor.object_id);
     if (view->level() == currentLevel_) levelProperties_->setSpriteDefinitions(spriteDefinitions_, std::move(actor_object_ids));
@@ -2112,22 +2250,65 @@ void MainWindow::refreshChangedGraphics() {
 }
 
 void MainWindow::refreshPalette() {
-    if (!paletteToolbox_) return;
-    paletteButtons_.clear(); while(paletteToolbox_->count()){auto* widget=paletteToolbox_->widget(0);paletteToolbox_->removeItem(0);delete widget;}
+    if (!objectTabs_ || !spriteToolbox_) return;
+    paletteButtons_.clear();
+    while (objectTabs_->count()) { auto* widget = objectTabs_->widget(0); objectTabs_->removeTab(0); delete widget; }
+    while (spriteToolbox_->count()) { auto* widget = spriteToolbox_->widget(0); spriteToolbox_->removeItem(0); delete widget; }
     customPaletteTree_->clear();
+
     LevelPreviewWidget* view = nullptr;
     for (auto& [key, document] : documents_) {
         (void)key;
         if (document.view->level() == currentLevel_) view = document.view;
     }
-    std::map<std::string, std::vector<LevelPreviewWidget::PaletteEntry>> groups;
-    bool has_objects = false;
-    bool has_sprites = false;
+
+    // A grid of preview buttons, shared by the object and sprite pickers.
+    const auto grid = [this](QWidget* parent, const std::vector<LevelPreviewWidget::PaletteEntry>& entries,
+                             const QString& category) {
+        auto* page = new QScrollArea(parent);
+        page->setWidgetResizable(true);
+        page->setFrameShape(QFrame::NoFrame);
+        auto* content = new QWidget(page);
+        auto* layout = new QGridLayout(content);
+        layout->setAlignment(Qt::AlignTop);
+        int cell = 0;
+        for (const auto& entry : entries) {
+            auto* button = new QToolButton(content);
+            button->setText(entry.label);
+            button->setToolTip(entry.tooltip.isEmpty() ? entry.label : entry.tooltip);
+            button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            button->setIconSize({40, 40});
+            button->setMinimumSize(82, 72);
+            button->setProperty("category", category);
+            if (!entry.image.isNull()) {
+                button->setIcon(QIcon(QPixmap::fromImage(
+                    entry.image.scaled(40, 40, Qt::KeepAspectRatio, Qt::SmoothTransformation))));
+            }
+            connect(button, &QToolButton::clicked, this, [this, kind = entry.kind, id = entry.id, slot = entry.slot] {
+                auto* target = activeLevelView();
+                if (!target) return;
+                if (kind == 1) target->setPlacementObject(slot, id);
+                else if (kind == 2) target->setPlacementSprite(id);
+                else target->setCreateKind(kind);
+                target->setFocus();
+            });
+            layout->addWidget(button, cell / 3, cell % 3);
+            paletteButtons_.push_back(button);
+            ++cell;
+        }
+        page->setWidget(content);
+        return page;
+    };
+
+    std::array<std::vector<LevelPreviewWidget::PaletteEntry>, 3> objects;
+    std::map<std::string, std::vector<LevelPreviewWidget::PaletteEntry>> sprites;
     if (view) {
         for (auto& entry : view->paletteEntries()) {
-            has_objects |= entry.tool == LevelPreviewWidget::Tool::Object;
-            has_sprites |= entry.tool == LevelPreviewWidget::Tool::Sprite;
-            groups[entry.category.toStdString()].push_back(std::move(entry));
+            if (entry.kind == 1 && entry.slot >= 0 && entry.slot < static_cast<int>(objects.size())) {
+                objects[static_cast<std::size_t>(entry.slot)].push_back(std::move(entry));
+            } else if (entry.kind == 2) {
+                sprites[entry.category.toStdString()].push_back(std::move(entry));
+            }
         }
         std::unordered_map<std::string, QTreeWidgetItem*> modules;
         std::unordered_map<std::string, QTreeWidgetItem*> components;
@@ -2143,50 +2324,66 @@ void MainWindow::refreshPalette() {
         }
         customPaletteTree_->expandAll();
     }
-    if (!has_objects) groups["Tilesets"].push_back({LevelPreviewWidget::Tool::Object, 0, 0, "Object", "Tilesets", {}});
-    if (!has_sprites) groups["Other actors"].push_back({LevelPreviewWidget::Tool::Sprite, 0, 0, "Sprite", "Other actors", {}});
-    for (const auto& [tool, name] : std::array{
-             std::pair{LevelPreviewWidget::Tool::Entrance, "Entrance"},
-             std::pair{LevelPreviewWidget::Tool::Zone, "Zone"},
-             std::pair{LevelPreviewWidget::Tool::Path, "Path"},
-             std::pair{LevelPreviewWidget::Tool::ProgressPath, "Progress Path"}})
-        groups["Tools"].push_back({tool, 0, 0, name, "Tools", {}});
 
-    for (auto& [category, entries] : groups) {
-        auto* page=new QScrollArea(paletteToolbox_);page->setWidgetResizable(true);page->setFrameShape(QFrame::NoFrame);
-        auto* content=new QWidget(page);auto* grid=new QGridLayout(content);grid->setAlignment(Qt::AlignTop);int cell=0;
-        for (auto& entry : entries) {
-            auto* button=new QToolButton(content);button->setText(entry.label);button->setToolTip(entry.label);button->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);button->setIconSize({40,40});button->setMinimumSize(82,72);button->setProperty("category",QString::fromStdString(category));
-            if(!entry.image.isNull())button->setIcon(QIcon(QPixmap::fromImage(entry.image.scaled(40,40,Qt::KeepAspectRatio,Qt::SmoothTransformation))));
-            connect(button,&QToolButton::clicked,this,[this,tool=entry.tool,id=entry.id,slot=entry.slot]{auto* view=activeLevelView();if(!view)return;if(tool==LevelPreviewWidget::Tool::Object)view->setPlacementObject(slot,id);else if(tool==LevelPreviewWidget::Tool::Sprite)view->setPlacementSprite(id);else view->setPlacementTool(tool);view->setFocus();});
-            grid->addWidget(button,cell/3,cell%3);paletteButtons_.push_back(button);++cell;
-        }
-        page->setWidget(content);
-        paletteToolbox_->addItem(page,QString::fromStdString(category));
+    // Only slots that actually have a tileset loaded get a page, so the picker
+    // never offers three tabs where the level uses one.
+    for (std::size_t slot = 0; slot < objects.size(); ++slot) {
+        if (objects[slot].empty()) continue;
+        auto* page = grid(objectTabs_, objects[slot], QString("Tileset %1").arg(slot));
+        page->setObjectName(QString("ObjectPicker%1").arg(slot));
+        objectTabs_->addTab(page, QString("Tileset %1").arg(slot));
     }
+    if (objectTabs_->count() == 0) {
+        auto* empty = new QLabel("Open a level to list its tileset objects.", objectTabs_);
+        empty->setAlignment(Qt::AlignCenter);
+        empty->setWordWrap(true);
+        objectTabs_->addTab(empty, "Objects");
+    }
+
+    for (const auto& [category, entries] : sprites) {
+        spriteToolbox_->addItem(grid(spriteToolbox_, entries, QString::fromStdString(category)),
+                                QString::fromStdString(category));
+    }
+    if (spriteToolbox_->count() == 0) {
+        auto* empty = new QLabel("Open a level to list its actors.", spriteToolbox_);
+        empty->setAlignment(Qt::AlignCenter);
+        empty->setWordWrap(true);
+        spriteToolbox_->addItem(empty, "Sprites");
+    }
+
     emit paletteSearch_->textChanged(paletteSearch_->text());
+}
+
+std::string MainWindow::documentKey(const QString& course_path, const QString& bgdat_path) const {
+    // The variant is part of the identity. Two variants can supply different
+    // bytes for the same project-relative path, so a session cached without it
+    // would be handed back for the wrong layer.
+    return activeVariant_.toStdString() + "\n" + course_path.toStdString() + "\n" + bgdat_path.toStdString();
+}
+
+std::filesystem::path MainWindow::effectiveFile(const std::filesystem::path& projectRelative) const {
+    auto fallback = currentProject_.directory() / projectRelative;
+    auto romPath = romPathForProjectFile(projectRelative);
+    if (romPath) {
+        if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->source.empty()) {
+            std::error_code ec;
+            if (std::filesystem::is_regular_file(entry->source, ec)) return entry->source;
+        }
+    }
+    return fallback;
 }
 
 nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const QString& course_path, const QString& bgdat_path) {
     if (course_path.isEmpty() || bgdat_path.isEmpty()) {
         return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "course or BGDat file is missing");
     }
-    const auto key = course_path.toStdString() + "\n" + bgdat_path.toStdString();
+    const auto key = documentKey(course_path, bgdat_path);
     if (const auto found = levelSessions_.find(key); found != levelSessions_.end()) {
         return found->second.get();
     }
 
-    auto effective = [this](const QString& path) {
-        const auto relative = std::filesystem::path(path.toStdString());
-        auto fallback = currentProject_.directory() / relative;
-        auto romPath = romPathForProjectFile(relative);
-        if (romPath) if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->source.empty()) {
-            std::error_code ec; if (std::filesystem::is_regular_file(entry->source, ec)) return entry->source;
-        }
-        return fallback;
-    };
-    const auto course_file = effective(course_path);
-    const auto bgdat_file = effective(bgdat_path);
+    const auto course_file = effectiveFile(std::filesystem::path(course_path.toStdString()));
+    const auto bgdat_file = effectiveFile(std::filesystem::path(bgdat_path.toStdString()));
     auto course_data = readBinaryFile(course_file);
     if (!course_data) {
         return course_data.error();
@@ -2310,8 +2507,51 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     }
 }
 
+void MainWindow::editPreferences() {
+    QDialog dialog(this);
+    dialog.setWindowTitle("Preferences");
+    dialog.setObjectName("PreferencesDialog");
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* form = new QFormLayout;
+
+    auto* language = new QComboBox(&dialog);
+    language->setObjectName("PreferenceLanguage");
+    for (const auto& [code, name] : std::array{std::pair{"en", "English"}, std::pair{"nl", "Nederlands"},
+                                               std::pair{"pt", "Portugues"}, std::pair{"es", "Espanol"},
+                                               std::pair{"fr", "Francais"}}) {
+        language->addItem(QString::fromUtf8(name), QString::fromLatin1(code));
+    }
+    const auto current = QSettings().value("Language", "en").toString();
+    if (const auto index = language->findData(current); index >= 0) language->setCurrentIndex(index);
+    form->addRow("Language", language);
+    auto* restart = new QLabel("Applied the next time Big Star starts.", &dialog);
+    restart->setWordWrap(true);
+    form->addRow(QString{}, restart);
+
+    auto* autosave = new QSpinBox(&dialog);
+    autosave->setObjectName("PreferenceAutosaveMinutes");
+    autosave->setRange(1, 60);
+    autosave->setSuffix(" min");
+    autosave->setValue(QSettings().value("AutosaveMinutes", 1).toInt());
+    autosave->setToolTip("How often unsaved level edits are written to a recovery snapshot.");
+    form->addRow("Recovery snapshots", autosave);
+
+    layout->addLayout(form);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
+    layout->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) return;
+
+    QSettings settings;
+    settings.setValue("Language", language->currentData().toString());
+    settings.setValue("AutosaveMinutes", autosave->value());
+    // The snapshot interval is the one preference that can take effect now.
+    if (autosaveTimer_) autosaveTimer_->setInterval(autosave->value() * 60000);
+}
+
 void MainWindow::log(const QString& message) {
-    if (logOutput_) {
-        logOutput_->append(message);
+    if (patcherPanel_) {
+        patcherPanel_->appendLog(message);
     }
 }

@@ -2,6 +2,8 @@
 #include "FilesystemDock.hpp"
 #include "FileEditors.hpp"
 #include "GraphicsEditorDialog.hpp"
+
+#include "nsmb/formats/g2d.hpp"
 #include "MessageEditorDialog.hpp"
 #include "UiResourceEditorDialog.hpp"
 #include "TilesetEditorDialog.hpp"
@@ -16,6 +18,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QComboBox>
 #include <QClipboard>
 #include <QDockWidget>
 #include <QFile>
@@ -127,7 +130,7 @@ private slots:
         std::vector<std::uint8_t> enpg(0x10200U);
         QVERIFY(UiResourceEditorDialog::supports(enpg, "loading.enpg"));
         UiResourceEditorDialog image("loading.enpg", enpg, false);
-        QVERIFY(image.findChild<QWidget*>("UiResourceCanvas"));
+        QVERIFY(image.findChild<QWidget*>("GraphicsCanvas"));
         auto imageOutput = image.editedBytes();
         QVERIFY(imageOutput);
         QCOMPARE(imageOutput.value(), enpg);
@@ -139,6 +142,27 @@ private slots:
         auto metadataOutput = notes.editedBytes();
         QVERIFY(metadataOutput);
         QCOMPARE(metadataOutput.value(), metadata);
+    }
+
+    void oneGraphicsEditorOpensBothFormatFamilies() {
+        // There used to be two editors, and a file landed in whichever one
+        // claimed it. There is one now, so the same dialog has to show a
+        // uiStudio layout and an NNS G2D sheet alike.
+        const std::vector<std::uint8_t> bnbl{'J','N','B','L',0,0,1,0, 1,0,2,0,16,12};
+        QVERIFY(GraphicsEditorDialog::supports(bnbl, "uiStudio/touch.bnbl"));
+        GraphicsEditorDialog layout("uiStudio/touch.bnbl", bnbl);
+        QVERIFY(layout.findChild<QTableWidget*>("BnxlTable"));
+        QVERIFY(layout.editedBytes());
+        QCOMPARE(layout.editedBytes().value(), bnbl);
+
+        const std::string text = "[Music]\n0=Overworld\n";
+        const std::vector<std::uint8_t> metadata(text.begin(), text.end());
+        GraphicsEditorDialog notes("NSMBeUD", metadata, nullptr, {}, true);
+        QVERIFY(notes.findChild<QTreeWidget*>("MetadataTree"));
+
+        GraphicsEditorDialog sheet("root/enemy/test_ncg.bin", std::vector<std::uint8_t>(32));
+        QVERIFY(sheet.findChild<QWidget*>("GraphicsCanvas"));
+        QVERIFY(!sheet.findChild<QTableWidget*>("BnxlTable"));
     }
 
     void messageEditorRoundTripsAndEditsBmgMessages() {
@@ -207,9 +231,10 @@ private slots:
             return std::vector<std::uint8_t>(value.begin(), value.end());
         };
         QCOMPARE(bse::editors::classify(sampleBmg(), "script/course.bmg"), Kind::Messages);
+        // A uiStudio layout is a page of the one graphics editor, not an editor of its own.
         QCOMPARE(bse::editors::classify(bytes(QByteArray("JNBL") + QByteArray("\0\0\1\0\1\0\2\0\x10\x0c", 10)),
                                         "uiStudio/a.bnbl"),
-                 Kind::UiResource);
+                 Kind::Graphics);
         QCOMPARE(bse::editors::classify(bytes(QByteArray(64, '\0')), "BG_ncg/a_ncg.bin"), Kind::Graphics);
         QCOMPARE(bse::editors::classify(bytes(QByteArray("nothing here at all")), "notes.txt"), Kind::None);
 
@@ -263,6 +288,46 @@ private slots:
         QVERIFY(!details->text().contains("Opens in:"));
     }
 
+    void anOpenedFileBecomesADocumentTabRatherThanAModalDialog() {
+        // The whole shell used to freeze behind QDialog::exec() while a file was
+        // being edited. It is a tab now, so this test can go on driving the
+        // window after opening one.
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        const auto onDisk = files.filePath("course.bmg");
+        QFile file(onDisk);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        const auto body = sampleBmg();
+        file.write(reinterpret_cast<const char*>(body.data()), static_cast<qint64>(body.size()));
+        file.close();
+
+        MainWindow window;
+        auto* tabs = window.findChild<QTabWidget*>("DocumentTabs");
+        QVERIFY(tabs);
+        const auto before = tabs->count();
+
+        nsmb::project::FilesystemEntry entry;
+        entry.path = "script/course.bmg";
+        entry.extracted = onDisk.toStdString();
+        window.filesystemView_.entries.push_back(entry);
+        window.openFileDocument("\nscript/course.bmg", "script/course.bmg", body, false, {},
+                                [](const std::vector<std::uint8_t>&) { return nsmb::core::Result<void>{}; });
+
+        QCOMPARE(tabs->count(), before + 1);
+        auto* page = tabs->currentWidget();
+        QVERIFY(page);
+        QVERIFY(page->findChild<QPushButton*>("FileDocumentSave"));
+        QVERIFY(page->findChild<QTableWidget*>("MessageList"));
+
+        // Opening the same file again returns to its tab instead of stacking another.
+        window.openFileDocument("\nscript/course.bmg", "script/course.bmg", body, false, {},
+                                [](const std::vector<std::uint8_t>&) { return nsmb::core::Result<void>{}; });
+        QCOMPARE(tabs->count(), before + 1);
+
+        window.closeTab(tabs->indexOf(page));
+        QCOMPARE(tabs->count(), before);
+    }
+
     void previewAndDocksAreRecoverable() {
         MainWindow window;
         window.show();
@@ -271,25 +336,27 @@ private slots:
         auto* preview = window.findChild<QAction*>("PreviewAction");
         QVERIFY(window.findChild<QAction*>("RomBannerAction"));
         QVERIFY(window.findChild<QAction*>("RomUserMetadataAction"));
-        QVERIFY(window.findChild<QAction*>("FireflowerBuildAction"));
-        QVERIFY(window.findChild<QAction*>("NsmbeWrapperBuildAction"));
+        // The Fireflower and NSMBe-wrapper build actions are gone.
+        QVERIFY(!window.findChild<QAction*>("FireflowerBuildAction"));
+        QVERIFY(!window.findChild<QAction*>("NsmbeWrapperBuildAction"));
         auto* levels = window.findChild<QDockWidget*>("LevelsDock");
         QVERIFY(tabs);
         QVERIFY(preview);
         QVERIFY(levels);
-        QCOMPARE(tabs->count(), 2);
-        auto* hub = window.findChild<QTabWidget*>("ProjectHubTabs");
-        QVERIFY(hub);
-        QCOMPARE(hub->count(), 5);
-        auto* palette = window.findChild<QToolBox*>("VanillaPaletteToolbox");
-        QVERIFY(palette);
-        tabs->tabCloseRequested(tabs->indexOf(window.hub_));
-        QCOMPARE(tabs->count(), 2);
-        tabs->tabCloseRequested(tabs->indexOf(window.preview_));
+        // The Project Hub is gone: its level tree was the Levels dock's tree with
+        // a second selection model, and its pages restated the docks and menus.
         QCOMPARE(tabs->count(), 1);
+        QVERIFY(!window.findChild<QTabWidget*>("ProjectHubTabs"));
+        QVERIFY(!window.findChild<QTreeView*>("HubLevelTree"));
+        QVERIFY(window.findChild<QTabWidget*>("ObjectPickerTabs"));
+        QVERIFY(window.findChild<QToolBox*>("SpritePicker"));
+        QVERIFY(window.findChild<QTreeWidget*>("CustomActorTree"));
+        QVERIFY(window.findChild<QComboBox*>("VariantSelector"));
+        tabs->tabCloseRequested(tabs->indexOf(window.preview_));
+        QCOMPARE(tabs->count(), 0);
         QVERIFY(!preview->isChecked());
         preview->trigger();
-        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(tabs->count(), 1);
         levels->close();
         QVERIFY(levels->isHidden());
         levels->toggleViewAction()->trigger();
@@ -343,18 +410,71 @@ private slots:
         QTRY_VERIFY(!panel.running());
     }
 
-    void patcherPanelKeepsAVariantTheProjectNoLongerLists() {
+    void oneVariantSelectorDrivesTheWholeWindow() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto root = std::filesystem::path(directory.path().toStdString());
+        std::ofstream(root / "ncpatcher.yaml")
+            << "version: 2\nvariants:\n  en:\n    defines: EN\n  fr:\n    defines: FR\n";
+        const auto project = make_project(root);
+
+        MainWindow window;
+        window.setProject(project);
+
+        // Exactly one selector, and it carries the bare variant name in the data
+        // role -- reading the label instead is what made switching a no-op.
+        auto* selector = window.findChild<QComboBox*>("VariantSelector");
+        QVERIFY(selector);
+        QVERIFY(!window.findChild<QComboBox*>("ActiveVariant"));
+        QVERIFY(selector->findData(QString("en")) >= 0);
+        QVERIFY(selector->findData(QString("fr")) >= 0);
+
+        // Opening a level caches a session keyed to the variant it was loaded in.
+        const QString course = "extracted-rom/root/course/A01_1.bin";
+        const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
+        const auto index = window.findLevelIndex(course, bgdat);
+        QVERIFY(index.isValid());
+        window.openLevelEditor(index);
+        QCOMPARE(window.documents_.size(), 1U);
+        const auto before = window.documentKey(course, bgdat);
+        QVERIFY(window.levelSessions_.contains(before));
+
+        // Switching drops that session rather than handing it back for the other
+        // variant's layers, and the build is told about the change too.
+        selector->setCurrentIndex(selector->findData(QString("fr")));
+        QCOMPARE(window.activeVariant_, QString("fr"));
+        QVERIFY(!window.levelSessions_.contains(before));
+        QCOMPARE(window.patcherPanel_->selectedVariant(), QString("fr"));
+
+        // The level comes back, keyed to the variant now in force.
+        const auto after = window.documentKey(course, bgdat);
+        QVERIFY(after != before);
+        QCOMPARE(window.documents_.size(), 1U);
+        QVERIFY(window.documents_.contains(after));
+    }
+
+    void anUnlistedVariantIsKeptAndLabelled() {
         // A stored variant survives a project that cannot confirm it. Silently
         // resetting to "none" would switch the next build to a different
         // language without saying so.
-        QTemporaryDir project;
-        QVERIFY(project.isValid());
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto project = make_project(std::filesystem::path(directory.path().toStdString()));
 
-        PatcherPanel panel;
-        panel.setSelectedVariant("fr");
-        panel.setProjectDirectory(project.path().toStdString());
-        panel.setSelectedVariant("fr");
-        QCOMPARE(panel.selectedVariant(), QString("fr"));
+        MainWindow window;
+        window.setProject(project);
+        // As a restored workspace does: it names a variant, and the project it
+        // is reopened against no longer lists it.
+        window.activeVariant_ = "fr";
+        window.reloadFilesystemView();
+
+        auto* selector = window.findChild<QComboBox*>("VariantSelector");
+        QVERIFY(selector);
+        QCOMPARE(window.activeVariant_, QString("fr"));
+        const auto index = selector->findData(QString("fr"));
+        QVERIFY(index >= 0);
+        QCOMPARE(selector->currentIndex(), index);
+        QVERIFY(selector->itemText(index).contains("not configured"));
     }
 
     void graphicsEditorPaintsRawCharacterPixels() {
@@ -374,6 +494,85 @@ private slots:
         QVERIFY(edited);
         QCOMPARE(edited.value().size(), tile.size());
         QCOMPARE(edited.value().front() & 0x0fU, 3U);
+    }
+
+    // Helper for the pairing tests below: a one-tile-wide NCGR whose every
+    // pixel is index 1, plus an NCLR that paints index 1 red.
+    static std::vector<std::uint8_t> make_ncgr(std::vector<std::uint8_t> characters,
+                                               std::uint16_t width_tiles,
+                                               std::uint32_t character_format = 0) {
+        nsmb::formats::Ncgr ncgr;
+        ncgr.width = width_tiles;
+        ncgr.height = static_cast<std::uint16_t>(characters.size() / 32U / std::max<std::uint16_t>(1, width_tiles));
+        ncgr.pixel_format = 3;  // GX_TEXFMT_PLTT16 — 4bpp
+        ncgr.character_format = character_format;
+        ncgr.characters = std::move(characters);
+        return nsmb::formats::write_ncgr(ncgr).value();
+    }
+
+    void aPairedPaletteColoursTheGraphicsInsteadOfTheGreyRamp() {
+        // Index 1 across one whole tile.
+        const auto ncgr = make_ncgr(std::vector<std::uint8_t>(32, 0x11), 1);
+        nsmb::formats::Nclr nclr;
+        nclr.palette.assign(32, 0);
+        // BGR555 colour 1 is pure red.
+        nclr.palette[2] = 0x1f;
+        const auto encoded = nsmb::formats::write_nclr(nclr).value();
+
+        bse::editors::Companions companions;
+        companions.paths << "pair/red.nclr";
+        companions.load = [&](const QString&) -> nsmb::core::Result<std::vector<std::uint8_t>> { return encoded; };
+
+        GraphicsEditorDialog dialog("pair/sheet.ncgr", ncgr, nullptr, companions);
+        dialog.show();
+        QTest::qWait(10);
+        auto* source = dialog.findChild<QComboBox*>("GraphicsPaletteSource");
+        QVERIFY(source);
+        const auto index = source->findData(QString("pair/red.nclr"));
+        QVERIFY(index >= 0);
+        source->setCurrentIndex(index);
+
+        auto* canvas = dialog.findChild<QWidget*>("GraphicsCanvas");
+        QVERIFY(canvas);
+        const auto zoom = canvas->width() / 8;
+        const auto painted = canvas->grab().toImage().pixelColor(zoom / 2, zoom / 2);
+        // A grey ramp would give equal channels; a real palette does not.
+        QVERIFY(painted.red() > painted.green() + 40);
+        QVERIFY(painted.red() > painted.blue() + 40);
+    }
+
+    void aBitmapFormattedNcgrIsNotDeTiled() {
+        // Four tiles, two across, with one bright pixel at flat offset 8. Read
+        // linearly that lands at (8, 0); de-tiled it would land at (0, 1).
+        std::vector<std::uint8_t> characters(128, 0);
+        characters[4] = 0x0f;
+        const auto ncgr = make_ncgr(characters, 2, 1);  // NNS_G2D_CHARACTER_FMT_BMP
+
+        GraphicsEditorDialog dialog("bmp/sheet.ncgr", ncgr);
+        dialog.show();
+        QTest::qWait(10);
+        auto* canvas = dialog.findChild<QWidget*>("GraphicsCanvas");
+        QVERIFY(canvas);
+        const auto zoom = canvas->width() / 16;
+        QVERIFY(zoom > 0);
+        const auto grabbed = canvas->grab().toImage();
+        const auto at = [&](int x, int y) { return grabbed.pixelColor(x * zoom + zoom / 2, y * zoom + zoom / 2); };
+        QVERIFY(at(8, 0).lightness() > 200);
+        QVERIFY(at(0, 1).lightness() < 50);
+    }
+
+    void aHeaderlessSheetHonoursTheWidthItIsGiven() {
+        // Eight tiles: the square-root guess would lay them out three across.
+        GraphicsEditorDialog dialog("raw/width_ncg.bin", std::vector<std::uint8_t>(8 * 32, 0));
+        dialog.show();
+        QTest::qWait(10);
+        auto* width = dialog.findChild<QSpinBox*>("GraphicsRawWidth");
+        auto* canvas = dialog.findChild<QWidget*>("GraphicsCanvas");
+        QVERIFY(width);
+        QVERIFY(canvas);
+        width->setValue(8);
+        // One row of eight tiles is eight times as wide as it is tall.
+        QCOMPARE(canvas->width(), canvas->height() * 8);
     }
 
     void tilesetEditorExposesAllM10SurfacesAndPreservesResources() {
@@ -472,31 +671,48 @@ private slots:
         QVERIFY(log->toPlainText().isEmpty());
     }
 
-    void canvasRequiresPaletteAndRightClickToPlace() {
+    void rightClickCreatesTheCurrentKindAndLeftClickNeverDoes() {
         auto level = make_level();
         LevelPreviewWidget canvas;
         canvas.resize(800, 600);
         canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
         canvas.setEditable(true);
-        canvas.setTool(LevelPreviewWidget::Tool::Object);
+        canvas.setCreateKind(1);
         canvas.show();
         QTest::qWait(20);
         QSignalSpy changed(&canvas, &LevelPreviewWidget::levelChanged);
+
+        // Left-click selects and marquees. It never creates, whatever kind is set.
         QTest::mouseClick(&canvas, Qt::LeftButton, {}, QPoint(400, 350));
         QVERIFY(level.objects().empty());
-        QTest::mouseClick(&canvas, Qt::RightButton, {}, QPoint(400, 350));
-        QVERIFY(level.objects().empty());
-        canvas.setPlacementObject(1, 12);
+
+        // Right-click creates without needing anything armed from the palette:
+        // the default is object 0 of tileset slot 0.
         QTest::mouseClick(&canvas, Qt::RightButton, {}, QPoint(400, 350));
         QCOMPARE(level.objects().size(), 1U);
-        QCOMPARE(changed.count(), 1);
-        QCOMPARE(level.objects()[0].tileset_slot, 1);
-        QCOMPARE(level.objects()[0].object_id, 12);
+        QCOMPARE(level.objects()[0].tileset_slot, 0);
+        QCOMPARE(level.objects()[0].object_id, 0);
+
+        // A palette pick changes what is stamped, not whether stamping works.
+        canvas.setPlacementObject(1, 12);
+        QCOMPARE(canvas.createKind(), 1);
+        QTest::mouseClick(&canvas, Qt::RightButton, {}, QPoint(420, 370));
+        QCOMPARE(level.objects().size(), 2U);
+        QCOMPARE(changed.count(), 2);
+        QCOMPARE(level.objects()[1].tileset_slot, 1);
+        QCOMPARE(level.objects()[1].object_id, 12);
+
+        // The kind alone decides what is created; views used to be reachable
+        // only from the properties panel's Add button.
+        canvas.setCreateKind(7);
+        const auto views = level.course().views.size();
+        QTest::mouseClick(&canvas, Qt::RightButton, {}, QPoint(440, 390));
+        QCOMPARE(level.course().views.size(), views + 1U);
+
         QVERIFY(level.can_undo());
         QVERIFY(level.undo());
         canvas.refreshLevelState();
-        QVERIFY(level.objects().empty());
-        QVERIFY(canvas.selections_.empty());
+        QCOMPARE(level.course().views.size(), views);
     }
 
     void customPalettePlacementCarriesHash() {
@@ -521,7 +737,7 @@ private slots:
         canvas.resize(800, 600);
         canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
         canvas.setEditable(true);
-        canvas.setTool(LevelPreviewWidget::Tool::Object);
+        canvas.setCreateKind(1);
         canvas.setSelection(1, 0, -1);
         canvas.show();
         QTest::qWait(20);
@@ -547,22 +763,115 @@ private slots:
         QCOMPARE(level.objects()[0].height, 2);
     }
 
-    void toolbarFiltersSelectionKind() {
+    void everyResizableKindHasEightKnobs() {
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 10, 10, 4, 4}));
+        QVERIFY(level.add_zone({320, 320, 256, 192, 0}));
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 640; view.y = 640; view.width = 256; view.height = 192;
+        QVERIFY(level.add_view(view));
+
+        LevelPreviewWidget canvas;
+        canvas.resize(900, 700);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.show();
+        QTest::qWait(20);
+
+        // Objects, zones and views all resize; sprites and entrances do not.
+        for (const int kind : {1, 4, 7}) {
+            canvas.setSelection(kind, 0, -1);
+            const auto rect = canvas.selectedResizableRect();
+            QVERIFY2(rect.has_value(), qPrintable(QString("kind %1 has no resizable rect").arg(kind)));
+            const auto screen = canvas.sceneTransform().mapRect(*rect);
+
+            // All eight knobs answer, and each reports its own corner or edge.
+            const std::array centres{screen.topLeft(),
+                                     QPointF(screen.center().x(), screen.top()),
+                                     screen.topRight(),
+                                     QPointF(screen.right(), screen.center().y()),
+                                     screen.bottomRight(),
+                                     QPointF(screen.center().x(), screen.bottom()),
+                                     screen.bottomLeft(),
+                                     QPointF(screen.left(), screen.center().y())};
+            for (std::size_t i = 0; i < centres.size(); ++i) {
+                QCOMPARE(canvas.handleAt(centres[i]), static_cast<LevelPreviewWidget::Handle>(i + 1));
+            }
+            QCOMPARE(canvas.handleAt(screen.center()), LevelPreviewWidget::Handle::None);
+        }
+
+        canvas.setSelection(2, 0, -1);
+        QVERIFY(!canvas.selectedResizableRect().has_value());
+    }
+
+    void topLeftKnobMovesTheViewOriginRatherThanItsExtent() {
+        auto level = make_level();
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 320; view.y = 320; view.width = 256; view.height = 192;
+        QVERIFY(level.add_view(view));
+
+        LevelPreviewWidget canvas;
+        canvas.resize(900, 700);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.setSelection(7, 0, -1);
+        canvas.show();
+        QTest::qWait(20);
+
+        // Dragging the bottom-right knob grows the view away from its origin.
+        auto screen = canvas.sceneTransform().mapRect(*canvas.selectedResizableRect());
+        auto knob = screen.bottomRight().toPoint();
+        QTest::mousePress(&canvas, Qt::LeftButton, {}, knob);
+        QTest::mouseMove(&canvas, knob + QPoint(48, 48));
+        QTest::mouseRelease(&canvas, Qt::LeftButton, {}, knob + QPoint(48, 48));
+        QCOMPARE(level.course().views[0].x, 320);
+        QCOMPARE(level.course().views[0].y, 320);
+        QVERIFY(level.course().views[0].width > 256);
+        QVERIFY(level.course().views[0].height > 192);
+
+        // Dragging the top-left knob moves the origin instead, which the old
+        // single bottom-right handle could not express at all.
+        const auto width = level.course().views[0].width;
+        const auto height = level.course().views[0].height;
+        canvas.refreshLevelState();
+        canvas.setSelection(7, 0, -1);
+        screen = canvas.sceneTransform().mapRect(*canvas.selectedResizableRect());
+        knob = screen.topLeft().toPoint();
+        QTest::mousePress(&canvas, Qt::LeftButton, {}, knob);
+        QTest::mouseMove(&canvas, knob + QPoint(32, 32));
+        QTest::mouseRelease(&canvas, Qt::LeftButton, {}, knob + QPoint(32, 32));
+        QVERIFY(level.course().views[0].x > 320);
+        QVERIFY(level.course().views[0].y > 320);
+        QVERIFY(level.course().views[0].width < width);
+        QVERIFY(level.course().views[0].height < height);
+    }
+
+    void selectionIgnoresTheCreateKind() {
         auto level = make_level();
         QVERIFY(level.add_object({1, 0, 1, 1, 1, 1}));
         QVERIFY(level.add_sprite({7, 10, 10, {}}));
         LevelPreviewWidget canvas;
         canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
         canvas.setEditable(true);
+
+        // A mixed selection survives a change of create kind. Deciding what to
+        // place next is not a reason to drop what is already held.
         canvas.selections_ = {{1, 0, -1}, {2, 0, -1}};
-        canvas.setTool(LevelPreviewWidget::Tool::Object);
-        QCOMPARE(canvas.selections_.size(), 1U);
-        QCOMPARE(canvas.selections_.front().kind, 1);
-        QVERIFY(canvas.hitTest({20, 20}));
-        QVERIFY(!canvas.hitTest({160, 160}));
-        canvas.setTool(LevelPreviewWidget::Tool::Sprite);
-        QVERIFY(!canvas.hitTest({20, 20}));
-        QVERIFY(canvas.hitTest({160, 160}));
+        canvas.setCreateKind(1);
+        QCOMPARE(canvas.selections_.size(), 2U);
+
+        // Both entities stay hittable whatever the kind is, so an object never
+        // has to be "switched to" before it can be grabbed.
+        for (const int kind : {1, 2, 4, 7}) {
+            canvas.setCreateKind(kind);
+            QCOMPARE(canvas.createKind(), kind);
+            const auto object = canvas.hitTest({20, 20});
+            const auto sprite = canvas.hitTest({160, 160});
+            QVERIFY(object);
+            QCOMPARE(object->kind, 1);
+            QVERIFY(sprite);
+            QCOMPARE(sprite->kind, 2);
+        }
     }
 
     void multiPropertiesEditIsOneUndoStep() {
@@ -606,7 +915,7 @@ private slots:
 
         LevelPreviewWidget canvas;
         canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
-        canvas.setTool(LevelPreviewWidget::Tool::Sprite);
+        canvas.setCreateKind(2);
         canvas.actor_object_ids_.emplace(7, 42);
         canvas.setSpriteDefinitions(catalog);
         const auto hit = canvas.hitTest({130, 150});
@@ -748,20 +1057,22 @@ private slots:
         const auto project = make_project(directory.path().toStdString());
         const QString course = "extracted-rom/root/course/A01_1.bin";
         const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
-        const auto key = (course + "\n" + bgdat).toStdString();
 
         MainWindow first;
         first.setProject(project);
+        // Documents are keyed by variant as well as by path, so ask the window
+        // rather than rebuilding the key here.
+        const auto key = first.documentKey(course, bgdat);
         const auto index = first.findLevelIndex(course, bgdat);
         QVERIFY(index.isValid());
         first.updateSelectedLevel(index);
-        QCOMPARE(first.tabs_->count(), 2);
+        QCOMPARE(first.tabs_->count(), 1);
         first.openLevelEditor(index);
         first.openLevelEditor(index);
         QCOMPARE(first.documents_.size(), 1U);
-        QCOMPARE(first.tabs_->count(), 3);
-        QVERIFY(first.paletteToolbox_->count() > 0);
-        QVERIFY(qobject_cast<QScrollArea*>(first.paletteToolbox_->widget(0)));
+        QCOMPARE(first.tabs_->count(), 2);
+        QVERIFY(first.objectTabs_->count() > 0);
+        QVERIFY(first.spriteToolbox_->count() > 0);
         auto& document = first.documents_.at(key);
         document.view->setZoom(2.0);
         document.view->setPan({12, 34});
@@ -769,7 +1080,7 @@ private slots:
         first.detachEditor(key);
         QVERIFY(document.window);
         QVERIFY(document.view->isVisible());
-        QCOMPARE(first.tabs_->count(), 2);
+        QCOMPARE(first.tabs_->count(), 1);
         first.saveWorkspaceState();
 
         MainWindow restored;
@@ -783,7 +1094,7 @@ private slots:
 
         restored.reattachEditor(key);
         QVERIFY(!restored.documents_.at(key).window);
-        QCOMPARE(restored.tabs_->count(), 3);
+        QCOMPARE(restored.tabs_->count(), 2);
     }
 
     void levelSavesGoToTheActiveModuleTree() {

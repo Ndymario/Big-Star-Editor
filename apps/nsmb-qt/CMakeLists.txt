@@ -15,6 +15,8 @@ add_executable(nsmb-qt
   src/MessageEditorDialog.hpp
   src/TilesetEditorDialog.cpp
   src/TilesetEditorDialog.hpp
+  src/GraphicsCanvas.cpp
+  src/GraphicsCanvas.hpp
   src/UiResourceEditorDialog.cpp
   src/UiResourceEditorDialog.hpp
   src/LevelDataWidget.cpp
@@ -43,6 +45,7 @@ if(BSE_BUILD_TESTS)
       src/GraphicsEditorDialog.cpp src/GraphicsEditorDialog.hpp
       src/MessageEditorDialog.cpp src/MessageEditorDialog.hpp
       src/TilesetEditorDialog.cpp src/TilesetEditorDialog.hpp
+      src/GraphicsCanvas.cpp src/GraphicsCanvas.hpp
       src/UiResourceEditorDialog.cpp src/UiResourceEditorDialog.hpp
       src/LevelPropertiesWidget.cpp src/LevelPropertiesWidget.hpp
       src/LevelDataWidget.cpp src/LevelDataWidget.hpp

@@ -47,6 +47,28 @@ struct LevelGraphicsResources {
     std::vector<std::filesystem::path> watched_files;
 };
 
+// Visits every path this struct holds, so a caller can redirect the whole set
+// in one pass. `resolve_level_graphics` reads the ROM's own file table and so
+// only ever names files in the extracted tree; a frontend that knows about
+// module layers uses this to point each one at the layer actually supplying it.
+// Empty paths are visited too -- the callback decides what to do with them.
+template <typename F>
+void for_each_resource_path(LevelGraphicsResources& resources, F&& visit) {
+    for (auto& tileset : resources.tilesets) {
+        for (auto* path : {&tileset.graphics, &tileset.palette, &tileset.map16,
+                           &tileset.objects, &tileset.object_index, &tileset.behaviors}) {
+            visit(*path);
+        }
+    }
+    for (auto* background : {&resources.background, &resources.foreground}) {
+        for (auto* path : {&background->graphics, &background->palette, &background->screen}) visit(*path);
+    }
+    for (auto& actor : resources.actors) {
+        for (auto* path : {&actor.graphics, &actor.palette, &actor.model}) visit(*path);
+    }
+    for (auto& path : resources.watched_files) visit(path);
+}
+
 using ObjectBankOverlayTable = std::array<std::array<std::uint32_t, 10>, 16>;
 core::Result<ObjectBankOverlayTable> find_object_bank_overlays(std::span<const std::uint8_t> arm9);
 

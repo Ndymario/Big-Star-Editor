@@ -1,4 +1,5 @@
 #include "TilesetEditorDialog.hpp"
+#include "GraphicsCanvas.hpp"
 #include "ThemeColors.hpp"
 
 #include "nsmb/core/file_io.hpp"
@@ -49,24 +50,9 @@ RgbaImage image(const QImage& source) {
     return output;
 }
 
-class ImageCanvas final : public QWidget {
-public:
-    explicit ImageCanvas(QWidget* parent = nullptr) : QWidget(parent) { setCursor(Qt::CrossCursor); }
-    void setImage(QImage value, int cell) {
-        image_ = std::move(value); cell_ = cell; const auto longest = std::max(image_.width(), image_.height()); zoom_ = std::clamp(longest ? 640 / longest : 1, 1, 8);
-        setFixedSize(std::max(1, image_.width() * zoom_), std::max(1, image_.height() * zoom_)); update();
-    }
-    std::function<void(int,int)> clicked;
-protected:
-    void paintEvent(QPaintEvent*) override { QPainter painter(this); painter.fillRect(rect(), palette().brush(QPalette::Base)); painter.setRenderHint(QPainter::SmoothPixmapTransform, false); if (!image_.isNull()) painter.drawImage(rect(), image_); if (cell_ * zoom_ >= 16) { painter.setPen(bse::theme::pixelGrid(palette())); for (int x=0;x<=image_.width();x+=cell_) painter.drawLine(x*zoom_,0,x*zoom_,height()); for(int y=0;y<=image_.height();y+=cell_) painter.drawLine(0,y*zoom_,width(),y*zoom_); } }
-    void mousePressEvent(QMouseEvent* event) override { if (!clicked || image_.isNull()) return; clicked(static_cast<int>(event->position().x()) / zoom_, static_cast<int>(event->position().y()) / zoom_); }
-private:
-    QImage image_; int cell_{1}, zoom_{1};
-};
-
-QWidget* scroller(ImageCanvas*& canvas, QString name, QWidget* parent) {
+QWidget* scroller(GraphicsCanvas*& canvas, QString name, QWidget* parent) {
     auto* scroll = new QScrollArea(parent); scroll->setWidgetResizable(false); scroll->setAlignment(Qt::AlignCenter);
-    canvas = new ImageCanvas(scroll); canvas->setObjectName(std::move(name)); scroll->setWidget(canvas); return scroll;
+    canvas = new GraphicsCanvas(scroll); canvas->setObjectName(std::move(name)); scroll->setWidget(canvas); return scroll;
 }
 
 bool export_png(QWidget* parent, const RgbaImage& value, const QString& title) {
@@ -83,7 +69,7 @@ std::optional<RgbaImage> import_png(QWidget* parent, const QString& title) {
 } // namespace
 
 struct TilesetEditorDialog::Impl {
-    struct MapUi { ImageCanvas* canvas{}; QSpinBox* entry{}; QSpinBox* tile{}; QSpinBox* palette{}; QCheckBox* hflip{}; QCheckBox* vflip{}; };
+    struct MapUi { GraphicsCanvas* canvas{}; QSpinBox* entry{}; QSpinBox* tile{}; QSpinBox* palette{}; QCheckBox* hflip{}; QCheckBox* vflip{}; };
 
     Impl(TilesetEditorDialog* owner,
          std::array<EditableTileset,3> values,
@@ -150,7 +136,7 @@ struct TilesetEditorDialog::Impl {
     }
 
     void buildBehaviors() {
-        auto* page=new QWidget(owner);auto* layout=new QHBoxLayout(page);behavior_preview=new ImageCanvas(page);behavior_preview->setObjectName("BehaviorMap16Canvas");auto* scroll=new QScrollArea(page);scroll->setWidget(behavior_preview);scroll->setAlignment(Qt::AlignCenter);layout->addWidget(scroll,1);auto* form=new QFormLayout;behavior_entry=new QSpinBox(page);behavior_entry->setObjectName("BehaviorEntry");behavior_flags=new QListWidget(page);behavior_flags->setObjectName("BehaviorFlags");for(const auto name:tile_behavior_flag_names){auto* item=new QListWidgetItem(QString::fromUtf8(name.data(),static_cast<qsizetype>(name.size())),behavior_flags);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(Qt::Unchecked);}behavior_subtype=new QComboBox(page);for(const auto name:tile_behavior_subtype_names)behavior_subtype->addItem(QString::fromUtf8(name.data(),static_cast<qsizetype>(name.size())));behavior_parameter=new QSpinBox(page);behavior_parameter->setRange(0,255);behavior_parameter_name=new QLabel(page);behavior_raw=new QLineEdit(page);behavior_raw->setObjectName("BehaviorRaw");form->addRow("Map16 tile",behavior_entry);form->addRow("Flags",behavior_flags);form->addRow("Subtype",behavior_subtype);form->addRow("Parameter",behavior_parameter);form->addRow("Meaning",behavior_parameter_name);form->addRow("Raw hex",behavior_raw);layout->addLayout(form);
+        auto* page=new QWidget(owner);auto* layout=new QHBoxLayout(page);behavior_preview=new GraphicsCanvas(page);behavior_preview->setObjectName("BehaviorMap16Canvas");auto* scroll=new QScrollArea(page);scroll->setWidget(behavior_preview);scroll->setAlignment(Qt::AlignCenter);layout->addWidget(scroll,1);auto* form=new QFormLayout;behavior_entry=new QSpinBox(page);behavior_entry->setObjectName("BehaviorEntry");behavior_flags=new QListWidget(page);behavior_flags->setObjectName("BehaviorFlags");for(const auto name:tile_behavior_flag_names){auto* item=new QListWidgetItem(QString::fromUtf8(name.data(),static_cast<qsizetype>(name.size())),behavior_flags);item->setFlags(item->flags()|Qt::ItemIsUserCheckable);item->setCheckState(Qt::Unchecked);}behavior_subtype=new QComboBox(page);for(const auto name:tile_behavior_subtype_names)behavior_subtype->addItem(QString::fromUtf8(name.data(),static_cast<qsizetype>(name.size())));behavior_parameter=new QSpinBox(page);behavior_parameter->setRange(0,255);behavior_parameter_name=new QLabel(page);behavior_raw=new QLineEdit(page);behavior_raw->setObjectName("BehaviorRaw");form->addRow("Map16 tile",behavior_entry);form->addRow("Flags",behavior_flags);form->addRow("Subtype",behavior_subtype);form->addRow("Parameter",behavior_parameter);form->addRow("Meaning",behavior_parameter_name);form->addRow("Raw hex",behavior_raw);layout->addLayout(form);
         behavior_preview->clicked=[this](int x,int y){const auto index=y/16*16+x/16;if(index<static_cast<int>(tileset().map16.size()))behavior_entry->setValue(index);};QObject::connect(behavior_entry,&QSpinBox::valueChanged,owner,[this]{loadBehavior();});
         auto changed=[this]{saveBehavior();};QObject::connect(behavior_flags,&QListWidget::itemChanged,owner,changed);QObject::connect(behavior_subtype,&QComboBox::currentIndexChanged,owner,changed);QObject::connect(behavior_parameter,&QSpinBox::valueChanged,owner,changed);QObject::connect(behavior_raw,&QLineEdit::editingFinished,owner,[this]{bool ok=false;const auto value=behavior_raw->text().toUInt(&ok,16);if(ok){ensureBehaviors();tileset().behaviors[static_cast<std::size_t>(behavior_entry->value())]=value;loadBehavior();}});
         tabs->addTab(page,"Behaviors");
@@ -164,24 +150,24 @@ struct TilesetEditorDialog::Impl {
     }
 
     void refreshAll() { refreshGraphics(); refreshMap16(); refreshObjects(); refreshBehaviors(); refreshTilemap(0); refreshTilemap(1); }
-    void refreshGraphics(){auto value=render_tileset_graphics(tileset());graphics_canvas->setImage(value?image(value.value()):QImage{},8);}
-    void refreshMap16(){auto value=render_map16_sheet(tileset());map16_canvas->setImage(value?image(value.value()):QImage{},16);map16_entry->setRange(0,std::max(0,static_cast<int>(tileset().map16.size())-1));loadMap16Entry();}
+    void refreshGraphics(){auto value=render_tileset_graphics(tileset());graphics_canvas->setImage(value?image(value.value()):QImage{}, {8, 16}, 640, 8);}
+    void refreshMap16(){auto value=render_map16_sheet(tileset());map16_canvas->setImage(value?image(value.value()):QImage{}, {16, 16}, 640, 8);map16_entry->setRange(0,std::max(0,static_cast<int>(tileset().map16.size())-1));loadMap16Entry();}
     void loadMap16Entry(){if(tileset().map16.empty())return;updating=true;const auto& value=tileset().map16[static_cast<std::size_t>(map16_entry->value())].tiles[static_cast<std::size_t>(map16_quadrant->currentIndex())];map16_tile->setValue(value.tile);map16_palette->setValue(value.palette);map16_hflip->setChecked(value.horizontal_flip);map16_vflip->setChecked(value.vertical_flip);updating=false;}
     void refreshObjects(){const QSignalBlocker block(object_index);const auto selected=object_index->currentIndex();object_index->clear();for(std::size_t i=0;i<tileset().objects.size();++i)object_index->addItem(QString("Object %1").arg(i));object_index->setCurrentIndex(std::clamp(selected,0,std::max(0,object_index->count()-1)));loadObject();}
     void loadObject(){if(object_index->currentIndex()<0||tileset().objects.empty())return;updating=true;const auto& rows=tileset().objects[static_cast<std::size_t>(object_index->currentIndex())].rows;std::size_t columns=0;for(const auto& row:rows)columns=std::max(columns,row.size());object_table->clear();object_table->setRowCount(static_cast<int>(rows.size()));object_table->setColumnCount(static_cast<int>(columns));for(std::size_t y=0;y<rows.size();++y)for(std::size_t x=0;x<rows[y].size();++x){auto* item=new QTableWidgetItem(rows[y][x].tile<0?QString{}:QString::number(rows[y][x].tile));item->setToolTip(QString("Control 0x%1").arg(rows[y][x].control,2,16,QChar('0')));object_table->setItem(static_cast<int>(y),static_cast<int>(x),item);}updating=false;}
     void ensureBehaviors(){if(tileset().behaviors.empty())tileset().behaviors.resize(tileset().map16.size());}
-    void refreshBehaviors(){auto value=render_map16_sheet(tileset());behavior_preview->setImage(value?image(value.value()):QImage{},16);behavior_entry->setRange(0,std::max(0,static_cast<int>(tileset().map16.size())-1));loadBehavior();}
+    void refreshBehaviors(){auto value=render_map16_sheet(tileset());behavior_preview->setImage(value?image(value.value()):QImage{}, {16, 16}, 640, 8);behavior_entry->setRange(0,std::max(0,static_cast<int>(tileset().map16.size())-1));loadBehavior();}
     void loadBehavior(){updating=true;const auto raw=tileset().behaviors.empty()?0U:tileset().behaviors[static_cast<std::size_t>(behavior_entry->value())];const auto parts=decode_tile_behavior(raw);for(int i=0;i<behavior_flags->count();++i)behavior_flags->item(i)->setCheckState(parts.flags&(1U<<i)?Qt::Checked:Qt::Unchecked);behavior_subtype->setCurrentIndex(parts.subtype);behavior_parameter->setValue(parts.parameter);behavior_raw->setText(QString("%1").arg(raw,8,16,QChar('0')));const auto kind=tile_behavior_parameter_kind(parts);const auto name=tile_behavior_parameter_name(kind,parts.parameter);auto meaning=name.empty()?QString("Unknown %1").arg(parts.parameter):QString::fromUtf8(name.data(),static_cast<qsizetype>(name.size()));if(kind==TileBehaviorParameterKind::PipeDoor){const auto main=tile_behavior_pipe_main_names[parts.parameter>>5U];meaning=QString::fromUtf8(main.data(),static_cast<qsizetype>(main.size()))+" — "+meaning;}behavior_parameter_name->setText(meaning);updating=false;}
     void saveBehavior(){if(updating||tileset().map16.empty())return;ensureBehaviors();TileBehaviorParts parts{};for(int i=0;i<behavior_flags->count();++i)if(behavior_flags->item(i)->checkState()==Qt::Checked)parts.flags|=1U<<i;parts.subtype=static_cast<std::uint8_t>(behavior_subtype->currentIndex());parts.parameter=static_cast<std::uint8_t>(behavior_parameter->value());tileset().behaviors[static_cast<std::size_t>(behavior_entry->value())]=encode_tile_behavior(parts);loadBehavior();}
-    void refreshTilemap(int which){auto value=render_tilemap(tilemaps[which]);map_ui[which].canvas->setImage(value?image(value.value()):QImage{},8);map_ui[which].entry->setRange(0,std::max(0,static_cast<int>(tilemaps[which].screen.size())-1));loadTilemapEntry(which);}
+    void refreshTilemap(int which){auto value=render_tilemap(tilemaps[which]);map_ui[which].canvas->setImage(value?image(value.value()):QImage{}, {8, 16}, 640, 8);map_ui[which].entry->setRange(0,std::max(0,static_cast<int>(tilemaps[which].screen.size())-1));loadTilemapEntry(which);}
     void loadTilemapEntry(int which){auto& map=tilemaps[which];if(map.screen.empty())return;updating=true;const auto& value=map.screen[static_cast<std::size_t>(map_ui[which].entry->value())];map_ui[which].tile->setValue(value.tile);map_ui[which].palette->setValue(value.palette);map_ui[which].hflip->setChecked(value.horizontal_flip);map_ui[which].vflip->setChecked(value.vertical_flip);updating=false;}
     void saveTilemapEntry(int which){auto& map=tilemaps[which];if(updating||map.screen.empty())return;auto& value=map.screen[static_cast<std::size_t>(map_ui[which].entry->value())];value={static_cast<std::uint16_t>(map_ui[which].tile->value()),static_cast<std::uint8_t>(map_ui[which].palette->value()),map_ui[which].hflip->isChecked(),map_ui[which].vflip->isChecked()};refreshTilemap(which);}
     void importBundle(){const auto path=QFileDialog::getOpenFileName(owner,"Import tileset",{},"Big Star tileset (*.bstileset)");if(path.isEmpty())return;auto bytes=nsmb::core::read_file(path.toStdString());if(!bytes){QMessageBox::warning(owner,"Import tileset",QString::fromStdString(bytes.error().message));return;}auto data=parse_tileset_bundle(bytes.value());if(!data){QMessageBox::warning(owner,"Import tileset",QString::fromStdString(data.error().message));return;}auto value=parse_tileset(data.value(),tileset().tile_offset,tileset().palette_offset,tileset().tile_page_offset);if(!value){QMessageBox::warning(owner,"Import tileset",QString::fromStdString(value.error().message));return;}tileset()=std::move(value.value());refreshAll();}
     void exportBundle(){auto data=write_tileset(tileset());if(!data){QMessageBox::warning(owner,"Export tileset",QString::fromStdString(data.error().message));return;}auto bytes=write_tileset_bundle(data.value());if(!bytes){QMessageBox::warning(owner,"Export tileset",QString::fromStdString(bytes.error().message));return;}const auto path=QFileDialog::getSaveFileName(owner,"Export tileset",{},"Big Star tileset (*.bstileset)");if(path.isEmpty())return;auto result=nsmb::core::write_file_atomically(path.toStdString(),bytes.value());if(!result)QMessageBox::warning(owner,"Export tileset",QString::fromStdString(result.error().message));}
 
     TilesetEditorDialog* owner; std::array<EditableTileset,3> tilesets; std::array<EditableTilemap,2> tilemaps; nsmb::project::LevelTilesetReferences initial_references;
-    QTabWidget* tabs{};QComboBox* slot{};std::array<QSpinBox*,5> reference_spins{};ImageCanvas* graphics_canvas{};ImageCanvas* map16_canvas{};QSpinBox* map16_entry{};QComboBox* map16_quadrant{};QSpinBox* map16_tile{};QSpinBox* map16_palette{};QCheckBox* map16_hflip{};QCheckBox* map16_vflip{};
-    QComboBox* object_index{};QTableWidget* object_table{};QSpinBox* object_control{};ImageCanvas* behavior_preview{};QSpinBox* behavior_entry{};QListWidget* behavior_flags{};QComboBox* behavior_subtype{};QSpinBox* behavior_parameter{};QLabel* behavior_parameter_name{};QLineEdit* behavior_raw{};std::array<MapUi,2> map_ui{};bool updating{};
+    QTabWidget* tabs{};QComboBox* slot{};std::array<QSpinBox*,5> reference_spins{};GraphicsCanvas* graphics_canvas{};GraphicsCanvas* map16_canvas{};QSpinBox* map16_entry{};QComboBox* map16_quadrant{};QSpinBox* map16_tile{};QSpinBox* map16_palette{};QCheckBox* map16_hflip{};QCheckBox* map16_vflip{};
+    QComboBox* object_index{};QTableWidget* object_table{};QSpinBox* object_control{};GraphicsCanvas* behavior_preview{};QSpinBox* behavior_entry{};QListWidget* behavior_flags{};QComboBox* behavior_subtype{};QSpinBox* behavior_parameter{};QLabel* behavior_parameter_name{};QLineEdit* behavior_raw{};std::array<MapUi,2> map_ui{};bool updating{};
 };
 
 TilesetEditorDialog::TilesetEditorDialog(std::array<EditableTileset,3> tilesets,EditableTilemap background,EditableTilemap foreground,nsmb::project::LevelTilesetReferences references,QWidget* parent)

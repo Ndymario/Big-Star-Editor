@@ -64,10 +64,6 @@ QString provenance(const nsmb::project::FilesystemEntry& entry) {
     return QString::fromStdString(entry.module + (entry.component.empty() ? "" : " / " + entry.component));
 }
 
-QString hex(std::span<const std::uint8_t> bytes) {
-    return QByteArray(reinterpret_cast<const char*>(bytes.data()), static_cast<qsizetype>(bytes.size())).toHex(' ').toUpper();
-}
-
 int compare_names(QStringView left, QStringView right) {
     // Natural, case-insensitive ordering: "w2map" before "w10map", and "bomthrow.narc"
     // next to "Dat_2D.narc" instead of after every upper-case name in the directory.
@@ -232,22 +228,15 @@ bool path_precedes(const TreeRow& left, const TreeRow& right) {
     return left.parts.size() < right.parts.size();
 }
 
-std::optional<std::vector<std::uint8_t>> unhex(QString text) {
-    text.remove(' '); text.remove('\t'); text.remove('\r'); text.remove('\n');
-    if (text.size() % 2 != 0) return std::nullopt;
-    for (const auto c : text) if (!c.isDigit() && (c.toLower() < 'a' || c.toLower() > 'f')) return std::nullopt;
-    const auto data = QByteArray::fromHex(text.toLatin1());
-    return std::vector<std::uint8_t>(data.begin(), data.end());
-}
 }
 
 FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
     auto* target = new QHBoxLayout;
-    target->addWidget(new QLabel("Module", this));
+    // This picks where add/replace/extract write, not what the tree shows -- it
+    // used to sit next to a variant combo and read like a second view filter.
+    target->addWidget(new QLabel("Save to module", this));
     module_ = new QComboBox(this); module_->setObjectName("ActiveModule"); target->addWidget(module_, 1);
-    target->addWidget(new QLabel("Variant", this));
-    variant_ = new QComboBox(this); variant_->setObjectName("ActiveVariant"); target->addWidget(variant_, 1);
     layout->addLayout(target);
 
     auto* banner = new QHBoxLayout;
@@ -298,7 +287,6 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
 
     auto changed = [this] { emit activeTargetChanged(activeModule(), activeVariant()); };
     connect(module_, &QComboBox::currentIndexChanged, this, changed);
-    connect(variant_, &QComboBox::currentIndexChanged, this, changed);
     connect(run_, &QPushButton::clicked, this, &FilesystemDock::runPatcherRequested);
     connect(add_, &QPushButton::clicked, this, &FilesystemDock::addFile);
     connect(replace_, &QPushButton::clicked, this, &FilesystemDock::replaceFile);
@@ -328,19 +316,19 @@ void FilesystemDock::setData(std::filesystem::path projectDir,
                              QString activeVariant,
                              std::vector<nsmb::project::ModuleVariantMapping> mappings) {
     projectDir_ = std::move(projectDir); modules_ = std::move(modules); view_ = std::move(view); mappings_ = std::move(mappings);
-    const QSignalBlocker moduleBlock(module_), variantBlock(variant_);
+    const QSignalBlocker moduleBlock(module_);
     module_->clear();
     for (const auto& entry : modules_.modules) if (entry.enabled && entry.nitrofs)
         module_->addItem(QString::fromStdString(entry.name.empty() ? entry.key : entry.name), QString::fromStdString(entry.key));
     auto moduleIndex = module_->findData(activeModule); if (moduleIndex < 0 && module_->count()) moduleIndex = 0; module_->setCurrentIndex(moduleIndex);
-    variant_->clear(); variant_->addItem("(base)", QString{});
-    variants.removeDuplicates(); for (const auto& value : variants) if (!value.isEmpty()) variant_->addItem(value, value);
-    auto variantIndex = variant_->findData(activeVariant); if (variantIndex < 0) variantIndex = 0; variant_->setCurrentIndex(variantIndex);
+    variants.removeDuplicates();
+    variants_ = std::move(variants);
+    activeVariant_ = activeVariant;
     rebuildTree();
 }
 
 QString FilesystemDock::activeModule() const { return module_->currentData().toString(); }
-QString FilesystemDock::activeVariant() const { return variant_->currentData().toString(); }
+QString FilesystemDock::activeVariant() const { return activeVariant_; }
 
 void FilesystemDock::rebuildTree() {
     tree_->clear();
@@ -492,9 +480,15 @@ void FilesystemDock::addFile() {
     if (!accepted || romPath.isEmpty()) return;
     if (!view_.find(romPath.toStdString()) && !romPath.startsWith("z_new/")) { emit errorOccurred("New NitroFS files must be under z_new/."); return; }
     QStringList existing;
-    if (const auto* module = targetModule()) for (int i = 0; i < variant_->count(); ++i) {
-        auto target = nsmb::project::module_file_target(*module, variant_->itemData(i).toString().toStdString(), romPath.toStdString(), mappings_);
-        if (target && std::filesystem::exists(target.value())) existing.push_back(variant_->itemText(i));
+    if (const auto* module = targetModule()) {
+        // The base layer plus every configured variant, so the prompt can name
+        // all of them rather than only the one in view.
+        auto candidates = variants_;
+        candidates.prepend(QString{});
+        for (const auto& value : candidates) {
+            auto target = nsmb::project::module_file_target(*module, value.toStdString(), romPath.toStdString(), mappings_);
+            if (target && std::filesystem::exists(target.value())) existing.push_back(value.isEmpty() ? "(base)" : value);
+        }
     }
     if (!existing.isEmpty() && QMessageBox::question(this, "Replace existing module file", "This path already exists in: " + existing.join(", ") + ". Replace the active variant?") != QMessageBox::Yes) return;
     auto data = nsmb::core::read_file(source.toStdString()); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
@@ -521,13 +515,8 @@ void FilesystemDock::extractFile() {
 }
 
 void FilesystemDock::hexEditFile() {
-    const auto* entry = selectedEntry(); if (!entry) return; const auto source = !entry->source.empty() ? entry->source : entry->extracted;
-    auto data = nsmb::core::read_file(source); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
-    QDialog dialog(this); dialog.setWindowTitle("Hex edit " + QString::fromStdString(entry->path)); dialog.resize(760, 520);
-    auto* layout = new QVBoxLayout(&dialog); auto* editor = new QPlainTextEdit(&dialog); editor->setLineWrapMode(QPlainTextEdit::NoWrap); editor->setPlainText(hex(data.value())); layout->addWidget(editor);
-    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog); layout->addWidget(buttons); connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept); connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
-    if (dialog.exec() != QDialog::Accepted) return; auto decoded = unhex(editor->toPlainText()); if (!decoded) { emit errorOccurred("Hex data contains an invalid or incomplete byte."); return; }
-    auto result = writeTarget(entry->path, *decoded, entry); if (!result) emit errorOccurred(QString::fromStdString(result.error().message)); else emit filesChanged();
+    const auto* entry = selectedEntry();
+    if (entry) emit hexEditRequested(QString::fromStdString(entry->path));
 }
 
 // Which editor claims the selected file, if any. Read straight from the bytes so the answer is
@@ -540,23 +529,33 @@ bse::editors::Kind FilesystemDock::editorFor(const nsmb::project::FilesystemEntr
     return bse::editors::classify(data.value(), entry->path, entry->id && *entry->id == rom_user_metadata_id);
 }
 
-void FilesystemDock::openFile() {
-    const auto* entry = selectedEntry(); if (!entry) return;
-    const auto source = !entry->source.empty() ? entry->source : entry->extracted;
-    auto data = nsmb::core::read_file(source); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
-    const auto outcome = bse::editors::edit(this, entry->path, data.value(), entry->id && *entry->id == rom_user_metadata_id);
-    switch (outcome.status) {
-    case bse::editors::Outcome::Status::Unsupported:
-        emit errorOccurred("No editor understands " + QString::fromStdString(entry->path) + ". Use Hex edit instead.");
-        return;
-    case bse::editors::Outcome::Status::Failed:
-        emit errorOccurred(outcome.error);
-        return;
-    case bse::editors::Outcome::Status::Cancelled:
-        return;
-    case bse::editors::Outcome::Status::Edited:
-        break;
+bse::editors::Companions FilesystemDock::companionsFor(const QString& romPath) const {
+    const auto directory = romPath.section('/', 0, -2);
+    bse::editors::Companions companions;
+    for (const auto& candidate : view_.entries) {
+        const auto path = QString::fromStdString(candidate.path);
+        if (path == romPath || path.section('/', 0, -2) != directory) continue;
+        companions.paths << path;
     }
-    auto result = writeTarget(entry->path, outcome.bytes, entry);
-    if (!result) emit errorOccurred(QString::fromStdString(result.error().message)); else emit filesChanged();
+    companions.paths.sort();
+    companions.load = [this](const QString& path) -> nsmb::core::Result<std::vector<std::uint8_t>> {
+        const auto* found = view_.find(path.toStdString());
+        if (!found) return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "no such file in this variant");
+        auto data = nsmb::core::read_file(!found->source.empty() ? found->source : found->extracted);
+        if (!data) return data.error();
+        return bse::editors::unwrapped(data.value());
+    };
+    return companions;
+}
+
+nsmb::core::Result<void> FilesystemDock::saveEditedFile(const QString& romPath, std::span<const std::uint8_t> bytes) {
+    const auto* entry = view_.find(romPath.toStdString());
+    auto result = writeTarget(romPath.toStdString(), bytes, entry);
+    if (result) emit filesChanged();
+    return result;
+}
+
+void FilesystemDock::openFile() {
+    const auto* entry = selectedEntry();
+    if (entry) emit openInEditorRequested(QString::fromStdString(entry->path));
 }

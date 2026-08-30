@@ -26,7 +26,15 @@ class LevelPreviewWidget final : public QWidget {
     Q_OBJECT
 
 public:
-    enum class Tool { Select, Pan, Object, Sprite, Entrance, Zone, Path, ProgressPath };
+    // Which of the eight resize knobs a drag has hold of.
+    enum class Handle { None, TopLeft, Top, TopRight, Right, BottomRight, Bottom, BottomLeft, Left };
+
+    // How far each edge of a resized rectangle has moved, in scene pixels.
+    // Grabbing a corner moves two edges and grabbing the top or left moves the
+    // origin, neither of which a lone bottom-right handle could express.
+    struct ResizeEdges {
+        double left{}, top{}, right{}, bottom{};
+    };
 
     explicit LevelPreviewWidget(QWidget* parent = nullptr);
 
@@ -42,8 +50,12 @@ public:
                    nsmb::project::EditableLevel* level);
     void setSelection(int kind, int item_index, int node_index);
     void setEditable(bool editable);
-    void setTool(Tool tool);
-    [[nodiscard]] Tool tool() const noexcept;
+    // The entity kind right-click creates, in the numbering shared with
+    // LevelPropertiesWidget::Kind: 1 object, 2 sprite, 3 entrance, 4 zone,
+    // 5 path, 6 progress path, 7 view. Selection is never filtered by it --
+    // anything on the canvas can be grabbed whatever this is set to.
+    void setCreateKind(int kind);
+    [[nodiscard]] int createKind() const noexcept;
     [[nodiscard]] double zoom() const noexcept;
     void setZoom(double zoom);
     [[nodiscard]] QPointF pan() const noexcept;
@@ -57,18 +69,20 @@ public:
     [[nodiscard]] nsmb::project::EditableLevel* level() const noexcept;
 
     struct PaletteEntry {
-        Tool tool{};
+        int kind{};
         int id{};
         int slot{};
         QString label;
         QString category;
+        // What the picker shows on hover: the identifiers you need to match a
+        // placement against the ROM, which do not fit under a 40px icon.
+        QString tooltip;
         QImage image;
     };
     [[nodiscard]] std::vector<PaletteEntry> paletteEntries();
     void setPlacementObject(int slot, int object_id);
     void setPlacementSprite(int sprite_type);
     void setPlacementCustomSprite(std::uint32_t hash);
-    void setPlacementTool(Tool tool);
     void clearPlacement();
     void refreshLevelState();
     void copySelection();
@@ -123,11 +137,15 @@ private:
     [[nodiscard]] QTransform sceneTransform() const;
     [[nodiscard]] QPointF toScene(const QPointF& point) const;
     [[nodiscard]] std::optional<Selection> hitTest(const QPointF& scene_point) const;
-    [[nodiscard]] bool selectionMatchesTool(const Selection& selection) const;
+    // The scene-space rectangle of the single selected resizable entity, if the
+    // selection is exactly one object, zone or view.
+    [[nodiscard]] std::optional<QRectF> selectedResizableRect() const;
+    [[nodiscard]] Handle handleAt(const QPointF& widget_point) const;
+    [[nodiscard]] ResizeEdges resizeEdges(const QPointF& delta) const;
     void publishSelection();
     void placeEntity(const QPointF& scene_point);
     void commitMove(const QPointF& delta);
-    void commitResize(const QPointF& delta);
+    void commitResize(const ResizeEdges& edges);
     void deleteSelection();
     void rebuildSpriteDefinitions();
 
@@ -135,7 +153,7 @@ private:
     QString message_;
     std::vector<Selection> selections_;
     class QToolBar* toolbar_{};
-    Tool tool_{Tool::Select};
+    int create_kind_{1};
     double zoom_{1.0};
     QPointF pan_;
     QPointF press_position_;
@@ -145,7 +163,7 @@ private:
     bool editable_{};
     bool panning_{};
     bool dragging_{};
-    bool resizing_{};
+    Handle resize_handle_{Handle::None};
     bool marquee_selecting_{};
     bool space_pan_{};
     bool grid_snap_{true};
@@ -160,8 +178,6 @@ private:
     int placement_tileset_slot_{};
     int placement_sprite_type_{};
     std::optional<std::uint32_t> placement_sprite_hash_;
-    Tool placement_tool_{Tool::Select};
-    bool placement_selected_{};
     std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3> tilesets_;
     QImage background_;
     QImage foreground_;

@@ -86,6 +86,7 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
     connect(kindTabs_, &QTabBar::currentChanged, this, [this] {
         selected_items_.clear();
         refresh();
+        emit currentKindChanged(static_cast<int>(kind()));
     });
     connect(itemBox_, &QSpinBox::valueChanged, this, [this] {
         if (!refreshing_) selected_items_.clear();
@@ -124,6 +125,8 @@ std::vector<std::size_t> LevelPropertiesWidget::selectedIndices() const {
 LevelPropertiesWidget::Kind LevelPropertiesWidget::kind() const {
     return static_cast<Kind>(kindTabs_->tabData(kindTabs_->currentIndex()).toInt());
 }
+
+LevelPropertiesWidget::Kind LevelPropertiesWidget::currentKind() const { return kind(); }
 
 std::size_t LevelPropertiesWidget::itemCount() const {
     if (!level_) {
@@ -645,4 +648,6 @@ void LevelPropertiesWidget::selectMany(Kind selected_kind, const QList<int>& ite
     }
     if (!selected_items_.empty()) itemBox_->setValue(static_cast<int>(selected_items_.front()));
     refresh();
+    // The tab bar's own signal is blocked above, so the change is announced here.
+    emit currentKindChanged(static_cast<int>(kind()));
 }

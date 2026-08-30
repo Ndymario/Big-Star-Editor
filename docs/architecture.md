@@ -12,7 +12,7 @@ The frontend lives under `apps/`. Qt-specific models and widgets are allowed onl
 - `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, extracted ROM roots, file-tree nodes, and extraction/build services.
 - `nsmb-formats`: defensive NSMB level parsing/serialization plus portable Nitro compression, editable tile/palette/screen-map/Map16/object-layout codecs, TEX0, quantisation, and tileset bundles.
 - `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, editable level sessions, compound command history, regional ROM resource resolution, and decoded graphics assembly.
-- `nsmb-patching`: no-shell external process boundary for NCPatcher and isolated legacy patch adapters.
+- `nsmb-patching`: no-shell external process boundary for NCPatcher.
 
 ## Error policy
 

@@ -32,8 +32,17 @@ public:
                  std::vector<nsmb::project::ModuleVariantMapping> mappings = {});
     [[nodiscard]] QString activeModule() const;
     [[nodiscard]] QString activeVariant() const;
+    // The files a graphics editor may pair the opened one with: its NitroFS
+    // siblings, read through the same module layering the dock itself shows.
+    [[nodiscard]] bse::editors::Companions companionsFor(const QString& romPath) const;
+    // Writes an editor's result back through the active module target.
+    nsmb::core::Result<void> saveEditedFile(const QString& romPath, std::span<const std::uint8_t> bytes);
 
 signals:
+    // The window hosts editors in document tabs, so the dock asks rather than
+    // opening a modal dialog of its own.
+    void openInEditorRequested(const QString& romPath);
+    void hexEditRequested(const QString& romPath);
     void activeTargetChanged(const QString& module, const QString& variant);
     void filesChanged();
     void runPatcherRequested();
@@ -69,7 +78,11 @@ private:
     nsmb::project::FilesystemView view_;
     std::vector<nsmb::project::ModuleVariantMapping> mappings_;
     QComboBox* module_{};
-    QComboBox* variant_{};
+    // The variant is chosen once, on the window's toolbar. This dock only needs
+    // to know which one is active and what the full list is, so it can say which
+    // variants already hold a path it is about to write.
+    QStringList variants_;
+    QString activeVariant_;
     QLabel* pending_{};
     QTreeWidget* tree_{};
     QMenu* columnMenu_{};

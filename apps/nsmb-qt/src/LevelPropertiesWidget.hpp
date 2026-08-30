@@ -36,9 +36,14 @@ public:
     void refresh();
     void select(Kind kind, int item_index, int node_index = 0);
     void selectMany(Kind kind, const QList<int>& item_indices);
+    // Which entity kind the panel is showing. With no tool modes on the canvas,
+    // this is also what a right-click there creates.
+    [[nodiscard]] Kind currentKind() const;
 
 signals:
     void levelChanged();
+    // The kind tab changed, whether by the user or by a canvas selection.
+    void currentKindChanged(int kind);
     void selectionChanged(int kind, int item_index, int node_index);
     void errorOccurred(const QString& message);
 

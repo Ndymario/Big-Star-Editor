@@ -262,6 +262,41 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, cons
     return entities;
 }
 
+// Only rectangular entities can be resized: tile objects, zones and views.
+bool resizableKind(int kind) { return kind == 1 || kind == 4 || kind == 7; }
+
+// The eight knob centres of a rectangle, in the order Handle enumerates them
+// after None: clockwise from the top left, corners alternating with edge
+// midpoints.
+std::array<QPointF, 8> handleCentres(const QRectF& rect) {
+    const auto middle_x = rect.center().x();
+    const auto middle_y = rect.center().y();
+    return {rect.topLeft(),
+            QPointF(middle_x, rect.top()),
+            rect.topRight(),
+            QPointF(rect.right(), middle_y),
+            rect.bottomRight(),
+            QPointF(middle_x, rect.bottom()),
+            rect.bottomLeft(),
+            QPointF(rect.left(), middle_y)};
+}
+
+Qt::CursorShape handleCursor(LevelPreviewWidget::Handle handle) {
+    using Handle = LevelPreviewWidget::Handle;
+    switch (handle) {
+    case Handle::TopLeft:
+    case Handle::BottomRight: return Qt::SizeFDiagCursor;
+    case Handle::TopRight:
+    case Handle::BottomLeft: return Qt::SizeBDiagCursor;
+    case Handle::Top:
+    case Handle::Bottom: return Qt::SizeVerCursor;
+    case Handle::Left:
+    case Handle::Right: return Qt::SizeHorCursor;
+    case Handle::None: break;
+    }
+    return Qt::ArrowCursor;
+}
+
 void drawMap(QPainter& painter,
              const QRectF& target,
              const LevelPreviewWidget::Scene& scene,
@@ -278,6 +313,7 @@ void drawMap(QPainter& painter,
              const std::unordered_map<std::uint32_t, QString>& custom_actor_labels,
              const SpriteDefinitions& sprite_definitions,
              bool resizing,
+             const LevelPreviewWidget::ResizeEdges& resize,
              const CanvasColors& colors) {
     const auto& course = scene.level->course();
     painter.save();
@@ -288,6 +324,22 @@ void drawMap(QPainter& painter,
     const auto bounds = sceneBounds(scene, sprite_definitions);
     const auto transform = mapTransform(target, scene, sprite_definitions, zoom, pan);
     const auto scale = transform.m11();
+    // Knobs are a screen-space affordance, so their size is divided back out of
+    // the scene scale to stay grabbable at any zoom.
+    const auto drawKnobs = [&](const QRectF& rect) {
+        const auto size = 9.0 / scale;
+        painter.setPen(QPen(colors.outline, 1.0 / scale));
+        painter.setBrush(colors.marker);
+        for (const auto& centre : handleCentres(rect)) {
+            painter.drawRect(QRectF(centre - QPointF(size / 2.0, size / 2.0), QSizeF(size, size)));
+        }
+    };
+    // A resize adjusts the edges the grabbed knob owns; anything else moves.
+    const auto preview = [&](QRectF& rect, int kind, int index) {
+        if (!selected(selections, kind, index)) return;
+        if (resizing && resizableKind(kind)) rect.adjust(resize.left, resize.top, resize.right, resize.bottom);
+        else if (!resizing) rect.translate(drag_delta);
+    };
 
     painter.setClipRect(target);
     painter.setTransform(transform, true);
@@ -313,8 +365,7 @@ void drawMap(QPainter& painter,
     for (std::size_t i = 0; i < course.zones.size(); ++i) {
         const auto& zone = course.zones[i];
         auto rect = zoneRect(zone);
-        if (!resizing && selected(selections, 4, static_cast<int>(i))) rect.translate(drag_delta);
-        if (resizing && selected(selections, 4, static_cast<int>(i))) rect.setBottomRight(rect.bottomRight() + drag_delta);
+        preview(rect, 4, static_cast<int>(i));
         painter.setPen(QPen(QColor(84, 154, 110), 0));
         painter.setBrush(QColor(84, 154, 110, 34));
         painter.drawRect(rect);
@@ -322,22 +373,27 @@ void drawMap(QPainter& painter,
             painter.setPen(QPen(QColor(24, 111, 58), 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(rect);
-            painter.setBrush(colors.marker);
-            painter.drawEllipse(QRectF(rect.bottomRight() - QPointF(7.0 / scale, 7.0 / scale), QSizeF(14.0 / scale, 14.0 / scale)));
+            drawKnobs(rect);
         }
     }
     for (std::size_t i = 0; i < course.views.size(); ++i) {
         const auto& view = course.views[i];
+        auto rect = viewRect(view);
+        preview(rect, 7, static_cast<int>(i));
         painter.setPen(QPen(QColor(65, 122, 180), 0));
         painter.setBrush(QColor(65, 122, 180, 25));
-        painter.drawRect(viewRect(view));
-        if (selected(selections, 7, static_cast<int>(i))) { painter.setPen(QPen(QColor(35, 88, 145), 3.0 / scale)); painter.setBrush(Qt::NoBrush); painter.drawRect(viewRect(view)); }
+        painter.drawRect(rect);
+        if (selected(selections, 7, static_cast<int>(i))) {
+            painter.setPen(QPen(QColor(35, 88, 145), 3.0 / scale));
+            painter.setBrush(Qt::NoBrush);
+            painter.drawRect(rect);
+            drawKnobs(rect);
+        }
     }
     for (std::size_t i = 0; i < scene.level->objects().size(); ++i) {
         const auto& object = scene.level->objects()[i];
         auto rect = objectRect(object);
-        if (!resizing && selected(selections, 1, static_cast<int>(i))) rect.translate(drag_delta);
-        if (resizing && selected(selections, 1, static_cast<int>(i))) rect.setBottomRight(rect.bottomRight() + drag_delta);
+        preview(rect, 1, static_cast<int>(i));
         painter.setPen(QPen(colors.outline, 0));
         bool rendered = false;
         if (object.tileset_slot < tilesets.size() && tilesets[object.tileset_slot]) {
@@ -373,8 +429,7 @@ void drawMap(QPainter& painter,
             painter.setPen(QPen(colors.marker, 3.0 / scale));
             painter.setBrush(Qt::NoBrush);
             painter.drawRect(rect);
-            painter.setBrush(colors.marker);
-            painter.drawEllipse(QRectF(rect.bottomRight() - QPointF(7.0 / scale, 7.0 / scale), QSizeF(14.0 / scale, 14.0 / scale)));
+            drawKnobs(rect);
         }
     }
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
@@ -482,20 +537,9 @@ LevelPreviewWidget::LevelPreviewWidget(QWidget* parent) : QWidget(parent) {
     toolbar_ = new QToolBar(this);
     toolbar_->setMovable(false);
     toolbar_->setIconSize(QSize(16, 16));
-    auto* tools = new QActionGroup(toolbar_);
-    tools->setExclusive(true);
-    const std::array names{"Select", "Pan", "Object", "Sprite", "Entrance", "Zone", "Path", "Progress Path"};
-    for (int i = 0; i < static_cast<int>(names.size()); ++i) {
-        auto* action = toolbar_->addAction(names[static_cast<std::size_t>(i)]);
-        action->setCheckable(true);
-        action->setData(i);
-        tools->addAction(action);
-        if (i == 0) action->setChecked(true);
-    }
-    connect(tools, &QActionGroup::triggered, this, [this](QAction* action) {
-        setTool(static_cast<Tool>(action->data().toInt()));
-    });
-    toolbar_->addSeparator();
+    // No tool modes. Everything on the canvas is selectable at all times, and
+    // what right-click creates is whatever the properties panel is showing --
+    // the same arrangement NSMB Editor uses.
     auto* snap = toolbar_->addAction("Snap");
     snap->setCheckable(true);
     snap->setChecked(true);
@@ -581,7 +625,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 outer,
                 *scene_,
                 selections_,
-                (dragging_ || resizing_) ? drag_delta_ : QPointF{},
+                (dragging_ || resize_handle_ != Handle::None) ? drag_delta_ : QPointF{},
                 zoom_,
                 pan_,
                 tilesets_,
@@ -592,7 +636,8 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
-                resizing_,
+                resize_handle_ != Handle::None,
+                resizeEdges(drag_delta_),
                 colors);
         if (show_grid_ || show_ds_screen_ || !reference_image_.isNull()) {
             painter.save(); painter.setClipRect(outer); painter.setTransform(sceneTransform(), true);
@@ -609,7 +654,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
         if (show_minimap_) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
             drawMap(painter, mini, *scene_, {}, {}, 1.0, {}, tilesets_, background_, foreground_, object_images_,
-                    actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, colors);
+                    actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, {}, colors);
             bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, zoom_, pan_).inverted(&invertible).mapRect(outer);
             if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, 1.0, {}).mapRect(visible)); }
             painter.setPen(QPen(colors.outline, 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
@@ -650,7 +695,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 map_rect,
                 *scene_,
                 selections_,
-                (dragging_ || resizing_) ? drag_delta_ : QPointF{},
+                (dragging_ || resize_handle_ != Handle::None) ? drag_delta_ : QPointF{},
                 zoom_,
                 pan_,
                 tilesets_,
@@ -661,7 +706,8 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
-                resizing_,
+                resize_handle_ != Handle::None,
+                resizeEdges(drag_delta_),
                 colors);
     }
     if (marquee_selecting_) {
@@ -691,22 +737,13 @@ void LevelPreviewWidget::setEditable(bool editable) {
     update();
 }
 
-void LevelPreviewWidget::setTool(Tool tool) {
-    tool_ = tool;
-    for (auto* action : toolbar_->actions()) {
-        if (action->isCheckable() && action->data().isValid()) {
-            action->setChecked(action->data().toInt() == static_cast<int>(tool));
-        }
-    }
-    if (tool != Tool::Select && tool != Tool::Pan) {
-        const auto removed = std::erase_if(selections_, [this](const auto& selection) { return !selectionMatchesTool(selection); });
-        if (removed != 0) publishSelection();
-    }
-    setCursor(tool == Tool::Pan ? Qt::OpenHandCursor : Qt::ArrowCursor);
-    update();
+void LevelPreviewWidget::setCreateKind(int kind) {
+    // Deliberately does not touch the selection. Changing what you are about to
+    // create is not a reason to drop what you already had hold of.
+    create_kind_ = std::clamp(kind, 1, 7);
 }
 
-LevelPreviewWidget::Tool LevelPreviewWidget::tool() const noexcept { return tool_; }
+int LevelPreviewWidget::createKind() const noexcept { return create_kind_; }
 double LevelPreviewWidget::zoom() const noexcept { return zoom_; }
 void LevelPreviewWidget::setZoom(double zoom) {
     zoom_ = std::clamp(zoom, 0.25, 16.0);
@@ -752,24 +789,49 @@ std::optional<LevelPreviewWidget::Selection> LevelPreviewWidget::hitTest(const Q
         return std::nullopt;
     }
     const auto entities = entityRects(*scene_, sprite_definitions_);
+    // Front to back, across every layer. Nothing is filtered out.
     for (auto entity = entities.rbegin(); entity != entities.rend(); ++entity) {
-        if (selectionMatchesTool(entity->selection) && entity->rect.adjusted(-3, -3, 3, 3).contains(scene_point)) {
+        if (entity->rect.adjusted(-3, -3, 3, 3).contains(scene_point)) {
             return entity->selection;
         }
     }
     return std::nullopt;
 }
 
-bool LevelPreviewWidget::selectionMatchesTool(const Selection& selection) const {
-    if (tool_ == Tool::Select) return true;
-    const auto kind = tool_ == Tool::Object         ? 1
-                      : tool_ == Tool::Sprite       ? 2
-                      : tool_ == Tool::Entrance     ? 3
-                      : tool_ == Tool::Zone         ? 4
-                      : tool_ == Tool::Path         ? 5
-                      : tool_ == Tool::ProgressPath ? 6
-                                                   : -1;
-    return selection.kind == kind;
+std::optional<QRectF> LevelPreviewWidget::selectedResizableRect() const {
+    if (!scene_ || selections_.size() != 1U || !resizableKind(selections_.front().kind)) return std::nullopt;
+    const auto entities = entityRects(*scene_, sprite_definitions_);
+    const auto entity = std::find_if(entities.begin(), entities.end(), [this](const auto& value) {
+        return value.selection == selections_.front();
+    });
+    if (entity == entities.end()) return std::nullopt;
+    return entity->rect;
+}
+
+LevelPreviewWidget::Handle LevelPreviewWidget::handleAt(const QPointF& widget_point) const {
+    const auto rect = selectedResizableRect();
+    if (!rect) return Handle::None;
+    const auto transform = sceneTransform();
+    const auto centres = handleCentres(transform.mapRect(*rect));
+    for (std::size_t i = 0; i < centres.size(); ++i) {
+        if (QRectF(centres[i] - QPointF(6, 6), QSizeF(12, 12)).contains(widget_point)) {
+            return static_cast<Handle>(i + 1);
+        }
+    }
+    return Handle::None;
+}
+
+LevelPreviewWidget::ResizeEdges LevelPreviewWidget::resizeEdges(const QPointF& delta) const {
+    // Each knob owns the edges it sits on; the rest of the rectangle stays put.
+    const auto left = resize_handle_ == Handle::TopLeft || resize_handle_ == Handle::Left ||
+                      resize_handle_ == Handle::BottomLeft;
+    const auto right = resize_handle_ == Handle::TopRight || resize_handle_ == Handle::Right ||
+                       resize_handle_ == Handle::BottomRight;
+    const auto top = resize_handle_ == Handle::TopLeft || resize_handle_ == Handle::Top ||
+                     resize_handle_ == Handle::TopRight;
+    const auto bottom = resize_handle_ == Handle::BottomLeft || resize_handle_ == Handle::Bottom ||
+                        resize_handle_ == Handle::BottomRight;
+    return {left ? delta.x() : 0.0, top ? delta.y() : 0.0, right ? delta.x() : 0.0, bottom ? delta.y() : 0.0};
 }
 
 void LevelPreviewWidget::publishSelection() {
@@ -802,33 +864,23 @@ void LevelPreviewWidget::mousePressEvent(QMouseEvent* event) {
     last_position_ = event->position();
     drag_delta_ = {};
     if (!reference_image_.isNull() && event->button()==Qt::LeftButton && event->modifiers().testFlag(Qt::AltModifier) && event->modifiers().testFlag(Qt::ShiftModifier)) { dragging_reference_=true; return; }
-    if (event->button() == Qt::MiddleButton || tool_ == Tool::Pan || space_pan_ || event->modifiers().testFlag(Qt::AltModifier)) {
+    if (event->button() == Qt::MiddleButton || space_pan_ || event->modifiers().testFlag(Qt::AltModifier)) {
         panning_ = true;
         setCursor(Qt::ClosedHandCursor);
         return;
     }
     if (event->button() == Qt::RightButton) {
-        if (placement_selected_ && placement_tool_ == tool_) placeEntity(toScene(event->position()));
+        placeEntity(toScene(event->position()));
         return;
     }
     if (event->button() != Qt::LeftButton) {
         return;
     }
 
-    if (selections_.size() == 1U && selectionMatchesTool(selections_.front()) &&
-        (selections_.front().kind == 1 || selections_.front().kind == 4)) {
-        const auto entities = entityRects(*scene_, sprite_definitions_);
-        const auto selected_entity = std::find_if(entities.begin(), entities.end(), [this](const auto& entity) {
-            return entity.selection == selections_.front();
-        });
-        if (selected_entity != entities.end()) {
-            const auto handle = sceneTransform().map(selected_entity->rect.bottomRight());
-            if (QRectF(handle - QPointF(9, 9), QSizeF(18, 18)).contains(event->position())) {
-                resizing_ = true;
-                setCursor(Qt::SizeFDiagCursor);
-                return;
-            }
-        }
+    if (const auto handle = handleAt(event->position()); handle != Handle::None) {
+        resize_handle_ = handle;
+        setCursor(handleCursor(handle));
+        return;
     }
 
     const auto hit = hitTest(toScene(event->position()));
@@ -865,7 +917,7 @@ void LevelPreviewWidget::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
-    if (dragging_ || resizing_) {
+    if (dragging_ || resize_handle_ != Handle::None) {
         drag_delta_ = toScene(event->position()) - toScene(press_position_);
         if (grid_snap_ && !event->modifiers().testFlag(Qt::AltModifier)) {
             const auto grid = std::ranges::all_of(selections_, [](const auto& selection){return selection.kind==1||selection.kind==2;}) ? 16 : snap_size_;
@@ -880,17 +932,12 @@ void LevelPreviewWidget::mouseMoveEvent(QMouseEvent* event) {
         update();
         return;
     }
-    if (selections_.size() == 1U && selectionMatchesTool(selections_.front()) &&
-        (selections_.front().kind == 1 || selections_.front().kind == 4)) {
-        const auto entities = entityRects(*scene_, sprite_definitions_);
-        const auto selected_entity = std::find_if(entities.begin(), entities.end(), [this](const auto& entity) {
-            return entity.selection == selections_.front();
-        });
-        if (selected_entity != entities.end()) {
-            const auto handle = sceneTransform().map(selected_entity->rect.bottomRight());
-            setCursor(QRectF(handle - QPointF(9, 9), QSizeF(18, 18)).contains(event->position()) ? Qt::SizeFDiagCursor
-                                                                                                 : Qt::ArrowCursor);
-        }
+    // Hover feedback: a knob if one is under the cursor, otherwise a move cursor
+    // over anything grabbable at all.
+    if (const auto handle = handleAt(event->position()); handle != Handle::None) {
+        setCursor(handleCursor(handle));
+    } else {
+        setCursor(hitTest(toScene(event->position())) ? Qt::SizeAllCursor : Qt::ArrowCursor);
     }
     QWidget::mouseMoveEvent(event);
 }
@@ -899,7 +946,7 @@ void LevelPreviewWidget::mouseReleaseEvent(QMouseEvent* event) {
     if (dragging_reference_) { dragging_reference_=false; return; }
     if (panning_) {
         panning_ = false;
-        setCursor(tool_ == Tool::Pan ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        setCursor(Qt::ArrowCursor);
         return;
     }
     if (dragging_) {
@@ -909,9 +956,10 @@ void LevelPreviewWidget::mouseReleaseEvent(QMouseEvent* event) {
         update();
         return;
     }
-    if (resizing_) {
-        resizing_ = false;
-        commitResize(drag_delta_);
+    if (resize_handle_ != Handle::None) {
+        const auto edges = resizeEdges(drag_delta_);
+        resize_handle_ = Handle::None;
+        commitResize(edges);
         drag_delta_ = {};
         setCursor(Qt::ArrowCursor);
         update();
@@ -924,7 +972,7 @@ void LevelPreviewWidget::mouseReleaseEvent(QMouseEvent* event) {
         const auto bottom_right = toScene(screen_rect.bottomRight());
         const QRectF scene_rect(top_left, bottom_right);
         for (const auto& entity : entityRects(*scene_, sprite_definitions_)) {
-            if (selectionMatchesTool(entity.selection) && scene_rect.normalized().intersects(entity.rect) &&
+            if (scene_rect.normalized().intersects(entity.rect) &&
                 std::find(selections_.begin(), selections_.end(), entity.selection) == selections_.end()) {
                 selections_.push_back(entity.selection);
             }
@@ -982,7 +1030,7 @@ void LevelPreviewWidget::keyPressEvent(QKeyEvent* event) {
     }
     if (event->key() == Qt::Key_Escape) {
         dragging_ = false;
-        resizing_ = false;
+        resize_handle_ = Handle::None;
         marquee_selecting_ = false;
         drag_delta_ = {};
         marquee_ = {};
@@ -1076,7 +1124,7 @@ void LevelPreviewWidget::reorderSelection(bool forward) {
 void LevelPreviewWidget::keyReleaseEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Space && !event->isAutoRepeat()) {
         space_pan_ = false;
-        if (!panning_) setCursor(tool_ == Tool::Pan ? Qt::OpenHandCursor : Qt::ArrowCursor);
+        if (!panning_) setCursor(Qt::ArrowCursor);
         event->accept();
         return;
     }
@@ -1087,17 +1135,17 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
     if (!scene_ || !scene_->level) return;
     auto placement = point;
     if (grid_snap_ && !QApplication::keyboardModifiers().testFlag(Qt::AltModifier)) {
-        const auto grid = (tool_ == Tool::Object || tool_ == Tool::Sprite) ? 16 : snap_size_;
+        const auto grid = (create_kind_ == 1 || create_kind_ == 2) ? 16 : snap_size_;
         placement.setX(std::round(placement.x() / grid) * grid);
         placement.setY(std::round(placement.y() / grid) * grid);
     }
     const auto pixel_x = std::clamp(qRound(placement.x()), 0, 65535);
     const auto pixel_y = std::clamp(qRound(placement.y()), 0, 65535);
-    nsmb::core::Result<std::size_t> result = nsmb::core::make_error(nsmb::core::ErrorCode::Unsupported, "unsupported placement tool");
-    int kind = 0;
-    switch (tool_) {
-    case Tool::Object:
-        kind = 1;
+    nsmb::core::Result<std::size_t> result =
+        nsmb::core::make_error(nsmb::core::ErrorCode::Unsupported, "this entity kind cannot be created on the canvas");
+    const int kind = create_kind_;
+    switch (kind) {
+    case 1:
         result = scene_->level->add_object({static_cast<std::uint16_t>(placement_object_id_),
                                             static_cast<std::uint8_t>(placement_tileset_slot_),
                                             static_cast<std::int16_t>(pixel_x / 16),
@@ -1105,8 +1153,7 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
                                             1,
                                             1});
         break;
-    case Tool::Sprite:
-        kind = 2;
+    case 2:
         {
             nsmb::formats::NsmbLevelSprite sprite{static_cast<std::uint16_t>(placement_sprite_type_),
                                                   static_cast<std::uint16_t>(pixel_x / 16),
@@ -1115,25 +1162,31 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
                                             : scene_->level->add_sprite(sprite);
         }
         break;
-    case Tool::Entrance: {
-        kind = 3;
+    case 3: {
         nsmb::formats::NsmbLevelEntrance entrance;
         entrance.x = static_cast<std::uint16_t>(pixel_x);
         entrance.y = static_cast<std::uint16_t>(pixel_y);
         result = scene_->level->add_entrance(entrance);
         break;
     }
-    case Tool::Zone:
-        kind = 4;
+    case 4:
         result = scene_->level->add_zone({static_cast<std::uint16_t>(pixel_x), static_cast<std::uint16_t>(pixel_y), 256, 192, 0});
         break;
-    case Tool::Path:
-    case Tool::ProgressPath: {
-        const bool progress = tool_ == Tool::ProgressPath;
-        kind = progress ? 6 : 5;
+    case 5:
+    case 6: {
+        const bool progress = kind == 6;
         nsmb::formats::NsmbLevelPath path;
         path.nodes.push_back({static_cast<std::int16_t>(pixel_x), static_cast<std::int16_t>(pixel_y)});
         result = scene_->level->add_path(progress, std::move(path));
+        break;
+    }
+    case 7: {
+        nsmb::formats::NsmbLevelView view{};
+        view.x = static_cast<std::uint16_t>(pixel_x);
+        view.y = static_cast<std::uint16_t>(pixel_y);
+        view.width = 256;
+        view.height = 192;
+        result = scene_->level->add_view(view);
         break;
     }
     default:
@@ -1222,21 +1275,58 @@ void LevelPreviewWidget::commitMove(const QPointF& delta) {
     publishSelection();
 }
 
-void LevelPreviewWidget::commitResize(const QPointF& delta) {
+void LevelPreviewWidget::commitResize(const ResizeEdges& edges) {
     if (!scene_ || !scene_->level || selections_.size() != 1U) return;
     const auto selection = selections_.front();
     const auto index = static_cast<std::size_t>(selection.item);
+
+    // Grabbing a top or left knob moves the origin and shrinks the extent by the
+    // same amount, so both are adjusted together and the opposite edge holds
+    // still. `scale` converts scene pixels into the entity's own units.
+    const auto resized = [&](int origin, int extent, double near_edge, double far_edge, double scale, int minimum) {
+        const auto near_delta = qRound(near_edge / scale);
+        const auto far_delta = qRound(far_edge / scale);
+        auto value = std::make_pair(origin + near_delta, extent - near_delta + far_delta);
+        if (value.second < minimum) {
+            // Dragged past the far edge: pin the size and stop the origin there.
+            value.first -= minimum - value.second;
+            value.second = minimum;
+        }
+        return value;
+    };
+
     nsmb::project::LevelEntityUpdates edits;
     if (selection.kind == 1 && index < scene_->level->objects().size()) {
         auto object = scene_->level->objects()[index];
-        object.width = static_cast<std::uint16_t>(std::clamp(static_cast<int>(object.width) + qRound(delta.x() / 16.0), 1, 65535));
-        object.height = static_cast<std::uint16_t>(std::clamp(static_cast<int>(object.height) + qRound(delta.y() / 16.0), 1, 65535));
+        // Objects are placed and sized in tiles, so the scene delta is 16-scaled.
+        const auto [x, width] = resized(object.x, object.width, edges.left, edges.right, 16.0, 1);
+        const auto [y, height] = resized(object.y, object.height, edges.top, edges.bottom, 16.0, 1);
+        object.x = static_cast<std::int16_t>(std::clamp(x, -32768, 32767));
+        object.y = static_cast<std::int16_t>(std::clamp(y, -32768, 32767));
+        object.width = static_cast<std::uint16_t>(std::clamp(width, 1, 65535));
+        object.height = static_cast<std::uint16_t>(std::clamp(height, 1, 65535));
         edits.objects.push_back({index, object});
     } else if (selection.kind == 4 && index < scene_->level->course().zones.size()) {
         auto zone = scene_->level->course().zones[index];
-        zone.width = static_cast<std::uint16_t>(std::clamp(static_cast<int>(zone.width) + qRound(delta.x()), 1, 65535));
-        zone.height = static_cast<std::uint16_t>(std::clamp(static_cast<int>(zone.height) + qRound(delta.y()), 1, 65535));
+        const auto [x, width] = resized(zone.x, zone.width, edges.left, edges.right, 1.0, 1);
+        const auto [y, height] = resized(zone.y, zone.height, edges.top, edges.bottom, 1.0, 1);
+        zone.x = static_cast<std::uint16_t>(std::clamp(x, 0, 65535));
+        zone.y = static_cast<std::uint16_t>(std::clamp(y, 0, 65535));
+        zone.width = static_cast<std::uint16_t>(std::clamp(width, 1, 65535));
+        zone.height = static_cast<std::uint16_t>(std::clamp(height, 1, 65535));
         edits.zones.push_back({index, zone});
+    } else if (selection.kind == 7 && index < scene_->level->course().views.size()) {
+        // A view is a pixel-space rectangle exactly like a zone, so it resizes
+        // the same way. It only ever looked different because nothing offered a
+        // handle for it.
+        auto view = scene_->level->course().views[index];
+        const auto [x, width] = resized(view.x, view.width, edges.left, edges.right, 1.0, 1);
+        const auto [y, height] = resized(view.y, view.height, edges.top, edges.bottom, 1.0, 1);
+        view.x = static_cast<std::uint16_t>(std::clamp(x, 0, 65535));
+        view.y = static_cast<std::uint16_t>(std::clamp(y, 0, 65535));
+        view.width = static_cast<std::uint16_t>(std::clamp(width, 1, 65535));
+        view.height = static_cast<std::uint16_t>(std::clamp(height, 1, 65535));
+        edits.views.push_back({index, view});
     } else {
         return;
     }
@@ -1414,7 +1504,18 @@ std::vector<LevelPreviewWidget::PaletteEntry> LevelPreviewWidget::paletteEntries
         entries.reserve(entries.size() + tilesets_[slot]->objects.size());
         for (std::size_t object = 0; object < tilesets_[slot]->objects.size(); ++object) {
             QImage image;
-            auto rendered = nsmb::project::render_tileset_object(*tilesets_[slot], static_cast<std::uint16_t>(object), 1, 1);
+            // Preview an object at its own size, not at one tile. A pipe drawn
+            // 1x1 is a corner, which tells you nothing about what you are about
+            // to place. Repeat-marked rows would tile forever, so the natural
+            // extent is capped at a size that still fits a palette button.
+            const auto& layout = tilesets_[slot]->objects[object];
+            std::size_t natural_width = 1;
+            for (const auto& row : layout.rows) natural_width = std::max(natural_width, row.size());
+            const auto natural_height = std::max<std::size_t>(1, layout.rows.size());
+            const auto preview_width = std::clamp<std::size_t>(natural_width, 1, 8);
+            const auto preview_height = std::clamp<std::size_t>(natural_height, 1, 8);
+            auto rendered = nsmb::project::render_tileset_object(
+                *tilesets_[slot], static_cast<std::uint16_t>(object), preview_width, preview_height);
             if (rendered) {
                 const auto& value = rendered.value();
                 image = QImage(value.pixels.data(),
@@ -1424,23 +1525,30 @@ std::vector<LevelPreviewWidget::PaletteEntry> LevelPreviewWidget::paletteEntries
                                QImage::Format_RGBA8888)
                             .copy();
             }
-            entries.push_back({Tool::Object,
+            entries.push_back({1,
                                static_cast<int>(object),
                                static_cast<int>(slot),
                                QString("Object %1:%2").arg(slot).arg(object),
                                QString("Tileset %1").arg(slot),
+                               QString("Object %1 of tileset slot %2 - %3x%4 tiles")
+                                   .arg(object).arg(slot).arg(natural_width).arg(natural_height),
                                std::move(image)});
         }
     }
     for (const auto& [type, label] : actor_labels_) {
         const auto image = actor_images_.contains(type) ? actor_images_.at(type) : QImage{};
         const auto definition = sprite_definitions_.find(type);
-        entries.push_back({Tool::Sprite, type, 0,
-                           (definition == sprite_definitions_.end() ? label : QString::fromStdString(definition->second.name)) + QString(" (%1)").arg(type),
-                           definition == sprite_definitions_.end() ? QString("Other actors") : QString::fromStdString(definition->second.category), image});
+        const auto name = definition == sprite_definitions_.end() ? label
+                                                                 : QString::fromStdString(definition->second.name);
+        entries.push_back({2, type, 0,
+                           name + QString(" (%1)").arg(type),
+                           definition == sprite_definitions_.end() ? QString("Other actors")
+                                                                   : QString::fromStdString(definition->second.category),
+                           QString("%1 - actor type %2").arg(name).arg(type),
+                           image});
     }
     std::ranges::sort(entries, [](const auto& left, const auto& right) {
-        if (left.tool != right.tool) return left.tool < right.tool;
+        if (left.kind != right.kind) return left.kind < right.kind;
         if (left.slot != right.slot) return left.slot < right.slot;
         return left.id < right.id;
     });
@@ -1450,31 +1558,24 @@ std::vector<LevelPreviewWidget::PaletteEntry> LevelPreviewWidget::paletteEntries
 void LevelPreviewWidget::setPlacementObject(int slot, int object_id) {
     placement_tileset_slot_ = std::clamp(slot, 0, 2);
     placement_object_id_ = std::clamp(object_id, 0, 4095);
-    setTool(Tool::Object);
-    placement_tool_ = Tool::Object;
-    placement_selected_ = true;
+    setCreateKind(1);
 }
 
 void LevelPreviewWidget::setPlacementSprite(int sprite_type) {
     placement_sprite_type_ = std::clamp(sprite_type, 0, 65535);
     placement_sprite_hash_.reset();
-    setTool(Tool::Sprite);
-    placement_tool_ = Tool::Sprite;
-    placement_selected_ = true;
+    setCreateKind(2);
 }
 
 void LevelPreviewWidget::setPlacementCustomSprite(std::uint32_t hash) {
     placement_sprite_hash_ = hash;
     placement_sprite_type_ = 0;
-    setTool(Tool::Sprite);
-    placement_tool_ = Tool::Sprite;
-    placement_selected_ = true;
+    setCreateKind(2);
 }
 
-void LevelPreviewWidget::setPlacementTool(Tool tool) {
-    setTool(tool);
-    placement_tool_ = tool;
-    placement_selected_ = tool != Tool::Select && tool != Tool::Pan;
+void LevelPreviewWidget::clearPlacement() {
+    placement_object_id_ = 0;
+    placement_tileset_slot_ = 0;
+    placement_sprite_type_ = 0;
+    placement_sprite_hash_.reset();
 }
-
-void LevelPreviewWidget::clearPlacement() { placement_selected_ = false; }

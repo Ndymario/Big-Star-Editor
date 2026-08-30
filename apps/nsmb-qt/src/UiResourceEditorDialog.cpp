@@ -1,5 +1,5 @@
 #include "UiResourceEditorDialog.hpp"
-#include "ThemeColors.hpp"
+#include "GraphicsCanvas.hpp"
 
 #include "nsmb/formats/graphics.hpp"
 #include "nsmb/formats/ui_resources.hpp"
@@ -33,27 +33,6 @@ namespace {
 
 using namespace nsmb::formats;
 
-QColor bgr(std::uint16_t value) {
-    const auto expand=[](std::uint16_t channel){return static_cast<int>((channel<<3U)|(channel>>2U));};
-    return {expand(value&31U),expand((value>>5U)&31U),expand((value>>10U)&31U)};
-}
-
-std::uint16_t bgr(const QColor& value) {
-    const auto five=[](int channel){return static_cast<std::uint16_t>((channel*31+127)/255);};
-    return static_cast<std::uint16_t>(five(value.red())|(five(value.green())<<5U)|(five(value.blue())<<10U));
-}
-
-class IndexedCanvas final : public QWidget {
-public:
-    explicit IndexedCanvas(QWidget* parent=nullptr):QWidget(parent){setObjectName("UiResourceCanvas");setCursor(Qt::CrossCursor);}
-    void setImage(QImage image,bool editable=true){image_=std::move(image);editable_=editable;const auto longest=std::max(image_.width(),image_.height());zoom_=std::clamp(longest?512/longest:1,1,16);setFixedSize(std::max(1,image_.width()*zoom_),std::max(1,image_.height()*zoom_));update();}
-    std::function<void(int,int)> clicked;
-protected:
-    void paintEvent(QPaintEvent*)override{QPainter painter(this);painter.fillRect(rect(),palette().brush(QPalette::Base));painter.setRenderHint(QPainter::SmoothPixmapTransform,false);if(!image_.isNull())painter.drawImage(rect(),image_);if(editable_&&zoom_>=8){painter.setPen(bse::theme::pixelGrid(palette()));for(int x=0;x<=image_.width();++x)painter.drawLine(x*zoom_,0,x*zoom_,height());for(int y=0;y<=image_.height();++y)painter.drawLine(0,y*zoom_,width(),y*zoom_);}}
-    void mousePressEvent(QMouseEvent* event)override{if(!editable_||!clicked||image_.isNull())return;const auto x=static_cast<int>(event->position().x())/zoom_,y=static_cast<int>(event->position().y())/zoom_;if(x>=0&&y>=0&&x<image_.width()&&y<image_.height())clicked(x,y);}
-private:QImage image_;int zoom_{1};bool editable_{};
-};
-
 class LayoutPreview final : public QWidget {
 public:
     explicit LayoutPreview(QWidget* parent=nullptr):QWidget(parent){setMinimumSize(512,384);}
@@ -69,8 +48,8 @@ std::size_t tile_sheet_width(std::size_t tiles){return std::max<std::size_t>(1,s
 
 } // namespace
 
-struct UiResourceEditorDialog::Impl {
-    explicit Impl(UiResourceEditorDialog* owner,std::string_view path,std::span<const std::uint8_t> source,bool metadata):owner(owner),path(path),body(source.begin(),source.end()),metadata_mode(metadata){
+struct bse::editors::UiResourcePages::Impl {
+    explicit Impl(QWidget* owner,std::string_view path,std::span<const std::uint8_t> source,bool metadata):owner(owner),path(path),body(source.begin(),source.end()),metadata_mode(metadata){
         if(!metadata_mode&&!body.empty()&&(body[0]==0x10||body[0]==0x11)){compression=body[0];auto decoded=decompress_nitro_lz(body);if(!decoded){error=decoded.error();return;}body=std::move(decoded.value());}
         if(metadata_mode){auto parsed=parse_rom_user_metadata(body);if(!parsed)error=parsed.error();else user=std::move(parsed.value());return;}
         kind=identify_ui_resource(body,path);parse();
@@ -85,15 +64,13 @@ struct UiResourceEditorDialog::Impl {
         else error=nsmb::core::make_error(nsmb::core::ErrorCode::Unsupported,"file is not a supported M13 UI resource");
     }
 
-    void build(){
-        owner->setWindowTitle(QString("UI Resource — %1").arg(QString::fromStdString(path)));owner->resize(960,700);auto* root=new QVBoxLayout(owner);
-        if(error){root->addWidget(new QLabel(QString::fromStdString(error->message),owner));auto* buttons=new QDialogButtonBox(QDialogButtonBox::Cancel,owner);root->addWidget(buttons);QObject::connect(buttons,&QDialogButtonBox::rejected,owner,&QDialog::reject);return;}
+    void build(QVBoxLayout* root){
+        if(error){root->addWidget(new QLabel(QString::fromStdString(error->message),owner));return;}
         if(metadata_mode)buildMetadata(root);else if(bnbl)buildBnbl(root);else if(bncl)buildBncl(root);else if(bncd)buildBncd(root);else if(enpg)buildEnpg(root);else if(banner)buildBanner(root);
         if(layout_table)layout_table->setObjectName("BnxlTable");
         if(entry_table)entry_table->setObjectName("BncdEntryTable");
         if(subentry_table)subentry_table->setObjectName("BncdSubentryTable");
         if(metadata_tree)metadata_tree->setObjectName("MetadataTree");
-        auto* buttons=new QDialogButtonBox(QDialogButtonBox::Save|QDialogButtonBox::Cancel,owner);root->addWidget(buttons);QObject::connect(buttons,&QDialogButtonBox::accepted,owner,&QDialog::accept);QObject::connect(buttons,&QDialogButtonBox::rejected,owner,&QDialog::reject);
     }
 
     void addRowButtons(QVBoxLayout* root,QTableWidget* target,std::function<void()> add){auto* row=new QHBoxLayout;auto* plus=new QPushButton("Add",owner);auto* minus=new QPushButton("Delete",owner);row->addWidget(plus);row->addWidget(minus);row->addStretch();root->addLayout(row);QObject::connect(plus,&QPushButton::clicked,owner,[target,add=std::move(add)]{add();target->selectRow(target->rowCount()-1);});QObject::connect(minus,&QPushButton::clicked,owner,[target]{if(target->currentRow()>=0)target->removeRow(target->currentRow());});}
@@ -104,15 +81,15 @@ struct UiResourceEditorDialog::Impl {
 
     void buildBncd(QVBoxLayout* root){auto* tabs=new QTabWidget(owner);entry_table=table({"Width","Height","First subentry","Subentry count"},static_cast<int>(bncd->entries.size()),tabs);for(int r=0;r<entry_table->rowCount();++r){const auto& e=bncd->entries[static_cast<std::size_t>(r)];cell(entry_table,r,0,e.width);cell(entry_table,r,1,e.height);cell(entry_table,r,2,e.subentry_start);cell(entry_table,r,3,e.subentry_count);}subentry_table=table({"OAM attr 0","OAM attr 1","Unknown","Tile","Tile count"},static_cast<int>(bncd->subentries.size()),tabs);for(int r=0;r<subentry_table->rowCount();++r){const auto& e=bncd->subentries[static_cast<std::size_t>(r)];cell(subentry_table,r,0,e.oam_attr0);cell(subentry_table,r,1,e.oam_attr1);cell(subentry_table,r,2,e.unknown);cell(subentry_table,r,3,e.tile_number);cell(subentry_table,r,4,e.tile_count);}tabs->addTab(entry_table,"Cells");tabs->addTab(subentry_table,"OAM");auto* texture_page=new QWidget(tabs);auto* layout=new QVBoxLayout(texture_page);bpp=new QComboBox(texture_page);bpp->addItems({"4bpp","8bpp"});layout->addWidget(bpp);addCanvas(layout,texture_page);tabs->addTab(texture_page,"Texture");root->addWidget(tabs,1);QObject::connect(bpp,&QComboBox::currentIndexChanged,owner,[this]{refreshIndexed();});canvas->clicked=[this](int x,int y){editTiledPixel(bncd->texture,x,y,bpp->currentIndex()==1);refreshIndexed();};refreshIndexed();}
 
-    void addCanvas(QVBoxLayout* root,QWidget* parent){auto* scroll=new QScrollArea(parent);scroll->setAlignment(Qt::AlignCenter);canvas=new IndexedCanvas(scroll);scroll->setWidget(canvas);root->addWidget(scroll,1);palette_list=new QListWidget(parent);palette_list->setViewMode(QListView::IconMode);palette_list->setFlow(QListView::LeftToRight);palette_list->setWrapping(true);palette_list->setMaximumHeight(120);palette_list->setIconSize({22,22});palette_list->setGridSize({48,42});root->addWidget(palette_list);QObject::connect(palette_list,&QListWidget::currentRowChanged,owner,[this](int row){if(row>=0)selected_colour=static_cast<std::size_t>(row);});QObject::connect(palette_list,&QListWidget::itemDoubleClicked,owner,[this](QListWidgetItem* item){editPalette(item);});}
+    void addCanvas(QVBoxLayout* root,QWidget* parent){auto* scroll=new QScrollArea(parent);scroll->setAlignment(Qt::AlignCenter);canvas=new GraphicsCanvas(scroll);scroll->setWidget(canvas);root->addWidget(scroll,1);palette_list=new QListWidget(parent);palette_list->setViewMode(QListView::IconMode);palette_list->setFlow(QListView::LeftToRight);palette_list->setWrapping(true);palette_list->setMaximumHeight(120);palette_list->setIconSize({22,22});palette_list->setGridSize({48,42});root->addWidget(palette_list);QObject::connect(palette_list,&QListWidget::currentRowChanged,owner,[this](int row){if(row>=0)selected_colour=static_cast<std::size_t>(row);});QObject::connect(palette_list,&QListWidget::itemDoubleClicked,owner,[this](QListWidgetItem* item){editPalette(item);});}
 
-    void palette(std::span<const std::uint16_t> colours,bool editable){palette_editable=editable;palette_list->clear();for(std::size_t i=0;i<colours.size();++i){auto* item=new QListWidgetItem(QString::number(i),palette_list);QPixmap icon(22,22);icon.fill(bgr(colours[i]));item->setIcon(icon);}if(palette_list->count())palette_list->setCurrentRow(static_cast<int>(std::min(selected_colour,colours.size()-1)));}
+    void palette(std::span<const std::uint16_t> colours,bool editable){palette_editable=editable;palette_list->clear();for(std::size_t i=0;i<colours.size();++i){auto* item=new QListWidgetItem(QString::number(i),palette_list);QPixmap icon(22,22);icon.fill(bse::graphics::fromBgr555(colours[i]));item->setIcon(icon);}if(palette_list->count())palette_list->setCurrentRow(static_cast<int>(std::min(selected_colour,colours.size()-1)));}
 
-    QImage tiled(std::span<const std::uint8_t> data,bool eight,std::span<const std::uint16_t> colours){const std::size_t tile_size=eight?64U:32U;const auto tiles=data.size()/tile_size;const auto width=tile_sheet_width(tiles);const auto height=(tiles+width-1)/width;QImage image(static_cast<int>(width*8),static_cast<int>(height*8),QImage::Format_RGBA8888);image.fill(Qt::transparent);for(std::size_t tile=0;tile<tiles;++tile)for(std::size_t pixel=0;pixel<64;++pixel){const auto index=eight?data[tile*64+pixel]:static_cast<std::uint8_t>((data[tile*32+pixel/2]>>((pixel&1)*4))&15);const auto colour=colours.empty()?QColor(index,index,index):bgr(colours[std::min<std::size_t>(index,colours.size()-1)]);image.setPixelColor(static_cast<int>((tile%width)*8+pixel%8),static_cast<int>((tile/width)*8+pixel/8),colour);}return image;}
+    QImage tiled(std::span<const std::uint8_t> data,bool eight,std::span<const std::uint16_t> colours){const std::size_t tile_size=eight?64U:32U;const auto tiles=data.size()/tile_size;const auto width=tile_sheet_width(tiles);const auto height=(tiles+width-1)/width;QImage image(static_cast<int>(width*8),static_cast<int>(height*8),QImage::Format_RGBA8888);image.fill(Qt::transparent);for(std::size_t tile=0;tile<tiles;++tile)for(std::size_t pixel=0;pixel<64;++pixel){const auto index=eight?data[tile*64+pixel]:static_cast<std::uint8_t>((data[tile*32+pixel/2]>>((pixel&1)*4))&15);const auto colour=colours.empty()?QColor(index,index,index):bse::graphics::fromBgr555(colours[std::min<std::size_t>(index,colours.size()-1)]);image.setPixelColor(static_cast<int>((tile%width)*8+pixel%8),static_cast<int>((tile/width)*8+pixel/8),colour);}return image;}
 
     void editTiledPixel(std::vector<std::uint8_t>& data,int x,int y,bool eight){const std::size_t tile_size=eight?64U:32U;const auto tiles=data.size()/tile_size;const auto width=tile_sheet_width(tiles);const auto tile=static_cast<std::size_t>(y/8)*width+static_cast<std::size_t>(x/8);const auto pixel=static_cast<std::size_t>(y%8)*8+static_cast<std::size_t>(x%8);if(tile>=tiles)return;if(eight)data[tile*64+pixel]=static_cast<std::uint8_t>(selected_colour);else{auto& byte=data[tile*32+pixel/2];const auto shift=static_cast<unsigned>((pixel&1)*4);const auto mask=static_cast<std::uint8_t>(15U<<shift);byte=static_cast<std::uint8_t>((byte&~mask)|((selected_colour&15U)<<shift));}}
 
-    void refreshIndexed(){if(bncd){const auto colours=bpp->currentIndex()==1?256U:16U;std::vector<std::uint16_t> gray(colours);for(std::size_t i=0;i<colours;++i){const auto channel=static_cast<std::uint16_t>(i*31/(colours-1));gray[i]=static_cast<std::uint16_t>(channel|(channel<<5)|(channel<<10));}palette(gray,false);canvas->setImage(tiled(bncd->texture,bpp->currentIndex()==1,gray));}else if(enpg){palette(enpg->palette,true);QImage image(256,256,QImage::Format_RGBA8888);for(int y=0;y<256;++y)for(int x=0;x<256;++x)image.setPixelColor(x,y,bgr(enpg->palette[enpg->pixels[static_cast<std::size_t>(y)*256+x]]));canvas->setImage(image);}else if(banner){palette(banner->palette,true);canvas->setImage(tiled(bannerIcon(),false,banner->palette));}}
+    void refreshIndexed(){if(bncd){const auto colours=bpp->currentIndex()==1?256U:16U;std::vector<std::uint16_t> gray(colours);for(std::size_t i=0;i<colours;++i){const auto channel=static_cast<std::uint16_t>(i*31/(colours-1));gray[i]=static_cast<std::uint16_t>(channel|(channel<<5)|(channel<<10));}palette(gray,false);canvas->setImage(tiled(bncd->texture,bpp->currentIndex()==1,gray),{1});}else if(enpg){palette(enpg->palette,true);QImage image(256,256,QImage::Format_RGBA8888);for(int y=0;y<256;++y)for(int x=0;x<256;++x)image.setPixelColor(x,y,bse::graphics::fromBgr555(enpg->palette[enpg->pixels[static_cast<std::size_t>(y)*256+x]]));canvas->setImage(image,{1});}else if(banner){palette(banner->palette,true);canvas->setImage(tiled(bannerIcon(),false,banner->palette),{1});}}
 
     std::vector<std::uint8_t> bannerIcon()const{return banner?std::vector<std::uint8_t>(banner->icon.begin(),banner->icon.end()):std::vector<std::uint8_t>{};}
 
@@ -120,7 +97,7 @@ struct UiResourceEditorDialog::Impl {
 
     void buildBanner(QVBoxLayout* root){auto* tabs=new QTabWidget(owner);auto* image_page=new QWidget(tabs);auto* image_layout=new QVBoxLayout(image_page);addCanvas(image_layout,image_page);canvas->clicked=[this](int x,int y){auto data=bannerIcon();editTiledPixel(data,x,y,false);std::copy(data.begin(),data.end(),banner->icon.begin());refreshIndexed();};tabs->addTab(image_page,"Icon");auto* titles_page=new QWidget(tabs);auto* form=new QFormLayout(titles_page);static const std::array names{"Japanese","English","French","German","Italian","Spanish","Chinese","Korean"};for(std::size_t i=0;i<banner->title_count;++i){auto* editor=new QPlainTextEdit(QString::fromStdU16String(banner_title(*banner,i)),titles_page);editor->setObjectName(QString("BannerTitle%1").arg(i));editor->setMaximumHeight(64);title_editors.push_back(editor);form->addRow(names[i],editor);}tabs->addTab(titles_page,"Titles");root->addWidget(tabs,1);refreshIndexed();}
 
-    void editPalette(QListWidgetItem* item){if(!palette_editable||!item)return;const auto index=static_cast<std::size_t>(palette_list->row(item));std::uint16_t before{};if(enpg)before=enpg->palette[index];else if(banner)before=banner->palette[index];else return;const auto chosen=QColorDialog::getColor(bgr(before),owner,"Choose BGR555 colour");if(!chosen.isValid())return;if(enpg)enpg->palette[index]=bgr(chosen);else banner->palette[index]=bgr(chosen);refreshIndexed();}
+    void editPalette(QListWidgetItem* item){if(!palette_editable||!item)return;const auto index=static_cast<std::size_t>(palette_list->row(item));std::uint16_t before{};if(enpg)before=enpg->palette[index];else if(banner)before=banner->palette[index];else return;const auto chosen=QColorDialog::getColor(bse::graphics::fromBgr555(before),owner,"Choose BGR555 colour");if(!chosen.isValid())return;if(enpg)enpg->palette[index]=bse::graphics::toBgr555(chosen);else banner->palette[index]=bse::graphics::toBgr555(chosen);refreshIndexed();}
 
     void buildMetadata(QVBoxLayout* root){root->addWidget(new QLabel("Per-ROM names and object notes stored in NitroFS file ID 131. Numeric section names are tileset object-note lists.",owner));metadata_tree=new QTreeWidget(owner);metadata_tree->setHeaderLabels({"Section","Key","Value"});metadata_tree->setEditTriggers(QAbstractItemView::DoubleClicked|QAbstractItemView::EditKeyPressed);for(const auto& section:user->sections){auto* top=new QTreeWidgetItem(metadata_tree,{QString::fromStdString(section.name)});top->setFlags(top->flags()|Qt::ItemIsEditable);for(const auto& entry:section.entries){auto* child=new QTreeWidgetItem(top,{{},QString::number(entry.key),QString::fromStdString(entry.value)});child->setFlags(child->flags()|Qt::ItemIsEditable);}}metadata_tree->expandAll();root->addWidget(metadata_tree,1);auto* buttons=new QHBoxLayout;auto* section=new QPushButton("Add section",owner);auto* entry=new QPushButton("Add entry",owner);auto* remove=new QPushButton("Delete",owner);buttons->addWidget(section);buttons->addWidget(entry);buttons->addWidget(remove);buttons->addStretch();root->addLayout(buttons);QObject::connect(section,&QPushButton::clicked,owner,[this]{auto* item=new QTreeWidgetItem(metadata_tree,{"Names"});item->setFlags(item->flags()|Qt::ItemIsEditable);metadata_tree->setCurrentItem(item);});QObject::connect(entry,&QPushButton::clicked,owner,[this]{auto* current=metadata_tree->currentItem();auto* parent=current?(current->parent()?current->parent():current):nullptr;if(!parent)return;auto* item=new QTreeWidgetItem(parent,{{},"0","Name"});item->setFlags(item->flags()|Qt::ItemIsEditable);parent->setExpanded(true);metadata_tree->setCurrentItem(item);});QObject::connect(remove,&QPushButton::clicked,owner,[this]{auto* item=metadata_tree->currentItem();if(!item)return;if(item->parent())delete item->parent()->takeChild(item->parent()->indexOfChild(item));else delete metadata_tree->takeTopLevelItem(metadata_tree->indexOfTopLevelItem(item));});}
 
@@ -135,12 +112,37 @@ struct UiResourceEditorDialog::Impl {
 
     nsmb::core::Result<std::vector<std::uint8_t>> output(){if(error)return *error;if(auto result=collect();!result)return result.error();nsmb::core::Result<std::vector<std::uint8_t>> result=body;if(bnbl)result=write_bnbl(*bnbl);else if(bncl)result=write_bncl(*bncl);else if(bncd)result=write_bncd(*bncd);else if(enpg)result=write_enpg(*enpg);else if(banner)result=write_ds_banner(*banner);else if(user)result=write_rom_user_metadata(*user);if(!result||!compression)return result;return compression==0x10?compress_nitro_lz10(result.value()):compress_nitro_lz11(result.value());}
 
-    UiResourceEditorDialog* owner;std::string path;std::vector<std::uint8_t> body;bool metadata_mode{};std::uint8_t compression{};UiResourceKind kind{UiResourceKind::Unknown};std::optional<nsmb::core::Error> error;std::optional<Bnbl> bnbl;std::optional<Bncl> bncl;std::optional<Bncd> bncd;std::optional<Enpg> enpg;std::optional<DsBanner> banner;std::optional<RomUserMetadata> user;
-    QTableWidget* layout_table{};QTableWidget* entry_table{};QTableWidget* subentry_table{};QTreeWidget* metadata_tree{};QComboBox* bpp{};IndexedCanvas* canvas{};QListWidget* palette_list{};std::vector<QPlainTextEdit*> title_editors;std::size_t selected_colour{};bool palette_editable{};
+    QWidget* owner;std::string path;std::vector<std::uint8_t> body;bool metadata_mode{};std::uint8_t compression{};UiResourceKind kind{UiResourceKind::Unknown};std::optional<nsmb::core::Error> error;std::optional<Bnbl> bnbl;std::optional<Bncl> bncl;std::optional<Bncd> bncd;std::optional<Enpg> enpg;std::optional<DsBanner> banner;std::optional<RomUserMetadata> user;
+    QTableWidget* layout_table{};QTableWidget* entry_table{};QTableWidget* subentry_table{};QTreeWidget* metadata_tree{};QComboBox* bpp{};GraphicsCanvas* canvas{};QListWidget* palette_list{};std::vector<QPlainTextEdit*> title_editors;std::size_t selected_colour{};bool palette_editable{};
 };
 
-UiResourceEditorDialog::UiResourceEditorDialog(std::string_view path,std::span<const std::uint8_t> bytes,bool metadata,QWidget* parent):QDialog(parent),impl_(std::make_unique<Impl>(this,path,bytes,metadata)){impl_->build();}
+namespace bse::editors {
+
+UiResourcePages::UiResourcePages(QWidget* owner,std::string_view path,std::span<const std::uint8_t> bytes,bool rom_user_metadata)
+    :impl_(std::make_unique<Impl>(owner,path,bytes,rom_user_metadata)){}
+UiResourcePages::~UiResourcePages()=default;
+
+bool UiResourcePages::supports(std::span<const std::uint8_t> bytes,std::string_view path,bool rom_user_metadata){Impl probe(nullptr,path,bytes,rom_user_metadata);return !probe.error;}
+bool UiResourcePages::valid()const{return !impl_->error;}
+QString UiResourcePages::title()const{return QString("UI Resource — %1").arg(QString::fromStdString(impl_->path));}
+void UiResourcePages::build(QVBoxLayout* root){impl_->build(root);}
+nsmb::core::Result<std::vector<std::uint8_t>> UiResourcePages::output()const{return impl_->output();}
+
+} // namespace bse::editors
+
+// The dialog is now only a frame around those pages; the graphics editor hosts
+// the same ones for any file it is handed.
+UiResourceEditorDialog::UiResourceEditorDialog(std::string_view path,std::span<const std::uint8_t> bytes,bool metadata,QWidget* parent)
+    :QDialog(parent),pages_(std::make_unique<bse::editors::UiResourcePages>(this,path,bytes,metadata)){
+    setWindowTitle(pages_->title());resize(960,700);
+    auto* root=new QVBoxLayout(this);
+    pages_->build(root);
+    auto* buttons=new QDialogButtonBox(pages_->valid()?(QDialogButtonBox::Save|QDialogButtonBox::Cancel):QDialogButtonBox::Cancel,this);
+    root->addWidget(buttons);
+    connect(buttons,&QDialogButtonBox::accepted,this,&QDialog::accept);
+    connect(buttons,&QDialogButtonBox::rejected,this,&QDialog::reject);
+}
 UiResourceEditorDialog::~UiResourceEditorDialog()=default;
 
-bool UiResourceEditorDialog::supports(std::span<const std::uint8_t> bytes,std::string_view path,bool metadata){Impl probe(nullptr,path,bytes,metadata);return !probe.error;}
-nsmb::core::Result<std::vector<std::uint8_t>> UiResourceEditorDialog::editedBytes()const{return impl_->output();}
+bool UiResourceEditorDialog::supports(std::span<const std::uint8_t> bytes,std::string_view path,bool metadata){return bse::editors::UiResourcePages::supports(bytes,path,metadata);}
+nsmb::core::Result<std::vector<std::uint8_t>> UiResourceEditorDialog::editedBytes()const{return pages_->output();}

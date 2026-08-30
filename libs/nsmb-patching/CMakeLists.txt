@@ -1,7 +1,6 @@
 add_library(nsmb-patching
   src/ncpatcher.cpp
   src/process.cpp
-  src/legacy.cpp
 )
 add_library(nsmb::patching ALIAS nsmb-patching)
 target_include_directories(nsmb-patching PUBLIC include)
