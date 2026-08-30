@@ -19,23 +19,9 @@ QString pathText(const nsmb::project::GameFile* file) {
     return file ? QString::fromStdString(file->path.generic_string()) : QString{};
 }
 
-QString levelNameFromPath(const std::filesystem::path& path) {
-    const auto stem = QString::fromStdString(path.stem().string());
-    return stem.isEmpty() ? QString::fromStdString(path.filename().string()) : stem;
-}
-
 std::string lower(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return value;
-}
-
-bool endsWith(std::string_view value, std::string_view suffix) {
-    return value.size() >= suffix.size() && value.substr(value.size() - suffix.size()) == suffix;
-}
-
-bool isLevelCandidate(const nsmb::project::GameFile& file) {
-    const auto path = file.path.generic_string();
-    return nsmb::formats::identify_format({}, path) == nsmb::formats::FormatKind::LevelCandidate;
 }
 
 struct FileLookup {
@@ -201,7 +187,7 @@ QVariant ProjectTreeModel::data(const QModelIndex& idx, int role) const {
         return static_cast<int>(node->kind);
     }
     if (role == Qt::ToolTipRole) {
-        if (node->kind != AreaNode && node->kind != OtherNode) {
+        if (node->kind != AreaNode) {
             return node->label;
         }
         QString text = node->label;
@@ -238,7 +224,7 @@ Qt::ItemFlags ProjectTreeModel::flags(const QModelIndex& index) const {
     }
 
     Qt::ItemFlags flags = Qt::ItemIsEnabled;
-    if (node->kind == AreaNode || node->kind == OtherNode) {
+    if (node->kind == AreaNode) {
         flags |= Qt::ItemIsSelectable;
     }
     return flags;
@@ -273,16 +259,31 @@ void ProjectTreeModel::rebuildLevels() {
 
     const auto lookup = buildLookup(project_);
     std::map<std::string, Node*> worlds;
-    std::set<std::string> used_course_paths;
 
+    // A catalog world may name a path rather than a single group: "Mario vs.
+    // Luigi > Multicard" is one Mario vs. Luigi node holding a Multicard node,
+    // not a row with an arrow in its label.
     auto worldNode = [&](const std::string& world) -> Node* {
         if (const auto found = worlds.find(world); found != worlds.end()) {
             return found->second;
         }
-        auto* node = addChild(*root_, makeNode(WorldNode, QString::fromStdString(world)));
-        node->world = QString::fromStdString(world);
-        worlds.emplace(world, node);
-        return node;
+        Node* parent = root_.get();
+        QString prefix;
+        for (const auto& part : QString::fromStdString(world).split('>', Qt::SkipEmptyParts)) {
+            const auto name = part.trimmed();
+            if (name.isEmpty()) continue;
+            prefix = prefix.isEmpty() ? name : prefix + " > " + name;
+            const auto key = prefix.toStdString();
+            if (const auto found = worlds.find(key); found != worlds.end()) {
+                parent = found->second;
+                continue;
+            }
+            auto* node = addChild(*parent, makeNode(WorldNode, name));
+            node->world = prefix;
+            worlds.emplace(key, node);
+            parent = node;
+        }
+        return parent;
     };
 
     auto populateAreaNode = [&](Node& node, const nsmb::project::LevelCatalogEntry& entry, const nsmb::project::LevelCatalogArea& area) {
@@ -298,7 +299,6 @@ void ProjectTreeModel::rebuildLevels() {
         ++level_count_;
         if (node.available) {
             ++available_level_count_;
-            used_course_paths.insert(course->path.generic_string());
         }
     };
 
@@ -320,30 +320,4 @@ void ProjectTreeModel::rebuildLevels() {
         }
     }
 
-    auto* other = static_cast<Node*>(nullptr);
-    for (const auto* file : lookup.sorted_files) {
-        const auto path = file->path.generic_string();
-        const auto filename = file->path.filename().string();
-        if (used_course_paths.contains(path) || endsWith(filename, "_bgdat.bin") || !isLevelCandidate(*file)) {
-            continue;
-        }
-        if (!other) {
-            other = worldNode("Other Files");
-        }
-
-        auto area_node = makeNode(OtherNode, levelNameFromPath(file->path));
-        area_node->world = "Other Files";
-        area_node->area_name = area_node->label;
-        area_node->course_path = pathText(file);
-        const auto stem = file->path.stem().string();
-        const auto* bgdat = findByName(lookup, stem + "_bgdat.bin");
-        area_node->bgdat_path = pathText(bgdat);
-        area_node->available = bgdat != nullptr;
-        area_node->size = file->size + (bgdat ? bgdat->size : 0U);
-        ++level_count_;
-        if (area_node->available) {
-            ++available_level_count_;
-        }
-        addChild(*other, std::move(area_node));
-    }
 }

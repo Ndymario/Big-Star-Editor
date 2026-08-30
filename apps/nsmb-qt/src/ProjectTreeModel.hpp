@@ -28,7 +28,6 @@ public:
         WorldNode,
         LevelNode,
         AreaNode,
-        OtherNode,
     };
 
     explicit ProjectTreeModel(QObject* parent = nullptr);

@@ -9,6 +9,7 @@
 #include "TilesetEditorDialog.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "MainWindow.hpp"
+#include "ProjectTreeModel.hpp"
 #include "PatcherPanel.hpp"
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/formats/graphics.hpp"
@@ -713,6 +714,39 @@ private slots:
         QVERIFY(level.undo());
         canvas.refreshLevelState();
         QCOMPARE(level.course().views.size(), views);
+    }
+
+    void theLevelListHoldsOnlyLevelsAndNestsTheVersusGroups() {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto project = make_project(std::filesystem::path(directory.path().toStdString()));
+
+        ProjectTreeModel model;
+        model.setProject(project);
+
+        const auto topLevel = [&](const QString& name) {
+            for (int row = 0; row < model.rowCount({}); ++row)
+                if (model.data(model.index(row, 0), Qt::DisplayRole).toString() == name)
+                    return model.index(row, 0);
+            return QModelIndex{};
+        };
+
+        // Loose course-shaped files are not levels, so they get no bucket here.
+        QVERIFY(!topLevel("Other Files").isValid());
+
+        // "Mario vs. Luigi > Multicard" is a path, not a label: one group node
+        // holding the two modes, each holding the levels.
+        const auto versus = topLevel("Mario vs. Luigi");
+        QVERIFY(versus.isValid());
+        QCOMPARE(model.rowCount(versus), 2);
+        QCOMPARE(model.data(model.index(0, 0, versus), Qt::DisplayRole).toString(), QString("Multicard"));
+        QCOMPARE(model.data(model.index(1, 0, versus), Qt::DisplayRole).toString(), QString("Download Play"));
+        QVERIFY(model.rowCount(model.index(0, 0, versus)) > 0);
+        QVERIFY(model.rowCount(model.index(1, 0, versus)) > 0);
+
+        // The mode names carry no parenthetical essay any more.
+        for (int row = 0; row < model.rowCount(versus); ++row)
+            QVERIFY(!model.data(model.index(row, 0, versus), Qt::DisplayRole).toString().contains('('));
     }
 
     void objectPreviewsShowTheWholeObjectPerTilesetSlot() {

@@ -115,14 +115,14 @@ Item Bonus Game|I02_1
 Mega Mushroom Bonus Game|I03_1
 Bottom Screen Background Chooser|I04_1
 
--Mario vs. Luigi > 2 Cards (Needs the 'Ultimate No Spriteset Limitation' code hack otherwise download play levels will be used!)
+-Mario vs. Luigi > Multicard
 SMB 1-1|J01_1
 Underground|J02_1
 Ice World|J03_1
 Pipe World|J04_1
 Castle|J05_1
 
--Mario vs. Luigi > Download Play (Spritesets and background slots can not be changed!)
+-Mario vs. Luigi > Download Play
 SMB 1-1|J01_1@Dat_Field
 Underground|J02_1@Dat_Basement
 Ice World|J03_1@Dat_Ice
