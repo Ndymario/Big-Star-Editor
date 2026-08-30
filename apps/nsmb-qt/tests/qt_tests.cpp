@@ -715,6 +715,54 @@ private slots:
         QCOMPARE(level.course().views.size(), views);
     }
 
+    void objectPreviewsShowTheWholeObjectPerTilesetSlot() {
+        // A pipe previewed at one tile is a corner, which says nothing about
+        // what is being placed. Previews render at the object's own extent, and
+        // the picker splits by tileset slot the way ObjectPickerControlNew does.
+        auto tileset = std::make_shared<nsmb::project::DecodedTileset>();
+        nsmb::formats::RgbaImage tile{16, 16, {}};
+        tile.pixels.assign(16 * 16 * 4, 0xff);
+        tileset->map16_tiles.assign(4, tile);
+        nsmb::formats::ObjectLayout wide;
+        wide.rows = {{{0, 0}, {1, 0}}, {{2, 0}, {3, 0}}};  // two map16 tiles across, two down
+        tileset->objects.push_back(wide);
+
+        LevelPreviewWidget scratch;
+        scratch.tilesets_[0] = tileset;
+        const auto entries = scratch.paletteEntries();
+        QCOMPARE(entries.size(), 1U);
+        QCOMPARE(entries.front().slot, 0);
+        QVERIFY(entries.front().image.width() > 16);
+        QVERIFY(entries.front().image.height() > 16);
+        QVERIFY(entries.front().tooltip.contains("2x2"));
+
+        // One Objects sub-tab per loaded slot, and none for an empty one.
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto project = make_project(std::filesystem::path(directory.path().toStdString()));
+        MainWindow window;
+        window.setProject(project);
+        const auto index = window.findLevelIndex("extracted-rom/root/course/A01_1.bin",
+                                                 "extracted-rom/root/course/A01_1_bgdat.bin");
+        QVERIFY(index.isValid());
+        window.openLevelEditor(index);
+        QCOMPARE(window.documents_.size(), 1U);
+        auto* view = window.documents_.begin()->second.view;
+        QVERIFY(view);
+        view->tilesets_[0] = tileset;
+        view->tilesets_[2] = tileset;
+        window.refreshPalette();
+
+        auto* tabs = window.findChild<QTabWidget*>("ObjectPickerTabs");
+        QVERIFY(tabs);
+        QCOMPARE(tabs->count(), 2);
+        QCOMPARE(tabs->tabText(0), QString("Tileset 0"));
+        QCOMPARE(tabs->tabText(1), QString("Tileset 2"));
+        QVERIFY(window.findChild<QWidget*>("ObjectPicker0"));
+        QVERIFY(window.findChild<QWidget*>("ObjectPicker2"));
+        QVERIFY(!window.findChild<QWidget*>("ObjectPicker1"));
+    }
+
     void customPalettePlacementCarriesHash() {
         auto level = make_level();
         LevelPreviewWidget canvas;
