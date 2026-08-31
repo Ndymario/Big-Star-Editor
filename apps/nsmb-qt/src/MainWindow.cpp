@@ -429,9 +429,11 @@ void MainWindow::createDocks() {
     propertiesLabel_->setMargin(8);
     levelProperties_ = new LevelPropertiesWidget(propertiesContainer);
     levelData_ = new LevelDataWidget(propertiesContainer);
+    auto* propertiesTabs = new QTabWidget(propertiesContainer);
+    propertiesTabs->addTab(levelProperties_, "Selection");
+    propertiesTabs->addTab(levelData_, "Level Data");
     propertiesLayout->addWidget(propertiesLabel_);
-    propertiesLayout->addWidget(levelProperties_, 1);
-    propertiesLayout->addWidget(levelData_, 1);
+    propertiesLayout->addWidget(propertiesTabs, 1);
     propertiesDock_->setWidget(propertiesContainer);
     addDockWidget(Qt::RightDockWidgetArea, propertiesDock_);
 
@@ -1938,6 +1940,9 @@ void MainWindow::openLevelEditor(const QModelIndex& source_index) {
         if ((tabs_->currentWidget() == view || view->window()->isActiveWindow()) && kind >= 0 && kind <= 7 && !items.empty()) {
             levelProperties_->selectMany(static_cast<LevelPropertiesWidget::Kind>(kind), items);
         }
+    });
+    connect(view, &LevelPreviewWidget::interactionPreviewRequested, this, [this, view](const QPointF& delta, int handle) {
+        if (tabs_->currentWidget() == view || view->window()->isActiveWindow()) levelProperties_->previewInteraction(delta, handle);
     });
     connect(view, &LevelPreviewWidget::kindShortcutRequested, this, [this, view](int kind) {
         if (view->level() != currentLevel_) return;

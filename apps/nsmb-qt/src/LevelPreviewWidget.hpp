@@ -94,6 +94,7 @@ public:
 signals:
     void selectionRequested(int kind, int item_index, int node_index);
     void multiSelectionRequested(int kind, const QList<int>& item_indices);
+    void interactionPreviewRequested(const QPointF& delta, int resize_handle);
     void levelChanged();
     void errorOccurred(const QString& message);
     void graphicsLoaded();

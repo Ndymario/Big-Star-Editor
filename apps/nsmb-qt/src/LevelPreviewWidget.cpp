@@ -957,6 +957,7 @@ void LevelPreviewWidget::mouseMoveEvent(QMouseEvent* event) {
             drag_delta_.setX(std::round(drag_delta_.x() / grid) * grid);
             drag_delta_.setY(std::round(drag_delta_.y() / grid) * grid);
         }
+        emit interactionPreviewRequested(drag_delta_, static_cast<int>(resize_handle_));
         update();
         return;
     }
@@ -1067,6 +1068,7 @@ void LevelPreviewWidget::keyPressEvent(QKeyEvent* event) {
         marquee_selecting_ = false;
         drag_delta_ = {};
         marquee_ = {};
+        emit interactionPreviewRequested({}, 0);
         update();
         return;
     }

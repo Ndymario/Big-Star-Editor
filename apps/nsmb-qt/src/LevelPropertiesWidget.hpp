@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QList>
+#include <QPointF>
 #include <QWidget>
 
 #include <array>
@@ -34,6 +35,8 @@ public:
     void setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog,
                               std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids);
     void refresh();
+    // Shows the in-progress canvas transform without committing it to undo history.
+    void previewInteraction(const QPointF& delta, int resize_handle);
     void select(Kind kind, int item_index, int node_index = 0);
     void selectMany(Kind kind, const QList<int>& item_indices);
     // Which entity kind the panel is showing. With no tool modes on the canvas,
@@ -49,6 +52,7 @@ signals:
 
 private:
     struct FieldRow {
+        QWidget* container{};
         QLabel* label{};
         QSpinBox* value{};
         bool mixed{};

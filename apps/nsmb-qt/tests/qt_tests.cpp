@@ -987,6 +987,42 @@ private slots:
         QVERIFY(level.course().views[0].height < height);
     }
 
+    void propertiesPreviewAResizeBeforeItIsCommitted() {
+        auto level = make_level();
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 320; view.y = 320; view.width = 256; view.height = 192;
+        QVERIFY(level.add_view(view));
+
+        LevelPreviewWidget canvas;
+        LevelPropertiesWidget properties;
+        canvas.resize(900, 700);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.setSelection(7, 0, -1);
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::View, 0);
+        connect(&canvas, &LevelPreviewWidget::interactionPreviewRequested,
+                &properties, &LevelPropertiesWidget::previewInteraction);
+        canvas.show();
+        properties.resize(360, 600);
+        properties.show();
+        QTest::qWait(20);
+
+        const auto knob = canvas.sceneTransform().mapRect(*canvas.selectedResizableRect()).bottomRight().toPoint();
+        QTest::mousePress(&canvas, Qt::LeftButton, {}, knob);
+        QTest::mouseMove(&canvas, knob + QPoint(48, 48));
+
+        // The inspector tracks the gesture while the undoable model edit still
+        // waits for mouse release.
+        QCOMPARE(level.course().views[0].width, 256);
+        QVERIFY(properties.fields_[2].value->value() > 256);
+        QCOMPARE(properties.fields_[0].container->y(), properties.fields_[1].container->y());
+        QVERIFY(properties.fields_[0].container->x() < properties.fields_[1].container->x());
+
+        QTest::mouseRelease(&canvas, Qt::LeftButton, {}, knob + QPoint(48, 48));
+        QCOMPARE(properties.fields_[2].value->value(), static_cast<int>(level.course().views[0].width));
+    }
+
     void selectionIgnoresTheCreateKind() {
         auto level = make_level();
         QVERIFY(level.add_object({1, 0, 1, 1, 1, 1}));

@@ -1,10 +1,13 @@
 #include "LevelPropertiesWidget.hpp"
 
 #include <QComboBox>
-#include <QFormLayout>
+#include <QFrame>
+#include <QGridLayout>
+#include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabBar>
@@ -35,7 +38,8 @@ int firstUnusedNumber(const auto& values, int start, auto number) {
 
 LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) {
     auto* layout = new QVBoxLayout(this);
-    auto* form = new QFormLayout;
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
 
     kindTabs_ = new QTabBar(this); kindTabs_->setExpanding(false); kindTabs_->setUsesScrollButtons(true);
     for (const auto& [name, value] : std::array{
@@ -44,44 +48,80 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
              std::pair{"Zones", Kind::Zone}, std::pair{"Paths", Kind::Path}, std::pair{"Progress", Kind::ProgressPath}}) {
         const auto tab = kindTabs_->addTab(name); kindTabs_->setTabData(tab, static_cast<int>(value));
     }
-    form->addRow(kindTabs_);
+    layout->addWidget(kindTabs_);
+
+    auto* scroll = new QScrollArea(this);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* content = new QWidget(scroll);
+    auto* contentLayout = new QVBoxLayout(content);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(8);
+
+    auto* selectionGroup = new QGroupBox("Selection", content);
+    auto* selectionLayout = new QGridLayout(selectionGroup);
 
     itemBox_ = new QSpinBox(this);
     itemBox_->setMinimum(0);
-    form->addRow("Item", itemBox_);
+    itemBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    selectionLayout->addWidget(new QLabel("Item", selectionGroup), 0, 0);
+    selectionLayout->addWidget(itemBox_, 1, 0);
 
     nodeLabel_ = new QLabel("Node", this);
     nodeBox_ = new QSpinBox(this);
     nodeBox_->setMinimum(0);
-    form->addRow(nodeLabel_, nodeBox_);
+    nodeBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    selectionLayout->addWidget(nodeLabel_, 0, 1);
+    selectionLayout->addWidget(nodeBox_, 1, 1);
 
-    for (auto& field : fields_) {
-        field.label = new QLabel(this);
-        field.value = new QSpinBox(this);
+    auto* propertiesGroup = new QGroupBox("Properties", content);
+    auto* fieldsLayout = new QGridLayout(propertiesGroup);
+    fieldsLayout->setHorizontalSpacing(10);
+    fieldsLayout->setVerticalSpacing(7);
+
+    for (std::size_t index = 0; index < fields_.size(); ++index) {
+        auto& field = fields_[index];
+        field.container = new QWidget(propertiesGroup);
+        auto* fieldLayout = new QVBoxLayout(field.container);
+        fieldLayout->setContentsMargins(0, 0, 0, 0);
+        fieldLayout->setSpacing(2);
+        field.label = new QLabel(field.container);
+        field.label->setWordWrap(true);
+        field.value = new QSpinBox(field.container);
         field.value->setObjectName(QString("PropertyField%1").arg(&field - fields_.data()));
         field.value->setRange(-32768, 65535);
-        form->addRow(field.label, field.value);
+        field.value->setAccelerated(true);
+        field.value->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        fieldLayout->addWidget(field.label);
+        fieldLayout->addWidget(field.value);
+        fieldsLayout->addWidget(field.container, static_cast<int>(index / 2), static_cast<int>(index % 2));
         connect(field.value, &QSpinBox::valueChanged, this, [this, current = &field] {
             if (!refreshing_) current->mixed = false;
             applyFields();
         });
     }
-    layout->addLayout(form);
+    fieldsLayout->setColumnStretch(0, 1);
+    fieldsLayout->setColumnStretch(1, 1);
+    contentLayout->addWidget(selectionGroup);
+    contentLayout->addWidget(propertiesGroup);
 
     auto* entityButtons = new QHBoxLayout;
     addButton_ = new QPushButton("Add", this);
     deleteButton_ = new QPushButton("Delete", this);
     entityButtons->addWidget(addButton_);
     entityButtons->addWidget(deleteButton_);
-    layout->addLayout(entityButtons);
+    contentLayout->addLayout(entityButtons);
 
     auto* nodeButtons = new QHBoxLayout;
     addNodeButton_ = new QPushButton("Add Node", this);
     deleteNodeButton_ = new QPushButton("Delete Node", this);
     nodeButtons->addWidget(addNodeButton_);
     nodeButtons->addWidget(deleteNodeButton_);
-    layout->addLayout(nodeButtons);
-    layout->addStretch();
+    contentLayout->addLayout(nodeButtons);
+    contentLayout->addStretch();
+    scroll->setWidget(content);
+    layout->addWidget(scroll, 1);
 
     connect(kindTabs_, &QTabBar::currentChanged, this, [this] {
         selected_items_.clear();
@@ -160,8 +200,7 @@ void LevelPropertiesWidget::refresh() {
     refreshing_ = true;
     visible_sprite_fields_.clear();
     for (auto& field : fields_) {
-        field.label->hide();
-        field.value->hide();
+        field.container->hide();
         field.label->setToolTip({});
         field.value->setToolTip({});
     }
@@ -196,8 +235,7 @@ void LevelPropertiesWidget::refresh() {
         current.value->setRange(current.unset_value, maximum);
         current.value->setSpecialValueText("—");
         current.value->setValue(value.value_or(current.unset_value));
-        current.label->show();
-        current.value->show();
+        current.container->show();
     };
 
     auto common = [&](auto getter) -> std::optional<int> {
@@ -330,6 +368,99 @@ void LevelPropertiesWidget::refresh() {
 
     refreshing_ = false;
     if (!multi) emit selectionChanged(static_cast<int>(kind()), itemBox_->value(), nodeBox_->value());
+}
+
+void LevelPropertiesWidget::previewInteraction(const QPointF& delta, int resize_handle) {
+    if (refreshing_ || !level_ || itemCount() == 0) return;
+    const auto indices = selectedIndices();
+    if (indices.empty()) return;
+
+    auto show = [&](std::size_t field, int value) {
+        if (fields_[field].mixed) return;
+        const QSignalBlocker blocker(fields_[field].value);
+        fields_[field].value->setValue(value);
+    };
+    auto clamp16 = [](int value) { return std::clamp(value, 0, 65535); };
+    auto clampSigned16 = [](int value) { return std::clamp(value, -32768, 32767); };
+    auto common = [&](auto getter) -> std::optional<int> {
+        const auto first = static_cast<int>(getter(indices.front()));
+        return std::ranges::all_of(indices, [&](auto index) { return static_cast<int>(getter(index)) == first; })
+                   ? std::optional<int>(first)
+                   : std::nullopt;
+    };
+
+    if (resize_handle == 0) {
+        const auto shifted = [&](std::size_t field, std::optional<int> original, double amount, double scale, bool signed_value) {
+            if (!original) return;
+            const auto value = *original + qRound(amount / scale);
+            show(field, signed_value ? clampSigned16(value) : clamp16(value));
+        };
+        switch (kind()) {
+        case Kind::Object:
+            shifted(2, common([&](auto i) { return level_->objects()[i].x; }), delta.x(), 16.0, true);
+            shifted(3, common([&](auto i) { return level_->objects()[i].y; }), delta.y(), 16.0, true);
+            break;
+        case Kind::Sprite:
+            shifted(1, common([&](auto i) { return level_->course().sprites[i].x; }), delta.x(), 16.0, false);
+            shifted(2, common([&](auto i) { return level_->course().sprites[i].y; }), delta.y(), 16.0, false);
+            break;
+        case Kind::Entrance:
+            shifted(0, common([&](auto i) { return level_->course().entrances[i].x; }), delta.x(), 1.0, false);
+            shifted(1, common([&](auto i) { return level_->course().entrances[i].y; }), delta.y(), 1.0, false);
+            break;
+        case Kind::Zone:
+            shifted(0, common([&](auto i) { return level_->course().zones[i].x; }), delta.x(), 1.0, false);
+            shifted(1, common([&](auto i) { return level_->course().zones[i].y; }), delta.y(), 1.0, false);
+            break;
+        case Kind::View:
+            shifted(0, common([&](auto i) { return level_->course().views[i].x; }), delta.x(), 1.0, false);
+            shifted(1, common([&](auto i) { return level_->course().views[i].y; }), delta.y(), 1.0, false);
+            break;
+        case Kind::Path:
+        case Kind::ProgressPath: {
+            if (indices.size() != 1U) break;
+            const auto& paths = kind() == Kind::ProgressPath ? level_->course().progress_paths : level_->course().paths;
+            const auto& nodes = paths[indices.front()].nodes;
+            if (nodes.empty()) break;
+            const auto& node = nodes[static_cast<std::size_t>(nodeBox_->value())];
+            shifted(1, node.x, delta.x(), 1.0, true);
+            shifted(2, node.y, delta.y(), 1.0, true);
+            break;
+        }
+        default: break;
+        }
+        return;
+    }
+
+    if (indices.size() != 1U || (kind() != Kind::Object && kind() != Kind::Zone && kind() != Kind::View)) return;
+    const auto left = resize_handle == 1 || resize_handle == 7 || resize_handle == 8;
+    const auto right = resize_handle == 3 || resize_handle == 4 || resize_handle == 5;
+    const auto top = resize_handle == 1 || resize_handle == 2 || resize_handle == 3;
+    const auto bottom = resize_handle == 5 || resize_handle == 6 || resize_handle == 7;
+    const auto resized = [](int origin, int extent, double near_edge, double far_edge, double scale) {
+        const auto near_delta = qRound(near_edge / scale);
+        const auto far_delta = qRound(far_edge / scale);
+        auto result = std::pair{origin + near_delta, extent - near_delta + far_delta};
+        if (result.second < 1) { result.first -= 1 - result.second; result.second = 1; }
+        return result;
+    };
+    const auto index = indices.front();
+    if (kind() == Kind::Object) {
+        const auto& object = level_->objects()[index];
+        const auto [x, width] = resized(object.x, object.width, left ? delta.x() : 0.0, right ? delta.x() : 0.0, 16.0);
+        const auto [y, height] = resized(object.y, object.height, top ? delta.y() : 0.0, bottom ? delta.y() : 0.0, 16.0);
+        show(2, clampSigned16(x)); show(3, clampSigned16(y)); show(4, clamp16(width)); show(5, clamp16(height));
+    } else if (kind() == Kind::Zone) {
+        const auto& value = level_->course().zones[index];
+        const auto [x, width] = resized(value.x, value.width, left ? delta.x() : 0.0, right ? delta.x() : 0.0, 1.0);
+        const auto [y, height] = resized(value.y, value.height, top ? delta.y() : 0.0, bottom ? delta.y() : 0.0, 1.0);
+        show(0, clamp16(x)); show(1, clamp16(y)); show(2, clamp16(width)); show(3, clamp16(height));
+    } else {
+        const auto& value = level_->course().views[index];
+        const auto [x, width] = resized(value.x, value.width, left ? delta.x() : 0.0, right ? delta.x() : 0.0, 1.0);
+        const auto [y, height] = resized(value.y, value.height, top ? delta.y() : 0.0, bottom ? delta.y() : 0.0, 1.0);
+        show(0, clamp16(x)); show(1, clamp16(y)); show(2, clamp16(width)); show(3, clamp16(height));
+    }
 }
 
 void LevelPropertiesWidget::applyFields() {
