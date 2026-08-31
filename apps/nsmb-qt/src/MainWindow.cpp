@@ -1784,8 +1784,8 @@ void MainWindow::reloadActorDefinitions() {
         spriteDefinitions_ = actorDefinitions_.sprite_definitions();
     }
     levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
-    if (preview_) preview_->setSpriteDefinitions(spriteDefinitions_);
-    for (auto& [key, document] : documents_) { (void)key; document.view->setSpriteDefinitions(spriteDefinitions_); }
+    if (preview_) preview_->setActorDefinitions(actorDefinitions_);
+    for (auto& [key, document] : documents_) { (void)key; document.view->setActorDefinitions(actorDefinitions_); }
 }
 
 nsmb::core::Result<std::string> MainWindow::romPathForProjectFile(const std::filesystem::path& projectRelative) const {
@@ -2241,7 +2241,7 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         return;
     }
     view->setCustomActors(moduleData_);
-    view->setSpriteDefinitions(spriteDefinitions_);
+    view->setActorDefinitions(actorDefinitions_);
     const auto references = view->level()->tileset_references();
     if (view->graphicsMatch(references)) return;
     auto resources = nsmb::project::resolve_level_graphics(currentProject_, references);
@@ -2270,6 +2270,8 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
     for (const auto& definition : actorDefinitions_.actors) {
         resources.value().watched_files.push_back(definition.source);
         for (const auto& path : {definition.graphics, definition.palette, definition.model})
+            if (!path.empty()) resources.value().watched_files.push_back(path);
+        for (const auto& path : definition.render_resources)
             if (!path.empty()) resources.value().watched_files.push_back(path);
     }
     // resolve_level_graphics walks the ROM's own file table, so it can only name

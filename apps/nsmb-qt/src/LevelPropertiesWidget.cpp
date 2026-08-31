@@ -34,6 +34,17 @@ int firstUnusedNumber(const auto& values, int start, auto number) {
     return start;
 }
 
+std::uint64_t spriteData(const nsmb::formats::NsmbLevelSprite& sprite) {
+    return sprite.settings | (static_cast<std::uint64_t>(sprite.events[1]) << 32U) |
+           (static_cast<std::uint64_t>(sprite.events[0]) << 40U);
+}
+
+void setSpriteData(nsmb::formats::NsmbLevelSprite& sprite, std::uint64_t data) {
+    sprite.settings = static_cast<std::uint32_t>(data);
+    sprite.events[1] = static_cast<std::uint8_t>(data >> 32U);
+    sprite.events[0] = static_cast<std::uint8_t>(data >> 40U);
+}
+
 } // namespace
 
 LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) {
@@ -289,16 +300,19 @@ void LevelPropertiesWidget::refresh() {
             if (definition && !definition->fields.empty()) {
                 for (const auto& named : definition->fields) {
                     if (row >= fields_.size()) break;
-                    const auto maximum = static_cast<int>((std::uint32_t{1} << named.bit_width) - 1U);
-                    field(named.label.c_str(), static_cast<int>(nsmb::project::read_sprite_field(course.sprites[index].settings, named)), 0, maximum);
+                    field(named.label.c_str(), nsmb::project::read_sprite_field(spriteData(course.sprites[index]), named),
+                          nsmb::project::sprite_field_min(named), nsmb::project::sprite_field_max(named));
                     visible_sprite_fields_.push_back(&named);
+                    QStringList tooltip;
+                    if (!named.notes.empty()) tooltip.push_back(QString::fromStdString(named.notes));
                     if (!named.choices.empty()) {
                         QStringList choices;
                         for (const auto& choice : named.choices)
                             choices.push_back(QString("%1 = %2").arg(choice.value).arg(QString::fromStdString(choice.label)));
-                        fields_[row - 1].label->setToolTip(choices.join("\n"));
-                        fields_[row - 1].value->setToolTip(choices.join("\n"));
+                        tooltip.push_back(choices.join("\n"));
                     }
+                    fields_[row - 1].label->setToolTip(tooltip.join("\n\n"));
+                    fields_[row - 1].value->setToolTip(tooltip.join("\n\n"));
                 }
             } else {
                 field("Settings low", common([&](auto i) { return course.sprites[i].settings & 0xffff; }));
@@ -562,9 +576,10 @@ void LevelPropertiesWidget::applyFields() {
         if (visible_sprite_fields_.empty()) {
             sprite.settings=static_cast<std::uint32_t>(value(5))|(static_cast<std::uint32_t>(value(6))<<16);
         } else {
+            auto data = spriteData(sprite);
             for (std::size_t field = 0; field < visible_sprite_fields_.size(); ++field)
-                sprite.settings = nsmb::project::write_sprite_field(sprite.settings, *visible_sprite_fields_[field],
-                                                                    static_cast<std::uint32_t>(value(field + 5)));
+                data = nsmb::project::write_sprite_field(data, *visible_sprite_fields_[field], value(field + 5));
+            setSpriteData(sprite, data);
         }
         result = level_->update_sprite(index, sprite);
         break;

@@ -1,0 +1,66 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 40,
+    name = "Spiny",
+    category = "Enemies - Desert",
+    color = "#c9833b",
+    shape = "ellipse",
+    known = true,
+    complete = false,
+    notes = "This sprite can be spawned by Lakitu (unused) and Lakitus spawned by the Lakitu Spawner.",
+    grabBounds = { x = 0, y = 0, width = 20, height = 16 },
+    renderBounds = { x = 0, y = 0, width = 20, height = 16 },
+    sourceFiles = {
+        "/enemy/paipo.nsbmd",
+        "/enemy/togezo.nsbmd",
+        "/enemy/togezo_shell.nsbmd",
+    },
+    fields = {
+        {
+            key = "egg_type",
+            label = "Egg type",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "1 is used when the equivalent unused Lakitu setting is used.",
+            choices = {
+                { value = 0, label = "Normal" },
+                { value = 1, label = "Rolling" },
+            },
+        },
+        {
+            key = "spawn_as",
+            label = "Spawn as",
+            bitOffset = 0,
+            bitWidth = 4,
+            notes = "1 is used by Lakitu and Lakithunder.",
+            choices = {
+                { value = 0, label = "Default" },
+                { value = 1, label = "Spiny Egg" },
+                { value = 2, label = "Shell" },
+                { value = 3, label = "Upside-down shell" },
+            },
+        },
+        {
+            key = "faster",
+            label = "Faster",
+            bitOffset = 8,
+            bitWidth = 4,
+            notes = "Unused.",
+            checkboxValue = 1,
+        },
+        {
+            key = "unknown_8",
+            label = "Unknown 8",
+            bitOffset = 12,
+            bitWidth = 4,
+            notes = "8 and 9 are used by Lakitu and Lakithunder respectively. This is possibly a \"bounciness\" setting. Or maybe nybble 5 (if it exists) is that,",
+            choices = {
+                { value = 0, label = "Normal" },
+                { value = 8, label = "Unknown 8" },
+                { value = 9, label = "Unknown 9" },
+            },
+        },
+    },
+    model = readModel("paipo.nsbmd"),
+}

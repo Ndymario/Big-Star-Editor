@@ -1,1 +1,50 @@
-return {schema=1, objectId=94, name="Koopa Troopa", category="Enemies / Ground", shape="ellipse", color="#55a630", grabBounds={x=-8,y=-12,width=16,height=24}, renderBounds={x=-8,y=-12,width=16,height=24}, graphics=readGraphics("I_nokonoko256_ncg.bin"), palette=readPalette("I_enemy_ncl.bin")}
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 94,
+    name = "Koopa Troopa",
+    category = "Enemies - Overground",
+    color = "#b5651d",
+    shape = "ellipse",
+    known = true,
+    complete = false,
+    grabBounds = { x = 0, y = -13, width = 16, height = 29 },
+    renderBounds = { x = 0, y = -13, width = 16, height = 29 },
+    sourceFiles = {
+        "/obj/I_nokonoko256_ncg.bin",
+        "/obj/I_enemy_ncl.bin",
+    },
+    fields = {
+        {
+            key = "color",
+            label = "Color",
+            bitOffset = 0,
+            bitWidth = 4,
+            notes = "Red Koopas stay on ledges, but we all knew that... did you?",
+            choices = {
+                { value = 0, label = "Green" },
+                { value = 1, label = "Red" },
+                { value = 2, label = "Blue" },
+                { value = 3, label = "Blue (stays on ledge)" },
+            },
+        },
+        {
+            key = "empty_shell",
+            label = "Empty shell",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "Only an empty shell spawns. Used by Bowser Jr. Shows unused behavior if colour is set to blue.",
+            checkboxValue = 1,
+        },
+        {
+            key = "shell_disappears",
+            label = "Shell disappears",
+            bitOffset = 28,
+            bitWidth = 4,
+            notes = "Disappears after a while if set to \"Empty shell\". Used by shell thrown by Bowser Jr.",
+            checkboxValue = 1,
+        },
+    },
+    graphics = readGraphics("I_nokonoko256_ncg.bin"),
+    palette = readPalette("I_enemy_ncl.bin"),
+}

@@ -1,0 +1,57 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 250,
+    name = "Hanging Bouncing ? Block",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    grabBounds = { x = 0, y = -80, width = 16, height = 144 },
+    renderBounds = { x = 0, y = -80, width = 16, height = 144 },
+    sourceFiles = {
+        "/enemy/I_hatena_normal.nsbmd (SOMETHING_question_normal)",
+    },
+    fields = {
+        {
+            key = "trigger_id_1",
+            label = "Trigger ID 1",
+            bitOffset = 40,
+            bitWidth = 8,
+            notes = "Unused. Starts moving when this is activated. Turning off event doesn't affect it.",
+        },
+        {
+            key = "trigger_id_2",
+            label = "Trigger ID 2",
+            bitOffset = 32,
+            bitWidth = 8,
+            notes = "Unused. Starts moving when this is activated. Turning off event doesn't affect it.",
+        },
+        {
+            key = "drop_swing_amount",
+            label = "Drop / Swing Amount",
+            bitOffset = 20,
+            bitWidth = 4,
+        },
+        {
+            key = "contents",
+            label = "Contents",
+            bitOffset = 0,
+            bitWidth = 4,
+            notes = "Unused.",
+            choices = {
+                { value = 0, label = "Coin" },
+                { value = 1, label = "Fire Flower" },
+                { value = 2, label = "Super Star" },
+                { value = 3, label = "1-Up Mushroom" },
+                { value = 4, label = "Fire Flower" },
+                { value = 5, label = "Mini Mushroom" },
+                { value = 6, label = "Blue Shell" },
+                { value = 7, label = "Mega Mushroom" },
+                { value = 8, label = "Super Mushroom" },
+            },
+        },
+    },
+    model = readModel("I_hatena_normal.nsbmd"),
+}

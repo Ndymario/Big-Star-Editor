@@ -96,13 +96,15 @@
 
 ## M11: sprite definitions and rendering
 
-- Added strict actor metadata with 0-based bit offsets, non-overlapping fields, choices, categories, colours, shapes, render bounds, and grab bounds; this metadata now lives in the per-actor Lua files.
+- Added strict actor metadata with 0-based bit offsets, intentional overlap support, choices, categories, colours, shapes, render bounds, and grab bounds; this metadata now lives in the per-actor Lua files.
 - Added ordered plugin → project → local → shipped loading with first-definition-wins resolution by ROM class/object ID and a plugin-directory seam that does not require a plugin host.
-- Added a clean-room shipped catalog for the already verified actor-resource classes; no NSMB Editor XML, code, or data is included.
+- Added a reproducible GPL-compatible import of all 305 NSMB Editor class definitions, including its metadata, 48-bit field layout, zero-settings bounds, and documented ROM filenames; no bundled sprite PNG or ROM data is included.
 - Generated named sprite-setting rows in the property dock while retaining raw settings for undefined actors and deliberately giving module objects no generated fields.
 - Applied definition render bounds and shapes to the canvas and definition grab bounds to scene sizing, hit testing, marquee selection, and selection outlines.
 - Categorized the searchable visual palette while preserving decoded actor thumbnails and the module/component custom-actor tree.
 - Replaced the split shipped JSON/C++ actor catalog with sandboxed, per-actor Lua files. Project and enabled-module actors use the same metadata, named-field, bounds, and filename-resolved graphics API.
+- Kept actor Lua states alive as render programs with cached raw/NCGR/NCLR and NSBMD/NSBTX TEX0 resources, multiple transformed draw calls, source tile/frame selection, and settings-dependent grab/render bounds.
+- Ported Pokey's dynamic bounds and body/head composition from `NSMBStageObj.cs` as the first ROM-backed behavioral actor; NSMBe's PNG previews remain intentionally excluded.
 - Added synthetic backend and Qt coverage for schema refusal, layered precedence, bit reads/writes, generated fields, and definition-driven hit bounds.
 
 ## M12: hub window and UX parity

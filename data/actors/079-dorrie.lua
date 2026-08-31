@@ -1,0 +1,68 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 79,
+    name = "Dorrie",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "If end path node is not set, Dorrie will keep going back and forth between last two nodes. Set end as value 1 in unknown 6.\n\nUsing value 256 in unknown 3 will lower Dorrie's head. 512 will raise it again. Set this at each node you want a change or it will continue from last node setting.",
+    grabBounds = { x = -51, y = -59, width = 115, height = 76 },
+    renderBounds = { x = -51, y = -59, width = 115, height = 76 },
+    sourceFiles = {
+        "/enemy/dossy.nsbmd",
+    },
+    fields = {
+        {
+            key = "path_id",
+            label = "Path ID",
+            bitOffset = 28,
+            bitWidth = 4,
+        },
+        {
+            key = "starting_node",
+            label = "Starting node",
+            bitOffset = 0,
+            bitWidth = 8,
+            notes = "255=Appear Always, 0=Appear at level start, Anything else=Appear from midway",
+        },
+        {
+            key = "size",
+            label = "Size",
+            bitOffset = 20,
+            bitWidth = 4,
+            notes = "Size is 1+(N6 mod 4).",
+            valueOffset = 1,
+        },
+        {
+            key = "direction",
+            label = "Direction",
+            bitOffset = 24,
+            bitWidth = 4,
+            notes = "2 and 3 don't function properly. 1, 2 and 3 are Unused.",
+            choices = {
+                { value = 0, label = "Right" },
+                { value = 1, label = "Left" },
+                { value = 2, label = "Towards background" },
+                { value = 3, label = "Away from background" },
+            },
+        },
+        {
+            key = "trigger_id_1",
+            label = "Trigger ID 1",
+            bitOffset = 32,
+            bitWidth = 8,
+            notes = "Starts facing away from background and turns to actual direction when activated. If set to zero, Dorrie won't start until touched by Mario. Unused.",
+        },
+        {
+            key = "trigger_id_2",
+            label = "Trigger ID 2",
+            bitOffset = 40,
+            bitWidth = 8,
+            notes = "Starts facing away from background and turns to actual direction when activated. If set to zero, Dorrie won't start until touched by Mario. Unused.",
+        },
+    },
+    model = readModel("dossy.nsbmd"),
+}

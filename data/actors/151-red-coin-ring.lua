@@ -1,0 +1,68 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 151,
+    name = "Red Coin Ring",
+    category = "Event controllers",
+    color = "#d4a72c",
+    shape = "diamond",
+    known = true,
+    complete = true,
+    notes = "A.k.a. “Red Coin Ring”.\nNote: \"obj_e3_ring.nsbmd\" cannot be opened with NSMBe, to fix this problem, see this tutorial:\n\nhttp://nsmbhd.net/thread/3250-fixing-already-opened-files-tutorial/",
+    grabBounds = { x = -7, y = -26, width = 30, height = 42 },
+    renderBounds = { x = -7, y = -26, width = 30, height = 42 },
+    sourceFiles = {
+        "/enemy/obj_e3_ring.nsbmd",
+    },
+    fields = {
+        {
+            key = "target_id",
+            label = "Target ID",
+            bitOffset = 32,
+            bitWidth = 8,
+            notes = "It can trigger anything, but it's usually used to trigger Red Coins.",
+        },
+        {
+            key = "disable_timer",
+            label = "Disable timer",
+            bitOffset = 20,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "shift_8_pixels_right",
+            label = "Shift 8 pixels right",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "If set, the Red Ring will respawn if you change areas and come back.",
+            checkboxValue = 1,
+        },
+        {
+            key = "switch_tile_states",
+            label = "Switch Tile States",
+            bitOffset = 16,
+            bitWidth = 4,
+            notes = "Switches the state of all two-state tiles; invisible blue coins appear, red coin outlines become collectable, red switch blocks become solid.",
+            choices = {
+                { value = 0, label = "No" },
+                { value = 1, label = "Like a P Switch" },
+                { value = 2, label = "Like a ! Switch" },
+                { value = 4, label = "Red Blocks only" },
+                { value = 5, label = "Like a P Switch + Red Blocks" },
+                { value = 7, label = "All switchable tiles" },
+            },
+        },
+        {
+            key = "id_activation_mode",
+            label = "ID Activation mode",
+            bitOffset = 12,
+            bitWidth = 4,
+            notes = "Works only if Target ID is not equal to 0 and Disable timer is not set.",
+            choices = {
+                { value = 0, label = "During timer" },
+                { value = 2, label = "After timer" },
+            },
+        },
+    },
+    model = readModel("obj_e3_ring.nsbmd"),
+}

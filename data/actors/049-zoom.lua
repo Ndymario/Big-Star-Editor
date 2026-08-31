@@ -1,0 +1,50 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 49,
+    name = "Zoom",
+    category = "Camera controllers",
+    color = "#3f9ca8",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "Technically the documentation for this sprite is complete, just confusing, there is a suggestion of a visual representation of the sprites effects to make it easier to understand:\nhttp://nsmbhd.net/thread/1566-visual-representation-of-sprites-84-and-245-suggestion/#23062\n\nHere are the heights you get with each width:\n24 width - 18 height",
+    grabBounds = { x = -128, y = -16, width = 256, height = 16 },
+    renderBounds = { x = -128, y = -16, width = 256, height = 16 },
+    fields = {
+        {
+            key = "delay",
+            label = "Delay",
+            bitOffset = 24,
+            bitWidth = 8,
+        },
+        {
+            key = "zone_width",
+            label = "Zone width",
+            bitOffset = 20,
+            bitWidth = 4,
+            notes = "0=infinite.",
+        },
+        {
+            key = "zone_height",
+            label = "Zone height",
+            bitOffset = 16,
+            bitWidth = 4,
+            notes = "0=infinite.",
+        },
+        {
+            key = "zoom_left",
+            label = "Zoom left",
+            bitOffset = 8,
+            bitWidth = 8,
+            notes = "This value will match the width (in tiles) in-game. By default the game uses a width of 16 tiles, with this sprite you can use any width between 8 and 24 included. Don't forget the game always uses a ratio of 4 tiles in width for 3 tiles in height, so to keep the best aspect you might want to put in this field a value that is divisible by 4.",
+        },
+        {
+            key = "zoom_right",
+            label = "Zoom right",
+            bitOffset = 0,
+            bitWidth = 8,
+            notes = "Ditto. Setting this to a value equal to nybbles 8-9 (the previous field) is recommended.",
+        },
+    },
+}

@@ -1,0 +1,76 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 179,
+    name = "Rotating rectangle lift",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "'Stick to line' option is unused.",
+    grabBounds = { x = -24, y = -8, width = 64, height = 32 },
+    renderBounds = { x = -24, y = -8, width = 64, height = 32 },
+    sourceFiles = {
+        "/enemy/rect_lift.nsbmd",
+    },
+    fields = {
+        {
+            key = "rotation",
+            label = "Rotation",
+            bitOffset = 16,
+            bitWidth = 4,
+            notes = "Does not apply if Nybble 9 is set to 2.",
+            choices = {
+                { value = 0, label = "Counterclockwise" },
+                { value = 1, label = "Clockwise" },
+            },
+        },
+        {
+            key = "spinning",
+            label = "Spinning",
+            bitOffset = 8,
+            bitWidth = 4,
+            choices = {
+                { value = 0, label = "Constant" },
+                { value = 1, label = "90° periodically" },
+                { value = 2, label = "When stood on" },
+            },
+        },
+        {
+            key = "shift_8_pixels_down",
+            label = "Shift 8 pixels down",
+            bitOffset = 28,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "faster",
+            label = "Faster",
+            bitOffset = 24,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "stick_to_a_line",
+            label = "Stick to a line",
+            bitOffset = 20,
+            bitWidth = 4,
+            notes = "If you want to go right, put clockwise. If you want to go left, put counterclockwise.",
+            checkboxValue = 1,
+        },
+        {
+            key = "trigger_id_1",
+            label = "Trigger ID 1",
+            bitOffset = 32,
+            bitWidth = 8,
+        },
+        {
+            key = "trigger_id_2",
+            label = "Trigger ID 2",
+            bitOffset = 40,
+            bitWidth = 8,
+        },
+    },
+    model = readModel("rect_lift.nsbmd"),
+}

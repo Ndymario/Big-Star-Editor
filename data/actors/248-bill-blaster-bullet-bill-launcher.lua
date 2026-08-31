@@ -1,0 +1,56 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 248,
+    name = "Bill Blaster (Bullet Bill launcher)",
+    category = "Enemies - Castle",
+    color = "#535967",
+    shape = "ellipse",
+    known = true,
+    complete = false,
+    notes = "Sprite set: 5-1",
+    grabBounds = { x = 0, y = -16, width = 16, height = 32 },
+    renderBounds = { x = 0, y = -16, width = 16, height = 32 },
+    sourceFiles = {
+        "/enemy/I_killer_ashiba.nsbmd (SOMETHING_killer_scaffold)",
+        "/enemy/I_killer_black.nsbmd",
+        "/enemy/I_killer_houdai.nsbmd (SOMETHING_killer_battery)",
+        "/enemy/killer.nsmbd",
+    },
+    fields = {
+        {
+            key = "shooting_direction",
+            label = "Shooting direction",
+            bitOffset = 8,
+            bitWidth = 4,
+            choices = {
+                { value = 1, label = "Left" },
+                { value = 2, label = "Right" },
+                { value = 0, label = "Both" },
+            },
+        },
+        {
+            key = "height",
+            label = "Height",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "A height of 9 or more will make the Bill Blaster invisible if the 8 bottommost tiles disappear from view, but still retains collision.",
+            valueOffset = 2,
+        },
+        {
+            key = "unknown_8",
+            label = "Unknown 8",
+            bitOffset = 12,
+            bitWidth = 4,
+            notes = "Was used by Nintendo devs, somehow as a copy of Nybble 10, but is apparently never called at all, needs testing. Doesn't seem to affect spawned Bullet Bills settings.",
+        },
+        {
+            key = "unknown_11",
+            label = "Unknown 11",
+            bitOffset = 0,
+            bitWidth = 4,
+            notes = "is stored by the game for ulterior use but seems to never be called, still needs testing. Doesn't seem to affect spawned Bullet Bills settings.",
+        },
+    },
+    model = readModel("I_killer_ashiba.nsbmd"),
+}

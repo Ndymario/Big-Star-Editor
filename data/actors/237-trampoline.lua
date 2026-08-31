@@ -1,1 +1,0 @@
-return {schema=1, objectId=237, name="Trampoline", category="Platforms", shape="box", color="#e63946", grabBounds={x=-16,y=-8,width=32,height=16}, renderBounds={x=-16,y=-8,width=32,height=16}, model=readModel("jump_step.nsbmd")}

@@ -1,1 +1,0 @@
-return {schema=1, objectId=101, name="Fire Piranha Plant", category="Enemies / Plants", shape="ellipse", color="#e63946", grabBounds={x=-8,y=-16,width=16,height=32}, renderBounds={x=-8,y=-16,width=16,height=32}, model=readModel("pakkun.nsbmd")}

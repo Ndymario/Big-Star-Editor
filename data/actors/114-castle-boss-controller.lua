@@ -1,0 +1,53 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 114,
+    name = "Castle boss controller",
+    category = "Bosses and cutscenes",
+    color = "#b84b4b",
+    shape = "ellipse",
+    known = true,
+    complete = true,
+    notes = "Spawns any boss outside of the final boss. for more info, see the Final Bowser controller.",
+    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
+    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
+    fields = {
+        {
+            key = "target_id",
+            label = "Target ID",
+            bitOffset = 32,
+            bitWidth = 8,
+        },
+        {
+            key = "boss",
+            label = "Boss",
+            bitOffset = 0,
+            bitWidth = 4,
+            choices = {
+                { value = 6, label = "Bowser" },
+                { value = 0, label = "Mummipokey" },
+                { value = 4, label = "Cheepskipper" },
+                { value = 3, label = "Mega Goomba" },
+                { value = 2, label = "Petey Piranha" },
+                { value = 5, label = "Monty Tank" },
+                { value = 1, label = "Lakithunder" },
+                { value = 7, label = "Dry Bowser" },
+            },
+        },
+        {
+            key = "zone_id",
+            label = "Zone ID",
+            bitOffset = 8,
+            bitWidth = 8,
+            notes = "Does this actually exist or work? It seems to ignore this value and use zone 0.",
+        },
+        {
+            key = "win_cutscene",
+            label = "Win Cutscene",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "Shows Bowser Jr and Peach. Used by the game when boss is defeated",
+            checkboxValue = 1,
+        },
+    },
+}

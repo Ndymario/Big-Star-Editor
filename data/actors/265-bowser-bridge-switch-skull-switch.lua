@@ -1,0 +1,45 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 265,
+    name = "Bowser bridge switch (skull switch)",
+    category = "Event controllers",
+    color = "#d4a72c",
+    shape = "diamond",
+    known = true,
+    complete = true,
+    notes = "Destroys the bridge seen in the Boss area of 1-Castle, 8-First Castle, and 8-Final Castle.",
+    grabBounds = { x = 4, y = -7, width = 24, height = 23 },
+    renderBounds = { x = 4, y = -7, width = 24, height = 23 },
+    sourceFiles = {
+        "/obj/I_switch_ncg.bin",
+        "/obj/I-enemy256_ncl.bin",
+        "/obj/I-enemy_B_ncl.bin",
+        "/obj/I-enemy_ncl_ncg.bin",
+        "/obj/I-enemy_R_ncg.bin",
+        "/obj/I-enemy_W_ncg.bin",
+        "label3 - 4",
+        "label3 - 6",
+    },
+    fields = {
+        {
+            key = "target_id",
+            label = "Target ID",
+            bitOffset = 32,
+            bitWidth = 8,
+            notes = "Triggers Bowser, Dry Bowser and Giant Bowser falling animation.",
+        },
+        {
+            key = "destroys_bridge",
+            label = "Destroys bridge",
+            bitOffset = 0,
+            bitWidth = 4,
+            choices = {
+                { value = 1, label = "1 tile below switch" },
+                { value = 0, label = "2 tiles below switch" },
+            },
+        },
+    },
+    graphics = readGraphics("I_switch_ncg.bin"),
+    palette = readPalette("I-enemy256_ncl.bin"),
+}

@@ -17,6 +17,7 @@
 #include "nsmb/formats/level.hpp"
 #include "nsmb/project/editable_level.hpp"
 #include "nsmb/project/graphics_resources.hpp"
+#include "nsmb/project/lua_actors.hpp"
 #include "nsmb/project/project.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
 
@@ -62,6 +63,7 @@ public:
     void setPan(QPointF pan);
     void setGraphicsResources(nsmb::project::LevelGraphicsResources resources, nsmb::project::LevelTilesetReferences references);
     void setCustomActors(const nsmb::project::ModuleDataCatalog& catalog);
+    void setActorDefinitions(const nsmb::project::LuaActorCatalog& catalog);
     void setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog);
     void clearGraphics();
     void invalidateGraphics();
@@ -189,6 +191,7 @@ private:
     std::unordered_map<std::uint16_t, QString> actor_labels_;
     std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids_;
     std::unordered_map<std::uint64_t, nsmb::project::SpriteDefinition> sprite_definitions_;
+    nsmb::project::LuaActorCatalog actor_definition_catalog_;
     nsmb::project::SpriteDefinitionCatalog sprite_definition_catalog_;
     std::unordered_map<std::uint32_t, QString> custom_actor_labels_;
     std::uint64_t graphics_generation_{};

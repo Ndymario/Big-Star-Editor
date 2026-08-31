@@ -1,0 +1,76 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 180,
+    name = "Rotating triangle lift",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "\"Only someone with direct access to the database can procede this modification : Class ID is actually 180, not 6 !\"",
+    grabBounds = { x = -14, y = -6, width = 44, height = 39 },
+    renderBounds = { x = -14, y = -6, width = 44, height = 39 },
+    sourceFiles = {
+        "/enemy/tri_lift.nsbmd (triangle_lift)",
+    },
+    fields = {
+        {
+            key = "rotation",
+            label = "Rotation",
+            bitOffset = 16,
+            bitWidth = 4,
+            notes = "Does not apply if Nybble 9 is set to 2.",
+            choices = {
+                { value = 0, label = "Counterclockwise" },
+                { value = 1, label = "Clockwise" },
+            },
+        },
+        {
+            key = "spinning",
+            label = "Spinning",
+            bitOffset = 8,
+            bitWidth = 4,
+            choices = {
+                { value = 0, label = "Constant" },
+                { value = 1, label = "120° periodically" },
+                { value = 2, label = "When stood on" },
+            },
+        },
+        {
+            key = "shift_8_pixels_down",
+            label = "Shift 8 pixels down",
+            bitOffset = 28,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "faster",
+            label = "Faster",
+            bitOffset = 24,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "stick_to_a_line",
+            label = "Stick to a line",
+            bitOffset = 20,
+            bitWidth = 4,
+            notes = "If you want to go right, put clockwise. If you want to go left, put counterclockwise.",
+            checkboxValue = 1,
+        },
+        {
+            key = "trigger_id_1",
+            label = "Trigger ID 1",
+            bitOffset = 32,
+            bitWidth = 8,
+        },
+        {
+            key = "trigger_id_2",
+            label = "Trigger ID 2",
+            bitOffset = 40,
+            bitWidth = 8,
+        },
+    },
+    model = readModel("tri_lift.nsbmd"),
+}

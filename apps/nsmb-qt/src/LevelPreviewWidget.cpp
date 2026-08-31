@@ -62,6 +62,7 @@ QRectF objectRect(const nsmb::formats::NsmbLevelObject& object) {
 }
 
 using SpriteDefinitions = std::unordered_map<std::uint64_t, nsmb::project::SpriteDefinition>;
+using ActorObjectIds = std::unordered_map<std::uint16_t, std::uint32_t>;
 
 std::uint64_t spriteDefinitionKey(std::uint16_t type, std::optional<std::uint32_t> hash) {
     return hash ? (std::uint64_t{1} << 32U) | *hash : type;
@@ -74,13 +75,50 @@ const nsmb::project::SpriteDefinition* spriteDefinition(const nsmb::formats::Nsm
     return found == definitions.end() ? nullptr : &found->second;
 }
 
+const nsmb::project::LuaActorDefinition* actorDefinition(const nsmb::formats::NsmbLevelSprite& sprite,
+                                                         std::optional<std::uint32_t> hash,
+                                                         const nsmb::project::LuaActorCatalog& definitions,
+                                                         const ActorObjectIds& object_ids) {
+    if (hash) return definitions.by_hash(*hash);
+    const auto object = object_ids.find(sprite.id);
+    return object == object_ids.end() ? nullptr : definitions.by_object_id(object->second);
+}
+
+nsmb::project::LuaActorRenderInput actorInput(const nsmb::formats::NsmbLevelSprite& sprite,
+                                              std::optional<std::uint32_t> hash,
+                                              std::uint32_t object_id,
+                                              const QPointF& offset = {}) {
+    nsmb::project::LuaActorRenderInput input;
+    input.x = sprite.x;
+    input.y = sprite.y;
+    input.pixel_x = sprite.x * 16.0 + offset.x();
+    input.pixel_y = sprite.y * 16.0 + offset.y();
+    input.object_id = object_id;
+    input.type = sprite.id;
+    input.hash = hash;
+    input.settings = sprite.settings;
+    input.data = {sprite.events[0], sprite.events[1],
+                  static_cast<std::uint8_t>(sprite.settings >> 24U),
+                  static_cast<std::uint8_t>(sprite.settings >> 16U),
+                  static_cast<std::uint8_t>(sprite.settings >> 8U),
+                  static_cast<std::uint8_t>(sprite.settings)};
+    return input;
+}
+
 QRectF spriteRect(const nsmb::formats::NsmbLevelSprite& sprite,
                   std::optional<std::uint32_t> hash,
                   const SpriteDefinitions& definitions,
+                  const nsmb::project::LuaActorCatalog& actor_definitions,
+                  const ActorObjectIds& object_ids,
                   bool render = false) {
     const auto* definition = spriteDefinition(sprite, hash, definitions);
-    const auto bounds = definition ? (render ? definition->render_bounds : definition->grab_bounds)
-                                   : nsmb::project::SpriteBounds{};
+    auto bounds = definition ? (render ? definition->render_bounds : definition->grab_bounds)
+                             : nsmb::project::SpriteBounds{};
+    if (const auto* actor = actorDefinition(sprite, hash, actor_definitions, object_ids)) {
+        const auto dynamic = nsmb::project::lua_actor_bounds(
+            *actor, actorInput(sprite, hash, actor->sprite.object_id), render);
+        if (dynamic && dynamic.value()) bounds = *dynamic.value();
+    }
     return QRectF(sprite.x * 16.0 + bounds.x, sprite.y * 16.0 + bounds.y, bounds.width, bounds.height);
 }
 
@@ -105,7 +143,10 @@ void includeRect(QRectF& bounds, bool& has_bounds, const QRectF& rect) {
     }
 }
 
-QRectF sceneBounds(const LevelPreviewWidget::Scene& scene, const SpriteDefinitions& definitions) {
+QRectF sceneBounds(const LevelPreviewWidget::Scene& scene,
+                   const SpriteDefinitions& definitions,
+                   const nsmb::project::LuaActorCatalog& actor_definitions,
+                   const ActorObjectIds& object_ids) {
     const auto& course = scene.level->course();
     QRectF bounds;
     bool has_bounds = false;
@@ -119,7 +160,8 @@ QRectF sceneBounds(const LevelPreviewWidget::Scene& scene, const SpriteDefinitio
         includeRect(bounds, has_bounds, objectRect(object));
     }
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
-        includeRect(bounds, has_bounds, spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions, true));
+        includeRect(bounds, has_bounds, spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions,
+                                                   actor_definitions, object_ids, true));
     }
     for (const auto& entrance : course.entrances) {
         includeRect(bounds, has_bounds, entranceRect(entrance));
@@ -209,9 +251,11 @@ QColor entityStroke(const QColor& color, const CanvasColors& colors) {
 QTransform mapTransform(const QRectF& target,
                         const LevelPreviewWidget::Scene& scene,
                         const SpriteDefinitions& definitions,
+                        const nsmb::project::LuaActorCatalog& actor_definitions,
+                        const ActorObjectIds& object_ids,
                         double zoom,
                         const QPointF& pan) {
-    const auto bounds = sceneBounds(scene, definitions);
+    const auto bounds = sceneBounds(scene, definitions, actor_definitions, object_ids);
     const auto scale = std::min(target.width() / bounds.width(), target.height() / bounds.height()) * zoom;
     const auto left = target.left() + (target.width() - bounds.width() * scale) / 2.0 + pan.x();
     const auto top = target.top() + (target.height() - bounds.height() * scale) / 2.0 + pan.y();
@@ -238,7 +282,10 @@ struct EntityRect {
 // because they are the big rectangles everything else sits inside -- were they
 // picked first, a click anywhere in a view could never reach the object under
 // the cursor, and the enclosing container would be the only thing selectable.
-std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, const SpriteDefinitions& definitions) {
+std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene,
+                                    const SpriteDefinitions& definitions,
+                                    const nsmb::project::LuaActorCatalog& actor_definitions,
+                                    const ActorObjectIds& object_ids) {
     std::vector<EntityRect> entities;
     const auto& course = scene.level->course();
     // Views are the largest, so they yield to everything, zones included.
@@ -253,7 +300,8 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, cons
     }
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
         entities.push_back({{2, static_cast<int>(i), -1},
-                            spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions)});
+                            spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions,
+                                       actor_definitions, object_ids)});
     }
     for (std::size_t i = 0; i < course.entrances.size(); ++i) {
         entities.push_back({{3, static_cast<int>(i), -1}, entranceRect(course.entrances[i])});
@@ -325,6 +373,8 @@ void drawMap(QPainter& painter,
              const std::unordered_map<std::uint16_t, QString>& actor_labels,
              const std::unordered_map<std::uint32_t, QString>& custom_actor_labels,
              const SpriteDefinitions& sprite_definitions,
+             const nsmb::project::LuaActorCatalog& actor_definitions,
+             const ActorObjectIds& actor_object_ids,
              bool resizing,
              const LevelPreviewWidget::ResizeEdges& resize,
              const CanvasColors& colors) {
@@ -334,8 +384,8 @@ void drawMap(QPainter& painter,
     painter.setBrush(colors.surface);
     painter.drawRect(target);
 
-    const auto bounds = sceneBounds(scene, sprite_definitions);
-    const auto transform = mapTransform(target, scene, sprite_definitions, zoom, pan);
+    const auto bounds = sceneBounds(scene, sprite_definitions, actor_definitions, actor_object_ids);
+    const auto transform = mapTransform(target, scene, sprite_definitions, actor_definitions, actor_object_ids, zoom, pan);
     const auto scale = transform.m11();
     // Knobs are a screen-space affordance, so their size is divided back out of
     // the scene scale to stay grabbable at any zoom.
@@ -463,13 +513,55 @@ void drawMap(QPainter& painter,
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
         const auto& sprite = course.sprites[i];
         const auto custom_hash = scene.level->sprite_hash(i);
-        auto rect = spriteRect(sprite, custom_hash, sprite_definitions);
-        auto render_rect = spriteRect(sprite, custom_hash, sprite_definitions, true);
-        if (selected(selections, 2, static_cast<int>(i))) rect.translate(drag_delta);
-        if (selected(selections, 2, static_cast<int>(i))) render_rect.translate(drag_delta);
-        if (!custom_hash) if (const auto actor = actor_images.find(sprite.id); actor != actor_images.end()) {
-            painter.drawImage(render_rect, actor->second);
-        } else {
+        auto rect = spriteRect(sprite, custom_hash, sprite_definitions, actor_definitions, actor_object_ids);
+        auto render_rect = spriteRect(sprite, custom_hash, sprite_definitions, actor_definitions, actor_object_ids, true);
+        const auto moving = selected(selections, 2, static_cast<int>(i));
+        if (moving) rect.translate(drag_delta);
+        if (moving) render_rect.translate(drag_delta);
+
+        bool rendered = false;
+        if (const auto* actor = actorDefinition(sprite, custom_hash, actor_definitions, actor_object_ids);
+            actor && nsmb::project::has_lua_renderer(*actor)) {
+            const auto commands = nsmb::project::render_lua_actor(
+                *actor, actorInput(sprite, custom_hash, actor->sprite.object_id, moving ? drag_delta : QPointF{}));
+            if (commands) {
+                for (const auto& command : commands.value()) {
+                    if (!command.image || command.image->pixels.empty()) continue;
+                    const QImage image(command.image->pixels.data(),
+                                       static_cast<int>(command.image->width),
+                                       static_cast<int>(command.image->height),
+                                       static_cast<int>(command.image->width * 4U),
+                                       QImage::Format_RGBA8888);
+                    const QRectF destination(command.x, command.y, command.width, command.height);
+                    const QRectF source(command.source_x, command.source_y,
+                                        command.source_width, command.source_height);
+                    painter.save();
+                    painter.setOpacity(command.opacity);
+                    const auto center = destination.center();
+                    painter.translate(center);
+                    painter.rotate(command.rotation);
+                    painter.scale(command.flip_x ? -1.0 : 1.0, command.flip_y ? -1.0 : 1.0);
+                    painter.translate(-center);
+                    painter.drawImage(destination, image, source);
+                    painter.restore();
+                    rendered = true;
+                }
+            }
+        }
+
+        if (!rendered && !custom_hash) {
+            if (const auto image = actor_images.find(sprite.id); image != actor_images.end()) {
+                painter.drawImage(render_rect, image->second);
+                rendered = true;
+            }
+        } else if (!rendered) {
+            if (const auto image = custom_actor_images.find(*custom_hash); image != custom_actor_images.end()) {
+                painter.drawImage(render_rect, image->second);
+                rendered = true;
+            }
+        }
+
+        if (!rendered && !custom_hash) {
             const auto* definition = spriteDefinition(sprite, std::nullopt, sprite_definitions);
             const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(238, 178, 75);
             painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
@@ -480,10 +572,7 @@ void drawMap(QPainter& painter,
                                           : (actor_labels.contains(sprite.id) ? actor_labels.at(sprite.id) : QString("Actor %1").arg(sprite.id));
             painter.setPen(QPen(colors.label_text, 0));
             painter.drawText(QRectF(render_rect.right() + 2.0, render_rect.top() - 2.0, 120.0, 20.0), label);
-        }
-        else if (const auto image = custom_actor_images.find(*custom_hash); image != custom_actor_images.end()) {
-            painter.drawImage(render_rect, image->second);
-        } else {
+        } else if (!rendered) {
             const auto* definition = spriteDefinition(sprite, custom_hash, sprite_definitions);
             const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(191, 112, 215);
             painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
@@ -675,6 +764,8 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
+                actor_definition_catalog_,
+                actor_object_ids_,
                 resize_handle_ != Handle::None,
                 resizeEdges(drag_delta_),
                 colors);
@@ -693,9 +784,10 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
         if (show_minimap_) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
             drawMap(painter, mini, *scene_, {}, {}, 1.0, {}, tilesets_, background_, foreground_, object_images_,
-                    actor_images_, custom_actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, {}, colors);
-            bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, zoom_, pan_).inverted(&invertible).mapRect(outer);
-            if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, 1.0, {}).mapRect(visible)); }
+                    actor_images_, custom_actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_,
+                    actor_definition_catalog_, actor_object_ids_, false, {}, colors);
+            bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, zoom_, pan_).inverted(&invertible).mapRect(outer);
+            if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, 1.0, {}).mapRect(visible)); }
             painter.setPen(QPen(colors.outline, 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
         }
         return;
@@ -746,6 +838,8 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
+                actor_definition_catalog_,
+                actor_object_ids_,
                 resize_handle_ != Handle::None,
                 resizeEdges(drag_delta_),
                 colors);
@@ -820,7 +914,8 @@ QRectF LevelPreviewWidget::mapRect() const {
 }
 
 QTransform LevelPreviewWidget::sceneTransform() const {
-    return scene_ ? mapTransform(mapRect(), *scene_, sprite_definitions_, zoom_, pan_) : QTransform{};
+    return scene_ ? mapTransform(mapRect(), *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, zoom_, pan_)
+                  : QTransform{};
 }
 
 QPointF LevelPreviewWidget::toScene(const QPointF& point) const {
@@ -833,7 +928,7 @@ std::optional<LevelPreviewWidget::Selection> LevelPreviewWidget::hitTest(const Q
     if (!scene_) {
         return std::nullopt;
     }
-    const auto entities = entityRects(*scene_, sprite_definitions_);
+    const auto entities = entityRects(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_);
     // Front to back, across every layer. Nothing is filtered out.
     for (auto entity = entities.rbegin(); entity != entities.rend(); ++entity) {
         if (entity->rect.adjusted(-3, -3, 3, 3).contains(scene_point)) {
@@ -845,7 +940,7 @@ std::optional<LevelPreviewWidget::Selection> LevelPreviewWidget::hitTest(const Q
 
 std::optional<QRectF> LevelPreviewWidget::selectedResizableRect() const {
     if (!scene_ || selections_.size() != 1U || !resizableKind(selections_.front().kind)) return std::nullopt;
-    const auto entities = entityRects(*scene_, sprite_definitions_);
+    const auto entities = entityRects(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_);
     const auto entity = std::find_if(entities.begin(), entities.end(), [this](const auto& value) {
         return value.selection == selections_.front();
     });
@@ -1017,7 +1112,7 @@ void LevelPreviewWidget::mouseReleaseEvent(QMouseEvent* event) {
         const auto top_left = toScene(screen_rect.topLeft());
         const auto bottom_right = toScene(screen_rect.bottomRight());
         const QRectF scene_rect(top_left, bottom_right);
-        for (const auto& entity : entityRects(*scene_, sprite_definitions_)) {
+        for (const auto& entity : entityRects(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_)) {
             if (scene_rect.normalized().intersects(entity.rect) &&
                 std::find(selections_.begin(), selections_.end(), entity.selection) == selections_.end()) {
                 selections_.push_back(entity.selection);
@@ -1487,6 +1582,11 @@ void LevelPreviewWidget::setCustomActors(const nsmb::project::ModuleDataCatalog&
     for (const auto& actor : catalog.stage_objects)
         custom_actor_labels_.emplace(actor.hash, QString::fromStdString(actor.name));
     update();
+}
+
+void LevelPreviewWidget::setActorDefinitions(const nsmb::project::LuaActorCatalog& catalog) {
+    actor_definition_catalog_ = catalog;
+    setSpriteDefinitions(catalog.sprite_definitions());
 }
 
 void LevelPreviewWidget::setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog) {

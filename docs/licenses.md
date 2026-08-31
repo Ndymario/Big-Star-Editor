@@ -4,7 +4,7 @@ This repository is currently GPL-3.0 because the root `LICENSE` is GPL version 3
 
 ## Old NSMB Editor
 
-The current NSMB Editor repository contains GPL-3.0-or-later notices. Copying or translating source code from it would require preserving compatible GPL obligations and attribution. M0 does not copy or line-by-line port code; it records behavioral observations only.
+The current NSMB Editor repository contains GPL-3.0-or-later notices. The generated `data/actors/*.lua` catalog is adapted from its `stageobjsettings.xml` metadata and the zero-settings behavior of `NSMBStageObj.GetGrabBounds()`. `tools/import_nsmbe_actors.py` records that provenance and makes the transformation reproducible. This repository is GPL-3.0, so the licensing remains compatible. NSMBe's bundled sprite PNGs are not copied.
 
 ## NCPatcher
 

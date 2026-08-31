@@ -1,0 +1,62 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 77,
+    name = "Arrow signboard",
+    category = "Effects and decorations",
+    color = "#5b9b86",
+    shape = "box",
+    known = true,
+    complete = true,
+    grabBounds = { x = -8, y = -16, width = 32, height = 32 },
+    renderBounds = { x = -8, y = -16, width = 32, height = 32 },
+    sourceFiles = {
+        "/enemy/yajirusi_l.nsbmd",
+        "/enemy/yajirusi_r.nsbmd",
+    },
+    fields = {
+        {
+            key = "direction",
+            label = "Direction",
+            bitOffset = 4,
+            bitWidth = 4,
+            choices = {
+                { value = 0, label = "Left" },
+                { value = 1, label = "Left-down" },
+                { value = 2, label = "Down" },
+                { value = 3, label = "Right-down" },
+                { value = 4, label = "Right" },
+                { value = 5, label = "Right-up" },
+                { value = 6, label = "Up" },
+                { value = 7, label = "Left-up" },
+            },
+        },
+        {
+            key = "mirrored",
+            label = "Mirrored",
+            bitOffset = 0,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "smaller",
+            label = "Smaller",
+            bitOffset = 16,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "shift_position",
+            label = "Shift position",
+            bitOffset = 8,
+            bitWidth = 8,
+            choices = {
+                { value = 0, label = "No shifting" },
+                { value = 16, label = "8 pixels right" },
+                { value = 1, label = "8 pixels down" },
+                { value = 17, label = "8 pixels right and down" },
+            },
+        },
+    },
+    model = readModel("yajirusi_l.nsbmd"),
+}

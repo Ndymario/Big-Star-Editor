@@ -1,0 +1,68 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 189,
+    name = "Mushroom Platform lift (tilting and bobbing)",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "\n\t\t\t\tA basic mushroom platform, where Mario/Luigi can stand. There is unused stuff like moving when stood on (huh? -Hiccup). 7 is the maximum height that works with sprite data.  If you want it to be longer, set it to 7 and then use a mushroom stalk object in the tileset to make the mushroom's stalk height look higher.\n\t\t\t\tThis mushroom can be either red or green.\n\t\t\t",
+    grabBounds = { x = -16, y = 0, width = 64, height = 64 },
+    renderBounds = { x = -16, y = 0, width = 64, height = 64 },
+    sourceFiles = {
+        "/enemy/I_kinoko_ashiba.nsbtx",
+        "/enemy/I_kinoko_ashiba2.nsbtx",
+        "/enemy/I_kinoko_kuki.nsbtx",
+        "/enemy/I_kinoko_kuki_l.nsbtx",
+        "/enemy/I_kinoko_kuki_s.nsbtx",
+        "/enemy/I_kinoko_kuki_sl.nsbtx",
+    },
+    fields = {
+        {
+            key = "bobbing",
+            label = "Bobbing",
+            bitOffset = 21,
+            bitWidth = 1,
+            checkboxValue = 1,
+        },
+        {
+            key = "color",
+            label = "Color",
+            bitOffset = 23,
+            bitWidth = 1,
+            notes = "Green is unused.",
+            choices = {
+                { value = 0, label = "Red" },
+                { value = 1, label = "Green" },
+            },
+        },
+        {
+            key = "stalk_height",
+            label = "Stalk height",
+            bitOffset = 16,
+            bitWidth = 3,
+            notes = "Max 7. Add tiles under it.",
+        },
+        {
+            key = "length",
+            label = "Length",
+            bitOffset = 12,
+            bitWidth = 3,
+        },
+        {
+            key = "tilt_angle",
+            label = "Tilt angle",
+            bitOffset = 8,
+            bitWidth = 4,
+        },
+        {
+            key = "speed",
+            label = "Speed",
+            bitOffset = 0,
+            bitWidth = 8,
+        },
+    },
+    model = readModel("I_kinoko_ashiba.nsbtx"),
+}

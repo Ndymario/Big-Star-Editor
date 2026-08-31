@@ -1,0 +1,61 @@
+-- Imported from NSMB Editor 5 stageobjsettings.xml.
+return {
+    schema = 1,
+    objectId = 192,
+    name = "Rise or lower while/once on Mushroom Platform lift - mechanical",
+    category = "Platforms and ropes",
+    color = "#4f86c6",
+    shape = "box",
+    known = true,
+    complete = true,
+    notes = "Has the same data as sprite 239. Any code differences other than the obvious?",
+    grabBounds = { x = -8, y = 0, width = 32, height = 49 },
+    renderBounds = { x = -8, y = 0, width = 32, height = 49 },
+    sourceFiles = {
+        "/enemy/I_kinoko_ashib3u.nsbtx [this must be wrong]",
+        "/enemy/I_kinoko_kuki_u3.nsbtx",
+    },
+    fields = {
+        {
+            key = "distance",
+            label = "Distance",
+            bitOffset = 8,
+            bitWidth = 4,
+            notes = "N9-N10 is the actual distance this mushroom will move.",
+        },
+        {
+            key = "stalk_height_and_move_direction",
+            label = "Stalk height and move direction",
+            bitOffset = 4,
+            bitWidth = 4,
+            notes = "If N9-10>0, this mushroom will go up, else it'll go down.",
+        },
+        {
+            key = "width",
+            label = "Width",
+            bitOffset = 0,
+            bitWidth = 4,
+        },
+        {
+            key = "returns_to_original_position",
+            label = "Returns to original position",
+            bitOffset = 12,
+            bitWidth = 4,
+            notes = "The mushroom will return to its original position once Mario/Luigi gets off it.",
+            checkboxValue = 1,
+        },
+        {
+            key = "trigger_id_1",
+            label = "Trigger ID 1",
+            bitOffset = 36,
+            bitWidth = 8,
+        },
+        {
+            key = "trigger_id_2",
+            label = "Trigger ID 2",
+            bitOffset = 28,
+            bitWidth = 8,
+        },
+    },
+    model = readModel("I_kinoko_ashib3u.nsbtx"),
+}
