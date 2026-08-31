@@ -1,0 +1,1 @@
+return {schema=1, objectId=93, name="Boss Key", category="Items", shape="diamond", color="#ffd166", grabBounds={x=-8,y=-8,width=16,height=16}, renderBounds={x=-8,y=-8,width=16,height=16}, model=readModel("koopa_key.nsbmd")}

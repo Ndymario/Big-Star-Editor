@@ -1,0 +1,1 @@
+return {schema=1, objectId=26, name="Pipe Piranha Plant", category="Enemies / Plants", shape="ellipse", color="#57a35c", grabBounds={x=-8,y=-16,width=16,height=32}, renderBounds={x=-8,y=-16,width=16,height=32}, model=readModel("v_pakkun.nsbmd")}

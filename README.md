@@ -22,6 +22,7 @@ Project manifests are YAML files named `big-star-project.yaml`. They store proje
   - Windows: Visual Studio 2022 or recent LLVM/MinGW.
   - Linux: GCC 11+ or Clang 14+.
   - macOS: AppleClang from a recent Xcode.
+- Lua 5.4 or newer development headers and library.
 - Optional: Qt 6 Widgets development package for `apps/nsmb-qt`.
 - Optional: Emscripten for the browser frontend.
 
@@ -68,7 +69,7 @@ Install Qt 6 with the Qt Online Installer or a package manager and ensure `CMAKE
 ### Linux
 
 ```sh
-sudo apt install cmake g++ qt6-base-dev # package names vary by distro
+sudo apt install cmake g++ qt6-base-dev liblua5.4-dev # package names vary by distro
 cmake -S . -B build -DBSE_BUILD_TESTS=ON
 cmake --build build -j
 ctest --test-dir build --output-on-failure
@@ -77,7 +78,7 @@ ctest --test-dir build --output-on-failure
 ### macOS
 
 ```sh
-brew install cmake qt
+brew install cmake qt lua
 cmake -S . -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DBSE_BUILD_TESTS=ON
 cmake --build build
 ctest --test-dir build --output-on-failure
@@ -95,4 +96,4 @@ ctest --test-dir build --output-on-failure
 
 `import-rom` uses the built-in DS ROM service to extract ARM binaries, overlay tables, FNT/FAT data, banner data, and the NitroFS tree, then atomically writes `big-star-project.yaml` with validated project-relative paths. It refuses to overwrite an existing project or a nonempty extraction directory. `build-rom` rebuilds a ROM from the extracted path recorded in that manifest and atomically replaces the chosen output.
 
-The Qt editor can create and open projects, reopen the last ten through File > Open Recent, import `.nds` files, edit levels and Nitro graphics, inspect the module-aware filesystem, run NCPatcher, and build a new ROM. Files open the way they do in NSMB Editor: one Open button in the filesystem dock, a double click on any row, or File > Open File for a file anywhere on disk, and Big Star picks the editor that understands the bytes. LZ10/LZ11 wrappers are unwrapped before the editor sees the file and put back exactly as they were found, whichever editor opened it. Its graphics dialog views NCLR/NCGR/NSCR/NCER/NANR and TEX0 resources, paints indexed character pixels, and edits BGR555 palettes with the native colour picker. The message dialog edits BMG bundles -- text, `[type:HEXDATA]` escapes, INF1 attributes and MID1 IDs -- with filtering and a text export/import interchange compatible with the NDS BMG Editor. The tileset workspace edits graphics, Map16, objects, behaviours, background/foreground NSC maps and slot IDs, with quantized PNG and `.bstileset` import/export. Sprite definitions use Big Star's strict, zero-based JSON schema to supply names, categories, property fields, render shapes, and grab bounds; layers load in plugin, project, local, then shipped order with the first object ID winning. The M12 desktop workspace adds a five-tab Project Hub, visual actor grids, minimap and canvas overlays, compressed entity clipboard, named history, `.nml`/`.nsmbpatch`/xdelta exchange, level search and event tools, crash recovery, and five-language shell localization. Level and graphics saves target module NitroFS files so the derived extracted tree is never mistaken for authoritative data.
+The Qt editor can create and open projects, reopen the last ten through File > Open Recent, import `.nds` files, edit levels and Nitro graphics, inspect the module-aware filesystem, run NCPatcher, and build a new ROM. Files open the way they do in NSMB Editor: one Open button in the filesystem dock, a double click on any row, or File > Open File for a file anywhere on disk, and Big Star picks the editor that understands the bytes. LZ10/LZ11 wrappers are unwrapped before the editor sees the file and put back exactly as they were found, whichever editor opened it. Its graphics dialog views NCLR/NCGR/NSCR/NCER/NANR and TEX0 resources, paints indexed character pixels, and edits BGR555 palettes with the native colour picker. The message dialog edits BMG bundles -- text, `[type:HEXDATA]` escapes, INF1 attributes and MID1 IDs -- with filtering and a text export/import interchange compatible with the NDS BMG Editor. The tileset workspace edits graphics, Map16, objects, behaviours, background/foreground NSC maps and slot IDs, with quantized PNG and `.bstileset` import/export. Actor metadata, fields, bounds, and artwork now live together in one `.lua` file per actor; the sandboxed actor API resolves graphics and palettes by NitroFS filename for both vanilla and enabled-module actors. See [Lua actors](docs/lua-actors.md). The M12 desktop workspace adds a five-tab Project Hub, visual actor grids, minimap and canvas overlays, compressed entity clipboard, named history, `.nml`/`.nsmbpatch`/xdelta exchange, level search and event tools, crash recovery, and five-language shell localization. Level and graphics saves target module NitroFS files so the derived extracted tree is never mistaken for authoritative data.

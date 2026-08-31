@@ -80,6 +80,7 @@ public:
         QImage image;
     };
     [[nodiscard]] std::vector<PaletteEntry> paletteEntries();
+    [[nodiscard]] QImage customActorImage(std::uint32_t hash) const;
     void setPlacementObject(int slot, int object_id);
     void setPlacementSprite(int sprite_type);
     void setPlacementCustomSprite(std::uint32_t hash);
@@ -184,9 +185,10 @@ private:
     QImage foreground_;
     std::unordered_map<std::uint64_t, QImage> object_images_;
     std::unordered_map<std::uint16_t, QImage> actor_images_;
+    std::unordered_map<std::uint32_t, QImage> custom_actor_images_;
     std::unordered_map<std::uint16_t, QString> actor_labels_;
     std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids_;
-    std::unordered_map<std::uint16_t, nsmb::project::SpriteDefinition> sprite_definitions_;
+    std::unordered_map<std::uint64_t, nsmb::project::SpriteDefinition> sprite_definitions_;
     nsmb::project::SpriteDefinitionCatalog sprite_definition_catalog_;
     std::unordered_map<std::uint32_t, QString> custom_actor_labels_;
     std::uint64_t graphics_generation_{};

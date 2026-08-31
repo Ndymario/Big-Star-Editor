@@ -1,13 +1,9 @@
 #pragma once
 
 #include <cstdint>
-#include <filesystem>
-#include <span>
+#include <optional>
 #include <string>
-#include <string_view>
 #include <vector>
-
-#include "nsmb/core/result.hpp"
 
 namespace nsmb::project {
 
@@ -31,6 +27,7 @@ struct SpriteFieldDefinition {
 
 struct SpriteDefinition {
     std::uint32_t object_id{};
+    std::optional<std::uint32_t> hash;
     std::string name, category{"Other"}, color{"#eeB24b"};
     SpriteBounds grab_bounds, render_bounds;
     SpriteShape shape{SpriteShape::Diamond};
@@ -41,15 +38,8 @@ struct SpriteDefinitionCatalog {
     std::vector<SpriteDefinition> definitions;
 
     [[nodiscard]] const SpriteDefinition* by_object_id(std::uint32_t object_id) const;
+    [[nodiscard]] const SpriteDefinition* by_hash(std::uint32_t hash) const;
 };
-
-struct SpriteDefinitionLayer {
-    std::string name;
-    std::filesystem::path path;
-};
-
-core::Result<std::vector<SpriteDefinition>> parse_sprite_definitions(std::string_view json);
-core::Result<SpriteDefinitionCatalog> load_sprite_definition_layers(std::span<const SpriteDefinitionLayer> layers);
 
 [[nodiscard]] std::uint32_t read_sprite_field(std::uint32_t settings, const SpriteFieldDefinition& field);
 [[nodiscard]] std::uint32_t write_sprite_field(std::uint32_t settings,

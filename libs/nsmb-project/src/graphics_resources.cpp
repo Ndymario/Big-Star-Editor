@@ -36,42 +36,6 @@ constexpr std::array profiles{
     NsmbGraphicsProfile{"A2DC", 131, 0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC},
 };
 
-struct ActorDefinition {
-    std::uint16_t type;
-    std::string_view name;
-    std::string_view graphics;
-    std::string_view palette;
-    std::string_view model;
-};
-
-constexpr std::array actor_definitions{
-    ActorDefinition{23, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
-    ActorDefinition{24, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
-    ActorDefinition{25, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
-    ActorDefinition{26, "Pipe Piranha Plant", {}, {}, "v_pakkun.nsbmd"},
-    ActorDefinition{28, "Cheep Cheep", {}, {}, "pukupuku.nsbmd"},
-    ActorDefinition{81, "Skeeter", {}, {}, "bomb_menbo.nsbmd"},
-    ActorDefinition{83, "Goomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
-    ActorDefinition{84, "Paragoomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
-    ActorDefinition{85, "Mini Goomba", "I_kuribo256_ncg.bin", "I_enemy_ncl.bin", {}},
-    ActorDefinition{88, "Fire Bro.", {}, {}, "hammer_bros.nsbmd"},
-    ActorDefinition{89, "Boomerang Bro.", {}, {}, "hammer_bros.nsbmd"},
-    ActorDefinition{90, "Swooper", {}, {}, "basabasa_wait.nsbmd"},
-    ActorDefinition{91, "Snailicorn", {}, {}, "donketu.nsbmd"},
-    ActorDefinition{93, "Boss Key", {}, {}, "koopa_key.nsbmd"},
-    ActorDefinition{94, "Koopa Troopa", "I_nokonoko256_ncg.bin", "I_enemy_ncl.bin", {}},
-    ActorDefinition{95, "Koopa Paratroopa", "I_nokonoko256_ncg.bin", "I_enemy_B_ncl.bin", {}},
-    ActorDefinition{96, "Climbing Koopa", {}, {}, "net_nokonoko.nsbmd"},
-    ActorDefinition{98, "Pokey", {}, {}, "sanbo_head.nsbmd"},
-    ActorDefinition{99, "Piranha Plant", {}, {}, "pakkun.nsbmd"},
-    ActorDefinition{100, "Big Piranha Plant", {}, {}, "pakkun.nsbmd"},
-    ActorDefinition{101, "Fire Piranha Plant", {}, {}, "pakkun.nsbmd"},
-    ActorDefinition{102, "Large Fire Piranha Plant", {}, {}, "pakkun.nsbmd"},
-    ActorDefinition{103, "Spiked Ball", {}, {}, "iron_ball.nsbmd"},
-    ActorDefinition{237, "Trampoline", {}, {}, "jump_step.nsbmd"},
-    ActorDefinition{239, "Mega Goomba", {}, {}, "kuribo.nsbmd"},
-};
-
 std::filesystem::path extracted_path(const Project& project) {
     if (!project.rom()) return {};
     return project.rom()->extracted_path.is_absolute() ? project.rom()->extracted_path : project.directory() / project.rom()->extracted_path;
@@ -232,24 +196,15 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
         !value) return value.error();
     result.watched_files.push_back(root / "fnt.bin");
     result.watched_files.push_back(root / "overlay9" / nds::overlay_file_name(0));
-    // ponytail: only classes with a verified ROM sprite sheet or model are decoded; the rest keep the labelled fallback.
     constexpr std::uint16_t actor_type_count = 326;
     for (std::uint16_t type = 0; type < actor_type_count; ++type) {
         const auto class_offset = profile->sprite_object_ids + static_cast<std::size_t>(type) * 2U;
         if (class_offset + 1U >= overlay.value().size()) continue;
         const auto class_id = static_cast<std::uint16_t>(overlay.value()[class_offset] | (overlay.value()[class_offset + 1U] << 8U));
-        const auto definition = std::find_if(actor_definitions.begin(), actor_definitions.end(), [&](const auto& actor) { return actor.type == class_id; });
         ActorResourceFiles actor;
         actor.type = type;
         actor.object_id = class_id;
-        actor.name = definition == actor_definitions.end() ? "Actor " + std::to_string(type) + " (class " + std::to_string(class_id) + ")"
-                                                            : std::string(definition->name);
-        if (definition != actor_definitions.end()) {
-            if (!definition->graphics.empty()) actor.graphics = find_named_file(entries.value(), root, definition->graphics);
-            if (!definition->palette.empty()) actor.palette = find_named_file(entries.value(), root, definition->palette);
-            if (!definition->model.empty()) actor.model = find_named_file(entries.value(), root, definition->model);
-            for(const auto& path:{actor.graphics,actor.palette,actor.model})if(!path.empty())result.watched_files.push_back(path);
-        }
+        actor.name = "Actor " + std::to_string(type) + " (class " + std::to_string(class_id) + ")";
         result.actors.push_back(std::move(actor));
     }
     std::ranges::sort(result.watched_files);

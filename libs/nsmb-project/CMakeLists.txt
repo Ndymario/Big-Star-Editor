@@ -4,15 +4,18 @@ add_library(nsmb-project
   src/graphics_resources.cpp
   src/level_catalog.cpp
   src/level_exchange.cpp
+  src/lua_actors.cpp
   src/manifest.cpp
   src/module_data.cpp
   src/patch_apply.cpp
   src/project.cpp
   src/sprite_definitions.cpp
 )
+find_package(Lua 5.4 REQUIRED)
 add_library(nsmb::project ALIAS nsmb-project)
 target_include_directories(nsmb-project PUBLIC include)
-target_link_libraries(nsmb-project PUBLIC nsmb-core nsmb-nds nsmb-formats nsmb-patching)
+target_include_directories(nsmb-project PRIVATE ${LUA_INCLUDE_DIR})
+target_link_libraries(nsmb-project PUBLIC nsmb-core nsmb-nds nsmb-formats nsmb-patching PRIVATE ${LUA_LIBRARIES})
 target_compile_features(nsmb-project PUBLIC cxx_std_20)
 if(BSE_BUILD_TESTS)
   add_executable(nsmb-project-tests tests/project_tests.cpp)
@@ -23,8 +26,11 @@ if(BSE_BUILD_TESTS)
   add_test(NAME nsmb-module-data-tests COMMAND nsmb-module-data-tests)
   add_executable(nsmb-sprite-definitions-tests tests/sprite_definitions_tests.cpp)
   target_link_libraries(nsmb-sprite-definitions-tests PRIVATE nsmb-project)
-  target_compile_definitions(nsmb-sprite-definitions-tests PRIVATE BSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   add_test(NAME nsmb-sprite-definitions-tests COMMAND nsmb-sprite-definitions-tests)
+  add_executable(nsmb-lua-actors-tests tests/lua_actors_tests.cpp)
+  target_link_libraries(nsmb-lua-actors-tests PRIVATE nsmb-project)
+  target_compile_definitions(nsmb-lua-actors-tests PRIVATE BSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  add_test(NAME nsmb-lua-actors-tests COMMAND nsmb-lua-actors-tests)
   add_executable(nsmb-level-exchange-tests tests/level_exchange_tests.cpp)
   target_link_libraries(nsmb-level-exchange-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-level-exchange-tests COMMAND nsmb-level-exchange-tests)

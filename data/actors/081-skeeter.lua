@@ -1,0 +1,1 @@
+return {schema=1, objectId=81, name="Skeeter", category="Enemies / Aquatic", shape="ellipse", color="#457b9d", grabBounds={x=-12,y=-8,width=24,height=16}, renderBounds={x=-12,y=-8,width=24,height=16}, model=readModel("bomb_menbo.nsbmd")}

@@ -1,0 +1,1 @@
+return {schema=1, objectId=98, name="Pokey", category="Enemies / Ground", shape="ellipse", color="#f4a261", grabBounds={x=-8,y=-24,width=16,height=48}, renderBounds={x=-8,y=-24,width=16,height=48}, model=readModel("sanbo_head.nsbmd")}

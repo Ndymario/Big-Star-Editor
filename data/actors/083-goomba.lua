@@ -1,0 +1,1 @@
+return {schema=1, objectId=83, name="Goomba", category="Enemies / Ground", shape="ellipse", color="#b5651d", grabBounds={x=-8,y=-8,width=16,height=16}, renderBounds={x=-8,y=-8,width=16,height=16}, graphics=readGraphics("I_kuribo256_ncg.bin"), palette=readPalette("I_enemy_ncl.bin")}

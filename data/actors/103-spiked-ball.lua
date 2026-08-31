@@ -1,0 +1,1 @@
+return {schema=1, objectId=103, name="Spiked Ball", category="Hazards", shape="ellipse", color="#495057", grabBounds={x=-12,y=-12,width=24,height=24}, renderBounds={x=-12,y=-12,width=24,height=24}, model=readModel("iron_ball.nsbmd")}

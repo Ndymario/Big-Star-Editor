@@ -1,0 +1,1 @@
+return {schema=1, objectId=94, name="Koopa Troopa", category="Enemies / Ground", shape="ellipse", color="#55a630", grabBounds={x=-8,y=-12,width=16,height=24}, renderBounds={x=-8,y=-12,width=16,height=24}, graphics=readGraphics("I_nokonoko256_ncg.bin"), palette=readPalette("I_enemy_ncl.bin")}

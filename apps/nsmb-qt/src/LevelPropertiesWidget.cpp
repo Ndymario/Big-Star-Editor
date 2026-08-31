@@ -281,8 +281,9 @@ void LevelPropertiesWidget::refresh() {
             field("Event 1", common([&](auto i) { return course.sprites[i].events[0]; }), 0, 255);
             field("Event 2", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
             const nsmb::project::SpriteDefinition* definition = nullptr;
-            if (!multi && !level_->sprite_hash(index)) {
-                if (const auto object = actor_object_ids_.find(course.sprites[index].id); object != actor_object_ids_.end())
+            if (!multi) {
+                if (const auto hash = level_->sprite_hash(index)) definition = sprite_definitions_.by_hash(*hash);
+                else if (const auto object = actor_object_ids_.find(course.sprites[index].id); object != actor_object_ids_.end())
                     definition = sprite_definitions_.by_object_id(object->second);
             }
             if (definition && !definition->fields.empty()) {

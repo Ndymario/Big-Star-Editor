@@ -1,0 +1,1 @@
+return {schema=1, objectId=89, name="Boomerang Bro.", category="Enemies / Bros.", shape="box", color="#118ab2", grabBounds={x=-8,y=-16,width=16,height=32}, renderBounds={x=-8,y=-16,width=16,height=32}, model=readModel("hammer_bros.nsbmd")}

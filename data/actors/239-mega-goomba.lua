@@ -1,0 +1,1 @@
+return {schema=1, objectId=239, name="Mega Goomba", category="Enemies / Ground", shape="ellipse", color="#7f5539", grabBounds={x=-32,y=-32,width=64,height=64}, renderBounds={x=-32,y=-32,width=64,height=64}, model=readModel("kuribo.nsbmd")}

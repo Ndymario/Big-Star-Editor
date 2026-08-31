@@ -19,6 +19,7 @@
 #include "LevelPropertiesWidget.hpp"
 #include "LevelDataWidget.hpp"
 #include "nsmb/project/module_data.hpp"
+#include "nsmb/project/lua_actors.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
 #include "nsmb/project/filesystem_view.hpp"
 #include "LevelPreviewWidget.hpp"
@@ -123,6 +124,7 @@ private:
     void refreshChangedGraphics();
     void refreshPalette();
     void reloadFilesystemView();
+    void reloadActorDefinitions();
     [[nodiscard]] std::vector<nsmb::project::ModuleVariantMapping> activeModuleMappings() const;
     [[nodiscard]] nsmb::core::Result<std::string> romPathForProjectFile(const std::filesystem::path& projectRelative) const;
     // Where a project-relative file actually lives once the active variant's
@@ -148,6 +150,7 @@ private:
     nsmb::project::Project currentProject_;
     nsmb::project::ModuleDataCatalog moduleData_;
     nsmb::project::SpriteDefinitionCatalog spriteDefinitions_;
+    nsmb::project::LuaActorCatalog actorDefinitions_;
     nsmb::patching::ModuleGraph moduleGraph_;
     std::optional<nsmb::patching::ProjectConfig> patcherConfig_;
     std::optional<nsmb::patching::FileManifest> fileManifest_;

@@ -1,0 +1,1 @@
+return {schema=1, objectId=88, name="Fire Bro.", category="Enemies / Bros.", shape="box", color="#ef476f", grabBounds={x=-8,y=-16,width=16,height=32}, renderBounds={x=-8,y=-16,width=16,height=32}, model=readModel("hammer_bros.nsbmd")}

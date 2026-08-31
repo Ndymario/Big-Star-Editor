@@ -61,21 +61,24 @@ QRectF objectRect(const nsmb::formats::NsmbLevelObject& object) {
                   std::max<int>(1, object.height) * 16.0);
 }
 
-using SpriteDefinitions = std::unordered_map<std::uint16_t, nsmb::project::SpriteDefinition>;
+using SpriteDefinitions = std::unordered_map<std::uint64_t, nsmb::project::SpriteDefinition>;
+
+std::uint64_t spriteDefinitionKey(std::uint16_t type, std::optional<std::uint32_t> hash) {
+    return hash ? (std::uint64_t{1} << 32U) | *hash : type;
+}
 
 const nsmb::project::SpriteDefinition* spriteDefinition(const nsmb::formats::NsmbLevelSprite& sprite,
-                                                        bool custom,
+                                                        std::optional<std::uint32_t> hash,
                                                         const SpriteDefinitions& definitions) {
-    if (custom) return nullptr;
-    const auto found = definitions.find(sprite.id);
+    const auto found = definitions.find(spriteDefinitionKey(sprite.id, hash));
     return found == definitions.end() ? nullptr : &found->second;
 }
 
 QRectF spriteRect(const nsmb::formats::NsmbLevelSprite& sprite,
-                  bool custom,
+                  std::optional<std::uint32_t> hash,
                   const SpriteDefinitions& definitions,
                   bool render = false) {
-    const auto* definition = spriteDefinition(sprite, custom, definitions);
+    const auto* definition = spriteDefinition(sprite, hash, definitions);
     const auto bounds = definition ? (render ? definition->render_bounds : definition->grab_bounds)
                                    : nsmb::project::SpriteBounds{};
     return QRectF(sprite.x * 16.0 + bounds.x, sprite.y * 16.0 + bounds.y, bounds.width, bounds.height);
@@ -116,7 +119,7 @@ QRectF sceneBounds(const LevelPreviewWidget::Scene& scene, const SpriteDefinitio
         includeRect(bounds, has_bounds, objectRect(object));
     }
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
-        includeRect(bounds, has_bounds, spriteRect(course.sprites[i], scene.level->sprite_hash(i).has_value(), definitions, true));
+        includeRect(bounds, has_bounds, spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions, true));
     }
     for (const auto& entrance : course.entrances) {
         includeRect(bounds, has_bounds, entranceRect(entrance));
@@ -250,7 +253,7 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene, cons
     }
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
         entities.push_back({{2, static_cast<int>(i), -1},
-                            spriteRect(course.sprites[i], scene.level->sprite_hash(i).has_value(), definitions)});
+                            spriteRect(course.sprites[i], scene.level->sprite_hash(i), definitions)});
     }
     for (std::size_t i = 0; i < course.entrances.size(); ++i) {
         entities.push_back({{3, static_cast<int>(i), -1}, entranceRect(course.entrances[i])});
@@ -318,6 +321,7 @@ void drawMap(QPainter& painter,
              const QImage& foreground,
              std::unordered_map<std::uint64_t, QImage>& object_images,
              const std::unordered_map<std::uint16_t, QImage>& actor_images,
+             const std::unordered_map<std::uint32_t, QImage>& custom_actor_images,
              const std::unordered_map<std::uint16_t, QString>& actor_labels,
              const std::unordered_map<std::uint32_t, QString>& custom_actor_labels,
              const SpriteDefinitions& sprite_definitions,
@@ -459,14 +463,14 @@ void drawMap(QPainter& painter,
     for (std::size_t i = 0; i < course.sprites.size(); ++i) {
         const auto& sprite = course.sprites[i];
         const auto custom_hash = scene.level->sprite_hash(i);
-        auto rect = spriteRect(sprite, custom_hash.has_value(), sprite_definitions);
-        auto render_rect = spriteRect(sprite, custom_hash.has_value(), sprite_definitions, true);
+        auto rect = spriteRect(sprite, custom_hash, sprite_definitions);
+        auto render_rect = spriteRect(sprite, custom_hash, sprite_definitions, true);
         if (selected(selections, 2, static_cast<int>(i))) rect.translate(drag_delta);
         if (selected(selections, 2, static_cast<int>(i))) render_rect.translate(drag_delta);
         if (!custom_hash) if (const auto actor = actor_images.find(sprite.id); actor != actor_images.end()) {
             painter.drawImage(render_rect, actor->second);
         } else {
-            const auto* definition = spriteDefinition(sprite, false, sprite_definitions);
+            const auto* definition = spriteDefinition(sprite, std::nullopt, sprite_definitions);
             const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(238, 178, 75);
             painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
             if (definition && definition->shape == nsmb::project::SpriteShape::Box) painter.drawRoundedRect(render_rect, 2, 2);
@@ -477,9 +481,15 @@ void drawMap(QPainter& painter,
             painter.setPen(QPen(colors.label_text, 0));
             painter.drawText(QRectF(render_rect.right() + 2.0, render_rect.top() - 2.0, 120.0, 20.0), label);
         }
-        else {
-            // Module objects deliberately keep the generic box until build output supplies a definition.
-            painter.setPen(QPen(QColor(112, 47, 132), 0)); painter.setBrush(QColor(191, 112, 215, 190)); painter.drawRect(rect);
+        else if (const auto image = custom_actor_images.find(*custom_hash); image != custom_actor_images.end()) {
+            painter.drawImage(render_rect, image->second);
+        } else {
+            const auto* definition = spriteDefinition(sprite, custom_hash, sprite_definitions);
+            const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(191, 112, 215);
+            painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
+            if (definition && definition->shape == nsmb::project::SpriteShape::Ellipse) painter.drawEllipse(render_rect);
+            else if (definition && definition->shape == nsmb::project::SpriteShape::Diamond) { QPolygonF diamond; const auto center=render_rect.center(); diamond << QPointF(center.x(),render_rect.top()) << QPointF(render_rect.right(),center.y()) << QPointF(center.x(),render_rect.bottom()) << QPointF(render_rect.left(),center.y()); painter.drawPolygon(diamond); }
+            else painter.drawRoundedRect(render_rect, 2, 2);
             const auto label = custom_actor_labels.contains(*custom_hash) ? custom_actor_labels.at(*custom_hash)
                 : QString("0x%1 (foreign)").arg(*custom_hash, 8, 16, QLatin1Char('0'));
             painter.setPen(QPen(colors.label_text, 0));
@@ -661,6 +671,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 foreground_,
                 object_images_,
                 actor_images_,
+                custom_actor_images_,
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
@@ -682,7 +693,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
         if (show_minimap_) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
             drawMap(painter, mini, *scene_, {}, {}, 1.0, {}, tilesets_, background_, foreground_, object_images_,
-                    actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, {}, colors);
+                    actor_images_, custom_actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_, false, {}, colors);
             bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, zoom_, pan_).inverted(&invertible).mapRect(outer);
             if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, 1.0, {}).mapRect(visible)); }
             painter.setPen(QPen(colors.outline, 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
@@ -731,6 +742,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 foreground_,
                 object_images_,
                 actor_images_,
+                custom_actor_images_,
                 actor_labels_,
                 custom_actor_labels_,
                 sprite_definitions_,
@@ -1399,8 +1411,9 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
     const auto generation = ++graphics_generation_;
     graphics_references_ = references;
     actor_images_.clear();
+    custom_actor_images_.clear();
     actor_object_ids_.clear();
-    for (const auto& actor : resources.actors) actor_object_ids_.emplace(actor.type, actor.object_id);
+    for (const auto& actor : resources.actors) if (!actor.hash) actor_object_ids_.emplace(actor.type, actor.object_id);
     rebuildSpriteDefinitions();
     QPointer<LevelPreviewWidget> weak(this);
     QThreadPool::globalInstance()->start([weak, generation, resources = std::move(resources)]() mutable {
@@ -1408,7 +1421,9 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
         QImage background;
         QImage foreground;
         std::unordered_map<std::uint16_t, QImage> actor_images;
+        std::unordered_map<std::uint32_t, QImage> custom_actor_images;
         std::unordered_map<std::uint16_t, QString> actor_labels;
+        std::unordered_map<std::uint32_t, QString> custom_actor_labels;
         QStringList warnings;
         for (std::size_t slot = 0; slot < resources.tilesets.size(); ++slot) {
             auto decoded = nsmb::project::load_tileset_graphics(resources.tilesets[slot]);
@@ -1434,16 +1449,17 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
         convert(nsmb::project::load_background_graphics(resources.background), background, "Background", warnings);
         convert(nsmb::project::load_background_graphics(resources.foreground), foreground, "Foreground", warnings);
         for (const auto& actor : resources.actors) {
-            actor_labels.emplace(actor.type,
-                                 QString::fromUtf8(actor.name.data(), static_cast<qsizetype>(actor.name.size())) +
-                                     (actor.model.empty() ? QString{} : " (3D)"));
-            auto decoded=nsmb::project::load_actor_graphics(actor);if(decoded){const auto& image=decoded.value();QImage converted(image.pixels.data(),static_cast<int>(image.width),static_cast<int>(image.height),static_cast<int>(image.width*4U),QImage::Format_RGBA8888);auto copy=converted.copy();if(copy.width()>64||copy.height()>64)copy=copy.scaled(64,64,Qt::KeepAspectRatio,Qt::SmoothTransformation);actor_images.emplace(actor.type,std::move(copy));}
+            const auto label = QString::fromUtf8(actor.name.data(), static_cast<qsizetype>(actor.name.size())) +
+                               (actor.model.empty() ? QString{} : " (3D)");
+            if (actor.hash) custom_actor_labels.emplace(*actor.hash, label); else actor_labels.emplace(actor.type, label);
+            auto decoded=nsmb::project::load_actor_graphics(actor);if(decoded){const auto& image=decoded.value();QImage converted(image.pixels.data(),static_cast<int>(image.width),static_cast<int>(image.height),static_cast<int>(image.width*4U),QImage::Format_RGBA8888);auto copy=converted.copy();if(copy.width()>64||copy.height()>64)copy=copy.scaled(64,64,Qt::KeepAspectRatio,Qt::SmoothTransformation);if(actor.hash)custom_actor_images.emplace(*actor.hash,std::move(copy));else actor_images.emplace(actor.type,std::move(copy));}
         }
         if (!weak) return;
         QMetaObject::invokeMethod(
             weak,
             [weak, generation, tilesets = std::move(tilesets), background = std::move(background), foreground = std::move(foreground),
-             actor_images = std::move(actor_images), actor_labels = std::move(actor_labels), warnings = warnings.join("\n")]() mutable {
+             actor_images = std::move(actor_images), custom_actor_images = std::move(custom_actor_images), actor_labels = std::move(actor_labels),
+             custom_actor_labels = std::move(custom_actor_labels), warnings = warnings.join("\n")]() mutable {
                 if (!weak || weak->graphics_generation_ != generation) return;
                 bool tileset_changed = false;
                 for (std::size_t slot = 0; slot < tilesets.size(); ++slot) {
@@ -1455,6 +1471,8 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
                 if (!foreground.isNull()) weak->foreground_ = std::move(foreground);
                 weak->actor_labels_ = std::move(actor_labels);
                 weak->actor_images_ = std::move(actor_images);
+                weak->custom_actor_images_ = std::move(custom_actor_images);
+                for (auto& [hash, label] : custom_actor_labels) weak->custom_actor_labels_.insert_or_assign(hash, std::move(label));
                 if (tileset_changed) weak->object_images_.clear();
                 weak->update();
                 if (!warnings.isEmpty()) emit weak->graphicsWarning(warnings);
@@ -1482,6 +1500,8 @@ void LevelPreviewWidget::rebuildSpriteDefinitions() {
     for (const auto& [type, object_id] : actor_object_ids_)
         if (const auto* definition = sprite_definition_catalog_.by_object_id(object_id))
             sprite_definitions_.emplace(type, *definition);
+    for (const auto& definition : sprite_definition_catalog_.definitions)
+        if (definition.hash) sprite_definitions_.emplace(spriteDefinitionKey(0, definition.hash), definition);
 }
 
 void LevelPreviewWidget::clearGraphics() {
@@ -1491,6 +1511,7 @@ void LevelPreviewWidget::clearGraphics() {
     foreground_ = {};
     object_images_.clear();
     actor_images_.clear();
+    custom_actor_images_.clear();
     actor_labels_.clear();
     actor_object_ids_.clear();
     sprite_definitions_.clear();
@@ -1588,6 +1609,11 @@ std::vector<LevelPreviewWidget::PaletteEntry> LevelPreviewWidget::paletteEntries
         return left.id < right.id;
     });
     return entries;
+}
+
+QImage LevelPreviewWidget::customActorImage(std::uint32_t hash) const {
+    const auto found = custom_actor_images_.find(hash);
+    return found == custom_actor_images_.end() ? QImage{} : found->second;
 }
 
 void LevelPreviewWidget::setPlacementObject(int slot, int object_id) {

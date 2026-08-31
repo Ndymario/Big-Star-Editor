@@ -255,6 +255,7 @@ void MainWindow::createWorkspace() {
         }
     });
     connect(preview_, &LevelPreviewWidget::graphicsWarning, this, [this](const QString& warning) { log("Graphics: " + warning); });
+    connect(preview_, &LevelPreviewWidget::graphicsLoaded, this, [this] { if (preview_->level() == currentLevel_) refreshPalette(); });
     connect(qApp, &QApplication::focusChanged, this, [this](QWidget*, QWidget* now) {
         if (!now) {
             return;
@@ -1158,7 +1159,7 @@ void MainWindow::findEntity(bool sprites) {
 }
 
 void MainWindow::showSpriteEvents() {
-    if(!currentLevel_){QMessageBox::information(this,"Sprite Events","Open an editable level first.");return;}std::unordered_map<std::uint16_t,QString> names;auto resources=nsmb::project::resolve_level_graphics(currentProject_,currentLevel_->tileset_references());if(resources)for(const auto& actor:resources.value().actors)names.emplace(actor.type,QString::fromStdString(actor.name));
+    if(!currentLevel_){QMessageBox::information(this,"Sprite Events","Open an editable level first.");return;}std::unordered_map<std::uint16_t,QString> names;auto resources=nsmb::project::resolve_level_graphics(currentProject_,currentLevel_->tileset_references());if(resources)for(const auto& actor:resources.value().actors){const auto* definition=actorDefinitions_.by_object_id(actor.object_id);names.emplace(actor.type,QString::fromStdString(definition?definition->sprite.name:actor.name));}
     QDialog dialog(this);dialog.setWindowTitle("Sprite Event Viewer");dialog.resize(620,420);auto* layout=new QVBoxLayout(&dialog);auto* table=new QTreeWidget(&dialog);table->setHeaderLabels({"Event","Sprite","Type","Name"});for(std::size_t i=0;i<currentLevel_->course().sprites.size();++i){const auto& sprite=currentLevel_->course().sprites[i];for(const auto event:sprite.events)if(event){auto* item=new QTreeWidgetItem(table,{QString::number(event),QString::number(i),QString::number(sprite.id),names.contains(sprite.id)?names.at(sprite.id):QString("Actor %1").arg(sprite.id)});item->setData(0,Qt::UserRole,static_cast<int>(i));}}table->sortItems(0,Qt::AscendingOrder);layout->addWidget(table);auto* close=new QDialogButtonBox(QDialogButtonBox::Close,&dialog);layout->addWidget(close);connect(close,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);connect(table,&QTreeWidget::itemDoubleClicked,&dialog,[&](QTreeWidgetItem* item){const auto index=item->data(0,Qt::UserRole).toInt();levelProperties_->select(LevelPropertiesWidget::Kind::Sprite,index);if(auto* view=activeLevelView())view->setSelection(2,index,-1);});dialog.exec();
 }
 
@@ -1574,24 +1575,6 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     auto module_data=nsmb::project::load_module_data_catalog(currentProject_.directory(),generated);
     if(module_data){moduleData_=std::move(module_data.value());if(moduleData_.stage_object_id_base!=326)log(QString("Stage-object catalog base %1 disagrees with Big Star's vanilla count 326.").arg(moduleData_.stage_object_id_base));}
     else log("Module data: "+QString::fromStdString(module_data.error().message));
-    std::vector<nsmb::project::SpriteDefinitionLayer> definition_layers;
-    const auto plugins = currentProject_.directory() / "plugins";
-    std::error_code definitions_ec;
-    if (std::filesystem::is_directory(plugins, definitions_ec)) {
-        std::vector<std::filesystem::path> plugin_files;
-        for (const auto& entry : std::filesystem::directory_iterator(plugins, definitions_ec)) {
-            const auto path = entry.path() / "sprite-definitions.json";
-            if (entry.is_directory() && std::filesystem::exists(path)) plugin_files.push_back(path);
-        }
-        std::ranges::sort(plugin_files);
-        for (const auto& path : plugin_files) definition_layers.push_back({"plugin " + path.parent_path().filename().string(), path});
-    }
-    definition_layers.push_back({"project", currentProject_.directory() / "sprite-definitions.json"});
-    definition_layers.push_back({"local", std::filesystem::path(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation).toStdString()) / "sprite-definitions.json"});
-    definition_layers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "sprite-definitions.json"});
-    auto definitions = nsmb::project::load_sprite_definition_layers(definition_layers);
-    if (definitions) spriteDefinitions_ = std::move(definitions.value());
-    else log("Sprite definitions: " + QString::fromStdString(definitions.error().message));
     levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
     levelData_->setLevel(nullptr, &moduleData_);
     levelProperties_->setObjectBankOverlays(std::nullopt);
@@ -1660,6 +1643,7 @@ void MainWindow::reloadFilesystemView() {
     if (moduleWatcher_ && !moduleWatcher_->directories().empty()) moduleWatcher_->removePaths(moduleWatcher_->directories());
     if (currentProject_.directory().empty() || !currentProject_.rom()) {
         moduleGraph_ = {}; fileManifest_.reset(); filesystemView_ = {};
+        actorDefinitions_ = {}; spriteDefinitions_ = {};
         filesystemPanel_->setData({}, {}, {}, {}, {}, {});
         return;
     }
@@ -1766,11 +1750,42 @@ void MainWindow::reloadFilesystemView() {
     auto built = nsmb::project::build_filesystem_view(std::move(request));
     if (!built) { log("Filesystem view: " + QString::fromStdString(built.error().message)); filesystemView_ = {}; }
     else filesystemView_ = std::move(built.value());
+    reloadActorDefinitions();
     filesystemPanel_->setData(currentProject_.directory(), moduleGraph_, filesystemView_, variants, activeModule_, activeVariant_, activeModuleMappings());
     if (moduleWatcher_) {
         QStringList watch; for (const auto& path : filesystemView_.watched_directories) if (std::filesystem::is_directory(path, ec)) watch.push_back(QString::fromStdString(path.string()));
         if (!watch.isEmpty()) moduleWatcher_->addPaths(watch);
     }
+}
+
+void MainWindow::reloadActorDefinitions() {
+    std::vector<nsmb::project::LuaActorLayer> layers;
+    layers.push_back({"project", currentProject_.directory() / "actors"});
+    for (const auto& module : moduleGraph_.modules)
+        if (module.enabled && !module.dir.empty()) layers.push_back({"module " + module.key, module.dir / "actors"});
+    layers.push_back({"local", std::filesystem::path(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation).toStdString()) / "actors"});
+    layers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "actors"});
+    auto definitions = nsmb::project::load_lua_actor_layers(layers, [this](auto, std::string_view name) -> nsmb::core::Result<std::filesystem::path> {
+        const std::filesystem::path requested(name);
+        if (requested.empty() || requested.filename() != requested)
+            return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "actor resources must be read by file name");
+        const auto found = std::ranges::find_if(filesystemView_.entries, [&](const auto& entry) {
+            return std::filesystem::path(entry.path).filename() == requested;
+        });
+        if (found == filesystemView_.entries.end())
+            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "actor resource file is missing: " + std::string(name));
+        return !found->source.empty() ? found->source : found->extracted;
+    });
+    if (!definitions) {
+        log("Lua actors: " + QString::fromStdString(definitions.error().message));
+        actorDefinitions_ = {}; spriteDefinitions_ = {};
+    } else {
+        actorDefinitions_ = std::move(definitions.value());
+        spriteDefinitions_ = actorDefinitions_.sprite_definitions();
+    }
+    levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
+    if (preview_) preview_->setSpriteDefinitions(spriteDefinitions_);
+    for (auto& [key, document] : documents_) { (void)key; document.view->setSpriteDefinitions(spriteDefinitions_); }
 }
 
 nsmb::core::Result<std::string> MainWindow::romPathForProjectFile(const std::filesystem::path& projectRelative) const {
@@ -2234,6 +2249,29 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         log("Graphics fallback: " + QString::fromStdString(resources.error().message));
         return;
     }
+    for (auto& actor : resources.value().actors) {
+        const auto* definition = actorDefinitions_.by_object_id(actor.object_id);
+        if (!definition) continue;
+        actor.name = definition->sprite.name;
+        actor.graphics = definition->graphics;
+        actor.palette = definition->palette;
+        actor.model = definition->model;
+    }
+    for (const auto& definition : actorDefinitions_.actors) if (definition.hash) {
+        nsmb::project::ActorResourceFiles actor;
+        actor.hash = definition.hash;
+        actor.object_id = definition.sprite.object_id;
+        actor.name = definition.sprite.name;
+        actor.graphics = definition.graphics;
+        actor.palette = definition.palette;
+        actor.model = definition.model;
+        resources.value().actors.push_back(std::move(actor));
+    }
+    for (const auto& definition : actorDefinitions_.actors) {
+        resources.value().watched_files.push_back(definition.source);
+        for (const auto& path : {definition.graphics, definition.palette, definition.model})
+            if (!path.empty()) resources.value().watched_files.push_back(path);
+    }
     // resolve_level_graphics walks the ROM's own file table, so it can only name
     // files in the extracted tree. Point each one at the layer the active
     // variant actually supplies it from, the same redirect levels already got.
@@ -2261,6 +2299,7 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
 
 void MainWindow::refreshGraphics() {
     if (!graphicsWatcher_) return;
+    reloadActorDefinitions();
     const auto watched = graphicsWatcher_->files();
     if (!watched.empty()) graphicsWatcher_->removePaths(watched);
     preview_->invalidateGraphics();
@@ -2362,6 +2401,8 @@ void MainWindow::refreshPalette() {
             auto* item = new QTreeWidgetItem(component, {QString::fromStdString(actor.name) +
                 QString("  [object %1]").arg(actor.object_id)});
             item->setData(0, Qt::UserRole, static_cast<qulonglong>(actor.hash));
+            const auto image = view->customActorImage(actor.hash);
+            if (!image.isNull()) item->setIcon(0, QIcon(QPixmap::fromImage(image)));
         }
         customPaletteTree_->expandAll();
     }

@@ -1,0 +1,1 @@
+return {schema=1, objectId=96, name="Climbing Koopa", category="Enemies / Ground", shape="ellipse", color="#55a630", grabBounds={x=-8,y=-12,width=16,height=24}, renderBounds={x=-8,y=-12,width=16,height=24}, model=readModel("net_nokonoko.nsbmd")}

@@ -1,0 +1,1 @@
+return {schema=1, objectId=84, name="Paragoomba", category="Enemies / Air", shape="ellipse", color="#b5651d", grabBounds={x=-12,y=-10,width=24,height=20}, renderBounds={x=-12,y=-10,width=24,height=20}, graphics=readGraphics("I_kuribo256_ncg.bin"), palette=readPalette("I_enemy_ncl.bin")}

@@ -96,12 +96,13 @@
 
 ## M11: sprite definitions and rendering
 
-- Added the strict `bigstar.sprite-definitions/1` JSON schema with 0-based bit offsets, non-overlapping fields, choices, categories, colours, shapes, render bounds, and grab bounds.
+- Added strict actor metadata with 0-based bit offsets, non-overlapping fields, choices, categories, colours, shapes, render bounds, and grab bounds; this metadata now lives in the per-actor Lua files.
 - Added ordered plugin → project → local → shipped loading with first-definition-wins resolution by ROM class/object ID and a plugin-directory seam that does not require a plugin host.
 - Added a clean-room shipped catalog for the already verified actor-resource classes; no NSMB Editor XML, code, or data is included.
 - Generated named sprite-setting rows in the property dock while retaining raw settings for undefined actors and deliberately giving module objects no generated fields.
 - Applied definition render bounds and shapes to the canvas and definition grab bounds to scene sizing, hit testing, marquee selection, and selection outlines.
-- Categorized the searchable visual palette while preserving decoded actor thumbnails and the module/component custom-actor tree; module objects render as the default box.
+- Categorized the searchable visual palette while preserving decoded actor thumbnails and the module/component custom-actor tree.
+- Replaced the split shipped JSON/C++ actor catalog with sandboxed, per-actor Lua files. Project and enabled-module actors use the same metadata, named-field, bounds, and filename-resolved graphics API.
 - Added synthetic backend and Qt coverage for schema refusal, layered precedence, bit reads/writes, generated fields, and definition-driven hit bounds.
 
 ## M12: hub window and UX parity

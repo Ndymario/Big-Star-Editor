@@ -1,0 +1,1 @@
+return {schema=1, objectId=28, name="Cheep Cheep", category="Enemies / Aquatic", shape="ellipse", color="#e76f51", grabBounds={x=-8,y=-8,width=16,height=16}, renderBounds={x=-12,y=-8,width=24,height=16}, model=readModel("pukupuku.nsbmd")}

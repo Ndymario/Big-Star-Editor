@@ -1,0 +1,1 @@
+return {schema=1, objectId=90, name="Swooper", category="Enemies / Air", shape="diamond", color="#6d597a", grabBounds={x=-12,y=-8,width=24,height=16}, renderBounds={x=-12,y=-8,width=24,height=16}, model=readModel("basabasa_wait.nsbmd")}

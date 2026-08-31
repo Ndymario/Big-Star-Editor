@@ -3,6 +3,7 @@
 #include <array>
 #include <filesystem>
 #include <span>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -36,6 +37,7 @@ struct BackgroundResourceFiles {
 struct ActorResourceFiles {
     std::uint16_t type{};
     std::uint32_t object_id{};
+    std::optional<std::uint32_t> hash;
     std::string name;
     std::filesystem::path graphics, palette, model;
 };

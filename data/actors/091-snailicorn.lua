@@ -1,0 +1,1 @@
+return {schema=1, objectId=91, name="Snailicorn", category="Enemies / Ground", shape="box", color="#8ac926", grabBounds={x=-12,y=-8,width=24,height=16}, renderBounds={x=-12,y=-8,width=24,height=16}, model=readModel("donketu.nsbmd")}
