@@ -219,13 +219,15 @@ void LevelPropertiesWidget::refresh() {
     const auto count = itemCount();
     selected_items_.erase(std::remove_if(selected_items_.begin(), selected_items_.end(), [count](auto index) { return index >= count; }),
                           selected_items_.end());
-    const auto indices = selectedIndices();
-    const bool multi = indices.size() > 1U;
+    const bool multi = selected_items_.size() > 1U;
     itemBox_->setEnabled(level_ && kind() != Kind::Level && count != 0 && !multi);
     itemBox_->setMaximum(static_cast<int>(count == 0 ? 0 : count - 1U));
     if (static_cast<std::size_t>(itemBox_->value()) >= count) {
         itemBox_->setValue(static_cast<int>(count == 0 ? 0 : count - 1U));
     }
+    // Read after the clamp: switching kinds leaves the box holding the previous
+    // kind's index, which can be past the end of the new kind's collection.
+    const auto indices = selectedIndices();
 
     const bool path_kind = (kind() == Kind::Path || kind() == Kind::ProgressPath) && !multi;
     nodeLabel_->setVisible(path_kind);
