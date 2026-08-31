@@ -2104,7 +2104,14 @@ void MainWindow::reattachEditor(const std::string& key) {
 }
 
 void MainWindow::clearDocuments() {
-    for (auto& [key, document] : documents_) {
+    // Removing a tab makes the tab bar pick a new current widget, which runs
+    // activateCurrentDocument() while this loop is still deleting views. Move
+    // the maps out first so that pass never sees a document whose view has
+    // already been deleted.
+    auto documents = std::move(documents_);
+    documents_.clear();
+    currentLevel_ = nullptr;
+    for (auto& [key, document] : documents) {
         (void)key;
         if (document.window) {
             document.window->takeCentralWidget();
@@ -2116,14 +2123,14 @@ void MainWindow::clearDocuments() {
         delete document.view;
         graphicsFiles_.erase(document.view);
     }
-    documents_.clear();
     // File editors are keyed by variant too, so a switch has to take them with it.
-    for (auto& [key, document] : fileDocuments_) {
+    auto file_documents = std::move(fileDocuments_);
+    fileDocuments_.clear();
+    for (auto& [key, document] : file_documents) {
         (void)key;
         if (const auto index = tabs_->indexOf(document.page); index >= 0) tabs_->removeTab(index);
         delete document.page;
     }
-    fileDocuments_.clear();
 }
 
 QModelIndex MainWindow::findLevelIndex(const QString& course_path, const QString& bgdat_path) const {
@@ -2347,9 +2354,11 @@ void MainWindow::refreshPalette() {
     customPaletteTree_->clear();
 
     LevelPreviewWidget* view = nullptr;
-    for (auto& [key, document] : documents_) {
-        (void)key;
-        if (document.view->level() == currentLevel_) view = document.view;
+    if (currentLevel_) {
+        for (auto& [key, document] : documents_) {
+            (void)key;
+            if (document.view->level() == currentLevel_) view = document.view;
+        }
     }
 
     // A grid of preview buttons, shared by the object and sprite pickers.
