@@ -7,8 +7,10 @@
 
 namespace nsmb::project {
 
+// An actor that defines no bounds function grabs as the 16x16 tile it sits on,
+// the same default NSMBStageObj.cs starts its switch from.
 struct SpriteBounds {
-    std::int16_t x{-8}, y{-8};
+    std::int16_t x{}, y{};
     std::uint16_t width{16}, height{16};
 };
 

@@ -147,7 +147,13 @@ return {objectId=83, name="Goomba", category="Enemies / Ground", notes="Walks.",
 
     auto commands_again = nsmb::project::render_lua_actor(*goomba, input);
     assert(commands_again && commands_again.value().front().image == commands.value().front().image);
-    assert(catalog.value().sprite_definitions().by_hash(0x12345678));
+    // An actor that declares no bounds function grabs as the tile it sits on,
+    // which is where NSMBStageObj.cs starts before its per-class adjustments.
+    const auto* custom = catalog.value().sprite_definitions().by_hash(0x12345678);
+    assert(custom);
+    assert(custom->grab_bounds.x == 0 && custom->grab_bounds.y == 0);
+    assert(custom->grab_bounds.width == 16 && custom->grab_bounds.height == 16);
+    assert(custom->render_bounds.x == 0 && custom->render_bounds.y == 0);
 
     const std::vector<nsmb::project::LuaActorLayer> shipped{{"shipped", fs::path(BSE_TEST_SOURCE_DIR) / "data" / "actors"}};
     // The shipped catalog draws from stills on disk, so the resolver points at

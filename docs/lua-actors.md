@@ -61,6 +61,9 @@ return {
 - `grabBounds(actor)` and `renderBounds(actor)` return the actor's box. If
   `renderBounds` is absent, `grabBounds` is reused. The editor applies them to
   hit testing, selection, scene fitting, the main canvas and the minimap.
+  An actor that declares neither grabs as the 16x16 tile it sits on, which is
+  the default `NSMBStageObj.GetGrabBounds()` starts from and what the upstream
+  cases commented out as "don't need to be modified" keep.
 
 ## Coordinates
 
