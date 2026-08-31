@@ -15,7 +15,6 @@ local function render(actor, renderer)
     local drawn = renderer:strokeRect(gfx.colored(rect, "#000000"))
     rect.x, rect.y = rect.x - 1, rect.y - 1
     drawn = renderer:strokeRect(gfx.colored(rect, "#00ff00")) or drawn
-    renderer:drawText("Warp", { x = actor.pixelX + 1, y = actor.pixelY + 1 })
     renderer:drawText("Warp", { x = actor.pixelX, y = actor.pixelY })
     return drawn
 end

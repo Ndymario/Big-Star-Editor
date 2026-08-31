@@ -1613,13 +1613,13 @@ return {objectId=83, name="Goomba", category="Enemies / Ground", notes="Walks.",
     assert(warp_entrance_bounds && warp_entrance_bounds.value());
     assert(warp_entrance_bounds.value()->x == 160 && warp_entrance_bounds.value()->y == 320);
     assert(warp_entrance_bounds.value()->width == 48 && warp_entrance_bounds.value()->height == 64);
-    assert(warp_entrance_commands && warp_entrance_commands.value().size() == 4);
+    assert(warp_entrance_commands && warp_entrance_commands.value().size() == 3);
     assert(warp_entrance_commands.value()[0].kind == nsmb::project::LuaActorDrawKind::StrokeRect);
     assert(warp_entrance_commands.value()[0].x == 161 && warp_entrance_commands.value()[0].y == 321);
     assert(warp_entrance_commands.value()[1].kind == nsmb::project::LuaActorDrawKind::StrokeRect);
     assert(warp_entrance_commands.value()[1].x == 160 && warp_entrance_commands.value()[1].y == 320);
     assert(warp_entrance_commands.value()[2].kind == nsmb::project::LuaActorDrawKind::Text);
-    assert(warp_entrance_commands.value()[2].x == 161 && warp_entrance_commands.value()[2].y == 321);
+    assert(warp_entrance_commands.value()[2].x == 160 && warp_entrance_commands.value()[2].y == 320);
 
     auto unused_purple_mushroom_input = barrel_input;
     unused_purple_mushroom_input.settings = 0x30;
