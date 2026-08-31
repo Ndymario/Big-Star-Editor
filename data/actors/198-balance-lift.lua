@@ -1,19 +1,39 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 198.
+
+local images = {}
+
+local function init(ctx)
+    images.DownArrow = ctx.loadImage("images/DownArrow.png")
+    images.ManualPlatform = ctx.loadImage("images/ManualPlatform.png")
+    images.UpArrow = ctx.loadImage("images/UpArrow.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 112
+    height = 16
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.ManualPlatform, RenderX, RenderY) or drawn
+    if actor.fields.directions_arrows == 0 or actor.fields.directions_arrows == 2 then
+        drawn = gfx.blit(renderer, images.UpArrow, RenderX + 51, RenderY + 4) or drawn
+    elseif actor.fields.directions_arrows == 1 then
+        drawn = gfx.blit(renderer, images.DownArrow, RenderX + 51, RenderY + 4) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 198,
     name = "Balance lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Stops moving when it gets near to the top of the view.",
-    grabBounds = { x = 0, y = 0, width = 112, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 112, height = 16 },
-    sourceFiles = {
-        "/enemy/b_lift.nsbtx (balance lift)",
-    },
     fields = {
         {
             key = "loads_from",
@@ -57,5 +77,8 @@ return {
             },
         },
     },
-    model = readModel("b_lift.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

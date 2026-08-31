@@ -1,18 +1,64 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 264.
+
+local images = {}
+
+local function init(ctx)
+    images.QBlock = ctx.loadImage("images/QBlock.png")
+    images.ToadBackground1 = ctx.loadImage("images/ToadBackground1.png")
+    images.ToadBackground2 = ctx.loadImage("images/ToadBackground2.png")
+    images.ToadBackground3 = ctx.loadImage("images/ToadBackground3.png")
+    images.ToadBackground4 = ctx.loadImage("images/ToadBackground4.png")
+    images.ToadBackground5 = ctx.loadImage("images/ToadBackground5.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if (d[2] & 0x10) // 0x10 == 1 then
+        x = x - 12
+        y = y - 12
+        width = 40
+        height = 40
+    end
+    if (d[5] & 0x10) // 0x10 == 1 then
+        x = x + 8
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    img = images.QBlock
+    if (d[2] & 0x10) // 0x10 == 1 then
+        RenderX = RenderX - 12
+        RenderY = RenderY - 12
+        if actor.fields.block_id == 1 then
+            img = images.ToadBackground2
+        elseif actor.fields.block_id == 2 then
+            img = images.ToadBackground3
+        elseif actor.fields.block_id == 3 then
+            img = images.ToadBackground4
+        elseif actor.fields.block_id == 4 then
+            img = images.ToadBackground5
+        else
+            img = images.ToadBackground1
+        end
+    end
+    if (d[5] & 0x10) // 0x10 == 1 then
+        RenderX = RenderX + 8
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 264,
     name = "Toad House block",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/obj/I_minigame_block_ncg.bin",
-    },
     fields = {
         {
             key = "bonus_game",
@@ -56,4 +102,8 @@ return {
             },
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

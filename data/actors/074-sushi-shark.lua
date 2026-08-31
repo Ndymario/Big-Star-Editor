@@ -1,19 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 74.
+
+local images = {}
+
+local function init(ctx)
+    images.Shark = ctx.loadImage("images/Shark.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 27
+    y = y - 8
+    width = 71
+    height = 26
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Shark, RenderX - 27, RenderY - 8) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 74,
     name = "Sushi (shark)",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "Spawned by the Sushi spawner.\n\nThis sprite's settings seem to be an absolute mess of contradicting behaviours. ",
-    grabBounds = { x = -27, y = -8, width = 71, height = 26 },
-    renderBounds = { x = -27, y = -8, width = 71, height = 26 },
-    sourceFiles = {
-        "/enemy/hojiro.nsbmd",
-    },
     fields = {
         {
             key = "unknown_5",
@@ -54,5 +68,8 @@ return {
             },
         },
     },
-    model = readModel("hojiro.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

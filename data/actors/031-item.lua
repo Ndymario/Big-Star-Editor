@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 31,
     name = "Item",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "Outdated!!!",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "item_type",
@@ -126,4 +124,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

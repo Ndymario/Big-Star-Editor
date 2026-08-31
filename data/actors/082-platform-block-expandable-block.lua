@@ -1,18 +1,22 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 82.
+
+local images = {}
+
+local function init(ctx)
+    images.ExpandableBlock = ctx.loadImage("images/ExpandableBlock.png")
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.ExpandableBlock, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 82,
     name = "Platform Block (expandable block)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/obj/A_block_ncg.bin ([SOMETHING]_block_[SOMETHING].[SOMETHING])",
-    },
     fields = {
         {
             key = "turn_used_at_4th_hit",
@@ -23,4 +27,6 @@ return {
             checkboxValue = 1,
         },
     },
+    init = init,
+    render = render,
 }

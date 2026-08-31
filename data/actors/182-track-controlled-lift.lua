@@ -1,19 +1,36 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 182.
+
+local images = {}
+
+local function init(ctx)
+    images.MovingPlatformLeft = ctx.loadImage("images/MovingPlatformLeft.png")
+    images.MovingPlatformRight = ctx.loadImage("images/MovingPlatformRight.png")
+    images.MovingPlatformSection = ctx.loadImage("images/MovingPlatformSection.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    y = y + 8
+    width = 64
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.MovingPlatformLeft, RenderX, RenderY + 8) or drawn
+    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 16, RenderY + 8) or drawn
+    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 32, RenderY + 8) or drawn
+    drawn = gfx.blit(renderer, images.MovingPlatformRight, RenderX + 48, RenderY + 8) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 182,
     name = "Track-controlled lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = false,
     notes = "You can't make it longer, so try putting two beside each other without \"Wait for Mario\" checked.",
-    grabBounds = { x = 0, y = 8, width = 64, height = 16 },
-    renderBounds = { x = 0, y = 8, width = 64, height = 16 },
-    sourceFiles = {
-        "/enemy/n_lift_line.nsbtx (normal_lift_line)",
-    },
     fields = {
         {
             key = "starting_direction",
@@ -74,5 +91,8 @@ return {
             notes = "Used as 2 and 6 in Unused Level 1.",
         },
     },
-    model = readModel("n_lift_line.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

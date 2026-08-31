@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 137,
     name = "Event Controller AND",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "This sprite works by allowing up to 4 input IDs to be required to activate a single output. All input IDs must be set to a relevant value. Do not leave any as '0' - if you have less than four, you can enter the same ID into several spaces.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id_1",
@@ -65,4 +63,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

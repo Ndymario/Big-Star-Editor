@@ -1,18 +1,29 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 58.
+
+local images = {}
+
+local function init(ctx)
+    images.BulletBill = ctx.loadImage("images/BulletBill.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    width = 21
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.BulletBill, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 58,
     name = "Bullet Bill spawner",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 21, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 21, height = 16 },
-    sourceFiles = {
-        "/enemy/killer.nsmbd",
-    },
     fields = {
         {
             key = "shooting_behaviour",
@@ -49,4 +60,8 @@ return {
             notes = "Spawns from the right edge of screen when player is in zone.",
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,18 +1,44 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 134.
+
+local images = {}
+
+local function init(ctx)
+    images.ToadHouse1UP = ctx.loadImage("images/ToadHouse1UP.png")
+    images.ToadHouseItem = ctx.loadImage("images/ToadHouseItem.png")
+    images.ToadHouseMega = ctx.loadImage("images/ToadHouseMega.png")
+    images.Toadsworth = ctx.loadImage("images/Toadsworth.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 15
+    width = 20
+    height = 31
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Toadsworth, RenderX, RenderY - 15) or drawn
+    if actor.fields.type == 0 then
+        drawn = gfx.blit(renderer, images.ToadHouse1UP, RenderX - 188, RenderY - 88) or drawn
+    end
+    if actor.fields.type == 2 then
+        drawn = gfx.blit(renderer, images.ToadHouseItem, RenderX - 116, RenderY - 76) or drawn
+    end
+    if actor.fields.type == 3 then
+        drawn = gfx.blit(renderer, images.ToadHouseMega, RenderX - 116, RenderY - 76) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 134,
     name = "Toadsworth",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = -15, width = 20, height = 31 },
-    renderBounds = { x = 0, y = -15, width = 20, height = 31 },
-    sourceFiles = {
-        "/enemy/kinoji.nsbmd",
-    },
     fields = {
         {
             key = "type",
@@ -29,5 +55,8 @@ return {
             },
         },
     },
-    model = readModel("kinoji.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

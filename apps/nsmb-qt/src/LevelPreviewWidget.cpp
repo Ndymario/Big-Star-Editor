@@ -117,9 +117,62 @@ QRectF spriteRect(const nsmb::formats::NsmbLevelSprite& sprite,
     if (const auto* actor = actorDefinition(sprite, hash, actor_definitions, object_ids)) {
         const auto dynamic = nsmb::project::lua_actor_bounds(
             *actor, actorInput(sprite, hash, actor->sprite.object_id), render);
-        if (dynamic && dynamic.value()) bounds = *dynamic.value();
+        // A bounds function returns the box in scene pixels; the cached
+        // definition bounds are the same box evaluated at the origin.
+        if (dynamic && dynamic.value())
+            return QRectF(dynamic.value()->x, dynamic.value()->y, dynamic.value()->width, dynamic.value()->height);
     }
     return QRectF(sprite.x * 16.0 + bounds.x, sprite.y * 16.0 + bounds.y, bounds.width, bounds.height);
+}
+
+void paintActorCommand(QPainter& painter, const nsmb::project::LuaActorDrawCommand& command) {
+    const QRectF destination(command.x, command.y, command.width, command.height);
+    painter.save();
+    painter.setOpacity(command.opacity);
+    const auto center = destination.center();
+    painter.translate(center);
+    painter.rotate(command.rotation);
+    painter.scale(command.flip_x ? -1.0 : 1.0, command.flip_y ? -1.0 : 1.0);
+    painter.translate(-center);
+    const auto colorOf = [](std::uint32_t packed) {
+        return QColor(static_cast<int>(packed >> 24U & 0xFFU), static_cast<int>(packed >> 16U & 0xFFU),
+                      static_cast<int>(packed >> 8U & 0xFFU), static_cast<int>(packed & 0xFFU));
+    };
+    switch (command.kind) {
+    case nsmb::project::LuaActorDrawKind::FillRect:
+        painter.fillRect(destination, colorOf(command.color));
+        break;
+    case nsmb::project::LuaActorDrawKind::StrokeRect:
+        painter.setPen(QPen(colorOf(command.color), command.stroke_width));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(destination);
+        break;
+    case nsmb::project::LuaActorDrawKind::FillEllipse:
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(colorOf(command.color));
+        painter.drawEllipse(destination);
+        break;
+    case nsmb::project::LuaActorDrawKind::Line:
+        painter.setPen(QPen(colorOf(command.color), command.stroke_width));
+        painter.drawLine(QPointF(command.x, command.y), QPointF(command.x2, command.y2));
+        break;
+    case nsmb::project::LuaActorDrawKind::Text:
+    case nsmb::project::LuaActorDrawKind::Image:
+        break;
+    }
+    if (!command.text.empty()) {
+        painter.setPen(Qt::white);
+        painter.drawText(destination.topLeft() + QPointF(0.0, 8.0), QString::fromStdString(command.text));
+    } else if (command.image && !command.image->pixels.empty()) {
+        const QImage image(command.image->pixels.data(),
+                           static_cast<int>(command.image->width),
+                           static_cast<int>(command.image->height),
+                           static_cast<int>(command.image->width * 4U),
+                           QImage::Format_RGBA8888);
+        painter.drawImage(destination, image,
+                          QRectF(command.source_x, command.source_y, command.source_width, command.source_height));
+    }
+    painter.restore();
 }
 
 QRectF entranceRect(const nsmb::formats::NsmbLevelEntrance& entrance) {
@@ -522,30 +575,13 @@ void drawMap(QPainter& painter,
         bool rendered = false;
         if (const auto* actor = actorDefinition(sprite, custom_hash, actor_definitions, actor_object_ids);
             actor && nsmb::project::has_lua_renderer(*actor)) {
+            bool custom_rendered = false;
             const auto commands = nsmb::project::render_lua_actor(
-                *actor, actorInput(sprite, custom_hash, actor->sprite.object_id, moving ? drag_delta : QPointF{}));
+                *actor, actorInput(sprite, custom_hash, actor->sprite.object_id, moving ? drag_delta : QPointF{}),
+                &custom_rendered);
             if (commands) {
-                for (const auto& command : commands.value()) {
-                    if (!command.image || command.image->pixels.empty()) continue;
-                    const QImage image(command.image->pixels.data(),
-                                       static_cast<int>(command.image->width),
-                                       static_cast<int>(command.image->height),
-                                       static_cast<int>(command.image->width * 4U),
-                                       QImage::Format_RGBA8888);
-                    const QRectF destination(command.x, command.y, command.width, command.height);
-                    const QRectF source(command.source_x, command.source_y,
-                                        command.source_width, command.source_height);
-                    painter.save();
-                    painter.setOpacity(command.opacity);
-                    const auto center = destination.center();
-                    painter.translate(center);
-                    painter.rotate(command.rotation);
-                    painter.scale(command.flip_x ? -1.0 : 1.0, command.flip_y ? -1.0 : 1.0);
-                    painter.translate(-center);
-                    painter.drawImage(destination, image, source);
-                    painter.restore();
-                    rendered = true;
-                }
+                for (const auto& command : commands.value()) paintActorCommand(painter, command);
+                rendered = custom_rendered;
             }
         }
 
@@ -561,28 +597,21 @@ void drawMap(QPainter& painter,
             }
         }
 
-        if (!rendered && !custom_hash) {
-            const auto* definition = spriteDefinition(sprite, std::nullopt, sprite_definitions);
-            const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(238, 178, 75);
-            painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
-            if (definition && definition->shape == nsmb::project::SpriteShape::Box) painter.drawRoundedRect(render_rect, 2, 2);
-            else if (definition && definition->shape == nsmb::project::SpriteShape::Ellipse) painter.drawEllipse(render_rect);
-            else { QPolygonF diamond; const auto render_center = render_rect.center(); diamond << QPointF(render_center.x(), render_rect.top()) << QPointF(render_rect.right(), render_center.y()) << QPointF(render_center.x(), render_rect.bottom()) << QPointF(render_rect.left(), render_center.y()); painter.drawPolygon(diamond); }
-            const auto label = definition ? QString::fromStdString(definition->name)
-                                          : (actor_labels.contains(sprite.id) ? actor_labels.at(sprite.id) : QString("Actor %1").arg(sprite.id));
-            painter.setPen(QPen(colors.label_text, 0));
-            painter.drawText(QRectF(render_rect.right() + 2.0, render_rect.top() - 2.0, 120.0, 20.0), label);
-        } else if (!rendered) {
+        // An actor with no rendering program of its own gets the stock marker and
+        // its number, the way NSMBe draws an actor it has no case for.
+        if (!rendered) {
             const auto* definition = spriteDefinition(sprite, custom_hash, sprite_definitions);
-            const auto color = definition ? QColor(QString::fromStdString(definition->color)) : QColor(191, 112, 215);
-            painter.setPen(QPen(entityStroke(color, colors), 0)); painter.setBrush(QColor(color.red(), color.green(), color.blue(), 190));
-            if (definition && definition->shape == nsmb::project::SpriteShape::Ellipse) painter.drawEllipse(render_rect);
-            else if (definition && definition->shape == nsmb::project::SpriteShape::Diamond) { QPolygonF diamond; const auto center=render_rect.center(); diamond << QPointF(center.x(),render_rect.top()) << QPointF(render_rect.right(),center.y()) << QPointF(center.x(),render_rect.bottom()) << QPointF(render_rect.left(),center.y()); painter.drawPolygon(diamond); }
-            else painter.drawRoundedRect(render_rect, 2, 2);
-            const auto label = custom_actor_labels.contains(*custom_hash) ? custom_actor_labels.at(*custom_hash)
-                : QString("0x%1 (foreign)").arg(*custom_hash, 8, 16, QLatin1Char('0'));
+            painter.setPen(QPen(entityStroke(colors.label_text, colors), 0));
+            painter.setBrush(QColor(110, 110, 110, 190));
+            painter.drawRoundedRect(render_rect, 2, 2);
             painter.setPen(QPen(colors.label_text, 0));
-            painter.drawText(QRectF(rect.right() + 2.0, rect.top() - 2.0, 180.0, 20.0), label);
+            painter.drawText(render_rect, Qt::AlignCenter, QString::number(sprite.id));
+            const auto label = definition ? QString::fromStdString(definition->name)
+                : custom_hash ? (custom_actor_labels.contains(*custom_hash)
+                                     ? custom_actor_labels.at(*custom_hash)
+                                     : QString("0x%1 (foreign)").arg(*custom_hash, 8, 16, QLatin1Char('0')))
+                : (actor_labels.contains(sprite.id) ? actor_labels.at(sprite.id) : QString("Actor %1").arg(sprite.id));
+            painter.drawText(QRectF(render_rect.right() + 2.0, render_rect.top() - 2.0, 180.0, 20.0), label);
         }
         if (selected(selections, 2, static_cast<int>(i))) {
             painter.setPen(QPen(colors.marker, 3.0 / scale));
@@ -1505,18 +1534,15 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
                                               nsmb::project::LevelTilesetReferences references) {
     const auto generation = ++graphics_generation_;
     graphics_references_ = references;
-    actor_images_.clear();
-    custom_actor_images_.clear();
     actor_object_ids_.clear();
     for (const auto& actor : resources.actors) if (!actor.hash) actor_object_ids_.emplace(actor.type, actor.object_id);
     rebuildSpriteDefinitions();
+    rebuildActorThumbnails();
     QPointer<LevelPreviewWidget> weak(this);
     QThreadPool::globalInstance()->start([weak, generation, resources = std::move(resources)]() mutable {
         std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3> tilesets;
         QImage background;
         QImage foreground;
-        std::unordered_map<std::uint16_t, QImage> actor_images;
-        std::unordered_map<std::uint32_t, QImage> custom_actor_images;
         std::unordered_map<std::uint16_t, QString> actor_labels;
         std::unordered_map<std::uint32_t, QString> custom_actor_labels;
         QStringList warnings;
@@ -1544,17 +1570,14 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
         convert(nsmb::project::load_background_graphics(resources.background), background, "Background", warnings);
         convert(nsmb::project::load_background_graphics(resources.foreground), foreground, "Foreground", warnings);
         for (const auto& actor : resources.actors) {
-            const auto label = QString::fromUtf8(actor.name.data(), static_cast<qsizetype>(actor.name.size())) +
-                               (actor.model.empty() ? QString{} : " (3D)");
+            const auto label = QString::fromUtf8(actor.name.data(), static_cast<qsizetype>(actor.name.size()));
             if (actor.hash) custom_actor_labels.emplace(*actor.hash, label); else actor_labels.emplace(actor.type, label);
-            auto decoded=nsmb::project::load_actor_graphics(actor);if(decoded){const auto& image=decoded.value();QImage converted(image.pixels.data(),static_cast<int>(image.width),static_cast<int>(image.height),static_cast<int>(image.width*4U),QImage::Format_RGBA8888);auto copy=converted.copy();if(copy.width()>64||copy.height()>64)copy=copy.scaled(64,64,Qt::KeepAspectRatio,Qt::SmoothTransformation);if(actor.hash)custom_actor_images.emplace(*actor.hash,std::move(copy));else actor_images.emplace(actor.type,std::move(copy));}
         }
         if (!weak) return;
         QMetaObject::invokeMethod(
             weak,
             [weak, generation, tilesets = std::move(tilesets), background = std::move(background), foreground = std::move(foreground),
-             actor_images = std::move(actor_images), custom_actor_images = std::move(custom_actor_images), actor_labels = std::move(actor_labels),
-             custom_actor_labels = std::move(custom_actor_labels), warnings = warnings.join("\n")]() mutable {
+             actor_labels = std::move(actor_labels), custom_actor_labels = std::move(custom_actor_labels), warnings = warnings.join("\n")]() mutable {
                 if (!weak || weak->graphics_generation_ != generation) return;
                 bool tileset_changed = false;
                 for (std::size_t slot = 0; slot < tilesets.size(); ++slot) {
@@ -1565,8 +1588,6 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
                 if (!background.isNull()) weak->background_ = std::move(background);
                 if (!foreground.isNull()) weak->foreground_ = std::move(foreground);
                 weak->actor_labels_ = std::move(actor_labels);
-                weak->actor_images_ = std::move(actor_images);
-                weak->custom_actor_images_ = std::move(custom_actor_images);
                 for (auto& [hash, label] : custom_actor_labels) weak->custom_actor_labels_.insert_or_assign(hash, std::move(label));
                 if (tileset_changed) weak->object_images_.clear();
                 weak->update();
@@ -1587,6 +1608,40 @@ void LevelPreviewWidget::setCustomActors(const nsmb::project::ModuleDataCatalog&
 void LevelPreviewWidget::setActorDefinitions(const nsmb::project::LuaActorCatalog& catalog) {
     actor_definition_catalog_ = catalog;
     setSpriteDefinitions(catalog.sprite_definitions());
+    rebuildActorThumbnails();
+}
+
+// The picker and minimap show what the canvas shows, so a thumbnail is the
+// actor's own program run at zero settings rather than a separate preview path.
+void LevelPreviewWidget::rebuildActorThumbnails() {
+    actor_images_.clear();
+    custom_actor_images_.clear();
+    std::unordered_map<std::uint32_t, std::uint16_t> types;
+    for (const auto& [type, object_id] : actor_object_ids_) types.emplace(object_id, type);
+    for (const auto& actor : actor_definition_catalog_.actors) {
+        if (!nsmb::project::has_lua_renderer(actor)) continue;
+        nsmb::project::LuaActorRenderInput input;
+        input.object_id = actor.sprite.object_id;
+        input.hash = actor.hash;
+        const auto commands = nsmb::project::render_lua_actor(actor, input);
+        if (!commands || commands.value().empty()) continue;
+        QRectF box;
+        for (const auto& command : commands.value())
+            box = box.isNull() ? QRectF(command.x, command.y, command.width, command.height)
+                               : box.united(QRectF(command.x, command.y, command.width, command.height));
+        if (box.width() < 1.0 || box.height() < 1.0) continue;
+        QImage thumbnail(qCeil(box.width()), qCeil(box.height()), QImage::Format_RGBA8888);
+        thumbnail.fill(Qt::transparent);
+        QPainter painter(&thumbnail);
+        painter.translate(-box.topLeft());
+        for (const auto& command : commands.value()) paintActorCommand(painter, command);
+        painter.end();
+        if (thumbnail.width() > 64 || thumbnail.height() > 64)
+            thumbnail = thumbnail.scaled(64, 64, Qt::KeepAspectRatio, Qt::SmoothTransformation);
+        if (actor.hash) custom_actor_images_.emplace(*actor.hash, std::move(thumbnail));
+        else if (const auto type = types.find(actor.sprite.object_id); type != types.end())
+            actor_images_.emplace(type->second, std::move(thumbnail));
+    }
 }
 
 void LevelPreviewWidget::setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog) {

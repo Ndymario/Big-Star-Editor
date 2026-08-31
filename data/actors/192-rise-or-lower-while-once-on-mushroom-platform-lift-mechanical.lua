@@ -1,20 +1,54 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 192.
+
+local images = {}
+
+local function init(ctx)
+    images.GreenMushroomEdge = ctx.loadImage("images/GreenMushroomEdge.png")
+    images.GreenMushroomMiddle = ctx.loadImage("images/GreenMushroomMiddle.png")
+    images.GreenMushroomStalk = ctx.loadImage("images/GreenMushroomStalk.png")
+    images.GreenMushroomStalkTop = ctx.loadImage("images/GreenMushroomStalkTop.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = (actor.fields.width + 2) * 16
+    x = x - ((width - 16) // 2)
+    height = (d[5] & 0xF0) + 49
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderX2 = RenderX
+    local width = 0
+    local img
+    local drawn = false
+    img = images.GreenMushroomEdge
+    img = gfx.transform(img, 0, true, false)
+    width = actor.fields.width + 1
+    RenderX = RenderX - (width * 8)
+    drawn = gfx.blit(renderer, images.GreenMushroomEdge, RenderX, RenderY) or drawn
+    for l = 0, width - 2 do
+        RenderX = RenderX + 16
+        drawn = gfx.blit(renderer, images.GreenMushroomMiddle, RenderX, RenderY) or drawn
+    end
+    drawn = gfx.blit(renderer, img, RenderX + 16, RenderY) or drawn
+    drawn = gfx.blit(renderer, images.GreenMushroomStalkTop, RenderX2, RenderY + 24) or drawn
+    for l = 0, (actor.fields.stalk_height_and_move_direction) - 1 do
+        drawn = gfx.blit(renderer, images.GreenMushroomStalk, RenderX2, RenderY + 49) or drawn
+        RenderY = RenderY + 16
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 192,
     name = "Rise or lower while/once on Mushroom Platform lift - mechanical",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Has the same data as sprite 239. Any code differences other than the obvious?",
-    grabBounds = { x = -8, y = 0, width = 32, height = 49 },
-    renderBounds = { x = -8, y = 0, width = 32, height = 49 },
-    sourceFiles = {
-        "/enemy/I_kinoko_ashib3u.nsbtx [this must be wrong]",
-        "/enemy/I_kinoko_kuki_u3.nsbtx",
-    },
     fields = {
         {
             key = "distance",
@@ -57,5 +91,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("I_kinoko_ashib3u.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

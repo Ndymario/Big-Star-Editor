@@ -1,19 +1,41 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 151.
+
+local images = {}
+
+local function init(ctx)
+    images.RedCoinRing = ctx.loadImage("images/RedCoinRing.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 7
+    y = y - 26
+    width = 30
+    height = 42
+    if actor.fields.shift_8_pixels_right then
+        x = x + 8
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if actor.fields.shift_8_pixels_right then
+        RenderX = RenderX + 8
+    end
+    drawn = gfx.blit(renderer, images.RedCoinRing, RenderX - 7, RenderY - 26) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 151,
     name = "Red Coin Ring",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "A.k.a. “Red Coin Ring”.\nNote: \"obj_e3_ring.nsbmd\" cannot be opened with NSMBe, to fix this problem, see this tutorial:\n\nhttp://nsmbhd.net/thread/3250-fixing-already-opened-files-tutorial/",
-    grabBounds = { x = -7, y = -26, width = 30, height = 42 },
-    renderBounds = { x = -7, y = -26, width = 30, height = 42 },
-    sourceFiles = {
-        "/enemy/obj_e3_ring.nsbmd",
-    },
     fields = {
         {
             key = "target_id",
@@ -64,5 +86,8 @@ return {
             },
         },
     },
-    model = readModel("obj_e3_ring.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

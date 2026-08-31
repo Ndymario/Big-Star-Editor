@@ -1,19 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 300,
     name = "Small Grassland Clouds FG effect",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Has the same data as sprites 310, 315 and 324.\nDirection: list at nybble 4: 0=Left-down,1=Left-up,2=Right-down,3=Right-up\nOpacity: value at nybble 5-6. Modulo 32. 0 is transparent, 30 is almost opaque, 31 is completely red.\nMixed shift: value at nybble 7. Shift horizontally and vertically.\nHorizontal scrolling: value at nybble 8. 0 is the slowest, 15 is the fastest.\nVertical scrolling: value at nybble 9. 0 is the slowest, 15 is the fastest.\nHorizontal speed: value at nybble 10. 0 is the slowest, 15 is the fastest.\nVertical speed: value at nybble 11. 0 is the slowest, 15 is the fastest.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/polygon_unit/evf_tcloud1_b.nsbtx",
-    },
     fields = {
         {
             key = "direction",
@@ -74,5 +69,6 @@ return {
             valueOffset = 1,
         },
     },
-    model = readModel("evf_tcloud1_b.nsbtx"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

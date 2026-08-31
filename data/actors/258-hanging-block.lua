@@ -1,20 +1,38 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 258.
+
+local images = {}
+
+local function init(ctx)
+    images.HangingBlockOverrides = ctx.loadImage("images/HangingBlockOverrides.png")
+    images.QBlock = ctx.loadImage("images/QBlock.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    y = y - 128
+    height = height + 128
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local width, height = 0, 0
+    local drawn = false
+    drawn = gfx.blit(renderer, images.QBlock, RenderX, RenderY) or drawn
+    if actor.fields.contents < 10 then
+        drawn = gfx.blit(renderer, images.HangingBlockOverrides, RenderX, RenderY, nil, nil, { x = (actor.fields.contents) * 16, y = 0, width = 16, height = 16 }) or drawn
+    end
+    drawn = renderer:drawLine({ x = RenderX + 7, y = RenderY - 128, x2 = RenderX + 7, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY - 128, x2 = RenderX + 8, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 258,
     name = "Hanging ? Block",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = false,
-    grabBounds = { x = 0, y = -128, width = 16, height = 144 },
-    renderBounds = { x = 0, y = -128, width = 16, height = 144 },
-    sourceFiles = {
-        "/enemy/I_hatena_normal2.nsbmd",
-        "/enemy/I_hatena_normal.nsbmd",
-        "/enemy/I_hatena_block.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -61,5 +79,8 @@ return {
             },
         },
     },
-    model = readModel("I_hatena_normal2.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

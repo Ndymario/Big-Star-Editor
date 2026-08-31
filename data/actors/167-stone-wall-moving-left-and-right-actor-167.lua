@@ -1,19 +1,165 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 167.
+
+local images = {}
+
+local function init(ctx)
+    images.StoneBlockBottom = ctx.loadImage("images/StoneBlockBottom.png")
+    images.StoneBlockBottomLeft = ctx.loadImage("images/StoneBlockBottomLeft.png")
+    images.StoneBlockBottomRight = ctx.loadImage("images/StoneBlockBottomRight.png")
+    images.StoneBlockFlatHorizLeft = ctx.loadImage("images/StoneBlockFlatHorizLeft.png")
+    images.StoneBlockFlatHorizMiddle = ctx.loadImage("images/StoneBlockFlatHorizMiddle.png")
+    images.StoneBlockFlatHorizRight = ctx.loadImage("images/StoneBlockFlatHorizRight.png")
+    images.StoneBlockLeft = ctx.loadImage("images/StoneBlockLeft.png")
+    images.StoneBlockMiddle = ctx.loadImage("images/StoneBlockMiddle.png")
+    images.StoneBlockRight = ctx.loadImage("images/StoneBlockRight.png")
+    images.StoneBlockSpikes = ctx.loadImage("images/StoneBlockSpikes.png")
+    images.StoneBlockTop = ctx.loadImage("images/StoneBlockTop.png")
+    images.StoneBlockTopLeft = ctx.loadImage("images/StoneBlockTopLeft.png")
+    images.StoneBlockTopRight = ctx.loadImage("images/StoneBlockTopRight.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = math.max(16 * (d[5] % 0x10 + 1), 32)
+    height = 16 * ((2) ^ (((d[4] & 0x30) / 0x10)))
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local width, height = 0, 0
+    local drawn = false
+    width = d[5] % 0x10
+    if actor.objectId == 165 then
+        width = d[5] % 0x8
+    end
+    local spikes = 0
+    if actor.objectId == 168 then
+        height = actor.fields.unknown_10
+        spikes = d[2] % 0x10
+        if spikes == 1 or spikes == 3 then
+            height = height - 1
+            RenderY = RenderY + 16
+        end
+        if spikes == 2 or spikes == 3 then
+            height = height - 1
+        end
+        if spikes == 4 or spikes == 6 then
+            width = width - 1
+        end
+        if spikes == 5 or spikes == 6 then
+            width = width - 1
+            RenderX = RenderX + 16
+        end
+    else
+        height = (((2) ^ (((d[4] & 0x30) / 0x10))) - 1)
+    end
+    if width < 1 then
+        width = 1
+    end
+    if height < 0 then
+        height = 0
+    end
+    local xp = RenderX
+    local yp = RenderY
+    if height == 0 then
+        drawn = gfx.blit(renderer, images.StoneBlockFlatHorizLeft, RenderX, RenderY) or drawn
+        for l = 0, (width - 1) - 1 do
+            RenderX = RenderX + 16
+            drawn = gfx.blit(renderer, images.StoneBlockFlatHorizMiddle, RenderX, RenderY) or drawn
+        end
+        drawn = gfx.blit(renderer, images.StoneBlockFlatHorizRight, RenderX + 16, RenderY) or drawn
+    else
+        drawn = gfx.blit(renderer, images.StoneBlockTopLeft, RenderX, RenderY) or drawn
+        for l = 0, (width - 1) - 1 do
+            RenderX = RenderX + 16
+            drawn = gfx.blit(renderer, images.StoneBlockTop, RenderX, RenderY) or drawn
+        end
+        RenderX = RenderX + 16
+        drawn = gfx.blit(renderer, images.StoneBlockTopRight, RenderX, RenderY) or drawn
+        for l = 0, (height - 1) - 1 do
+            RenderY = RenderY + 16
+            drawn = gfx.blit(renderer, images.StoneBlockRight, RenderX, RenderY) or drawn
+        end
+        RenderY = RenderY + 16
+        drawn = gfx.blit(renderer, images.StoneBlockBottomRight, RenderX, RenderY) or drawn
+        for l = 0, (width - 1) - 1 do
+            RenderX = RenderX - 16
+            drawn = gfx.blit(renderer, images.StoneBlockBottom, RenderX, RenderY) or drawn
+        end
+        RenderX = RenderX - 16
+        drawn = gfx.blit(renderer, images.StoneBlockBottomLeft, RenderX, RenderY) or drawn
+        for l = 0, (height - 1) - 1 do
+            RenderY = RenderY - 16
+            drawn = gfx.blit(renderer, images.StoneBlockLeft, RenderX, RenderY) or drawn
+        end
+        RenderX = xp
+        RenderY = yp
+        local xStart = RenderX
+        for l = 0, (height - 1) - 1 do
+            RenderY = RenderY + 16
+            for m = 0, (width - 1) - 1 do
+                RenderX = RenderX + 16
+                drawn = gfx.blit(renderer, images.StoneBlockMiddle, RenderX, RenderY) or drawn
+            end
+            RenderX = xStart
+        end
+    end
+    if spikes == 1 or spikes == 3 then
+        RenderX = xp
+        RenderY = yp - 16
+        for l = 0, width do
+            drawn = gfx.blit(renderer, images.StoneBlockSpikes, RenderX, RenderY) or drawn
+            RenderX = RenderX + 16
+        end
+    end
+    if spikes == 2 or spikes == 3 then
+        RenderX = xp
+        RenderY = ((actor.pixelY / 16) + height + 1) * 16
+        if spikes == 3 then
+            RenderY = RenderY + 16
+        end
+        local spikes2 = images.StoneBlockSpikes
+        spikes2 = gfx.transform(spikes2, 0, false, true)
+        for l = 0, d[5] % 0x10 do
+            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
+            RenderX = RenderX + 16
+        end
+    end
+    if spikes == 4 or spikes == 6 then
+        RenderX = ((actor.pixelX / 16) + width + 1) * 16
+        RenderY = yp
+        if spikes == 6 then
+            RenderX = RenderX + 16
+        end
+        local spikes2 = images.StoneBlockSpikes
+        spikes2 = gfx.transform(spikes2, 90, false, false)
+        for l = 0, actor.fields.unknown_10 do
+            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
+            RenderY = RenderY + 16
+        end
+    end
+    if spikes == 5 or spikes == 6 then
+        RenderX = xp - 16
+        RenderY = yp
+        local spikes2 = images.StoneBlockSpikes
+        spikes2 = gfx.transform(spikes2, 90, true, false)
+        for l = 0, height do
+            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
+            RenderY = RenderY + 16
+        end
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 167,
     name = "Stone wall moving left and right (actor 167)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Exact duplicate of used horizontal moving stone block.\nSame settings as Actor 166.",
-    grabBounds = { x = 0, y = 0, width = 32, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 32, height = 16 },
-    sourceFiles = {
-        "/enemy/z_lift.nsbtx ([SOMETHING]_lift)",
-    },
     fields = {
         {
             key = "tiles_to_move",
@@ -85,5 +231,8 @@ return {
             notes = "Used in-game, useless.",
         },
     },
-    model = readModel("z_lift.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

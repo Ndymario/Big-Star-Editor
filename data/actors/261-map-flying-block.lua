@@ -1,22 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 261.
+
+local images = {}
+
+local function init(ctx)
+    images.FlyingBlock = ctx.loadImage("images/FlyingBlock.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 12
+    y = y - 8
+    width = 44
+    height = 23
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.FlyingBlock, RenderX - 12, RenderY - 8) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 261,
     name = "Map Flying ? Block",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "Moves slowly if in water.",
-    grabBounds = { x = -12, y = -8, width = 44, height = 23 },
-    renderBounds = { x = -12, y = -8, width = 44, height = 23 },
-    sourceFiles = {
-        "/enemy/pata_block.nsbmd",
-        "This NSBMD contains red and gold flying blocks + wings",
-        "sprites:",
-        "117 and 290",
-    },
     fields = {
         {
             key = "loads_from",
@@ -68,5 +79,8 @@ return {
             },
         },
     },
-    model = readModel("pata_block.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

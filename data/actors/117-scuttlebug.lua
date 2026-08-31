@@ -1,19 +1,39 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 117.
+
+local images = {}
+
+local function init(ctx)
+    images.HangingScuttleBug = ctx.loadImage("images/HangingScuttleBug.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y + ((d[5] & 0xF0) + 64)
+    x = x - 14
+    width = 44
+    height = 37
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderY2 = RenderY
+    local drawn = false
+    RenderY = RenderY + ((d[5] & 0xF0) + 64)
+    drawn = renderer:drawLine({ x = RenderX + 7, y = RenderY2, x2 = RenderX + 7, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY2, x2 = RenderX + 8, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = gfx.blit(renderer, images.HangingScuttleBug, RenderX - 14, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 117,
     name = "Scuttlebug",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A spider that will either drop to the ground or hang on it's web.",
-    grabBounds = { x = -14, y = 64, width = 44, height = 37 },
-    renderBounds = { x = -14, y = 64, width = 44, height = 37 },
-    sourceFiles = {
-        "/enemy/gasagoso.nsbmd",
-    },
     fields = {
         {
             key = "don_t_wait_for_player",
@@ -42,5 +62,8 @@ return {
             },
         },
     },
-    model = readModel("gasagoso.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 255.
+
+local images = {}
+
+local function init(ctx)
+    images.SpinBoard = ctx.loadImage("images/SpinBoard.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 6
+    width = 26
+    height = 26
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.SpinBoard, RenderX - 6, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 255,
     name = "Spin Block (unused Actor 255)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = false,
     notes = "Not complete because: Unknown values, unknown use\nWon't appear if Sprite 95 is not in immediate vicinity.",
-    grabBounds = { x = -6, y = 0, width = 26, height = 26 },
-    renderBounds = { x = -6, y = 0, width = 26, height = 26 },
-    sourceFiles = {
-        "/enemy/spin_obj.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -36,5 +49,8 @@ return {
             notes = "Used in-game. Doesn't do anything notable.",
         },
     },
-    model = readModel("spin_obj.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

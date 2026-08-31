@@ -1,18 +1,39 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 231.
+
+local images = {}
+
+local function init(ctx)
+    images.SwellingGround = ctx.loadImage("images/SwellingGround.png")
+    images.SwellingGroundIn = ctx.loadImage("images/SwellingGroundIn.png")
+    images.SwellingGroundOut = ctx.loadImage("images/SwellingGroundOut.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 128
+    width = 276
+    height = 128
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.SwellingGround, RenderX - 128, RenderY) or drawn
+    if (actor.fields.direction) == 0 then
+        drawn = gfx.blit(renderer, images.SwellingGroundOut, RenderX - 128, RenderY - 112) or drawn
+    elseif (actor.fields.direction) == 1 then
+        drawn = gfx.blit(renderer, images.SwellingGroundIn, RenderX - 128, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 231,
     name = "Swelling ground",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -128, y = 0, width = 276, height = 128 },
-    renderBounds = { x = -128, y = 0, width = 276, height = 128 },
-    sourceFiles = {
-        "/enemy/I_suna.nsbtx (SOMETHING_sand)",
-    },
     fields = {
         {
             key = "0_disable_1_enable_trigger_id_check",
@@ -44,5 +65,8 @@ return {
             },
         },
     },
-    model = readModel("I_suna.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

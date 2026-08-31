@@ -1,21 +1,43 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 95.
+
+local images = {}
+
+local function init(ctx)
+    images.ParakoopaBlue = ctx.loadImage("images/ParakoopaBlue.png")
+    images.ParakoopaGreen = ctx.loadImage("images/ParakoopaGreen.png")
+    images.ParakoopaRed = ctx.loadImage("images/ParakoopaRed.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 16
+    width = 19
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    if actor.fields.color == 1 then
+        img = images.ParakoopaRed
+    elseif actor.fields.color == 2 then
+        img = images.ParakoopaBlue
+    else
+        img = images.ParakoopaGreen
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY - 16) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 95,
     name = "Koopa Paratroopa",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Unused behaviours:\n- Has water behaviour when Direction is set to Jumping [may be used, or koopa leftover]",
-    grabBounds = { x = 0, y = -16, width = 19, height = 32 },
-    renderBounds = { x = 0, y = -16, width = 19, height = 32 },
-    sourceFiles = {
-        "/obj/I_nokonoko256_ncg.bin",
-        "/obj/I_enemy_B_ncl.bin",
-        "If you want to change colors in the Koopa Troopa's pallette, open 'I_enemy_B_ncl.bin', because that's the palette which belongs to it. When you edit the colors with 'I_enemy_W_ncl' for example, nothing will change in NSMB.",
-    },
     fields = {
         {
             key = "starting_direction",
@@ -63,6 +85,8 @@ return {
             },
         },
     },
-    graphics = readGraphics("I_nokonoko256_ncg.bin"),
-    palette = readPalette("I_enemy_B_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

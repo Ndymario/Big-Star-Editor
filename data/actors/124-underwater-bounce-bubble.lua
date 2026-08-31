@@ -1,19 +1,45 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 124.
+
+local images = {}
+
+local function init(ctx)
+    images.UnderwaterBounceBall = ctx.loadImage("images/UnderwaterBounceBall.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    local BouncePosX = (d[5] & 0xF0) // 8
+    if d[5] % 0x2 == 1 then
+        BouncePosX = BouncePosX * (-1)
+    end
+    x = x + BouncePosX
+    x = x - 26
+    y = y - 26
+    width = 53
+    height = 53
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    local BounceX = (d[5] & 0xF0) // 8
+    if d[5] % 0x2 == 1 then
+        BounceX = BounceX * (-1)
+    end
+    BounceX = BounceX + RenderX
+    drawn = gfx.blit(renderer, images.UnderwaterBounceBall, BounceX - 26, RenderY - 26) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 124,
     name = "Underwater bounce bubble",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "If it is ground pounded it will be destroyed, which is a unused behaviour.",
-    grabBounds = { x = -26, y = -26, width = 53, height = 53 },
-    renderBounds = { x = -26, y = -26, width = 53, height = 53 },
-    sourceFiles = {
-        "/enemy/W_awa.nsbmd",
-    },
     fields = {
         {
             key = "shift_position",
@@ -70,5 +96,8 @@ return {
             notes = "Unused.",
         },
     },
-    model = readModel("W_awa.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

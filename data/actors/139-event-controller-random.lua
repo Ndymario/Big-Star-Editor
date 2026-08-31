@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 139,
     name = "Event Controller Random",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "This Event Controller can cause one of the four random IDs to trigger, if a relevant Event ID has been activated. You do not have to use all four Random ID slots, and you can use the same ID on multiple slots. \nExample: \nA in ID1\nA in ID2\nB in ID3. \n2/3 chance of A, 1/3 chance of B.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id",
@@ -61,4 +59,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

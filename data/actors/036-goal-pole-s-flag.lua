@@ -1,22 +1,41 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 36.
+
+local images = {}
+
+local function init(ctx)
+    images.EndingFlag = ctx.loadImage("images/EndingFlag.png")
+    images.EndingFlagRed = ctx.loadImage("images/EndingFlagRed.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 29
+    y = y - 119
+    width = 27
+    height = 24
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    if actor.fields.secret_exit then
+        img = images.EndingFlagRed
+    else
+        img = images.EndingFlag
+    end
+    drawn = gfx.blit(renderer, img, RenderX - 29, RenderY - 119) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 36,
     name = "Goal Pole's flag",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "AKA Flagpole Flag",
-    grabBounds = { x = -29, y = -119, width = 27, height = 24 },
-    renderBounds = { x = -29, y = -119, width = 27, height = 24 },
-    sourceFiles = {
-        "/enemy/all_goal_flag.nsbmd [may be unused]",
-        "/enemy/all_goal_flagR.nsbmd (all_goal_flagRed) [may be unused]",
-        "/enemy/obj_goal_flag.nsbmd (object_goal_flag)[may be unused]",
-        "/enemy/obj_goal_flagR.nsbmd (object_goal_flagRed) [may be unused]",
-    },
     fields = {
         {
             key = "secret_exit",
@@ -34,5 +53,8 @@ return {
             checkboxValue = 2,
         },
     },
-    model = readModel("all_goal_flag.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

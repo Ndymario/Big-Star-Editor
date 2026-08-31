@@ -1,20 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 69.
+
+local images = {}
+
+local function init(ctx)
+    images.HammerBro = ctx.loadImage("images/HammerBro.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 18
+    width = 18
+    height = 34
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.HammerBro, RenderX, RenderY - 18) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 69,
     name = "Hammer Bro. from map",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "If a Hammer Bro is on the level this actor is placed in, upon starting the level a Hammer Bro. will spawn there.",
-    grabBounds = { x = 0, y = -18, width = 18, height = 34 },
-    renderBounds = { x = 0, y = -18, width = 18, height = 34 },
-    sourceFiles = {
-        "/enemy/hammer_bros.nsbmd",
-        "/enemy/I_hanmmer.nsbmd",
-    },
     fields = {
         {
             key = "loads_from",
@@ -41,5 +53,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("hammer_bros.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

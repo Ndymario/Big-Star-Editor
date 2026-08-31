@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 81.
+
+local images = {}
+
+local function init(ctx)
+    images.WaterBug = ctx.loadImage("images/WaterBug.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 16
+    y = y - 5
+    width = 41
+    height = 21
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.WaterBug, RenderX - 16, RenderY - 5) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 81,
     name = "Skeeter (Water Bug)",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -16, y = -5, width = 41, height = 21 },
-    renderBounds = { x = -16, y = -5, width = 41, height = 21 },
-    sourceFiles = {
-        "/enemy/bakudan.nsbmd",
-        "/enemy/bomb_menbo.nsbmd",
-    },
     fields = {
         {
             key = "mobility",
@@ -26,5 +39,8 @@ return {
             },
         },
     },
-    model = readModel("bomb_menbo.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

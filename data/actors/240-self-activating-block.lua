@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 240,
     name = "Self-activating block ",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = false,
     notes = "Brick/? block that activates when spawned. Used by the game when block is hit.\nWork in progress.\n\nFields in here were translated from single nibble flipping.\n\nPlease contribute by figuring out what the different combinations of sprite data do. Post your findings here: http://board.dirbaio.net/thread.php?id=244\n\nNibbles 6-7 with AA makes a dud block spawn something weird.\n\n00 00 00 00 00 00",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "unknown_4",
@@ -113,4 +111,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

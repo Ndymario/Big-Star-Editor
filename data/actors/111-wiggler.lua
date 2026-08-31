@@ -1,27 +1,44 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 111.
+
+local images = {}
+
+local function init(ctx)
+    images.Wiggler = ctx.loadImage("images/Wiggler.png")
+    images.WigglerL = ctx.loadImage("images/WigglerL.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if actor.fields.bigger then
+        y = y - 44
+        width = 92
+        height = 60
+    else
+        y = y - 14
+        width = 52
+        height = 30
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if d[5] == 1 then
+        drawn = gfx.blit(renderer, images.WigglerL, RenderX, RenderY - 44) or drawn
+    else
+        drawn = gfx.blit(renderer, images.Wiggler, RenderX, RenderY - 14) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 111,
     name = "Wiggler",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = false,
-    grabBounds = { x = 0, y = -14, width = 52, height = 30 },
-    renderBounds = { x = 0, y = -14, width = 52, height = 30 },
-    sourceFiles = {
-        "/enemy/body01.nsbmd",
-        "/enemy/body02.nsbmd",
-        "/enemy/body03.nsbmd",
-        "/enemy/body04.nsbmd",
-        "/enemy/head.nsbmd",
-        "/enemy/t_body01.nsbmd",
-        "/enemy/t_body02.nsbmd",
-        "/enemy/t_body03.nsbmd",
-        "/enemy/t_body04.nsbmd",
-        "/enemy/t_head.nsbmd",
-    },
     fields = {
         {
             key = "bigger",
@@ -40,5 +57,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("body01.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

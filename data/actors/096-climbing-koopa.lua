@@ -1,18 +1,38 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 96.
+
+local images = {}
+
+local function init(ctx)
+    images.FenceKoopaGreen = ctx.loadImage("images/FenceKoopaGreen.png")
+    images.FenceKoopaRed = ctx.loadImage("images/FenceKoopaRed.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 18
+    height = 26
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    if actor.fields.color == 1 then
+        img = images.FenceKoopaRed
+    else
+        img = images.FenceKoopaGreen
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 96,
     name = "Climbing Koopa",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 18, height = 26 },
-    renderBounds = { x = 0, y = 0, width = 18, height = 26 },
-    sourceFiles = {
-        "/enemy/net_nokonoko.nsbmd",
-    },
     fields = {
         {
             key = "walking_direction",
@@ -52,5 +72,8 @@ return {
             },
         },
     },
-    model = readModel("net_nokonoko.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

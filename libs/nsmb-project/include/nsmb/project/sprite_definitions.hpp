@@ -12,8 +12,6 @@ struct SpriteBounds {
     std::uint16_t width{16}, height{16};
 };
 
-enum class SpriteShape { Box, Ellipse, Diamond };
-
 struct SpriteFieldChoice {
     std::uint32_t value{};
     std::string label;
@@ -32,11 +30,11 @@ struct SpriteFieldDefinition {
 struct SpriteDefinition {
     std::uint32_t object_id{};
     std::optional<std::uint32_t> hash;
-    std::string name, category{"Other"}, color{"#eeB24b"}, notes;
-    bool known{}, complete{};
-    std::vector<std::string> source_files;
+    std::string name, category{"Other"}, notes;
+    // The actor's bounds functions evaluated once at zero settings, kept as an
+    // offset from the actor origin so hit testing and thumbnails have a cheap
+    // default without calling into Lua.
     SpriteBounds grab_bounds, render_bounds;
-    SpriteShape shape{SpriteShape::Diamond};
     std::vector<SpriteFieldDefinition> fields;
 };
 

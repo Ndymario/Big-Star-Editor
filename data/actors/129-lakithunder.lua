@@ -1,19 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 129.
+
+local images = {}
+
+local function init(ctx)
+    images.Lakithunder = ctx.loadImage("images/Lakithunder.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x + 125
+    y = y - 15
+    width = 37
+    height = 45
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Lakithunder, RenderX + 125, RenderY - 15) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 129,
     name = "Lakithunder",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Swoops down on the player, and tries to strike the player with Lightning as well. Can only be spawned with a Castle Boss Controller.",
-    grabBounds = { x = 125, y = -15, width = 37, height = 45 },
-    renderBounds = { x = 125, y = -15, width = 37, height = 45 },
-    sourceFiles = {
-        "/enemy/thunder_jugem.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -22,5 +36,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("thunder_jugem.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

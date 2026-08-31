@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 152.
+
+local images = {}
+
+local function init(ctx)
+    images.Hand = ctx.loadImage("images/Hand.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x + 8
+    width = 16
+    height = 20
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Hand, RenderX + 8, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 152,
     name = "Phantom Hand (Pointing hand)",
     category = "Enemies - Ghost House",
-    color = "#7b5aa6",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Points at connected Winged ? Blocks.\nAlso points to Unused Invisible Podoboos without connections.",
-    grabBounds = { x = 8, y = 0, width = 16, height = 20 },
-    renderBounds = { x = 8, y = 0, width = 16, height = 20 },
-    sourceFiles = {
-        "/enemy/finger.nsbmd",
-    },
     fields = {
         {
             key = "phantom_hand_id",
@@ -22,5 +35,8 @@ return {
             bitWidth = 4,
         },
     },
-    model = readModel("finger.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

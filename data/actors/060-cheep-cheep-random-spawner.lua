@@ -1,19 +1,23 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 60, which shares case 28's drawing but never the green variant.
+
+local plain
+local function init(ctx)
+    plain = ctx.loadImage("images/CheepCheep.png")
+end
+
+local function grabBounds(actor)
+    return { x = actor.pixelX - 1, y = actor.pixelY + 4, width = 19, height = 18 }
+end
+
+local function render(actor, renderer)
+    return renderer:draw(plain, { x = actor.pixelX - 1, y = actor.pixelY + 4, width = 19, height = 18 })
+end
+
 return {
-    schema = 1,
     objectId = 60,
     name = "Cheep Cheep random spawner",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Let spawn random generated Cheep Cheep in the selected Zone.",
-    grabBounds = { x = -1, y = 4, width = 19, height = 18 },
-    renderBounds = { x = -1, y = 4, width = 19, height = 18 },
-    sourceFiles = {
-        "/enemy/pukupuku.nsbmd",
-    },
     fields = {
         {
             key = "zone_id",
@@ -38,5 +42,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("pukupuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

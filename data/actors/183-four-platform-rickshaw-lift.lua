@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 183.
+
+local images = {}
+
+local function init(ctx)
+    images.Spinning4PointedPlatform = ctx.loadImage("images/Spinning4PointedPlatform.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 38
+    y = y - 29
+    width = 91
+    height = 75
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Spinning4PointedPlatform, RenderX - 38, RenderY - 29) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 183,
     name = "Four platform rickshaw lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -38, y = -29, width = 91, height = 75 },
-    renderBounds = { x = -38, y = -29, width = 91, height = 75 },
-    sourceFiles = {
-        "/enemy/kuruma4.nsbmd",
-        "/enemy/kuruma_lift.nsbtx",
-    },
     fields = {
         {
             key = "stick_on_line",
@@ -42,5 +55,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("kuruma4.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 239.
+
+local images = {}
+
+local function init(ctx)
+    images.MegaGoomba = ctx.loadImage("images/MegaGoomba.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    x = x + 73
+    y = y - 8
+    height = 19
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.MegaGoomba, RenderX + 73, RenderY - 8) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 239,
     name = "Mega Goomba",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "This is a boss used in World 4.",
-    grabBounds = { x = 73, y = -8, width = 16, height = 19 },
-    renderBounds = { x = 73, y = -8, width = 16, height = 19 },
-    sourceFiles = {
-        "/enemy/kuribo.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -22,5 +35,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("kuribo.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

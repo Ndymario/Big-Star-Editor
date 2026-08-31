@@ -152,6 +152,7 @@ private:
     void commitResize(const ResizeEdges& edges);
     void deleteSelection();
     void rebuildSpriteDefinitions();
+    void rebuildActorThumbnails();
 
     std::optional<Scene> scene_;
     QString message_;

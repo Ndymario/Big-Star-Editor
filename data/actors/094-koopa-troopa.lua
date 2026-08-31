@@ -1,19 +1,52 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 94.
+
+local images = {}
+
+local function init(ctx)
+    images.BlueKoopaShell = ctx.loadImage("images/BlueKoopaShell.png")
+    images.GreenKoopaShell = ctx.loadImage("images/GreenKoopaShell.png")
+    images.KoopaBlue = ctx.loadImage("images/KoopaBlue.png")
+    images.KoopaGreen = ctx.loadImage("images/KoopaGreen.png")
+    images.KoopaRed = ctx.loadImage("images/KoopaRed.png")
+    images.RedKoopaShell = ctx.loadImage("images/RedKoopaShell.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    if not actor.fields.empty_shell then
+        y = y - 13
+        height = 29
+    end
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    local inShell = actor.fields.empty_shell
+    if actor.fields.color == 1 then
+        img = (inShell and images.RedKoopaShell or images.KoopaRed)
+    elseif actor.fields.color == 2 or actor.fields.color == 3 then
+        img = (inShell and images.BlueKoopaShell or images.KoopaBlue)
+    else
+        img = (inShell and images.GreenKoopaShell or images.KoopaGreen)
+    end
+    if inShell then
+        drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    else
+        drawn = gfx.blit(renderer, img, RenderX, RenderY - 13) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 94,
     name = "Koopa Troopa",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = false,
-    grabBounds = { x = 0, y = -13, width = 16, height = 29 },
-    renderBounds = { x = 0, y = -13, width = 16, height = 29 },
-    sourceFiles = {
-        "/obj/I_nokonoko256_ncg.bin",
-        "/obj/I_enemy_ncl.bin",
-    },
     fields = {
         {
             key = "color",
@@ -45,6 +78,8 @@ return {
             checkboxValue = 1,
         },
     },
-    graphics = readGraphics("I_nokonoko256_ncg.bin"),
-    palette = readPalette("I_enemy_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

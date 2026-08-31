@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 277,
     name = "Scroll and Mario stop sideways",
     category = "Camera controllers",
-    color = "#3f9ca8",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Remember, the DS screen is 16 tiles wide. Make sure you allow for the full width of the screen or you camera will scroll shaky. Using X coordinates, numerically these should be 15 tiles apart.\n\nThis sprite, along with 198/199, doesn't always work. Try moving 276s up or down if they don't work.\n\nSprite must be placed at the bottom of the limit. Height is counted from the sprite position up.\n\nWhen using retro scroll horizontal, you have to select \"stop from scrolling left\".\n\nThese can be passed through using a connected pipe.\n",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "retro_scroll",
@@ -42,4 +40,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

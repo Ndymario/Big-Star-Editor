@@ -1,19 +1,67 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 235.
+
+local images = {}
+
+local function init(ctx)
+    images.Flamethrower = ctx.loadImage("images/Flamethrower.png")
+    images.SmallFlamethrower = ctx.loadImage("images/SmallFlamethrower.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    local w = 64
+    if actor.objectId == 235 then
+        w = 128
+    end
+    if d[5] % 0x40 == 0 then
+        width = w
+        height = 16
+    elseif d[5] % 0x40 == 1 then
+        x = x - (w - 16)
+        width = w
+        height = 16
+    elseif d[5] % 0x40 == 2 then
+        y = y - (w - 16)
+        width = 16
+        height = w
+    elseif d[5] % 0x40 == 3 then
+        width = 16
+        height = w
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    if actor.objectId == 234 then
+        img = images.SmallFlamethrower
+    else
+        img = images.Flamethrower
+    end
+    if d[5] % 0x40 == 0 then
+        drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    elseif d[5] % 0x40 == 1 then
+        img = gfx.transform(img, 180, false, false)
+        drawn = gfx.blit(renderer, img, RenderX - (gfx.width(img) - 16), RenderY) or drawn
+    elseif d[5] % 0x40 == 2 then
+        img = gfx.transform(img, 270, false, false)
+        drawn = gfx.blit(renderer, img, RenderX, RenderY - (gfx.height(img) - 16)) or drawn
+    elseif d[5] % 0x40 == 3 then
+        img = gfx.transform(img, 90, false, false)
+        drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 235,
     name = "Burner",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 128, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 128, height = 16 },
-    sourceFiles = {
-        "/enemy/burner1x6.nsbmd",
-        "/enemy/fire_cannon.nsbmd",
-    },
     fields = {
         {
             key = "direction",
@@ -28,5 +76,8 @@ return {
             },
         },
     },
-    model = readModel("burner1x6.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,18 +1,23 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 25.
+
+local tube
+
+local function init(ctx)
+    tube = ctx.loadImage("images/PiranhaplantTube.png")
+end
+
+local function grabBounds(actor)
+    return { x = actor.pixelX + 32, y = actor.pixelY, width = 28, height = 32 }
+end
+
+local function render(actor, renderer)
+    return renderer:draw(tube, { x = actor.pixelX + 30, y = actor.pixelY + 2, width = 32, height = 28, rotation = 90 })
+end
+
 return {
-    schema = 1,
     objectId = 25,
     name = "Pipe Piranha Plant (facing right)",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 32, y = 0, width = 28, height = 32 },
-    renderBounds = { x = 32, y = 0, width = 28, height = 32 },
-    sourceFiles = {
-        "/enemy/v_pakkun.nsbmd",
-    },
     fields = {
         {
             key = "number_of_fireballs",
@@ -29,5 +34,8 @@ return {
             },
         },
     },
-    model = readModel("v_pakkun.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

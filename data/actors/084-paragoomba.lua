@@ -1,19 +1,34 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 84.
+
+local images = {}
+
+local function init(ctx)
+    images.Paragoomba = ctx.loadImage("images/Paragoomba.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 12
+    width = 24
+    height = 28
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Paragoomba, RenderX, RenderY - 12) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 84,
     name = "Paragoomba",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Unused behaviours:\n- Has ceiling detection [may be used]\n- Has water interaction [may be used, or Goomba leftover]",
-    grabBounds = { x = 0, y = -12, width = 24, height = 28 },
-    renderBounds = { x = 0, y = -12, width = 24, height = 28 },
-    sourceFiles = {
-        "/obj/I_kuribo256_ncg.bin",
-    },
-    graphics = readGraphics("I_kuribo256_ncg.bin"),
-    palette = readPalette("I_enemy_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

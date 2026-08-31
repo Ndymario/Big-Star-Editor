@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 47.
+
+local images = {}
+
+local function init(ctx)
+    images.FlipGateSmall = ctx.loadImage("images/FlipGateSmall.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 32
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.FlipGateSmall, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 47,
     name = "Flip fence (duplicate sprite)",
     category = "Useless sprites",
-    color = "#777b82",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 32, height = 32 },
-    renderBounds = { x = 0, y = 0, width = 32, height = 32 },
-    sourceFiles = {
-        "/enemy/I_waku_s.nsbmd (SOMETHING_frame_small)",
-        "/enemy/I_kurowaku.nsbmd",
-    },
-    model = readModel("I_waku_s.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

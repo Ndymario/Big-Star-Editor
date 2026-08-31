@@ -1,19 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 296,
     name = "Fire FG effect 3",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Has the same data as sprites 311, 313, 314, 316, 317, 318, 319, 321 and 322.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/polygon_unit/evf_spark1_c.nsbtx",
-    },
     fields = {
         {
             key = "swaying_start_position",
@@ -76,5 +71,6 @@ return {
             valueOffset = 1,
         },
     },
-    model = readModel("evf_spark1_c.nsbtx"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

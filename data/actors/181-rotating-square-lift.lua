@@ -1,18 +1,49 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 181.
+
+local images = {}
+
+local function init(ctx)
+    images.Clockwise = ctx.loadImage("images/Clockwise.png")
+    images.SpinningSquarePlatform = ctx.loadImage("images/SpinningSquarePlatform.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 16
+    y = y - 16
+    if (d[2] & 0x10) // 0x10 == 1 then
+        y = y + 8
+    end
+    width = 48
+    height = 48
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderX2, RenderY2 = RenderX, RenderY
+    local img
+    local drawn = false
+    if (d[2] & 0x10) // 0x10 == 1 then
+        RenderY = RenderY + 8
+        RenderY2 = RenderY2 + 8
+    end
+    drawn = gfx.blit(renderer, images.SpinningSquarePlatform, RenderX - 16, RenderY - 16) or drawn
+    img = images.Clockwise
+    if d[3] % 0x2 == 0 then
+        img = gfx.transform(img, 0, true, false)
+    end
+    drawn = gfx.blit(renderer, img, RenderX2 - 8, RenderY2 - 8, 32, 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 181,
     name = "Rotating square lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -16, y = -16, width = 48, height = 48 },
-    renderBounds = { x = -16, y = -16, width = 48, height = 48 },
-    sourceFiles = {
-        "/enemy/square_lift.nsbmd",
-    },
     fields = {
         {
             key = "rotation",
@@ -71,5 +102,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("square_lift.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

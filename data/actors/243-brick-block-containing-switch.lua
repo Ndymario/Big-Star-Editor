@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 243,
     name = "Brick Block containing ? Switch",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "==Boss notes==\n* When sprite set 16 is set to any of the boss sets, the switch timer plays over the BG music, like in the Mega Goomba boss battle and with Red Rings. Though P Switches and ! Switches are silent with a boss sound set.\n* If the ? switch is absent in a Mega Goomba boss battle, the game freezes upon taking the key on a real NDS (not on DeSmuME though). Results are the same every time, if no ? switch is present, the game will freeze upon generation of the key (not even a brick block with ? switch will work). If there are more than 1 ? switch, the game will check for the leftmost switch first, then the bottommost if there are 2 or more switches on the same X coordinate, the one to fulfill this condition is the one to pop. [Source: Sharks]",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id",
@@ -96,4 +94,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

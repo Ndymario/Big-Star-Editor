@@ -1,18 +1,31 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 149.
+
+local images = {}
+
+local function init(ctx)
+    images.Kabomb = ctx.loadImage("images/Kabomb.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 3
+    width = 16
+    height = 19
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Kabomb, RenderX, RenderY - 3) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 149,
     name = "Kab-omb",
     category = "Enemies - Fire",
-    color = "#c8563f",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = -3, width = 16, height = 19 },
-    renderBounds = { x = 0, y = -3, width = 16, height = 19 },
-    sourceFiles = {
-        "/enemy/hanabi.nsbmd",
-    },
     fields = {
         {
             key = "chases_mario",
@@ -23,5 +36,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("hanabi.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

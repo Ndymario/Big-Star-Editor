@@ -1,21 +1,38 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 260.
+
+local images = {}
+
+local function init(ctx)
+    images.FlyingQBlock = ctx.loadImage("images/FlyingQBlock.png")
+    images.FlyingQBlockOverrides = ctx.loadImage("images/FlyingQBlockOverrides.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 9
+    y = y - 13
+    width = 38
+    height = 28
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local width, height = 0, 0
+    local drawn = false
+    drawn = gfx.blit(renderer, images.FlyingQBlock, RenderX - 9, RenderY - 13) or drawn
+    if actor.fields.item < 8 then
+        drawn = gfx.blit(renderer, images.FlyingQBlockOverrides, RenderX, RenderY, nil, nil, { x = (actor.fields.item) * 16, y = 0, width = 16, height = 16 }) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 260,
     name = "Flying ? Block",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = -9, y = -13, width = 38, height = 28 },
-    renderBounds = { x = -9, y = -13, width = 38, height = 28 },
-    sourceFiles = {
-        "enemy/pata_block.nsbmd",
-        "this nsbmd contains red and gold flying blocks + wings",
-        "sprites:",
-        "117 and 290",
-    },
     fields = {
         {
             key = "item",
@@ -106,5 +123,8 @@ return {
             notes = "See nybble 7 of Actor 21",
         },
     },
-    model = readModel("pata_block.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

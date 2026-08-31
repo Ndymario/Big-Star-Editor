@@ -1,19 +1,41 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 186.
+
+local images = {}
+
+local function init(ctx)
+    images.Clockwise = ctx.loadImage("images/Clockwise.png")
+    images.GiantSpinningPlatform = ctx.loadImage("images/GiantSpinningPlatform.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 144
+    y = y - 104
+    width = 288
+    height = 208
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderX2, RenderY2 = RenderX, RenderY
+    local img
+    local drawn = false
+    drawn = gfx.blit(renderer, images.GiantSpinningPlatform, RenderX - 144, RenderY - 104) or drawn
+    img = images.Clockwise
+    if d[3] % 0x2 == 0 then
+        img = gfx.transform(img, 0, true, false)
+    end
+    drawn = gfx.blit(renderer, img, RenderX2 - 16, RenderY2 - 16, 32, 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 186,
     name = "Big four platform rickshaw lift (rotates on spot by self)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -144, y = -104, width = 288, height = 208 },
-    renderBounds = { x = -144, y = -104, width = 288, height = 208 },
-    sourceFiles = {
-        "/enemy/A_jiku.nsbmd",
-        "/enemy/wheel_lift.nsbtx",
-    },
     fields = {
         {
             key = "rotation",
@@ -48,5 +70,8 @@ return {
             notes = "Unused.",
         },
     },
-    model = readModel("A_jiku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

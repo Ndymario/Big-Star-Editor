@@ -1,19 +1,44 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 67.
+
+local images = {}
+
+local function init(ctx)
+    images.StarCoin = ctx.loadImage("images/StarCoin.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if actor.fields.shift_block_right then
+        x = x + 8
+    end
+    if actor.fields.shift_block_down then
+        y = y + 8
+    end
+    width = 32
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if actor.fields.shift_block_right then
+        RenderX = RenderX + 8
+    end
+    if actor.fields.shift_block_down then
+        RenderY = RenderY + 8
+    end
+    drawn = gfx.blit(renderer, images.StarCoin, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 67,
     name = "Star Coin",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 32, height = 32 },
-    renderBounds = { x = 0, y = 0, width = 32, height = 32 },
-    sourceFiles = {
-        "/enemy/coin.nsbmd (uncollected)",
-        "/enemy/blie_coin.nsbmd (collected)",
-    },
     fields = {
         {
             key = "target_id",
@@ -74,5 +99,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("coin.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

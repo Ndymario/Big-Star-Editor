@@ -1,23 +1,31 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 41.
+
+local images = {}
+
+local function init(ctx)
+    images.Boo = ctx.loadImage("images/Boo.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 24
+    height = 20
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Boo, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 41,
     name = "Boo",
     category = "Enemies - Ghost House",
-    color = "#7b5aa6",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "This sprite will freeze and remain frozen indefinitely if placed in a view with music that includes a \"bahp\" note, such as music IDs 1A and 63.",
-    grabBounds = { x = 0, y = 0, width = 24, height = 20 },
-    renderBounds = { x = 0, y = 0, width = 24, height = 20 },
-    sourceFiles = {
-        "/obj/I_teresa256_ncg.bin",
-        "/obj/I_enemy_B_ncl.bin",
-        "/obj/I_enemy_W_ncl.bin",
-        "/obj/I_enemy_R_ncl.bin",
-        "/obj/I_enemy_ncl.bin",
-    },
     fields = {
         {
             key = "faster",
@@ -28,6 +36,8 @@ return {
             checkboxValue = 1,
         },
     },
-    graphics = readGraphics("I_teresa256_ncg.bin"),
-    palette = readPalette("I_enemy_B_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

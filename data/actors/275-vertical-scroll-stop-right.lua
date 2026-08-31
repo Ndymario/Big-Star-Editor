@@ -1,15 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 275,
     name = "Vertical scroll stop right",
     category = "Camera controllers",
-    color = "#3f9ca8",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "type",
@@ -44,4 +42,6 @@ return {
             bitWidth = 4,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

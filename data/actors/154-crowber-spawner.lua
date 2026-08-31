@@ -1,15 +1,30 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 154.
+
+local images = {}
+
+local function init(ctx)
+    images.Crow = ctx.loadImage("images/Crow.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 22
+    height = 14
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Crow, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 154,
     name = "Crowber spawner",
     category = "Enemies - Ghost House",
-    color = "#7b5aa6",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 22, height = 14 },
-    renderBounds = { x = 0, y = 0, width = 22, height = 14 },
     fields = {
         {
             key = "zone_id",
@@ -19,4 +34,8 @@ return {
             notes = "Crobers will spawn when Mario is inside this zone.",
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

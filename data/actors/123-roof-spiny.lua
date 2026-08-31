@@ -1,20 +1,22 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 123.
+
+local images = {}
+
+local function init(ctx)
+    images.RoofSpiny = ctx.loadImage("images/RoofSpiny.png")
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.RoofSpiny, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 123,
     name = "Roof Spiny",
     category = "Enemies - Underground",
-    color = "#686d76",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/enemy/paipo.nsbmd",
-        "/enemy/togezo.nsbmd",
-        "/enemy/togezo_shell.nsbmd",
-    },
     fields = {
         {
             key = "faster",
@@ -25,5 +27,6 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("paipo.nsbmd"),
+    init = init,
+    render = render,
 }

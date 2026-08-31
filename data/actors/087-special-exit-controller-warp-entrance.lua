@@ -1,16 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 87.
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 16 * (d[4] % 0x10 + 1)
+    height = 16 * (d[5] // 0x10 + 1)
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    local rect = grabBounds(actor)
+    rect.x, rect.y = rect.x + 1, rect.y + 1
+    drawn = renderer:strokeRect(gfx.colored(rect, "#000000")) or drawn
+    rect.x, rect.y = rect.x + (-1), rect.y + (-1)
+    drawn = renderer:strokeRect(gfx.colored(rect, "#00ff00")) or drawn
+    renderer:drawText("Warp", { x = RenderX + 1, y = RenderY + 1 })
+    renderer:drawText("Warp", { x = RenderX, y = RenderY })
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 87,
     name = "Special exit controller (warp entrance)",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "AKA:\nReggie! Name = Special Exit Controller\nNSMB2 internal actor name = NextGotoBlock\nThe actor will apparently delete itself after use and it will only re-spawn if you go to another area and back. Could be worked around by using multiple warps. Untested if event activation can undelete the actor.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "warp_mode",
@@ -80,4 +96,7 @@ return {
             checkboxValue = 1,
         },
     },
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

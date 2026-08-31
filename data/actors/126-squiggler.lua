@@ -1,22 +1,46 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 126.
+
+local images = {}
+
+local function init(ctx)
+    images.PipeCaterpiller = ctx.loadImage("images/PipeCaterpiller.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if actor.fields.pipe_exit_facing == 1 then
+        y = y + 16
+    else
+        y = y - 15
+    end
+    x = x + 10
+    width = 13
+    height = 15
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    img = images.PipeCaterpiller
+    if actor.fields.pipe_exit_facing == 1 then
+        img = gfx.transform(img, 180, false, false)
+        drawn = gfx.blit(renderer, img, RenderX + 10, RenderY + 16) or drawn
+    else
+        drawn = gfx.blit(renderer, img, RenderX + 10, RenderY - 15) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 126,
     name = "Squiggler",
     category = "Enemies - Underground",
-    color = "#686d76",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A caterpillar that is smaller than the Wiggler. Crawls slowly on all sides of  a surface.",
-    grabBounds = { x = 10, y = -15, width = 13, height = 15 },
-    renderBounds = { x = 10, y = -15, width = 13, height = 15 },
-    sourceFiles = {
-        "/enemy/I_wakaba.nsbmd",
-        "/enemy/wakaba.nsbmd",
-        "/enemy/wakaba_yoko.nsbmd",
-        "/sound_data.sdat/SeqArc/SAR_ENEMY_02_SE_EMY_WAKABA_APP",
-    },
     fields = {
         {
             key = "pipe_exit_facing",
@@ -32,5 +56,8 @@ return {
             },
         },
     },
-    model = readModel("I_wakaba.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

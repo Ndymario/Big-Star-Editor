@@ -280,11 +280,4 @@ core::Result<formats::RgbaImage> load_background_graphics(const BackgroundResour
     return formats::render_screen_map(screen.value(), width, tiles.value(), palette.value());
 }
 
-core::Result<formats::RgbaImage> load_actor_graphics(const ActorResourceFiles& files) {
-    if(!files.model.empty()){
-        auto bytes=read_resource(files.model);if(!bytes)return bytes.error();auto tex0=formats::parse_tex0(bytes.value());if(!tex0)return tex0.error();if(tex0.value().textures.empty()||tex0.value().palettes.empty())return core::make_error(core::ErrorCode::NotFound,"actor model has no texture and palette");auto image=formats::render_tex0_texture(tex0.value().textures.front(),tex0.value().palettes.front());if(!image)return image.error();return trim_image(image.value());
-    }
-    if(files.graphics.empty()||files.palette.empty())return core::make_error(core::ErrorCode::NotFound,"actor has no supported 2D or 3D graphics");auto characters=read_resource(files.graphics);auto palette_data=read_resource(files.palette);if(!characters)return characters.error();if(!palette_data)return palette_data.error();auto palette=formats::decode_bgr555_palette(palette_data.value(),false);if(!palette)return palette.error();formats::Ncer cells;cells.mapping_mode=0;cells.cells.push_back({0,{{0x2000,0x8000,0}},std::nullopt});auto image=formats::render_ncer_cell(cells,0,characters.value(),palette.value());if(!image)return image.error();return trim_image(image.value());
-}
-
 } // namespace nsmb::project

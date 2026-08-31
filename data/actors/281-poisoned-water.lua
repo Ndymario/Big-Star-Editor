@@ -1,19 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 281,
     name = "Poisoned Water",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "See Water",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/enemy/doku_texanim1.nsbtx",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -54,5 +49,6 @@ return {
             notes = "Modulo 128. If lower than 128 then the poisoned water will rise, if greater or equal than 128 the poisoned water will lower.",
         },
     },
-    model = readModel("doku_texanim1.nsbtx"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

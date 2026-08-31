@@ -1,18 +1,62 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 65.
+
+local images = {}
+
+local function init(ctx)
+    images.Clockwise = ctx.loadImage("images/Clockwise.png")
+    images.FireBarBall = ctx.loadImage("images/FireBarBall.png")
+    images.FireBarMiddle = ctx.loadImage("images/FireBarMiddle.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = (actor.fields.radius) * 10
+    y = y - width
+    if actor.fields.enable_second_bar then
+        x = x - width
+        width = width * 2
+    end
+    width = width + 12
+    height = width
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderX2, RenderY2 = RenderX, RenderY
+    local img
+    local drawn = false
+    local clockFireBarX = RenderX2 - 8
+    local clockFireBarY = RenderY2 - 8
+    RenderY2 = (actor.fields.radius) * 10
+    if actor.fields.enable_second_bar then
+        RenderX = RenderX - RenderY2
+        RenderY = RenderY + RenderY2
+    end
+    while not (RenderX == RenderX2 + RenderY2 + 10) do
+        if RenderX == RenderX2 then
+            drawn = gfx.blit(renderer, images.FireBarMiddle, RenderX + 4, RenderY + 4) or drawn
+        else
+            drawn = gfx.blit(renderer, images.FireBarBall, RenderX, RenderY) or drawn
+        end
+        RenderX = RenderX + 10
+        RenderY = RenderY - 10
+    end
+    img = images.Clockwise
+    if (d[4] & 0x10) // 0x10 == 0 then
+        img = gfx.transform(img, 0, true, false)
+    end
+    drawn = gfx.blit(renderer, img, clockFireBarX, clockFireBarY, 32, 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 65,
     name = "Fire Bar",
     category = "Enemies - Fire",
-    color = "#c8563f",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 12, height = 12 },
-    renderBounds = { x = 0, y = 0, width = 12, height = 12 },
-    sourceFiles = {
-        "/enemy/firebar1.nsbmd",
-    },
     fields = {
         {
             key = "rotation",
@@ -46,5 +90,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("firebar1.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,23 +1,56 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 242.
+
+local images = {}
+
+local function init(ctx)
+    images.PSwitch = ctx.loadImage("images/PSwitch.png")
+    images.QSwitch = ctx.loadImage("images/QSwitch.png")
+    images.RedSwitch = ctx.loadImage("images/RedSwitch.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    if not actor.fields.upside_down then
+        y = y - 2
+    end
+    if actor.fields.shift_block_right then
+        x = x + 8
+    end
+    height = 18
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    img = images.QSwitch
+    if actor.objectId == 244 then
+        img = images.PSwitch
+    end
+    if actor.objectId == 246 then
+        img = images.RedSwitch
+    end
+    if actor.fields.upside_down then
+        img = gfx.transform(img, 180, false, false)
+    else
+        RenderY = RenderY - 2
+    end
+    if actor.fields.shift_block_right then
+        RenderX = RenderX + 8
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 242,
     name = "? Switch",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = false,
     notes = "==Boss notes==\n* When sprite set 16 is set to any of the boss sets, the switch timer plays over the BG music, like in the Mega Goomba boss battle and with Red Rings. Though P Switches and ! Switches are silent with a boss sound set.\n* If the ? switch is absent in a Mega Goomba boss battle, the game freezes upon taking the key on a real NDS (not on DeSmuME though). Results are the same every time, if no ? switch is present, the game will freeze upon generation of the key (not even a brick block with ? switch will work). If there are more than 1 ? switch, the game will check for the leftmost switch first, then the bottommost if there are 2 or more switches on the same X coordinate, the one to fulfill this condition is the one to pop. [Source: Sharks]",
-    grabBounds = { x = 0, y = -2, width = 16, height = 18 },
-    renderBounds = { x = 0, y = -2, width = 16, height = 18 },
-    sourceFiles = {
-        "/obj/I_switch_ncg.bin",
-        "/obj/I_enemy_ncl.bin",
-        "/obj/I_enemy_B_ncl.bin",
-        "/obj/I_enemy_W_ncl.bin",
-        "/obj/I_enemy_R_ncl.bin",
-    },
     fields = {
         {
             key = "triggering_event_id",
@@ -106,6 +139,8 @@ return {
             checkboxValue = 1,
         },
     },
-    graphics = readGraphics("I_switch_ncg.bin"),
-    palette = readPalette("I_enemy_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

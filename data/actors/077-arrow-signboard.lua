@@ -1,19 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX - 8, y = actor.pixelY - 16, width = 32, height = 32 }
+end
+
+
 return {
-    schema = 1,
     objectId = 77,
     name = "Arrow signboard",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -8, y = -16, width = 32, height = 32 },
-    renderBounds = { x = -8, y = -16, width = 32, height = 32 },
-    sourceFiles = {
-        "/enemy/yajirusi_l.nsbmd",
-        "/enemy/yajirusi_r.nsbmd",
-    },
     fields = {
         {
             key = "direction",
@@ -58,5 +52,6 @@ return {
             },
         },
     },
-    model = readModel("yajirusi_l.nsbmd"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,19 +1,35 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 45.
+
+local images = {}
+
+local function init(ctx)
+    images.ChainChomp = ctx.loadImage("images/ChainChomp.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 28
+    height = 28
+    x = x - 29
+    width = 44
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.ChainChomp, RenderX - 29, RenderY - 28) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 45,
     name = "Chain Chomp (unused sprite)",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Spawned by Chain Chomp/Log. When spawned via a sprite it can be defeated by ground-pounding its head for some reason.",
-    grabBounds = { x = -29, y = -28, width = 44, height = 28 },
-    renderBounds = { x = -29, y = -28, width = 44, height = 28 },
-    sourceFiles = {
-        "/enemy/wanwan.nsbmd",
-        "/enemy/wanwan_chain.nsbmd",
-    },
-    model = readModel("wanwan.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

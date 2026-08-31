@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 119.
+
+local images = {}
+
+local function init(ctx)
+    images.PeteyPiranha = ctx.loadImage("images/PeteyPiranha.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 16
+    y = y - 56
+    width = 108
+    height = 75
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.PeteyPiranha, RenderX - 16, RenderY - 56) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 119,
     name = "Petey Piranha",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -16, y = -56, width = 108, height = 75 },
-    renderBounds = { x = -16, y = -56, width = 108, height = 75 },
-    sourceFiles = {
-        "/enemy/boss_packun.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -27,5 +41,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("boss_packun.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

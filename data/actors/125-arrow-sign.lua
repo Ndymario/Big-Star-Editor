@@ -1,18 +1,48 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 125.
+
+local images = {}
+
+local function init(ctx)
+    images.Arrow = ctx.loadImage("images/Arrow.png")
+    images.ArrowRotate45 = ctx.loadImage("images/ArrowRotate45.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 32
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    local direction = d[2] % 8
+    if direction == 0 or direction == 2 or direction == 4 or direction == 6 then
+        img = images.Arrow
+    else
+        img = images.ArrowRotate45
+    end
+    if direction == 2 or direction == 3 then
+        img = gfx.transform(img, 90, false, false)
+    end
+    if direction == 4 or direction == 5 then
+        img = gfx.transform(img, 180, false, false)
+    end
+    if direction == 6 or direction == 7 then
+        img = gfx.transform(img, 270, false, false)
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY, 32, 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 125,
     name = "Arrow sign",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 32, height = 32 },
-    renderBounds = { x = 0, y = 0, width = 32, height = 32 },
-    sourceFiles = {
-        "/obj/I_dokan_yajirushi_ncg.bin",
-    },
     fields = {
         {
             key = "z_order",
@@ -44,4 +74,8 @@ return {
             },
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

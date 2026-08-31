@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 206,
     name = "Tile Creator/Destroyer (Tile God)",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "To change what this can spawn, swap tiles around in map16. Can be used to make very intresting things, like a Star Coin select screen.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id_1",
@@ -87,4 +85,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

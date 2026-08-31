@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 141,
     name = "Event Controller Zone",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "This event controller can activate a target event ID, if either a player touches a predefined location and/or specified enemies are defated. There are many additional settings for this controller that can tweak its behaviour, for example requiring Mario to have a specific power-up status, or requiring him to be inside a location instead of just touching it. Setting up the controller to deactivate the event ID instead of activating it, will also swap the effect of the controller, requiring Mario to leave a predefined location or to clear a predefined location from all enemies to trigger the event.  Note that unlike NSMBW, only enemy \"life\" status is watched, not their position. The zone is used to select sprites placed in the editor that should be watched.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "player_id",
@@ -98,4 +96,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

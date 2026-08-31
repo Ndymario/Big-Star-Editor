@@ -1,21 +1,38 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 113.
+
+local images = {}
+
+local function init(ctx)
+    images.BowserJr = ctx.loadImage("images/BowserJr.png")
+    images.BowserJrMasked = ctx.loadImage("images/BowserJrMasked.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 25
+    width = 32
+    height = 41
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if (d[5] & 0xF0) == 0 or (d[5] & 0xF0) == 0x30 then
+        drawn = gfx.blit(renderer, images.BowserJrMasked, RenderX, RenderY - 25) or drawn
+    else
+        drawn = gfx.blit(renderer, images.BowserJr, RenderX, RenderY - 25) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 113,
     name = "Bowser Jr.",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "Values 3 and 4 are not used at all.\nValue 5 is used internally by the game in W8 Final Castle area 3.\nValue 7 is used in W8 Tower 1 area 2 (only in the European, Korean and Chinese roms).\n\nTest the unknowns :P I know for a fact that there is something that determines if Bowser Jr. will have collision to certain sprites like the drawbridge.\n\nHas weird interactions between values.",
-    grabBounds = { x = 0, y = -25, width = 32, height = 41 },
-    renderBounds = { x = 0, y = -25, width = 32, height = 41 },
-    sourceFiles = {
-        "Model/enemy/koopa_jr.nsbmd",
-        "Visibility Animation/enemy/koopa_jr.nsbva",
-        "Model Animation/enemy/koopajr.nsbca",
-    },
     fields = {
         {
             key = "fireball_immunity",
@@ -80,5 +97,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("koopa_jr.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

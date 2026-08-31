@@ -1,19 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 278,
     name = "Water",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "There is no way to make water only appear in a zone; like in NSMBW, but you can emulate this with the unused water tiles (which has its limitations) or by quickly rising the water when you enter an area and lowering it when you exit it (with the event controllers).",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/enemy/suimen_texanim1.nsbtx",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -63,5 +58,6 @@ return {
             notes = "Modulo 128. If lower than 128 then the water will rise, if greater or equal than 128 the water will lower. Lowering water does not work properly. If you want lowering water, rise it with a enter-view event, then \"unrise\" it or get the code hack that fixes the problem.",
         },
     },
-    model = readModel("suimen_texanim1.nsbtx"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

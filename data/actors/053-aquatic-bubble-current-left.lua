@@ -1,18 +1,34 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 53.
+
+local images = {}
+
+local function init(ctx)
+    images.TubeBubbles = ctx.loadImage("images/TubeBubbles.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 90
+    width = 74
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local img
+    local drawn = false
+    img = images.TubeBubbles
+    img = gfx.transform(img, 270, false, false)
+    drawn = gfx.blit(renderer, img, RenderX - 90, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 53,
     name = "Aquatic bubble current (left)",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -90, y = 0, width = 74, height = 32 },
-    renderBounds = { x = -90, y = 0, width = 74, height = 32 },
-    sourceFiles = {
-        "/obj/l_awa_ncg.bin",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -27,4 +43,8 @@ return {
             bitWidth = 8,
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

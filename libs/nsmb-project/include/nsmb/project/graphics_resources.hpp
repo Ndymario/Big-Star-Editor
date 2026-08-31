@@ -39,7 +39,6 @@ struct ActorResourceFiles {
     std::uint32_t object_id{};
     std::optional<std::uint32_t> hash;
     std::string name;
-    std::filesystem::path graphics, palette, model;
 };
 
 struct LevelGraphicsResources {
@@ -65,9 +64,6 @@ void for_each_resource_path(LevelGraphicsResources& resources, F&& visit) {
     for (auto* background : {&resources.background, &resources.foreground}) {
         for (auto* path : {&background->graphics, &background->palette, &background->screen}) visit(*path);
     }
-    for (auto& actor : resources.actors) {
-        for (auto* path : {&actor.graphics, &actor.palette, &actor.model}) visit(*path);
-    }
     for (auto& path : resources.watched_files) visit(path);
 }
 
@@ -91,6 +87,4 @@ core::Result<formats::RgbaImage> render_tileset_object(const DecodedTileset& til
                                                        std::size_t width,
                                                        std::size_t height);
 core::Result<formats::RgbaImage> load_background_graphics(const BackgroundResourceFiles& files);
-core::Result<formats::RgbaImage> load_actor_graphics(const ActorResourceFiles& files);
-
 } // namespace nsmb::project

@@ -1,20 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 128.
+
+local images = {}
+
+local function init(ctx)
+    images.MummiPokey = ctx.loadImage("images/MummiPokey.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 256
+    y = y + 16
+    width = 512
+    height = 95
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.MummiPokey, RenderX - 256, RenderY + 16) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 128,
     name = "Mummipokey",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -256, y = 16, width = 512, height = 95 },
-    renderBounds = { x = -256, y = 16, width = 512, height = 95 },
-    sourceFiles = {
-        "/enemy/I_sandoboss_ishi.nsbmd",
-        "/enemy/I_sandobossjimen.nsbmd",
-        "/enemy/sand_worm.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -23,5 +35,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("I_sandoboss_ishi.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

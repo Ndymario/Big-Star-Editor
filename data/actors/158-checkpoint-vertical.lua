@@ -1,17 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 158.
+
+local images = {}
+
+local function init(ctx)
+    images.MidpointFlag = ctx.loadImage("images/MidpointFlag.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 22
+    height = 33
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.MidpointFlag, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 158,
     name = "Checkpoint - vertical",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 22, height = 33 },
-    renderBounds = { x = 0, y = 0, width = 22, height = 33 },
-    sourceFiles = {
-        "/enemy/s_flag.nsbmd",
-    },
-    model = readModel("s_flag.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

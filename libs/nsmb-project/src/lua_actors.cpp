@@ -4,14 +4,17 @@
 #include <cctype>
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 
 extern "C" {
 #include <lua.h>
 #include <lauxlib.h>
+#include <lualib.h>
 }
 
 #include "nsmb/core/file_io.hpp"
@@ -24,38 +27,39 @@ struct LuaMemory {
     std::size_t used{};
 };
 
-struct LuaBitmap {
-    std::size_t width{}, height{};
-    std::vector<std::uint8_t> pixels;
-};
-
 struct LuaPalette {
     std::vector<formats::Bgr555Color> colors;
 };
 
-enum class LuaResourceType { LegacyGraphics, LegacyPalette, LegacyModel, Bitmap, Palette, Texture };
+// Everything the renderer can draw is a finished RGBA image. Indexed graphics
+// are combined with their palette at load time, so painting never re-rasterizes.
+struct LuaDrawable {
+    std::shared_ptr<const formats::RgbaImage> image;
+};
+
+enum class LuaResourceType { Palette, Drawable };
 
 struct ResourceRef {
     LuaResourceType type{};
     std::filesystem::path path;
-    std::shared_ptr<const LuaBitmap> bitmap;
     std::shared_ptr<const LuaPalette> palette;
     std::shared_ptr<const formats::RgbaImage> image;
 };
 
 struct LuaAssetCache {
-    std::unordered_map<std::string, std::weak_ptr<const LuaBitmap>> bitmaps;
     std::unordered_map<std::string, std::weak_ptr<const LuaPalette>> palettes;
-    std::unordered_map<std::string, std::weak_ptr<const formats::RgbaImage>> textures;
+    std::unordered_map<std::string, std::weak_ptr<const formats::RgbaImage>> images;
 };
 
 struct LuaContext {
     const ActorResourceResolver* resolve{};
+    const ActorImageDecoder* decode_image{};
     LuaAssetCache* cache{};
+    std::filesystem::path layer;
     std::vector<ResourceRef> resources;
-    std::unordered_map<std::uint64_t, std::shared_ptr<const formats::RgbaImage>> rasterized;
     std::vector<LuaActorDrawCommand>* commands{};
     const LuaActorRenderInput* input{};
+    const std::vector<SpriteFieldDefinition>* fields{};
     std::size_t instructions{};
 };
 
@@ -63,7 +67,7 @@ struct LuaActorProgram {
     LuaMemory memory;
     LuaContext context;
     lua_State* state{};
-    int on_render{LUA_NOREF};
+    int render{LUA_NOREF};
     int grab_bounds{LUA_NOREF};
     int render_bounds{LUA_NOREF};
     ~LuaActorProgram() { if (state) lua_close(state); }
@@ -74,7 +78,10 @@ namespace {
 constexpr std::size_t max_script_bytes = 1024U * 1024U;
 constexpr std::size_t max_lua_bytes = 8U * 1024U * 1024U;
 constexpr std::size_t max_instructions = 200000U;
-constexpr std::size_t max_draw_commands = 256U;
+// Enough for a screen-wide run of 16px tiles. Past it a draw is dropped
+// rather than raised, so an actor given nonsense settings still draws the
+// part that fits instead of vanishing.
+constexpr std::size_t max_draw_commands = 4096U;
 
 void* allocate(void* opaque, void* pointer, std::size_t old_size, std::size_t new_size) {
     auto& memory = *static_cast<LuaMemory*>(opaque);
@@ -99,30 +106,6 @@ void instruction_hook(lua_State* state, lua_Debug*) {
     auto& value = context(state);
     value.instructions += 1000U;
     if (value.instructions > max_instructions) luaL_error(state, "actor script exceeded its instruction limit");
-}
-
-int read_resource(lua_State* state) {
-    auto& value = context(state);
-    const auto kind = static_cast<ActorResourceKind>(lua_tointeger(state, lua_upvalueindex(1)));
-    if (!value.resolve) return luaL_error(state, "actor resources must be loaded before onRender");
-    if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "resource filename must be a string");
-    const auto* name = luaL_checkstring(state, 1);
-    auto resolved = (*value.resolve)(kind, name);
-    if (!resolved && resolved.error().code != core::ErrorCode::NotFound)
-        return luaL_error(state, "%s", resolved.error().message.c_str());
-    auto* resource = static_cast<std::size_t*>(lua_newuserdatauv(state, sizeof(std::size_t), 0));
-    *resource = value.resources.size();
-    const auto type = kind == ActorResourceKind::Graphics ? LuaResourceType::LegacyGraphics
-                    : kind == ActorResourceKind::Palette ? LuaResourceType::LegacyPalette
-                                                         : LuaResourceType::LegacyModel;
-    value.resources.push_back({type, resolved ? std::move(resolved.value()) : std::filesystem::path{}});
-    return 1;
-}
-
-void expose_reader(lua_State* state, const char* name, ActorResourceKind kind) {
-    lua_pushinteger(state, static_cast<lua_Integer>(kind));
-    lua_pushcclosure(state, read_resource, 1);
-    lua_setglobal(state, name);
 }
 
 lua_Integer option_integer(lua_State* state,
@@ -187,11 +170,12 @@ std::shared_ptr<const T> cached(std::unordered_map<std::string, std::weak_ptr<co
     return found == cache.end() ? nullptr : found->second.lock();
 }
 
-core::Result<std::shared_ptr<const LuaBitmap>> decode_bitmap(const std::filesystem::path& path,
-                                                             int bpp,
-                                                             std::size_t width,
-                                                             std::size_t height,
-                                                             std::size_t tile_offset) {
+core::Result<std::shared_ptr<const formats::RgbaImage>> decode_bitmap(const std::filesystem::path& path,
+                                                                             int bpp,
+                                                                             std::size_t width,
+                                                                             std::size_t height,
+                                                                             std::size_t tile_offset,
+                                                                             const LuaPalette& palette) {
     auto bytes = actor_resource_bytes(path);
     if (!bytes) return bytes.error();
     std::span<const std::uint8_t> characters(bytes.value());
@@ -224,18 +208,27 @@ core::Result<std::shared_ptr<const LuaBitmap>> decode_bitmap(const std::filesyst
     if (!height) height = ((available + tiles_wide - 1U) / tiles_wide) * 8U;
     if (!height || height % 8U || height > 4096U || width > (4096U * 4096U) / height)
         return core::make_error(core::ErrorCode::InvalidArgument, "loadBitmap height is invalid");
-    auto result = std::make_shared<LuaBitmap>();
+    auto result = std::make_shared<formats::RgbaImage>();
     result->width = width;
     result->height = height;
-    result->pixels.assign(width * height, 0);
+    result->pixels.assign(width * height * 4U, 0);
     const auto wanted = tiles_wide * (height / 8U);
     for (std::size_t tile = 0; tile < std::min(wanted, available); ++tile) {
         const auto tile_x = tile % tiles_wide, tile_y = tile / tiles_wide;
-        for (std::size_t y = 0; y < 8U; ++y)
-            std::copy_n(tiles[tile_offset + tile].begin() + static_cast<std::ptrdiff_t>(y * 8U), 8,
-                        result->pixels.begin() + static_cast<std::ptrdiff_t>((tile_y * 8U + y) * width + tile_x * 8U));
+        for (std::size_t y = 0; y < 8U; ++y) {
+            for (std::size_t x = 0; x < 8U; ++x) {
+                const auto index = tiles[tile_offset + tile][y * 8U + x];
+                if (index >= palette.colors.size()) continue;
+                const auto& color = palette.colors[index];
+                const auto target = ((tile_y * 8U + y) * width + tile_x * 8U + x) * 4U;
+                result->pixels[target] = color.red;
+                result->pixels[target + 1U] = color.green;
+                result->pixels[target + 2U] = color.blue;
+                result->pixels[target + 3U] = color.transparent ? 0 : 255;
+            }
+        }
     }
-    return std::shared_ptr<const LuaBitmap>(std::move(result));
+    return std::shared_ptr<const formats::RgbaImage>(std::move(result));
 }
 
 core::Result<std::shared_ptr<const LuaPalette>> decode_palette(const std::filesystem::path& path,
@@ -279,31 +272,64 @@ core::Result<std::shared_ptr<const formats::RgbaImage>> decode_texture(const std
     return std::make_shared<const formats::RgbaImage>(std::move(image.value()));
 }
 
+// Ports need the pixel size of what they loaded: the stock renderer places a
+// rotated still by its rotated top-left, which only converts to a centred
+// destination rectangle once the script knows the source dimensions.
+int resource_index(lua_State* state) {
+    const auto handle = *static_cast<const std::size_t*>(lua_touserdata(state, 1));
+    const auto& resources = context(state).resources;
+    const auto* key = luaL_checkstring(state, 2);
+    const auto& image = handle < resources.size() ? resources[handle].image : nullptr;
+    if (std::string_view(key) == "width") lua_pushinteger(state, image ? static_cast<lua_Integer>(image->width) : 0);
+    else if (std::string_view(key) == "height") lua_pushinteger(state, image ? static_cast<lua_Integer>(image->height) : 0);
+    else return luaL_error(state, "a resource has no '%s'", key);
+    return 1;
+}
+
 void push_resource(lua_State* state, ResourceRef resource) {
     auto& value = context(state);
     auto* handle = static_cast<std::size_t*>(lua_newuserdatauv(state, sizeof(std::size_t), 0));
     *handle = value.resources.size();
     value.resources.push_back(std::move(resource));
+    lua_newtable(state);
+    lua_pushcfunction(state, resource_index);
+    lua_setfield(state, -2, "__index");
+    lua_setmetatable(state, -2);
 }
 
-int load_bitmap(lua_State* state) {
-    if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "loadBitmap filename must be a string");
-    luaL_checktype(state, 2, LUA_TTABLE);
-    const auto* name = lua_tostring(state, 1);
-    const auto bpp = static_cast<int>(option_integer(state, 2, "bpp", 0, 4, 8));
-    if (bpp != 4 && bpp != 8) return luaL_error(state, "loadBitmap bpp must be 4 or 8");
-    const auto width = static_cast<std::size_t>(option_integer(state, 2, "width", 0, 0, 4096));
-    const auto height = static_cast<std::size_t>(option_integer(state, 2, "height", 0, 0, 4096));
-    const auto offset = static_cast<std::size_t>(option_integer(state, 2, "tileOffset", 0, 0, 1 << 24));
-    auto path = resolve_resource(state, ActorResourceKind::Graphics, name);
-    ResourceRef resource{LuaResourceType::Bitmap, path.value_or(std::filesystem::path{})};
-    if (path) {
-        const auto key = path->string() + ":" + std::to_string(bpp) + ":" + std::to_string(width) + ":" +
-                         std::to_string(height) + ":" + std::to_string(offset);
-        resource.bitmap = cached(context(state).cache->bitmaps, key);
-        if (!resource.bitmap) {
-            auto decoded = decode_bitmap(*path, bpp, width, height, offset);
-            if (decoded) context(state).cache->bitmaps[key] = resource.bitmap = std::move(decoded.value());
+const ResourceRef* resource_handle(lua_State* state, int index, LuaResourceType expected, const char* what) {
+    if (!lua_isuserdata(state, index)) luaL_error(state, "%s", what);
+    const auto handle = *static_cast<const std::size_t*>(lua_touserdata(state, index));
+    const auto& resources = context(state).resources;
+    if (handle >= resources.size() || resources[handle].type != expected) luaL_error(state, "%s", what);
+    return &resources[handle];
+}
+
+// Stills live beside the actor script rather than in the ROM, so they resolve
+// against the layer directory and may not climb out of it.
+int load_image(lua_State* state) {
+    auto& value = context(state);
+    if (!value.cache) return luaL_error(state, "resources can only be loaded from init");
+    if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "loadImage filename must be a string");
+    const std::filesystem::path name = lua_tostring(state, 1);
+    if (name.is_absolute()) return luaL_error(state, "loadImage filename must be relative to the actor directory");
+    for (const auto& part : name)
+        if (part == "..") return luaL_error(state, "loadImage filename may not leave the actor directory");
+    ResourceRef resource{LuaResourceType::Drawable, {}};
+    const auto path = value.layer / name;
+    std::error_code ec;
+    if (std::filesystem::exists(path, ec) && !ec) {
+        resource.path = path;
+        const auto key = path.string();
+        resource.image = cached(value.cache->images, key);
+        if (!resource.image && value.decode_image && *value.decode_image) {
+            auto bytes = core::read_file(path);
+            if (bytes) {
+                auto decoded = (*value.decode_image)(bytes.value());
+                if (decoded)
+                    value.cache->images[key] = resource.image =
+                        std::make_shared<const formats::RgbaImage>(std::move(decoded.value()));
+            }
         }
     }
     push_resource(state, std::move(resource));
@@ -311,6 +337,7 @@ int load_bitmap(lua_State* state) {
 }
 
 int load_palette(lua_State* state) {
+    if (!context(state).cache) return luaL_error(state, "resources can only be loaded from init");
     if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "loadPalette filename must be a string");
     if (!lua_isnoneornil(state, 2)) luaL_checktype(state, 2, LUA_TTABLE);
     const auto table = lua_istable(state, 2) ? 2 : 0;
@@ -333,7 +360,42 @@ int load_palette(lua_State* state) {
     return 1;
 }
 
+// The palette is bound here, not at draw time: an actor that wants two palettes
+// of the same characters loads the bitmap twice, and painting stays a blit.
+int load_bitmap(lua_State* state) {
+    if (!context(state).cache) return luaL_error(state, "resources can only be loaded from init");
+    if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "loadBitmap filename must be a string");
+    luaL_checktype(state, 2, LUA_TTABLE);
+    const auto* name = lua_tostring(state, 1);
+    const auto bpp = static_cast<int>(option_integer(state, 2, "bpp", 0, 4, 8));
+    if (bpp != 4 && bpp != 8) return luaL_error(state, "loadBitmap bpp must be 4 or 8");
+    const auto width = static_cast<std::size_t>(option_integer(state, 2, "width", 0, 0, 4096));
+    const auto height = static_cast<std::size_t>(option_integer(state, 2, "height", 0, 0, 4096));
+    const auto offset = static_cast<std::size_t>(option_integer(state, 2, "tileOffset", 0, 0, 1 << 24));
+    lua_getfield(state, 2, "palette");
+    if (lua_isnil(state, -1)) return luaL_error(state, "loadBitmap needs a palette from loadPalette");
+    const auto* palette = resource_handle(state, lua_gettop(state), LuaResourceType::Palette,
+                                          "loadBitmap palette must come from loadPalette");
+    auto palette_colors = palette->palette;
+    const auto palette_key = palette->path.string();
+    lua_pop(state, 1);
+    auto path = resolve_resource(state, ActorResourceKind::Graphics, name);
+    ResourceRef resource{LuaResourceType::Drawable, path.value_or(std::filesystem::path{})};
+    if (path && palette_colors) {
+        const auto key = path->string() + ":" + std::to_string(bpp) + ":" + std::to_string(width) + ":" +
+                         std::to_string(height) + ":" + std::to_string(offset) + ":" + palette_key;
+        resource.image = cached(context(state).cache->images, key);
+        if (!resource.image) {
+            auto decoded = decode_bitmap(*path, bpp, width, height, offset, *palette_colors);
+            if (decoded) context(state).cache->images[key] = resource.image = std::move(decoded.value());
+        }
+    }
+    push_resource(state, std::move(resource));
+    return 1;
+}
+
 int load_texture(lua_State* state) {
+    if (!context(state).cache) return luaL_error(state, "resources can only be loaded from init");
     if (lua_type(state, 1) != LUA_TSTRING) return luaL_error(state, "loadTexture filename must be a string");
     if (!lua_isnoneornil(state, 2)) luaL_checktype(state, 2, LUA_TTABLE);
     const auto table = lua_istable(state, 2) ? 2 : 0;
@@ -341,85 +403,52 @@ int load_texture(lua_State* state) {
     const auto palette = table ? static_cast<std::size_t>(option_integer(state, table, "palette", 0, 0, 65535)) : 0U;
     const auto* name = lua_tostring(state, 1);
     auto path = resolve_resource(state, ActorResourceKind::Model, name);
-    ResourceRef resource{LuaResourceType::Texture, path.value_or(std::filesystem::path{})};
+    ResourceRef resource{LuaResourceType::Drawable, path.value_or(std::filesystem::path{})};
     if (path) {
-        const auto key = path->string() + ":" + std::to_string(texture) + ":" + std::to_string(palette);
-        resource.image = cached(context(state).cache->textures, key);
+        const auto key = path->string() + ":tex:" + std::to_string(texture) + ":" + std::to_string(palette);
+        resource.image = cached(context(state).cache->images, key);
         if (!resource.image) {
             auto decoded = decode_texture(*path, texture, palette);
-            if (decoded) context(state).cache->textures[key] = resource.image = std::move(decoded.value());
+            if (decoded) context(state).cache->images[key] = resource.image = std::move(decoded.value());
         }
     }
     push_resource(state, std::move(resource));
     return 1;
 }
 
-void expose_render_loaders(lua_State* state) {
-    lua_pushcfunction(state, load_bitmap); lua_setglobal(state, "loadBitmap");
-    lua_pushcfunction(state, load_palette); lua_setglobal(state, "loadPalette");
-    lua_pushcfunction(state, load_texture); lua_setglobal(state, "loadTexture");
-}
-
-const ResourceRef* resource_at(lua_State* state, int index) {
-    if (!lua_isuserdata(state, index)) luaL_error(state, "renderer resource must be a loadBitmap/loadPalette/loadTexture handle");
-    const auto handle = *static_cast<const std::size_t*>(lua_touserdata(state, index));
-    const auto& resources = context(state).resources;
-    if (handle >= resources.size()) luaL_error(state, "renderer resource handle is invalid");
-    return &resources[handle];
-}
-
-std::shared_ptr<const formats::RgbaImage> rasterize(lua_State* state,
-                                                    std::size_t bitmap_index,
-                                                    std::size_t palette_index) {
-    auto& value = context(state);
-    const auto key = (static_cast<std::uint64_t>(bitmap_index) << 32U) | palette_index;
-    if (const auto found = value.rasterized.find(key); found != value.rasterized.end()) return found->second;
-    if (bitmap_index >= value.resources.size() || palette_index >= value.resources.size()) return {};
-    const auto& bitmap = value.resources[bitmap_index];
-    const auto& palette = value.resources[palette_index];
-    if (bitmap.type != LuaResourceType::Bitmap || palette.type != LuaResourceType::Palette || !bitmap.bitmap || !palette.palette) return {};
-    auto image = std::make_shared<formats::RgbaImage>();
-    image->width = bitmap.bitmap->width;
-    image->height = bitmap.bitmap->height;
-    image->pixels.assign(image->width * image->height * 4U, 0);
-    for (std::size_t pixel = 0; pixel < bitmap.bitmap->pixels.size(); ++pixel) {
-        const auto color_index = bitmap.bitmap->pixels[pixel];
-        if (color_index >= palette.palette->colors.size()) continue;
-        const auto& color = palette.palette->colors[color_index];
-        const auto target = pixel * 4U;
-        image->pixels[target] = color.red;
-        image->pixels[target + 1U] = color.green;
-        image->pixels[target + 2U] = color.blue;
-        image->pixels[target + 3U] = color.transparent ? 0 : 255;
-    }
-    value.rasterized[key] = image;
-    return image;
+std::shared_ptr<const formats::RgbaImage> drawable_at(lua_State* state, int index) {
+    return resource_handle(state, index, LuaResourceType::Drawable,
+                           "renderer methods need a handle from loadImage, loadBitmap or loadTexture")->image;
 }
 
 bool emit_draw(lua_State* state,
                std::shared_ptr<const formats::RgbaImage> image,
+               std::string text,
                int options,
                std::int32_t source_x,
                std::int32_t source_y,
                std::uint32_t source_width,
                std::uint32_t source_height) {
     auto& value = context(state);
-    if (!value.commands || !value.input) luaL_error(state, "renderer methods are only available inside onRender");
-    if (!image || !image->width || !image->height) return false;
+    if (!value.commands || !value.input) luaL_error(state, "renderer methods are only available inside render");
+    const bool is_text = !text.empty();
+    if (!is_text && (!image || !image->width || !image->height)) return false;
     if (!lua_isnoneornil(state, options)) luaL_checktype(state, options, LUA_TTABLE);
     const auto table = lua_istable(state, options) ? options : 0;
-    if (table) {
+    if (table && !is_text) {
         source_x = static_cast<std::int32_t>(option_integer(state, table, "sourceX", source_x, 0, 1 << 20));
         source_y = static_cast<std::int32_t>(option_integer(state, table, "sourceY", source_y, 0, 1 << 20));
         source_width = static_cast<std::uint32_t>(option_integer(state, table, "sourceWidth", source_width, 1, 1 << 20));
         source_height = static_cast<std::uint32_t>(option_integer(state, table, "sourceHeight", source_height, 1, 1 << 20));
     }
-    if (source_x < 0 || source_y < 0 || static_cast<std::size_t>(source_x) + source_width > image->width ||
-        static_cast<std::size_t>(source_y) + source_height > image->height)
+    if (!is_text && (source_x < 0 || source_y < 0 || static_cast<std::size_t>(source_x) + source_width > image->width ||
+                     static_cast<std::size_t>(source_y) + source_height > image->height))
         luaL_error(state, "draw source rectangle is outside the resource");
-    if (value.commands->size() >= max_draw_commands) luaL_error(state, "actor exceeded 256 draw commands");
+    if (value.commands->size() >= max_draw_commands) return false;
     LuaActorDrawCommand command;
+    command.kind = is_text ? LuaActorDrawKind::Text : LuaActorDrawKind::Image;
     command.image = std::move(image);
+    command.text = std::move(text);
     command.source_x = source_x;
     command.source_y = source_y;
     command.source_width = source_width;
@@ -437,75 +466,263 @@ bool emit_draw(lua_State* state,
 }
 
 int renderer_draw(lua_State* state) {
-    const auto* resource = resource_at(state, 2);
-    std::shared_ptr<const formats::RgbaImage> image;
-    int options = 3;
-    if (resource->type == LuaResourceType::Texture) image = resource->image;
-    else if (resource->type == LuaResourceType::Bitmap) {
-        const auto* palette = resource_at(state, 3);
-        if (palette->type != LuaResourceType::Palette) return luaL_error(state, "bitmap draw needs a palette handle");
-        const auto bitmap_index = *static_cast<const std::size_t*>(lua_touserdata(state, 2));
-        const auto palette_index = *static_cast<const std::size_t*>(lua_touserdata(state, 3));
-        image = rasterize(state, bitmap_index, palette_index);
-        options = 4;
-    } else return luaL_error(state, "renderer:draw needs a bitmap or texture handle");
-    const bool drawn = emit_draw(state, image, options, 0, 0,
-                                 image ? static_cast<std::uint32_t>(image->width) : 1U,
-                                 image ? static_cast<std::uint32_t>(image->height) : 1U);
-    lua_pushboolean(state, drawn);
+    auto image = drawable_at(state, 2);
+    const auto width = image ? static_cast<std::uint32_t>(image->width) : 1U;
+    const auto height = image ? static_cast<std::uint32_t>(image->height) : 1U;
+    lua_pushboolean(state, emit_draw(state, std::move(image), {}, 3, 0, 0, width, height));
     return 1;
 }
 
 int renderer_draw_tile(lua_State* state) {
-    const auto* bitmap = resource_at(state, 2);
-    const auto* palette = resource_at(state, 3);
-    if (bitmap->type != LuaResourceType::Bitmap || palette->type != LuaResourceType::Palette)
-        return luaL_error(state, "renderer:drawTile needs bitmap and palette handles");
-    const auto tile = luaL_checkinteger(state, 4);
+    auto image = drawable_at(state, 2);
+    const auto tile = luaL_checkinteger(state, 3);
     if (tile < 0) return luaL_error(state, "tile index cannot be negative");
-    const auto bitmap_index = *static_cast<const std::size_t*>(lua_touserdata(state, 2));
-    const auto palette_index = *static_cast<const std::size_t*>(lua_touserdata(state, 3));
-    auto image = rasterize(state, bitmap_index, palette_index);
     if (!image) { lua_pushboolean(state, false); return 1; }
     const auto tiles_wide = image->width / 8U;
+    if (!tiles_wide) return luaL_error(state, "drawTile needs a resource at least one tile wide");
     const auto source_x = static_cast<std::uint64_t>(tile) % tiles_wide * 8U;
     const auto source_y = static_cast<std::uint64_t>(tile) / tiles_wide * 8U;
-    const bool drawn = source_y < image->height && emit_draw(state, image, 5, static_cast<std::int32_t>(source_x),
-                                                              static_cast<std::int32_t>(source_y), 8, 8);
+    const bool drawn = source_y < image->height &&
+                       emit_draw(state, std::move(image), {}, 4, static_cast<std::int32_t>(source_x),
+                                 static_cast<std::int32_t>(source_y), 8, 8);
     lua_pushboolean(state, drawn);
     return 1;
 }
 
 int renderer_draw_frame(lua_State* state) {
-    const auto* bitmap = resource_at(state, 2);
-    const auto* palette = resource_at(state, 3);
-    if (bitmap->type != LuaResourceType::Bitmap || palette->type != LuaResourceType::Palette)
-        return luaL_error(state, "renderer:drawFrame needs bitmap and palette handles");
-    const auto frame = luaL_checkinteger(state, 4);
-    const auto width = luaL_checkinteger(state, 5);
-    const auto height = luaL_checkinteger(state, 6);
+    auto image = drawable_at(state, 2);
+    const auto frame = luaL_checkinteger(state, 3);
+    const auto width = luaL_checkinteger(state, 4);
+    const auto height = luaL_checkinteger(state, 5);
     if (frame < 0 || width <= 0 || height <= 0 || width > 4096 || height > 4096)
         return luaL_error(state, "drawFrame arguments are invalid");
-    const auto bitmap_index = *static_cast<const std::size_t*>(lua_touserdata(state, 2));
-    const auto palette_index = *static_cast<const std::size_t*>(lua_touserdata(state, 3));
-    auto image = rasterize(state, bitmap_index, palette_index);
     if (!image) { lua_pushboolean(state, false); return 1; }
     const auto frames_wide = image->width / static_cast<std::size_t>(width);
-    if (!frames_wide) return luaL_error(state, "drawFrame width exceeds the bitmap");
+    if (!frames_wide) return luaL_error(state, "drawFrame width exceeds the resource");
     const auto source_x = static_cast<std::uint64_t>(frame) % frames_wide * static_cast<std::uint64_t>(width);
     const auto source_y = static_cast<std::uint64_t>(frame) / frames_wide * static_cast<std::uint64_t>(height);
     const bool drawn = source_y + static_cast<std::uint64_t>(height) <= image->height &&
-                       emit_draw(state, image, 7, static_cast<std::int32_t>(source_x), static_cast<std::int32_t>(source_y),
-                                 static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height));
+                       emit_draw(state, std::move(image), {}, 6, static_cast<std::int32_t>(source_x),
+                                 static_cast<std::int32_t>(source_y), static_cast<std::uint32_t>(width),
+                                 static_cast<std::uint32_t>(height));
     lua_pushboolean(state, drawn);
     return 1;
 }
+
+// The stock renderer prints numbers over a few actors, so text is a draw command
+// rather than something scripts have to fake with graphics.
+int renderer_draw_text(lua_State* state) {
+    if (lua_type(state, 2) != LUA_TSTRING) return luaL_error(state, "renderer:drawText needs a string");
+    std::size_t size{};
+    const auto* text = lua_tolstring(state, 2, &size);
+    if (!size) { lua_pushboolean(state, false); return 1; }
+    lua_pushboolean(state, emit_draw(state, {}, std::string(text, size), 3, 0, 0, 0, 0));
+    return 1;
+}
+
+// "#rgb", "#rrggbb" and "#rrggbbaa" all land as 0xRRGGBBAA; an integer is taken
+// as that packed value directly so scripts can compute a colour.
+core::Result<std::uint32_t> parse_color(std::string_view text) {
+    if (!text.empty() && text.front() == '#') text.remove_prefix(1);
+    if (text.size() != 3 && text.size() != 6 && text.size() != 8)
+        return core::make_error(core::ErrorCode::ParseError, "a colour must be #rgb, #rrggbb or #rrggbbaa");
+    std::uint32_t value = 0;
+    for (const auto digit : text) {
+        const auto nibble = digit >= '0' && digit <= '9'   ? digit - '0'
+                            : digit >= 'a' && digit <= 'f' ? digit - 'a' + 10
+                            : digit >= 'A' && digit <= 'F' ? digit - 'A' + 10
+                                                           : -1;
+        if (nibble < 0) return core::make_error(core::ErrorCode::ParseError, "a colour has a non-hex digit");
+        value = value << 4U | static_cast<std::uint32_t>(nibble);
+        if (text.size() == 3) value = value << 4U | static_cast<std::uint32_t>(nibble);
+    }
+    if (text.size() != 8) value = value << 8U | 0xFFU;
+    return value;
+}
+
+std::uint32_t option_color(lua_State* state, int table, std::uint32_t fallback) {
+    if (!table) return fallback;
+    table = lua_absindex(state, table);
+    lua_getfield(state, table, "color");
+    if (lua_isnil(state, -1)) { lua_pop(state, 1); return fallback; }
+    std::uint32_t result = fallback;
+    if (lua_isinteger(state, -1)) {
+        result = static_cast<std::uint32_t>(lua_tointeger(state, -1));
+    } else if (lua_type(state, -1) == LUA_TSTRING) {
+        auto parsed = parse_color(lua_tostring(state, -1));
+        if (!parsed) { lua_pop(state, 1); luaL_error(state, "%s", parsed.error().message.c_str()); }
+        result = parsed.value();
+    } else {
+        lua_pop(state, 1);
+        luaL_error(state, "color must be a string or a packed integer");
+    }
+    lua_pop(state, 1);
+    return result;
+}
+
+int emit_shape(lua_State* state, LuaActorDrawKind kind) {
+    auto& value = context(state);
+    if (!value.commands || !value.input) return luaL_error(state, "renderer methods are only available inside render");
+    luaL_checktype(state, 2, LUA_TTABLE);
+    if (value.commands->size() >= max_draw_commands) { lua_pushboolean(state, false); return 1; }
+    LuaActorDrawCommand command;
+    command.kind = kind;
+    command.x = option_number(state, 2, "x", value.input->pixel_x, -1048576.0, 1048576.0);
+    command.y = option_number(state, 2, "y", value.input->pixel_y, -1048576.0, 1048576.0);
+    if (kind == LuaActorDrawKind::Line) {
+        command.x2 = option_number(state, 2, "x2", command.x, -1048576.0, 1048576.0);
+        command.y2 = option_number(state, 2, "y2", command.y, -1048576.0, 1048576.0);
+    } else {
+        // A degenerate or inverted box draws nothing, the way GDI+ treats one,
+        // rather than failing the actor's whole render.
+        command.width = option_number(state, 2, "width", 16.0, -1048576.0, 1048576.0);
+        command.height = option_number(state, 2, "height", 16.0, -1048576.0, 1048576.0);
+        if (command.width <= 0.0 || command.height <= 0.0) { lua_pushboolean(state, false); return 1; }
+    }
+    command.rotation = option_number(state, 2, "rotation", 0.0, -36000.0, 36000.0);
+    command.opacity = option_number(state, 2, "opacity", 1.0, 0.0, 1.0);
+    command.stroke_width = option_number(state, 2, "strokeWidth", 1.0, 0.0, 4096.0);
+    command.color = option_color(state, 2, 0xFFFFFFFFU);
+    value.commands->push_back(std::move(command));
+    lua_pushboolean(state, true);
+    return 1;
+}
+
+int renderer_fill_rect(lua_State* state) { return emit_shape(state, LuaActorDrawKind::FillRect); }
+int renderer_stroke_rect(lua_State* state) { return emit_shape(state, LuaActorDrawKind::StrokeRect); }
+int renderer_fill_ellipse(lua_State* state) { return emit_shape(state, LuaActorDrawKind::FillEllipse); }
+int renderer_draw_line(lua_State* state) { return emit_shape(state, LuaActorDrawKind::Line); }
 
 void push_renderer(lua_State* state) {
     lua_newtable(state);
     lua_pushcfunction(state, renderer_draw); lua_setfield(state, -2, "draw");
     lua_pushcfunction(state, renderer_draw_tile); lua_setfield(state, -2, "drawTile");
     lua_pushcfunction(state, renderer_draw_frame); lua_setfield(state, -2, "drawFrame");
+    lua_pushcfunction(state, renderer_draw_text); lua_setfield(state, -2, "drawText");
+    lua_pushcfunction(state, renderer_fill_rect); lua_setfield(state, -2, "fillRect");
+    lua_pushcfunction(state, renderer_stroke_rect); lua_setfield(state, -2, "strokeRect");
+    lua_pushcfunction(state, renderer_fill_ellipse); lua_setfield(state, -2, "fillEllipse");
+    lua_pushcfunction(state, renderer_draw_line); lua_setfield(state, -2, "drawLine");
+}
+
+std::uint64_t actor_data_value(const LuaActorRenderInput& input) {
+    return input.settings | (static_cast<std::uint64_t>(input.data[1]) << 32U) |
+           (static_cast<std::uint64_t>(input.data[0]) << 40U);
+}
+
+// Scripts read settings through the fields they already declare, so the canvas
+// and the properties panel decode the same bits the same way. A checkbox field
+// yields a boolean because 0 is truthy in Lua.
+void push_field_value(lua_State* state, const SpriteFieldDefinition& field, const LuaActorRenderInput& input) {
+    const auto value = read_sprite_field(actor_data_value(input), field);
+    if (field.checkbox_value) lua_pushboolean(state, value != 0);
+    else lua_pushinteger(state, value);
+}
+
+int actor_field_index(lua_State* state) {
+    auto& value = context(state);
+    const auto* key = luaL_checkstring(state, 2);
+    if (!value.fields || !value.input) return luaL_error(state, "actor fields are unavailable here");
+    for (const auto& field : *value.fields)
+        if (field.key == key) { push_field_value(state, field, *value.input); return 1; }
+    // Returning nil would let a mistyped key silently render the wrong thing.
+    return luaL_error(state, "actor has no declared field '%s'", key);
+}
+
+int actor_field_call(lua_State* state) {
+    lua_remove(state, 1); // the actor table; the key is what matters
+    return actor_field_index(state);
+}
+
+// Actors format numbers into labels and resource names, so the pure parts of the
+// standard library are available. Anything that reaches the filesystem, the
+// process, or the loader stays out.
+void expose_safe_library(lua_State* state) {
+    for (const auto& [name, opener] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
+             {LUA_GNAME, luaopen_base}, {LUA_STRLIBNAME, luaopen_string},
+             {LUA_MATHLIBNAME, luaopen_math}, {LUA_TABLIBNAME, luaopen_table}}) {
+        luaL_requiref(state, name, opener, 1);
+        lua_pop(state, 1);
+    }
+    for (const auto* name : {"dofile", "loadfile", "load", "require", "collectgarbage", "print", "loadstring"}) {
+        lua_pushnil(state);
+        lua_setglobal(state, name);
+    }
+}
+
+// Two things come up in nearly every actor: an image that has to be drawn with a
+// transform decided somewhere other than the draw call, and a destination given
+// as the top-left of the *drawn* result rather than as a rectangle to rotate in
+// place. `renderer:draw` is the low-level primitive for the latter; `gfx` is the
+// small Lua layer over it that actor scripts share, so neither idea has to be
+// restated in three hundred files. Scripts may ignore it and call the renderer
+// directly.
+constexpr const char* actor_prelude = R"LUA(
+gfx = {}
+
+-- Pairs an image with a transform to apply wherever it is eventually drawn.
+function gfx.transform(image, rotation, flipX, flipY)
+    if type(image) == "table" then image = image.image end
+    return { image = image, rotation = rotation, flipX = flipX, flipY = flipY }
+end
+
+-- The pixel size of an image or of a transformed image.
+function gfx.width(image)
+    if type(image) == "table" then image = image.image end
+    return image and image.width or 0
+end
+
+function gfx.height(image)
+    if type(image) == "table" then image = image.image end
+    return image and image.height or 0
+end
+
+-- Gives a rectangle a colour so it can go straight to a shape method.
+function gfx.colored(rect, color)
+    rect.color = color
+    return rect
+end
+
+-- Draws an image so that the visible result's top-left corner lands on x, y.
+-- renderer:draw rotates a destination rectangle about its own centre, so a
+-- quarter-turn needs the rectangle offset by half the difference of its sides.
+function gfx.blit(renderer, image, x, y, w, h, source)
+    local rotation, flipX, flipY = 0, false, false
+    if type(image) == "table" then
+        rotation, flipX, flipY, image = image.rotation, image.flipX, image.flipY, image.image
+    end
+    if not image then return false end
+    local opts = { rotation = rotation, flipX = flipX, flipY = flipY }
+    if source then
+        opts.sourceX, opts.sourceY = source.x, source.y
+        opts.sourceWidth, opts.sourceHeight = source.width, source.height
+    end
+    opts.width = w or (source and source.width) or image.width
+    opts.height = h or (source and source.height) or image.height
+    if rotation % 180 ~= 0 then
+        x, y = x + (opts.height - opts.width) / 2, y + (opts.width - opts.height) / 2
+    end
+    opts.x, opts.y = x, y
+    return renderer:draw(image, opts)
+end
+)LUA";
+
+core::Result<void> run_prelude(lua_State* state) {
+    if (luaL_loadbuffer(state, actor_prelude, std::strlen(actor_prelude), "=gfx") != LUA_OK ||
+        lua_pcall(state, 0, 0, 0) != LUA_OK) {
+        const auto* message = lua_tostring(state, -1);
+        return core::make_error(core::ErrorCode::ParseError,
+                                std::string("the gfx prelude failed: ") + (message ? message : "?"));
+    }
+    return {};
+}
+
+void push_loader_context(lua_State* state) {
+    lua_newtable(state);
+    lua_pushcfunction(state, load_image); lua_setfield(state, -2, "loadImage");
+    lua_pushcfunction(state, load_palette); lua_setfield(state, -2, "loadPalette");
+    lua_pushcfunction(state, load_bitmap); lua_setfield(state, -2, "loadBitmap");
+    lua_pushcfunction(state, load_texture); lua_setfield(state, -2, "loadTexture");
 }
 
 void push_actor(lua_State* state, const LuaActorRenderInput& input) {
@@ -523,6 +740,32 @@ void push_actor(lua_State* state, const LuaActorRenderInput& input) {
         lua_rawseti(state, -2, static_cast<lua_Integer>(i));
     }
     lua_setfield(state, -2, "data");
+    lua_pushcfunction(state, actor_field_call); lua_setfield(state, -2, "field");
+    lua_newtable(state);                  // actor.fields, empty and read through
+    lua_newtable(state);                  // its metatable
+    lua_pushcfunction(state, actor_field_index); lua_setfield(state, -2, "__index");
+    lua_setmetatable(state, -2);
+    lua_setfield(state, -2, "fields");
+}
+
+// Bounds arrive in scene pixels derived from pixelX/pixelY, which carry a drag
+// offset and so are not necessarily integers.
+core::Result<lua_Integer> bounds_number(lua_State* state,
+                                        int table,
+                                        const char* key,
+                                        lua_Integer minimum,
+                                        lua_Integer maximum,
+                                        std::string_view actor) {
+    lua_getfield(state, table, key);
+    if (!lua_isnumber(state, -1)) {
+        lua_pop(state, 1);
+        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
+    }
+    const auto value = static_cast<lua_Integer>(std::llround(lua_tonumber(state, -1)));
+    lua_pop(state, 1);
+    if (value < minimum || value > maximum)
+        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
+    return value;
 }
 
 core::Result<lua_Integer> integer_field(lua_State* state,
@@ -565,52 +808,6 @@ core::Result<std::string> string_field(lua_State* state,
     if (required && result.empty())
         return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an empty " + key);
     return result;
-}
-
-core::Result<SpriteBounds> bounds_field(lua_State* state,
-                                        int table,
-                                        const char* key,
-                                        SpriteBounds fallback,
-                                        std::string_view actor) {
-    lua_getfield(state, table, key);
-    if (lua_isnil(state, -1)) { lua_pop(state, 1); return fallback; }
-    if (!lua_istable(state, -1)) {
-        lua_pop(state, 1);
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
-    }
-    const auto bounds_table = lua_gettop(state);
-    auto x = integer_field(state, bounds_table, "x", -32768, 32767, actor);
-    auto y = integer_field(state, bounds_table, "y", -32768, 32767, actor);
-    auto width = integer_field(state, bounds_table, "width", 1, 4096, actor);
-    auto height = integer_field(state, bounds_table, "height", 1, 4096, actor);
-    lua_pop(state, 1);
-    if (!x) return x.error(); if (!y) return y.error(); if (!width) return width.error(); if (!height) return height.error();
-    return SpriteBounds{static_cast<std::int16_t>(x.value()), static_cast<std::int16_t>(y.value()),
-                        static_cast<std::uint16_t>(width.value()), static_cast<std::uint16_t>(height.value())};
-}
-
-core::Result<std::filesystem::path> resource_field(lua_State* state,
-                                                   int table,
-                                                   const char* key,
-                                                   ActorResourceKind kind,
-                                                   const LuaContext& context,
-                                                   std::string_view actor) {
-    lua_getfield(state, table, key);
-    if (lua_isnil(state, -1)) { lua_pop(state, 1); return std::filesystem::path{}; }
-    if (!lua_isuserdata(state, -1)) {
-        lua_pop(state, 1);
-        return core::make_error(core::ErrorCode::ParseError,
-                                std::string(actor) + " must set " + key + " with read" +
-                                    (kind == ActorResourceKind::Graphics ? "Graphics" : kind == ActorResourceKind::Palette ? "Palette" : "Model"));
-    }
-    const auto index = *static_cast<const std::size_t*>(lua_touserdata(state, -1));
-    lua_pop(state, 1);
-    const auto expected = kind == ActorResourceKind::Graphics ? LuaResourceType::LegacyGraphics
-                          : kind == ActorResourceKind::Palette ? LuaResourceType::LegacyPalette
-                                                               : LuaResourceType::LegacyModel;
-    if (index >= context.resources.size() || context.resources[index].type != expected)
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has the wrong resource type in " + key);
-    return context.resources[index].path;
 }
 
 core::Result<bool> boolean_field(lua_State* state,
@@ -684,23 +881,6 @@ core::Result<void> read_fields(lua_State* state, int table, LuaActorDefinition& 
     return {};
 }
 
-core::Result<void> read_source_files(lua_State* state, int table, LuaActorDefinition& actor) {
-    lua_getfield(state, table, "sourceFiles");
-    if (lua_isnil(state, -1)) { lua_pop(state, 1); return {}; }
-    if (!lua_istable(state, -1)) { lua_pop(state, 1); return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " has invalid sourceFiles"); }
-    const auto files_table = lua_gettop(state);
-    for (std::size_t i = 1; i <= lua_rawlen(state, files_table); ++i) {
-        lua_rawgeti(state, files_table, static_cast<lua_Integer>(i));
-        if (lua_type(state, -1) != LUA_TSTRING) { lua_pop(state, 2); return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " has an invalid source file"); }
-        std::size_t size{};
-        const auto* value = lua_tolstring(state, -1, &size);
-        actor.sprite.source_files.emplace_back(value, size);
-        lua_pop(state, 1);
-    }
-    lua_pop(state, 1);
-    return {};
-}
-
 core::Result<int> function_field(lua_State* state, int table, const char* key, std::string_view actor) {
     lua_getfield(state, table, key);
     if (lua_isnil(state, -1)) { lua_pop(state, 1); return LUA_NOREF; }
@@ -712,7 +892,9 @@ core::Result<int> function_field(lua_State* state, int table, const char* key, s
 }
 
 core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
+                                            const std::filesystem::path& layer,
                                             const ActorResourceResolver& resolve,
+                                            const ActorImageDecoder& decode_image,
                                             LuaAssetCache& cache) {
     auto bytes = core::read_file(path);
     if (!bytes) return bytes.error();
@@ -727,12 +909,12 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
     if (!state) return core::make_error(core::ErrorCode::IoError, "could not create the Lua actor state");
     program->state = state;
     program->context.resolve = &resolve;
+    program->context.decode_image = &decode_image;
     program->context.cache = &cache;
+    program->context.layer = layer;
     *static_cast<LuaContext**>(lua_getextraspace(state)) = &program->context;
-    expose_reader(state, "readGraphics", ActorResourceKind::Graphics);
-    expose_reader(state, "readPalette", ActorResourceKind::Palette);
-    expose_reader(state, "readModel", ActorResourceKind::Model);
-    expose_render_loaders(state);
+    expose_safe_library(state);
+    if (auto ready = run_prelude(state); !ready) return ready.error();
     lua_sethook(state, instruction_hook, LUA_MASKCOUNT, 1000);
     const std::string chunk = "@" + path.string();
     if (luaL_loadbufferx(state, reinterpret_cast<const char*>(bytes.value().data()), bytes.value().size(), chunk.c_str(), "t") != LUA_OK ||
@@ -742,8 +924,6 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
     }
     if (!lua_istable(state, -1)) return core::make_error(core::ErrorCode::ParseError, "actor script must return a table");
     const auto table = lua_gettop(state);
-    auto schema = integer_field(state, table, "schema", 1, 1, path.filename().string()); if (!schema) return schema.error();
-    (void)schema;
     LuaActorDefinition actor;
     actor.source = path;
     lua_getfield(state, table, "objectId");
@@ -769,74 +949,85 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
     actor.sprite.hash = actor.hash;
     auto category = string_field(state, table, "category", actor.sprite.name, false); if (!category) return category.error(); if (!category.value().empty()) actor.sprite.category = std::move(category.value());
     auto notes = string_field(state, table, "notes", actor.sprite.name, false); if (!notes) return notes.error(); actor.sprite.notes = std::move(notes.value());
-    auto known = boolean_field(state, table, "known", actor.sprite.name); if (!known) return known.error(); actor.sprite.known = known.value();
-    auto complete = boolean_field(state, table, "complete", actor.sprite.name); if (!complete) return complete.error(); actor.sprite.complete = complete.value();
-    auto color = string_field(state, table, "color", actor.sprite.name, false); if (!color) return color.error(); if (!color.value().empty()) actor.sprite.color = std::move(color.value());
-    if (actor.sprite.color.size() != 7 || actor.sprite.color.front() != '#' ||
-        std::ranges::any_of(std::string_view(actor.sprite.color).substr(1), [](char c) { return !std::isxdigit(static_cast<unsigned char>(c)); }))
-        return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " has an invalid #RRGGBB color");
-    auto shape = string_field(state, table, "shape", actor.sprite.name, false); if (!shape) return shape.error();
-    if (!shape.value().empty()) {
-        if (shape.value() == "box") actor.sprite.shape = SpriteShape::Box;
-        else if (shape.value() == "ellipse") actor.sprite.shape = SpriteShape::Ellipse;
-        else if (shape.value() == "diamond") actor.sprite.shape = SpriteShape::Diamond;
-        else return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " has an invalid shape");
-    }
-    auto grab = bounds_field(state, table, "grabBounds", actor.sprite.grab_bounds, actor.sprite.name); if (!grab) return grab.error(); actor.sprite.grab_bounds = grab.value();
-    auto render = bounds_field(state, table, "renderBounds", actor.sprite.render_bounds, actor.sprite.name); if (!render) return render.error(); actor.sprite.render_bounds = render.value();
-    if (auto files = read_source_files(state, table, actor); !files) return files.error();
     if (auto fields = read_fields(state, table, actor); !fields) return fields.error();
-    auto graphics = resource_field(state, table, "graphics", ActorResourceKind::Graphics, program->context, actor.sprite.name); if (!graphics) return graphics.error(); actor.graphics = std::move(graphics.value());
-    auto palette = resource_field(state, table, "palette", ActorResourceKind::Palette, program->context, actor.sprite.name); if (!palette) return palette.error(); actor.palette = std::move(palette.value());
-    auto model = resource_field(state, table, "model", ActorResourceKind::Model, program->context, actor.sprite.name); if (!model) return model.error(); actor.model = std::move(model.value());
-    if (actor.graphics.empty() != actor.palette.empty()) {
-        actor.graphics.clear();
-        actor.palette.clear();
+    auto render = function_field(state, table, "render", actor.sprite.name); if (!render) return render.error(); program->render = render.value();
+    auto grab_bounds = function_field(state, table, "grabBounds", actor.sprite.name); if (!grab_bounds) return grab_bounds.error(); program->grab_bounds = grab_bounds.value();
+    auto render_bounds = function_field(state, table, "renderBounds", actor.sprite.name); if (!render_bounds) return render_bounds.error(); program->render_bounds = render_bounds.value();
+    auto init = function_field(state, table, "init", actor.sprite.name); if (!init) return init.error();
+
+    // init() is the only place resources load, so painting never touches disk.
+    // A failure here costs the actor its renderer, not the whole catalog.
+    if (init.value() != LUA_NOREF) {
+        lua_rawgeti(state, LUA_REGISTRYINDEX, init.value());
+        push_loader_context(state);
+        program->context.instructions = 0;
+        if (lua_pcall(state, 1, 0, 0) != LUA_OK) {
+            const auto* message = lua_tostring(state, -1);
+            actor.init_error = message ? message : "actor init failed";
+            lua_pop(state, 1);
+            program->render = LUA_NOREF;
+        }
+        luaL_unref(state, LUA_REGISTRYINDEX, init.value());
     }
-    if (!actor.model.empty() && !actor.graphics.empty())
-        return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " cannot define both a model and 2D graphics");
-    auto on_render = function_field(state, table, "onRender", actor.sprite.name); if (!on_render) return on_render.error(); program->on_render = on_render.value();
-    auto grab_bounds = function_field(state, table, "getGrabBounds", actor.sprite.name); if (!grab_bounds) return grab_bounds.error(); program->grab_bounds = grab_bounds.value();
-    auto render_bounds = function_field(state, table, "getRenderBounds", actor.sprite.name); if (!render_bounds) return render_bounds.error(); program->render_bounds = render_bounds.value();
     for (const auto& resource : program->context.resources)
-        if (!resource.path.empty() && resource.type >= LuaResourceType::Bitmap) actor.render_resources.push_back(resource.path);
+        if (!resource.path.empty()) actor.render_resources.push_back(resource.path);
     std::ranges::sort(actor.render_resources);
     actor.render_resources.erase(std::unique(actor.render_resources.begin(), actor.render_resources.end()), actor.render_resources.end());
+    // Loaders exist only for init(); clearing them here makes a later call fail
+    // loudly instead of reading from disk mid-paint.
     program->context.resolve = nullptr;
+    program->context.decode_image = nullptr;
     program->context.cache = nullptr;
-    if (program->on_render != LUA_NOREF || program->grab_bounds != LUA_NOREF || program->render_bounds != LUA_NOREF)
+    if (program->render != LUA_NOREF || program->grab_bounds != LUA_NOREF || program->render_bounds != LUA_NOREF)
         actor.program = std::move(program);
+
+    // Evaluate the bounds once at zero settings and origin, so the absolute rect
+    // that comes back doubles as the offset used for hit testing and thumbnails.
+    if (actor.program) {
+        LuaActorRenderInput probe;
+        probe.object_id = actor.object_id.value_or(0);
+        probe.hash = actor.hash;
+        if (auto grab = lua_actor_bounds(actor, probe, false); grab && grab.value()) actor.sprite.grab_bounds = *grab.value();
+        if (auto render_box = lua_actor_bounds(actor, probe, true); render_box && render_box.value())
+            actor.sprite.render_bounds = *render_box.value();
+        else actor.sprite.render_bounds = actor.sprite.grab_bounds;
+    }
     return actor;
 }
 
 } // namespace
 
 bool has_lua_renderer(const LuaActorDefinition& actor) {
-    return actor.program && actor.program->on_render != LUA_NOREF;
+    return actor.program && actor.program->render != LUA_NOREF;
 }
 
 core::Result<std::vector<LuaActorDrawCommand>> render_lua_actor(const LuaActorDefinition& actor,
-                                                                const LuaActorRenderInput& input) {
+                                                                const LuaActorRenderInput& input,
+                                                                bool* custom_rendered) {
     std::vector<LuaActorDrawCommand> commands;
+    if (custom_rendered) *custom_rendered = false;
     if (!has_lua_renderer(actor)) return commands;
     auto& program = *actor.program;
     auto& value = program.context;
     value.instructions = 0;
     value.commands = &commands;
     value.input = &input;
+    value.fields = &actor.sprite.fields;
     lua_settop(program.state, 0);
-    lua_rawgeti(program.state, LUA_REGISTRYINDEX, program.on_render);
+    lua_rawgeti(program.state, LUA_REGISTRYINDEX, program.render);
     push_actor(program.state, input);
     push_renderer(program.state);
     if (lua_pcall(program.state, 2, 1, 0) != LUA_OK) {
         const auto* message = lua_tostring(program.state, -1);
-        const std::string error = message ? message : "actor onRender failed";
+        const std::string error = message ? message : "actor render failed";
         value.commands = nullptr;
         value.input = nullptr;
         lua_settop(program.state, 0);
         return core::make_error(core::ErrorCode::ParseError, error);
     }
-    if (lua_isboolean(program.state, -1) && !lua_toboolean(program.state, -1)) commands.clear();
+    // A falsy return is NSMBe's `customRendered = false`: whatever the script
+    // drew stands, and the stock numbered marker is drawn over it as well.
+    if (custom_rendered) *custom_rendered = lua_toboolean(program.state, -1) != 0;
     value.commands = nullptr;
     value.input = nullptr;
     lua_settop(program.state, 0);
@@ -851,32 +1042,38 @@ core::Result<std::optional<SpriteBounds>> lua_actor_bounds(const LuaActorDefinit
     const auto function = render_bounds && program.render_bounds != LUA_NOREF ? program.render_bounds : program.grab_bounds;
     if (function == LUA_NOREF) return std::optional<SpriteBounds>{};
     program.context.instructions = 0;
+    program.context.input = &input;
+    program.context.fields = &actor.sprite.fields;
     lua_settop(program.state, 0);
     lua_rawgeti(program.state, LUA_REGISTRYINDEX, function);
     push_actor(program.state, input);
     if (lua_pcall(program.state, 1, 1, 0) != LUA_OK) {
         const auto* message = lua_tostring(program.state, -1);
         const std::string error = message ? message : "actor bounds function failed";
+        program.context.input = nullptr;
         lua_settop(program.state, 0);
         return core::make_error(core::ErrorCode::ParseError, error);
     }
-    if (lua_isnil(program.state, -1)) { lua_settop(program.state, 0); return std::optional<SpriteBounds>{}; }
+    if (lua_isnil(program.state, -1)) { program.context.input = nullptr; lua_settop(program.state, 0); return std::optional<SpriteBounds>{}; }
     if (!lua_istable(program.state, -1)) {
+        program.context.input = nullptr;
         lua_settop(program.state, 0);
         return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " bounds function must return a table or nil");
     }
     const auto table = lua_gettop(program.state);
-    auto x = integer_field(program.state, table, "x", -32768, 32767, actor.sprite.name);
-    auto y = integer_field(program.state, table, "y", -32768, 32767, actor.sprite.name);
-    auto width = integer_field(program.state, table, "width", 1, 4096, actor.sprite.name);
-    auto height = integer_field(program.state, table, "height", 1, 4096, actor.sprite.name);
+    auto x = bounds_number(program.state, table, "x", -32768, 32767, actor.sprite.name);
+    auto y = bounds_number(program.state, table, "y", -32768, 32767, actor.sprite.name);
+    auto width = bounds_number(program.state, table, "width", 1, 65536, actor.sprite.name);
+    auto height = bounds_number(program.state, table, "height", 1, 65536, actor.sprite.name);
     if (!x || !y || !width || !height) {
         const auto error = !x ? x.error() : !y ? y.error() : !width ? width.error() : height.error();
+        program.context.input = nullptr;
         lua_settop(program.state, 0);
         return error;
     }
     const SpriteBounds bounds{static_cast<std::int16_t>(x.value()), static_cast<std::int16_t>(y.value()),
                               static_cast<std::uint16_t>(width.value()), static_cast<std::uint16_t>(height.value())};
+    program.context.input = nullptr;
     lua_settop(program.state, 0);
     return std::optional<SpriteBounds>(bounds);
 }
@@ -899,7 +1096,8 @@ SpriteDefinitionCatalog LuaActorCatalog::sprite_definitions() const {
 }
 
 core::Result<LuaActorCatalog> load_lua_actor_layers(std::span<const LuaActorLayer> layers,
-                                                    const ActorResourceResolver& resolve) {
+                                                    const ActorResourceResolver& resolve,
+                                                    const ActorImageDecoder& decode_image) {
     LuaActorCatalog result;
     LuaAssetCache cache;
     std::unordered_set<std::uint32_t> object_ids, hashes;
@@ -917,7 +1115,7 @@ core::Result<LuaActorCatalog> load_lua_actor_layers(std::span<const LuaActorLaye
         if (ec) return core::make_error(core::ErrorCode::IoError, "could not read actor layer " + layer.name);
         std::ranges::sort(scripts);
         for (const auto& script : scripts) {
-            auto actor = load_actor(script, resolve, cache);
+            auto actor = load_actor(script, layer.directory, resolve, decode_image, cache);
             if (!actor) return core::make_error(actor.error().code, layer.name + " / " + script.filename().string() + ": " + actor.error().message);
             const bool claimed = actor.value().object_id ? !object_ids.insert(*actor.value().object_id).second
                                                          : !hashes.insert(*actor.value().hash).second;

@@ -1,18 +1,27 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 30.
+
+local gfx = {}
+local function init(ctx)
+    gfx.left = ctx.loadImage("images/CheepCheepTrailLeft.png")
+    gfx.right = ctx.loadImage("images/CheepCheepTrailRight.png")
+end
+
+local function grabBounds(actor)
+    local x = actor.fields.swims_left and actor.pixelX - 1 or actor.pixelX - 62
+    return { x = x, y = actor.pixelY + 4, width = 80, height = 29 }
+end
+
+local function render(actor, renderer)
+    local box = grabBounds(actor)
+    local image = actor.fields.swims_left and gfx.left or gfx.right
+    return renderer:draw(image, box)
+end
+
 return {
-    schema = 1,
     objectId = 30,
     name = "Coin trail Cheep Cheep",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -62, y = 4, width = 80, height = 29 },
-    renderBounds = { x = -62, y = 4, width = 80, height = 29 },
-    sourceFiles = {
-        "/enemy/pukupuku.nsbmd",
-    },
+    notes = "Unused.",
     fields = {
         {
             key = "swims_left",
@@ -31,5 +40,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("pukupuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

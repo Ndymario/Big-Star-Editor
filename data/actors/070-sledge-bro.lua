@@ -1,18 +1,34 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 70.
+
+local images = {}
+
+local function init(ctx)
+    images.GiantHammerBro = ctx.loadImage("images/GiantHammerBro.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 15
+    width = 26
+    height = 31
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.GiantHammerBro, RenderX, RenderY - 15) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 70,
     name = "Sledge Bro.",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Can destroy smashable (question mark/brick/wood/stone/used) blocks.",
-    grabBounds = { x = 0, y = -15, width = 26, height = 31 },
-    renderBounds = { x = 0, y = -15, width = 26, height = 31 },
-    sourceFiles = {
-        "/enemy/himan.nsbmd",
-    },
-    model = readModel("himan.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

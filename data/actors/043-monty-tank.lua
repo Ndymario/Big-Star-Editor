@@ -1,22 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 43.
+
+local images = {}
+
+local function init(ctx)
+    images.MontyTank = ctx.loadImage("images/MontyTank.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 374
+    y = y - 37
+    width = 72
+    height = 52
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.MontyTank, RenderX - 374, RenderY - 37) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 43,
     name = "Monty Tank",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -374, y = -37, width = 72, height = 52 },
-    renderBounds = { x = -374, y = -37, width = 72, height = 52 },
-    sourceFiles = {
-        "/enemy/body_1.nsbmd",
-        "/enemy/body_2.nsbmd",
-        "/enemy/body_3.nsbmd",
-        "/enemy/choropu.nsbmd",
-        "/enemy/tire.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -25,5 +35,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("body_1.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

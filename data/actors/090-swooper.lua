@@ -1,20 +1,44 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 90.
+
+local images = {}
+
+local function init(ctx)
+    images.Swooper = ctx.loadImage("images/Swooper.png")
+    images.SwooperLarge = ctx.loadImage("images/SwooperLarge.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if d[5] % 0x10 == 1 then
+        x = x - 6
+        y = y - 16
+        width = 26
+        height = 37
+    else
+        height = 18
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if d[5] % 0x10 == 1 then
+        drawn = gfx.blit(renderer, images.SwooperLarge, RenderX - 6, RenderY - 16) or drawn
+    else
+        drawn = gfx.blit(renderer, images.Swooper, RenderX, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 90,
     name = "Swooper",
     category = "Enemies - Underground",
-    color = "#686d76",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A bat.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 18 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 18 },
-    sourceFiles = {
-        "/enemy/basabasa.nsbmd",
-        "/enemy/basabasa_wait.nsbmd",
-    },
     fields = {
         {
             key = "size",
@@ -30,5 +54,8 @@ return {
             },
         },
     },
-    model = readModel("basabasa_wait.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

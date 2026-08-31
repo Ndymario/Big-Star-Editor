@@ -1,19 +1,50 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 179.
+
+local images = {}
+
+local function init(ctx)
+    images.Clockwise = ctx.loadImage("images/Clockwise.png")
+    images.SpinningRectanglePlatform = ctx.loadImage("images/SpinningRectanglePlatform.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 24
+    y = y - 8
+    if (d[2] & 0x10) // 0x10 == 1 then
+        y = y + 8
+    end
+    width = 64
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local RenderX2, RenderY2 = RenderX, RenderY
+    local img
+    local drawn = false
+    if (d[2] & 0x10) // 0x10 == 1 then
+        RenderY = RenderY + 8
+        RenderY2 = RenderY2 + 8
+    end
+    drawn = gfx.blit(renderer, images.SpinningRectanglePlatform, RenderX - 24, RenderY - 8) or drawn
+    img = images.Clockwise
+    if d[3] % 0x2 == 0 then
+        img = gfx.transform(img, 0, true, false)
+    end
+    drawn = gfx.blit(renderer, img, RenderX2 - 8, RenderY2 - 8, 32, 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 179,
     name = "Rotating rectangle lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "'Stick to line' option is unused.",
-    grabBounds = { x = -24, y = -8, width = 64, height = 32 },
-    renderBounds = { x = -24, y = -8, width = 64, height = 32 },
-    sourceFiles = {
-        "/enemy/rect_lift.nsbmd",
-    },
     fields = {
         {
             key = "rotation",
@@ -72,5 +103,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("rect_lift.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 220.
+
+local images = {}
+
+local function init(ctx)
+    images.GiantSpike = ctx.loadImage("images/GiantSpike.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 128
+    width = 64
+    height = 144
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.GiantSpike, RenderX, RenderY - 128) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 220,
     name = "Fast Spike Pillar - Down",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Falling Spike",
-    grabBounds = { x = 0, y = -128, width = 64, height = 144 },
-    renderBounds = { x = 0, y = -128, width = 64, height = 144 },
-    sourceFiles = {
-        "enemy/I_TEST_kui.nsbmd",
-    },
     fields = {
         {
             key = "speed",
@@ -66,5 +79,8 @@ return {
             notes = "60 frames = 1 second.",
         },
     },
-    model = readModel("I_TEST_kui.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

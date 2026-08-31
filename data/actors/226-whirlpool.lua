@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 226.
+
+local images = {}
+
+local function init(ctx)
+    images.WhirlPool = ctx.loadImage("images/WhirlPool.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 78
+    y = y - 164
+    width = 165
+    height = 182
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.WhirlPool, RenderX - 78, RenderY - 164) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 226,
     name = "Whirlpool",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = -78, y = -164, width = 165, height = 182 },
-    renderBounds = { x = -78, y = -164, width = 165, height = 182 },
-    sourceFiles = {
-        "/enemy/waterland_uzu.nsbmd (Dire Dire Docks_whirlpool) [ported from SM64DS]",
-    },
     fields = {
         {
             key = "invisible_when_inactive",
@@ -25,5 +39,8 @@ return {
             },
         },
     },
-    model = readModel("waterland_uzu.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

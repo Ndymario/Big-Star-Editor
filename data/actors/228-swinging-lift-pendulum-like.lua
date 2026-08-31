@@ -1,18 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX - 32, y = actor.pixelY - 6, width = 64, height = 68 }
+end
+
+
 return {
-    schema = 1,
     objectId = 228,
     name = "Swinging Lift (Pendulum-like)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -32, y = -6, width = 64, height = 68 },
-    renderBounds = { x = -32, y = -6, width = 64, height = 68 },
-    sourceFiles = {
-        "/enemy/swing.nsbmd",
-    },
     fields = {
         {
             key = "length",
@@ -94,5 +89,6 @@ return {
             notes = "For full details on the starting position formula, refer to this post: http://nsmbhd.net/post/43562/",
         },
     },
-    model = readModel("swing.nsbmd"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

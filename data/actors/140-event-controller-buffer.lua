@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 140,
     name = "Event Controller Buffer",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "Activates multiple events. It's possible to define a delay time. If the delay is set to 0, the event will be activated instantly. If not, it will wait a specific amount of time before activating.\n\nThe purpose of this sprite in World 3-Ghost House seems to be to make the stairs go down a few seconds after the ? Switch timer is up.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id",
@@ -83,4 +81,6 @@ return {
             },
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

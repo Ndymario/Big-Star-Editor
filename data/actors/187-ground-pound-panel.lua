@@ -1,18 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 187.
+
+local images = {}
+
+local function init(ctx)
+    images.StarGate = ctx.loadImage("images/StarGate.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 32
+    height = 8
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.StarGate, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 187,
     name = "Ground-pound panel",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Needs a ground-pound to be able to pass from top. Is jump-through from bottom.",
-    grabBounds = { x = 0, y = 0, width = 32, height = 8 },
-    renderBounds = { x = 0, y = 0, width = 32, height = 8 },
-    sourceFiles = {
-        "m_hole.nsbmd",
-    },
-    model = readModel("m_hole.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

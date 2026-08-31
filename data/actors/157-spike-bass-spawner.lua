@@ -1,19 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 157.
+
+local images = {}
+
+local function init(ctx)
+    images.SpikeBass = ctx.loadImage("images/SpikeBass.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 3
+    y = y - 10
+    width = 45
+    height = 53
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.SpikeBass, RenderX - 3, RenderY - 10) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 157,
     name = "Spike Bass spawner",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Spawns a Spike Bass into onscreen actor-based liquid if the player is in the zone.\n\nTest: multiple onscreen liquids.",
-    grabBounds = { x = -3, y = -10, width = 45, height = 53 },
-    renderBounds = { x = -3, y = -10, width = 45, height = 53 },
-    sourceFiles = {
-        "/enemy/togepuku.nsbmd",
-    },
     fields = {
         {
             key = "zone_id",
@@ -37,5 +51,8 @@ return {
             notes = "Unused.",
         },
     },
-    model = readModel("togepuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

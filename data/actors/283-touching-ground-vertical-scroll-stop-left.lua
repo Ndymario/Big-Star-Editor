@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 283,
     name = "Touching ground vertical scroll stop left ",
     category = "Camera controllers",
-    color = "#3f9ca8",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "This sprite seems to disable all other camera sprites when activated.\n\nIt also changed horizontal scrolling...I think.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "type",
@@ -37,4 +35,6 @@ return {
             notes = "Can only be set to a max of 31 pixels. Past that move the sprite.",
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

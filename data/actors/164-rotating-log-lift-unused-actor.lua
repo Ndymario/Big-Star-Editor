@@ -1,19 +1,42 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 164.
+
+local images = {}
+
+local function init(ctx)
+    images.SpinningLog = ctx.loadImage("images/SpinningLog.png")
+    images.SpinningLogL = ctx.loadImage("images/SpinningLogL.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    if actor.fields.longer then
+        x = x - 56
+        width = 128
+    else
+        x = x - 24
+        width = 64
+    end
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if actor.fields.longer then
+        drawn = gfx.blit(renderer, images.SpinningLogL, RenderX - 56, RenderY) or drawn
+    else
+        drawn = gfx.blit(renderer, images.SpinningLog, RenderX - 24, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 164,
     name = "Rotating log lift (unused actor)",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -24, y = 0, width = 64, height = 16 },
-    renderBounds = { x = -24, y = 0, width = 64, height = 16 },
-    sourceFiles = {
-        "/enemy/r_lift_L.nsbmd (rotate_lift_Large)",
-        "/enemy/r_lift_S.nsbmd (rotate_lift_Small)",
-    },
     fields = {
         {
             key = "longer",
@@ -23,5 +46,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("r_lift_L.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

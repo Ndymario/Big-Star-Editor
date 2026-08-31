@@ -1,19 +1,25 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 29.
+
+local gfx = {}
+local function init(ctx)
+    gfx.plain = ctx.loadImage("images/CheepCheepGiant.png")
+    gfx.green = ctx.loadImage("images/CheepCheepGiantGreen.png")
+end
+
+local function grabBounds(actor)
+    return { x = actor.pixelX - 20, y = actor.pixelY - 32, width = 63, height = 52 }
+end
+
+local function render(actor, renderer)
+    local image = actor.fields.green_chases_mario == 1 and gfx.green or gfx.plain
+    return renderer:draw(image, { x = actor.pixelX - 20, y = actor.pixelY - 32, width = 63, height = 52 })
+end
+
 return {
-    schema = 1,
     objectId = 29,
     name = "Big Cheep Cheep",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Unused behaviours:\n- Can be defeated by ground pound for 200pts, with no effect [may be default behaviour]",
-    grabBounds = { x = -20, y = -32, width = 63, height = 52 },
-    renderBounds = { x = -20, y = -32, width = 63, height = 52 },
-    sourceFiles = {
-        "/enemy/big_pukupuku.nsbmd",
-    },
     fields = {
         {
             key = "slower",
@@ -31,5 +37,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("big_pukupuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

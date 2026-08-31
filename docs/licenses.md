@@ -4,7 +4,11 @@ This repository is currently GPL-3.0 because the root `LICENSE` is GPL version 3
 
 ## Old NSMB Editor
 
-The current NSMB Editor repository contains GPL-3.0-or-later notices. The generated `data/actors/*.lua` catalog is adapted from its `stageobjsettings.xml` metadata and the zero-settings behavior of `NSMBStageObj.GetGrabBounds()`. `tools/import_nsmbe_actors.py` records that provenance and makes the transformation reproducible. This repository is GPL-3.0, so the licensing remains compatible. NSMBe's bundled sprite PNGs are not copied.
+The current NSMB Editor repository contains GPL-3.0-or-later notices, and this repository is GPL-3.0, so the licensing is compatible in both directions.
+
+Three things are taken from it. The `data/actors/*.lua` catalog is adapted from its `stageobjsettings.xml` metadata and the zero-settings behavior of `NSMBStageObj.GetGrabBounds()`. Individual actors' drawing is ported from `NSMBStageObj.cs`, one case at a time, with the upstream case named in each file's header comment. `data/actors/images` is a verbatim copy of `NSMBe5/Resources/Sprite Images` plus `sprite_invalid.png`, `tileoverrides.png` and `Icons/arrow_down.png`.
+
+Copying those stills reverses an earlier decision to exclude them. Most NSMB actors are 3D models that neither editor renders as geometry, so the stills are the only way to draw them at all; they are NSMBe's own artwork under the same license, not Nintendo ROM data. No ROM data is vendored here.
 
 ## NCPatcher
 

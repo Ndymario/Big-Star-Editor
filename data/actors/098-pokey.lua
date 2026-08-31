@@ -1,38 +1,34 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 98.
 
-local body = loadTexture("sanbo_body.nsbmd")
-local head = loadTexture("sanbo_head.nsbmd")
+local gfx = {}
 
-local function pokeyBounds(actor)
-    local height = 16 * (2 + (actor.data[5] & 7)) + 9
-    return { x = 0, y = 16 - height, width = 18, height = height }
+local function init(ctx)
+    gfx.body = ctx.loadTexture("sanbo_body.nsbmd")
+    gfx.head = ctx.loadTexture("sanbo_head.nsbmd")
 end
 
-local function renderPokey(actor, renderer)
+-- The stack grows upward from the actor's tile, so the box is as tall as the
+-- segment count the height field asks for.
+local function grabBounds(actor)
+    local height = 16 * actor.fields.height + 9
+    return { x = actor.pixelX, y = actor.pixelY + 16 - height, width = 18, height = height }
+end
+
+local function render(actor, renderer)
     local y = actor.pixelY
-    for _ = 0, actor.data[5] & 7 do
-        renderer:draw(body, { x = actor.pixelX, y = y, width = 18, height = 16 })
+    local drawn = false
+    for _ = 2, actor.fields.height do
+        drawn = renderer:draw(gfx.body, { x = actor.pixelX, y = y, width = 18, height = 16 }) or drawn
         y = y - 16
     end
-    renderer:draw(head, { x = actor.pixelX, y = y - 9, width = 18, height = 25 })
+    return renderer:draw(gfx.head, { x = actor.pixelX, y = y - 9, width = 18, height = 25 }) or drawn
 end
 
 return {
-    schema = 1,
     objectId = 98,
     name = "Pokey",
     category = "Enemies - Desert",
-    color = "#c9833b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A tall cactus enemy.\n\nUnused behaviours:\n- Can be defeated by Drill Stomp",
-    grabBounds = { x = 0, y = -25, width = 18, height = 41 },
-    renderBounds = { x = 0, y = -25, width = 18, height = 41 },
-    sourceFiles = {
-        "/enemy/sanbo_body.nsbmd",
-        "/enemy/sanbo_head.nsbmd",
-    },
     fields = {
         {
             key = "height",
@@ -43,8 +39,8 @@ return {
             valueOffset = 2,
         },
     },
-    model = readModel("sanbo_head.nsbmd"),
-    getGrabBounds = pokeyBounds,
-    getRenderBounds = pokeyBounds,
-    onRender = renderPokey,
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

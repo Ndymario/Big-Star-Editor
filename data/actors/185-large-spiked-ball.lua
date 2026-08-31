@@ -1,18 +1,31 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 185.
+
+local images = {}
+
+local function init(ctx)
+    images.SpikeBallLarge = ctx.loadImage("images/SpikeBallLarge.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 42
+    width = 63
+    height = 58
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.SpikeBallLarge, RenderX, RenderY - 42) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 185,
     name = "Large Spiked Ball",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = -42, width = 63, height = 58 },
-    renderBounds = { x = 0, y = -42, width = 63, height = 58 },
-    sourceFiles = {
-        "/enemy/big_iron_ball.nsbmd",
-    },
     fields = {
         {
             key = "direction",
@@ -62,5 +75,8 @@ return {
             notes = "This one will have no effect if Destroyer ID 1 is equal to 0.",
         },
     },
-    model = readModel("big_iron_ball.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

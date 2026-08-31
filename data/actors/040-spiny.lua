@@ -1,21 +1,30 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 40.
+
+local images = {}
+
+local function init(ctx)
+    images.Spiny = ctx.loadImage("images/Spiny.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    width = 20
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Spiny, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 40,
     name = "Spiny",
     category = "Enemies - Desert",
-    color = "#c9833b",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "This sprite can be spawned by Lakitu (unused) and Lakitus spawned by the Lakitu Spawner.",
-    grabBounds = { x = 0, y = 0, width = 20, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 20, height = 16 },
-    sourceFiles = {
-        "/enemy/paipo.nsbmd",
-        "/enemy/togezo.nsbmd",
-        "/enemy/togezo_shell.nsbmd",
-    },
     fields = {
         {
             key = "egg_type",
@@ -62,5 +71,8 @@ return {
             },
         },
     },
-    model = readModel("paipo.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

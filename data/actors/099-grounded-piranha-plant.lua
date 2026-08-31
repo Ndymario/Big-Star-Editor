@@ -1,18 +1,34 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 99.
+
+local images = {}
+
+local function init(ctx)
+    images.PiranhaplantGround = ctx.loadImage("images/PiranhaplantGround.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y + 3
+    width = 33
+    height = 29
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.PiranhaplantGround, RenderX, RenderY + 3) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 99,
     name = "Grounded Piranha Plant",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Unused behaviors:\n- Can be defeated by Drill Stomp",
-    grabBounds = { x = 0, y = 3, width = 33, height = 29 },
-    renderBounds = { x = 0, y = 3, width = 33, height = 29 },
-    sourceFiles = {
-        "/enemy/pakkun.nsbmd",
-    },
-    model = readModel("pakkun.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

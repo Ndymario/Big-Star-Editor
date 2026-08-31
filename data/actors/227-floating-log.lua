@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 227.
+
+local images = {}
+
+local function init(ctx)
+    images.Log = ctx.loadImage("images/Log.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 128
+    y = y - 32
+    width = 256
+    height = 64
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Log, RenderX - 128, RenderY - 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 227,
     name = "Floating log",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = false,
-    grabBounds = { x = -128, y = -32, width = 256, height = 64 },
-    renderBounds = { x = -128, y = -32, width = 256, height = 64 },
-    sourceFiles = {
-        "/enemy/W_maruta.nsbmd",
-    },
     fields = {
         {
             key = "unknown_4",
@@ -29,5 +43,8 @@ return {
             notes = "it don't need to get a value",
         },
     },
-    model = readModel("W_maruta.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

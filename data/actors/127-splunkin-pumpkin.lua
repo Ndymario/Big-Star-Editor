@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 127.
+
+local images = {}
+
+local function init(ctx)
+    images.Pumpkin = ctx.loadImage("images/Pumpkin.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 2
+    width = 18
+    height = 18
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Pumpkin, RenderX, RenderY - 2) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 127,
     name = "Splunkin (pumpkin)",
     category = "Enemies - Ghost House",
-    color = "#7b5aa6",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A walking pumpkin.",
-    grabBounds = { x = 0, y = -2, width = 18, height = 18 },
-    renderBounds = { x = 0, y = -2, width = 18, height = 18 },
-    sourceFiles = {
-        "/enemy/kabochan.nsbmd",
-    },
     fields = {
         {
             key = "explodes_at_start",
@@ -24,5 +37,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("kabochan.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

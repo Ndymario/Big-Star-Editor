@@ -1,19 +1,35 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 214.
+
+local images = {}
+
+local function init(ctx)
+    images.SnakeBlock = ctx.loadImage("images/SnakeBlock.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    width = 48 + (d[4] & 0xF0)
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    for l = 0, ((d[4] & 0xF0) // 0x10) + 2 do
+        drawn = gfx.blit(renderer, images.SnakeBlock, RenderX, RenderY) or drawn
+        RenderX = RenderX + 16
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 214,
     name = "Snake Block",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "It destroys any solid tiles it moves over. The sprite uses the green block tile in jyotyu map16. Diagonal directions don't work properly.",
-    grabBounds = { x = 0, y = 0, width = 48, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 48, height = 16 },
-    sourceFiles = {
-        "/BG_*/*jyotyu*",
-    },
     fields = {
         {
             key = "path_id",
@@ -67,4 +83,8 @@ return {
             checkboxValue = 1,
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

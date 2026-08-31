@@ -1,15 +1,22 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 80.
+
+local images = {}
+
+local function init(ctx)
+    images.RedCoin = ctx.loadImage("images/RedCoin.png")
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.RedCoin, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 80,
     name = "Red Coin",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id_1",
@@ -33,4 +40,6 @@ return {
             notes = "If you have multiple sets of red Coins in a level, each set must have a unique ID or they will not be counted properly.",
         },
     },
+    init = init,
+    render = render,
 }

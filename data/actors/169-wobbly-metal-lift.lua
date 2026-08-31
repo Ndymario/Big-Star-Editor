@@ -1,20 +1,37 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 169.
+
+local images = {}
+
+local function init(ctx)
+    images.HangingPlatform = ctx.loadImage("images/HangingPlatform.png")
+    images.HangingPlatformChain = ctx.loadImage("images/HangingPlatformChain.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 192
+    height = 32
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.HangingPlatform, RenderX, RenderY) or drawn
+    RenderX = RenderX + 92
+    for l = 0, (6) - 1 do
+        RenderY = RenderY - 32
+        drawn = gfx.blit(renderer, images.HangingPlatformChain, RenderX, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 169,
     name = "Wobbly metal lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "Wobbles when the player steps on it. Duh!",
-    grabBounds = { x = 0, y = 0, width = 192, height = 32 },
-    renderBounds = { x = 0, y = 0, width = 192, height = 32 },
-    sourceFiles = {
-        "/enemy/W_rift.nsbmd (SOMETHING_LIFT)",
-        "possibly: W_kusari.nsbmd ([SOMETHING]_[SOMETHING]) (might be for something else)",
-    },
     fields = {
         {
             key = "maximum_tilting",
@@ -29,5 +46,8 @@ return {
             },
         },
     },
-    model = readModel("W_rift.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

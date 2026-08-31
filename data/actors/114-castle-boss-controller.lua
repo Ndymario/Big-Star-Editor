@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 114,
     name = "Castle boss controller",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Spawns any boss outside of the final boss. for more info, see the Final Bowser controller.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "target_id",
@@ -50,4 +48,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

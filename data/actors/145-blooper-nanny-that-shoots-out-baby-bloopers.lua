@@ -1,19 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 145.
+
+local images = {}
+
+local function init(ctx)
+    images.BlooperWithMini = ctx.loadImage("images/BlooperWithMini.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 32
+    x = x - 8
+    width = 42
+    height = 64
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.BlooperWithMini, RenderX - 8, RenderY - 32) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 145,
     name = "Blooper Nanny that shoots out Baby Bloopers",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "This one shoots out baby bloopers after a rainbow effect",
-    grabBounds = { x = -8, y = -32, width = 42, height = 64 },
-    renderBounds = { x = -8, y = -32, width = 42, height = 64 },
-    sourceFiles = {
-        "/enemy/gesso.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -35,5 +49,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("gesso.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

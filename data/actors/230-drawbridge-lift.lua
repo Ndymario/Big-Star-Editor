@@ -1,18 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX - 16, y = actor.pixelY, width = 32, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 230,
     name = "Drawbridge lift",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -16, y = 0, width = 32, height = 16 },
-    renderBounds = { x = -16, y = 0, width = 32, height = 16 },
-    sourceFiles = {
-        "/enemy/d_bridge.nsbtx (draw_bridge)",
-    },
     fields = {
         {
             key = "length_of_side",
@@ -97,5 +92,6 @@ return {
             notes = "Enables/disables movement. Unused.",
         },
     },
-    model = readModel("d_bridge.nsbtx"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

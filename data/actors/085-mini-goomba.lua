@@ -1,20 +1,45 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 85.
+
+local images = {}
+
+local function init(ctx)
+    images.MiniGoomba = ctx.loadImage("images/MiniGoomba.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if actor.fields.shift_block_right then
+        x = x + 8
+    end
+    if actor.fields.shift_block_down then
+        y = y + 8
+    end
+    width = 8
+    height = 8
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if actor.fields.shift_block_right then
+        RenderX = RenderX + 8
+    end
+    if actor.fields.shift_block_down then
+        RenderY = RenderY + 8
+    end
+    drawn = gfx.blit(renderer, images.MiniGoomba, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 85,
     name = "Mini Goomba",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Unused behaviours:\n- Jumps with the music like goombas do [may be goomba leftover]",
-    grabBounds = { x = 0, y = 0, width = 8, height = 8 },
-    renderBounds = { x = 0, y = 0, width = 8, height = 8 },
-    sourceFiles = {
-        "/I_kuribo256_ncg.bin",
-        "/I_enemy_ncl.bin",
-    },
     fields = {
         {
             key = "shift_block_right",
@@ -31,6 +56,8 @@ return {
             checkboxValue = 1,
         },
     },
-    graphics = readGraphics("I_kuribo256_ncg.bin"),
-    palette = readPalette("I_enemy_ncl.bin"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

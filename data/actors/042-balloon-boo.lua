@@ -1,19 +1,33 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 42.
+
+local images = {}
+
+local function init(ctx)
+    images.BalloonBoo = ctx.loadImage("images/BalloonBoo.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 53
+    y = y - 106
+    width = 109
+    height = 108
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.BalloonBoo, RenderX - 53, RenderY - 106) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 42,
     name = "Balloon Boo",
     category = "Enemies - Ghost House",
-    color = "#7b5aa6",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "As far as I know, only killable with a star, though I guess if it runs out of air it dies.",
-    grabBounds = { x = -53, y = -106, width = 109, height = 108 },
-    renderBounds = { x = -53, y = -106, width = 109, height = 108 },
-    sourceFiles = {
-        "/enemy/balloon_teresa.nsbmd",
-    },
     fields = {
         {
             key = "stays_in_zone",
@@ -53,5 +67,8 @@ return {
             },
         },
     },
-    model = readModel("balloon_teresa.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,18 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 76,
     name = "Big Unagi",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/enemy/morray_big.nsbmd",
-    },
     fields = {
         {
             key = "visible_facing_right",
@@ -37,5 +32,6 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("morray_big.nsbmd"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

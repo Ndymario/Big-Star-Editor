@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 272,
     name = "0 Stick to bottom length activator left",
     category = "Camera controllers",
-    color = "#3f9ca8",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "The DS screen is 12 tiles high. When this is used as a top limit, it will control the tiles below the icon. As a bottom limit, it controls tiles above.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "type",
@@ -38,4 +36,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

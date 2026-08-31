@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 254.
+
+local images = {}
+
+local function init(ctx)
+    images.SpinBoard = ctx.loadImage("images/SpinBoard.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 6
+    width = 26
+    height = 26
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.SpinBoard, RenderX - 6, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 254,
     name = "Spin Block",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = false,
     notes = "Random notes:\n- When the player is fully submerged in water, they can only use the spin block when ducking, and even then, it just propels the swimming player upward - not putting them into \"spinning mode\". When the player reaches the surface (if there is one), they stop going up.",
-    grabBounds = { x = -6, y = 0, width = 26, height = 26 },
-    renderBounds = { x = -6, y = 0, width = 26, height = 26 },
-    sourceFiles = {
-        "/enemy/spin_obj.nsbmd (spin_object)",
-    },
     fields = {
         {
             key = "trigger_id",
@@ -44,5 +57,8 @@ return {
             notes = "does not need to have a value to appear",
         },
     },
-    model = readModel("spin_obj.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

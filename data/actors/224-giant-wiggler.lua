@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 224,
     name = "Giant Wiggler",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "Todo: test path values and other nybbles",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "path_id",
@@ -20,4 +18,6 @@ return {
             notes = "make paths straight and to a view edge block, or the sprite will not appear",
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

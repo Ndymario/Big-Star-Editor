@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 92,
     name = "Coin Spawner (unused actor)",
     category = "Other",
-    color = "#eeB24b",
-    shape = "diamond",
-    known = true,
-    complete = true,
     notes = "Todo: maximum amount of coins in air before slowdown + max in air before crash\n\nVideos that show some (0-15) of the different coin speeds can be found here:\nhttps://www.youtube.com/playlist?list=PLKKqYpRH33bLx3dywJ8y43uN1PGdqOckw\ncoin amount was 5",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "trigger_id",
@@ -41,4 +39,6 @@ return {
             checkboxValue = 1,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

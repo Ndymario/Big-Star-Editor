@@ -1,22 +1,41 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 248.
+
+local images = {}
+
+local function init(ctx)
+    images.BulletBillCannon = ctx.loadImage("images/BulletBillCannon.png")
+    images.BulletBillCannonTop = ctx.loadImage("images/BulletBillCannonTop.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    height = (d[5] & 0xF0) + 32
+    y = y - (height - 16)
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    for l = 0, d[5] // 0x10 do
+        if l == d[5] // 0x10 then
+            drawn = gfx.blit(renderer, images.BulletBillCannonTop, RenderX, RenderY - 16) or drawn
+        else
+            drawn = gfx.blit(renderer, images.BulletBillCannon, RenderX, RenderY) or drawn
+            RenderY = RenderY - 16
+        end
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 248,
     name = "Bill Blaster (Bullet Bill launcher)",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "Sprite set: 5-1",
-    grabBounds = { x = 0, y = -16, width = 16, height = 32 },
-    renderBounds = { x = 0, y = -16, width = 16, height = 32 },
-    sourceFiles = {
-        "/enemy/I_killer_ashiba.nsbmd (SOMETHING_killer_scaffold)",
-        "/enemy/I_killer_black.nsbmd",
-        "/enemy/I_killer_houdai.nsbmd (SOMETHING_killer_battery)",
-        "/enemy/killer.nsmbd",
-    },
     fields = {
         {
             key = "shooting_direction",
@@ -52,5 +71,8 @@ return {
             notes = "is stored by the game for ulterior use but seems to never be called, still needs testing. Doesn't seem to affect spawned Bullet Bills settings.",
         },
     },
-    model = readModel("I_killer_ashiba.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

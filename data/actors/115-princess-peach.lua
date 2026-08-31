@@ -1,19 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 115.
+
+local images = {}
+
+local function init(ctx)
+    images.PrincessPeach = ctx.loadImage("images/PrincessPeach.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 22
+    width = 29
+    height = 38
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.PrincessPeach, RenderX, RenderY - 22) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 115,
     name = "Princess Peach",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Seems to only say \"Help!\" when paired with the Final Boss Controller.",
-    grabBounds = { x = 0, y = -22, width = 29, height = 38 },
-    renderBounds = { x = 0, y = -22, width = 29, height = 38 },
-    sourceFiles = {
-        "/enemy/peach.nsbmd",
-    },
     fields = {
         {
             key = "ignore_cinematics",
@@ -24,5 +37,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("peach.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

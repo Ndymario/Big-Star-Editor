@@ -1,20 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 59.
+
+local images = {}
+
+local function init(ctx)
+    images.Lakitu = ctx.loadImage("images/Lakitu.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    y = y - 23
+    width = 26
+    height = 39
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Lakitu, RenderX, RenderY - 23) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 59,
     name = "Lakitu spawner",
     category = "Enemies - Overground",
-    color = "#b5651d",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Spawns Lakitu (40).\n\nThe lakitu spawns if Mario is inside Lakitu inside the Zone. If Lakitu is killed, it is respawned. If Mario exits the Zone, Lakitu despawns.\nIf Sprite Set 5:1 (Bullet Bill/Bob-omb) isn't enabled, the game will freeze when Lakitu tries to display the Spiny egg model.\n",
-    grabBounds = { x = 0, y = -23, width = 26, height = 39 },
-    renderBounds = { x = 0, y = -23, width = 26, height = 39 },
-    sourceFiles = {
-        "/enemy/jugem_body.nsmbd",
-        "/enemy/jugem_cloud.nsmbd",
-    },
     fields = {
         {
             key = "zone_id",
@@ -41,4 +53,8 @@ return {
             checkboxValue = 1,
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 208.
+
+local images = {}
+
+local function init(ctx)
+    images.Barrel = ctx.loadImage("images/Barrel.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 16
+    y = y - 8
+    width = 48
+    height = 48
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Barrel, RenderX - 16, RenderY - 8) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 208,
     name = "Floating barrel",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = -16, y = -8, width = 48, height = 48 },
-    renderBounds = { x = -16, y = -8, width = 48, height = 48 },
-    sourceFiles = {
-        "/enemy/barrel.nsbmd",
-    },
     fields = {
         {
             key = "starts_a_bit_submerged",
@@ -22,5 +36,8 @@ return {
             checkboxValue = 1,
         },
     },
-    model = readModel("barrel.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

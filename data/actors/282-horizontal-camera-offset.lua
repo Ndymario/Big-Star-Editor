@@ -1,16 +1,14 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 282,
     name = "Horizontal camera offset",
     category = "Camera controllers",
-    color = "#3f9ca8",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "You must set values for right and below tiles distances to activate. These are just like zones, the tiles are coordinates of activation. Setting either setting to zero will not give Mario an area to activate the sprite.\n\nThe default game lag is 2 tiles. This is in addition to that lag. This will shift Mario's center to one side or the other.\n\nCamera will not return to normal until re-entering sprite zone. So far, at least until more data is found.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "pixel_zone_below",
@@ -35,4 +33,6 @@ return {
             signed = true,
         },
     },
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

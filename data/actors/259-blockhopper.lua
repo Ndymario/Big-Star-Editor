@@ -1,21 +1,50 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 259.
+
+local images = {}
+
+local function init(ctx)
+    images.Brick = ctx.loadImage("images/Brick.png")
+    images.JumpingBrickBlock = ctx.loadImage("images/JumpingBrickBlock.png")
+    images.JumpingQBlock = ctx.loadImage("images/JumpingQBlock.png")
+    images.JumpingQBlockOverrides = ctx.loadImage("images/JumpingQBlockOverrides.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    height = (d[5] % 0x10) * 16 + 30
+    y = y - (height - 16)
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local width, height = 0, 0
+    local img
+    local drawn = false
+    RenderY = RenderY - 14
+    img = images.JumpingQBlock
+    if (d[5] & 0x10) // 0x10 == 1 then
+        img = images.JumpingBrickBlock
+    end
+    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
+    if (actor.fields.item) <= 3 then
+        drawn = gfx.blit(renderer, images.JumpingQBlockOverrides, RenderX, RenderY + 3, nil, nil, { x = (actor.fields.item) * 16, y = 0, width = 16, height = 16 }) or drawn
+    end
+    for l = 0, (d[5] % 0x10) - 1 do
+        RenderY = RenderY - 16
+        drawn = gfx.blit(renderer, images.Brick, RenderX, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 259,
     name = "Blockhopper",
     category = "Enemies - Desert",
-    color = "#c9833b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A value of 5 (which is unused) for nybble 9 will yield different results for each region due to a glitch (its reading different invalid data from the memory - different in each region because of the differences in code between regions):\nUS : Starman\nJP : Flower\nEU : Mini-mushroom\nKS : Blue shell\nCH : Mushroom/flower",
-    grabBounds = { x = 0, y = -14, width = 16, height = 30 },
-    renderBounds = { x = 0, y = -14, width = 16, height = 30 },
-    sourceFiles = {
-        "/enemy/gorem_body.nsbmd",
-        "/enemy/gorem_head.nsbmd",
-        "/enemy/gorem_head1.nsbmd",
-    },
     fields = {
         {
             key = "item",
@@ -59,5 +88,8 @@ return {
             valueOffset = 1,
         },
     },
-    model = readModel("gorem_body.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

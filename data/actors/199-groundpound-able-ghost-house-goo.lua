@@ -1,15 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 199.
+
+local images = {}
+
+local function init(ctx)
+    images.GroundpoundGoo = ctx.loadImage("images/GroundpoundGoo.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = (d[5] % 0x10 + 1) * 16
+    height = (d[5] // 0x10 + 1) * 16
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.GroundpoundGoo, RenderX, RenderY, (d[5] % 0x10 + 1) * 16, (d[5] // 0x10 + 1) * 16) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 199,
     name = "Groundpound-able ghost house goo",
     category = "Platforms and ropes",
-    color = "#4f86c6",
-    shape = "box",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "length",
@@ -26,4 +43,8 @@ return {
             valueOffset = 1,
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

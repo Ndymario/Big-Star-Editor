@@ -1,19 +1,43 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 269.
+
+local images = {}
+
+local function init(ctx)
+    images.WarpCannon = ctx.loadImage("images/WarpCannon.png")
+    images.WarpWorlds = ctx.loadImage("images/WarpWorlds.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x - 9
+    y = y - 26
+    width = 66
+    height = 90
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local width, height = 0, 0
+    local drawn = false
+    drawn = gfx.blit(renderer, images.WarpCannon, RenderX - 9, RenderY - 26) or drawn
+    local world = actor.fields.destination_world
+    if world >= 5 and world <= 8 then
+        world = world - 5
+    else
+        world = 0
+    end
+    drawn = gfx.blit(renderer, images.WarpWorlds, RenderX + 26, RenderY + 23, nil, nil, { x = world * 18, y = 0, width = 18, height = 19 }) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 269,
     name = "Warp Cannon",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "Note: \"w_cannon.nsbmd\" cannot be opened with NSMBe, to fix this problem, see this tutorial:\n\nhttp://nsmbhd.net/thread/3250-fixing-already-opened-files-tutorial/",
-    grabBounds = { x = -9, y = -26, width = 66, height = 90 },
-    renderBounds = { x = -9, y = -26, width = 66, height = 90 },
-    sourceFiles = {
-        "/enemy/w_cannon.nsbmd",
-    },
     fields = {
         {
             key = "destination_world",
@@ -33,5 +57,8 @@ return {
             },
         },
     },
-    model = readModel("w_cannon.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

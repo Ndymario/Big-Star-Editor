@@ -1,19 +1,31 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 280.
+
+local images = {}
+
+local function init(ctx)
+    images.Jungle = ctx.loadImage("images/Jungle.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    width = 256
+    height = 64
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.Jungle, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 280,
     name = "Jungle FG Effect (Unused Actor)",
     category = "Effects and decorations",
-    color = "#5b9b86",
-    shape = "box",
-    known = true,
-    complete = true,
     notes = "* The width of the effect is 15 blocks right from the sprite's place and height is 3 blocks down from the sprite's place and i.e. it is 16x4. The image is repeated sideways\n\n* The effect is above most things.\n\n* Only the first sprite placed defines the where the effect is located.\n\n* The X position of the sprite does not affect the X or Y position of the effect. The Y position does affect the Y position of the effect.\n",
-    grabBounds = { x = 0, y = 0, width = 256, height = 64 },
-    renderBounds = { x = 0, y = 0, width = 256, height = 64 },
-    sourceFiles = {
-        "/polygon_unit/W_junglekusa_10.nsbtx",
-    },
     fields = {
         {
             key = "swimmable",
@@ -31,5 +43,8 @@ return {
             signed = true,
         },
     },
-    model = readModel("W_junglekusa_10.nsbtx"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

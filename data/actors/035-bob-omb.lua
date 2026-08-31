@@ -1,20 +1,31 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 35.
+
+local images = {}
+
+local function init(ctx)
+    images.BomOmb = ctx.loadImage("images/BomOmb.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local height = 16
+    height = 18
+    y = y - 2
+    return { x = x, y = y, width = 16, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.BomOmb, RenderX, RenderY - 2) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 35,
     name = "Bob-omb",
     category = "Enemies - Castle",
-    color = "#535967",
-    shape = "ellipse",
-    known = true,
-    complete = true,
     notes = "A walking bomb.",
-    grabBounds = { x = 0, y = -2, width = 16, height = 18 },
-    renderBounds = { x = 0, y = -2, width = 16, height = 18 },
-    sourceFiles = {
-        "/enemy/bombhei.nsbca",
-        "/enemy/bombhei.nsbmd",
-    },
     fields = {
         {
             key = "behaviour",
@@ -42,5 +53,8 @@ return {
             },
         },
     },
-    model = readModel("bombhei.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

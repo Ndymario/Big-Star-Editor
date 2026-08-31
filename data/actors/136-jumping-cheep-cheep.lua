@@ -1,16 +1,30 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 136.
+
+local images = {}
+
+local function init(ctx)
+    images.CheepCheep = ctx.loadImage("images/CheepCheep.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width = 16
+    width = 21
+    return { x = x, y = y, width = width, height = 16 }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.CheepCheep, RenderX, RenderY) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 136,
     name = "Jumping Cheep Cheep",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "Funny (but useful) Glitch:\nIf you put a Green Cheep Cheep on the same screen as one of these, it becomes green!",
-    grabBounds = { x = 0, y = 0, width = 21, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 21, height = 16 },
     fields = {
         {
             key = "unknown_10",
@@ -32,4 +46,8 @@ return {
             notes = "Set to 1 for some of them in the Cheepskipper battle.",
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

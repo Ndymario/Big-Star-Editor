@@ -1,16 +1,67 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 66.
+
+local images = {}
+
+local function init(ctx)
+    images.Coin = ctx.loadImage("images/Coin.png")
+    images.CoinInBubble = ctx.loadImage("images/CoinInBubble.png")
+end
+
+local function grabBounds(actor)
+    local d = actor.data
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    if actor.fields.type == 1 then
+        x = x - 4
+        y = y - 4
+        width = 24
+        height = 24
+    elseif actor.fields.type == 2 then
+        x = x - 4
+        y = y - 20
+        width = 72
+        height = 40
+    end
+    if actor.fields.type ~= 1 and actor.fields.type ~= 2 then
+        if actor.fields.shift_8_pixels_down then
+            y = y + 8
+        end
+        if actor.fields.shift_8_pixels_right then
+            x = x + 8
+        end
+    end
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local d = actor.data
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    if actor.fields.type ~= 1 and actor.fields.type ~= 2 then
+        if actor.fields.shift_8_pixels_down then
+            RenderY = RenderY + 8
+        end
+        if actor.fields.shift_8_pixels_right then
+            RenderX = RenderX + 8
+        end
+    end
+    if actor.fields.type == 1 then
+        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX - 4, RenderY - 4) or drawn
+    elseif actor.fields.type == 2 then
+        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX - 4, RenderY - 4) or drawn
+        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX + 20, RenderY - 20) or drawn
+        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX + 44, RenderY - 4) or drawn
+    else
+        drawn = gfx.blit(renderer, images.Coin, RenderX, RenderY) or drawn
+    end
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 66,
     name = "Coin",
     category = "Uncategorized",
-    color = "#8b8f96",
-    shape = "diamond",
-    known = true,
-    complete = false,
     notes = "This is an actor version of the coin. Because it is an actor, you can do more things with it.",
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
     fields = {
         {
             key = "unk_4",
@@ -75,4 +126,8 @@ return {
             },
         },
     },
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

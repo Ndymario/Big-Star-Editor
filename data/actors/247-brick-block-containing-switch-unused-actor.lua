@@ -1,22 +1,13 @@
 -- Imported from NSMB Editor 5 stageobjsettings.xml.
+local function grabBounds(actor)
+    return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
+end
+
+
 return {
-    schema = 1,
     objectId = 247,
     name = "Brick Block containing ! Switch (unused actor)",
     category = "Event controllers",
-    color = "#d4a72c",
-    shape = "diamond",
-    known = true,
-    complete = true,
-    grabBounds = { x = 0, y = 0, width = 16, height = 16 },
-    renderBounds = { x = 0, y = 0, width = 16, height = 16 },
-    sourceFiles = {
-        "/obj/I_switch_ncg.bin",
-        "/obj/I_enemy_ncl.bin",
-        "/obj/I_enemy_B_ncl.bin",
-        "/obj/I_enemy_W_ncl.bin",
-        "/obj/I_enemy_R_ncl.bin",
-    },
     fields = {
         {
             key = "triggering_event_id",
@@ -104,6 +95,6 @@ return {
             checkboxValue = 1,
         },
     },
-    graphics = readGraphics("I_switch_ncg.bin"),
-    palette = readPalette("I_enemy_ncl.bin"),
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

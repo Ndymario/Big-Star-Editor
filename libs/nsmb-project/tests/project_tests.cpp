@@ -584,11 +584,6 @@ int main(int argc, char** argv) {
     for(std::size_t s=0;s<10;++s)for(std::size_t b=0;b<10;++b)put_u32(bank_table,8+(s*10+b)*4,banks[s][b]);for(std::size_t b=0;b<10;++b)put_u32(bank_table,8+(15*10+b)*4,12+b);
     auto resolved_banks=nsmb::project::find_object_bank_overlays(bank_table);assert(resolved_banks&&resolved_banks.value()[15][9]==21);
 
-    // Reference module assets are a private cross-check and never committed; run the
-    // model-backed actor preview only where that tree happens to sit beside the repo.
-    const auto actor_model=fs::path(__FILE__).parent_path()/"../../../deps/nsmb-coop-module/modules/coop/nitrofs/en/enemy/koopa_new.nsbmd";
-    if(fs::exists(actor_model)){nsmb::project::ActorResourceFiles actor;actor.model=actor_model;auto actor_image=nsmb::project::load_actor_graphics(actor);assert(actor_image&&actor_image.value().width&&actor_image.value().height);}
-
     auto outside = nsmb::project::make_project_relative(dir, fs::temp_directory_path() / "outside-file.bin");
     assert(!outside);
 

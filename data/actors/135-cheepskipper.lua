@@ -1,18 +1,32 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 135.
+
+local images = {}
+
+local function init(ctx)
+    images.CheepSkipper = ctx.loadImage("images/CheepSkipper.png")
+end
+
+local function grabBounds(actor)
+    local x, y = actor.pixelX, actor.pixelY
+    local width, height = 16, 16
+    x = x + 22
+    y = y - 29
+    width = 59
+    height = 48
+    return { x = x, y = y, width = width, height = height }
+end
+
+local function render(actor, renderer)
+    local RenderX, RenderY = actor.pixelX, actor.pixelY
+    local drawn = false
+    drawn = gfx.blit(renderer, images.CheepSkipper, RenderX + 22, RenderY - 29) or drawn
+    return drawn
+end
+
 return {
-    schema = 1,
     objectId = 135,
     name = "Cheepskipper",
     category = "Bosses and cutscenes",
-    color = "#b84b4b",
-    shape = "ellipse",
-    known = true,
-    complete = true,
-    grabBounds = { x = 22, y = -29, width = 59, height = 48 },
-    renderBounds = { x = 22, y = -29, width = 59, height = 48 },
-    sourceFiles = {
-        "/enemy/bosspuku.nsbmd",
-    },
     fields = {
         {
             key = "trigger_id_1",
@@ -27,5 +41,8 @@ return {
             bitWidth = 8,
         },
     },
-    model = readModel("bosspuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }

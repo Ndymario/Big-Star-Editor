@@ -1775,6 +1775,22 @@ void MainWindow::reloadActorDefinitions() {
         if (found == filesystemView_.entries.end())
             return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "actor resource file is missing: " + std::string(name));
         return !found->source.empty() ? found->source : found->extracted;
+    }, [](std::span<const std::uint8_t> bytes) -> nsmb::core::Result<nsmb::formats::RgbaImage> {
+        // nsmb-project carries no image codec, so the Qt layer supplies one for
+        // the stills that ship beside actor scripts.
+        QImage decoded;
+        if (!decoded.loadFromData(QByteArray(reinterpret_cast<const char*>(bytes.data()),
+                                             static_cast<qsizetype>(bytes.size()))))
+            return nsmb::core::make_error(nsmb::core::ErrorCode::ParseError, "could not decode the actor image");
+        decoded = decoded.convertToFormat(QImage::Format_RGBA8888);
+        nsmb::formats::RgbaImage image;
+        image.width = static_cast<std::size_t>(decoded.width());
+        image.height = static_cast<std::size_t>(decoded.height());
+        image.pixels.resize(image.width * image.height * 4U);
+        for (std::size_t y = 0; y < image.height; ++y)
+            std::copy_n(decoded.constScanLine(static_cast<int>(y)), image.width * 4U,
+                        image.pixels.begin() + static_cast<std::ptrdiff_t>(y * image.width * 4U));
+        return image;
     });
     if (!definitions) {
         log("Lua actors: " + QString::fromStdString(definitions.error().message));
@@ -2253,24 +2269,16 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         const auto* definition = actorDefinitions_.by_object_id(actor.object_id);
         if (!definition) continue;
         actor.name = definition->sprite.name;
-        actor.graphics = definition->graphics;
-        actor.palette = definition->palette;
-        actor.model = definition->model;
     }
     for (const auto& definition : actorDefinitions_.actors) if (definition.hash) {
         nsmb::project::ActorResourceFiles actor;
         actor.hash = definition.hash;
         actor.object_id = definition.sprite.object_id;
         actor.name = definition.sprite.name;
-        actor.graphics = definition.graphics;
-        actor.palette = definition.palette;
-        actor.model = definition.model;
         resources.value().actors.push_back(std::move(actor));
     }
     for (const auto& definition : actorDefinitions_.actors) {
         resources.value().watched_files.push_back(definition.source);
-        for (const auto& path : {definition.graphics, definition.palette, definition.model})
-            if (!path.empty()) resources.value().watched_files.push_back(path);
         for (const auto& path : definition.render_resources)
             if (!path.empty()) resources.value().watched_files.push_back(path);
     }

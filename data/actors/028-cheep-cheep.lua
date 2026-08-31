@@ -1,19 +1,25 @@
--- Imported from NSMB Editor 5 stageobjsettings.xml.
+-- Ported from NSMB Editor 5's NSMBStageObj.cs case 28.
+
+local gfx = {}
+local function init(ctx)
+    gfx.plain = ctx.loadImage("images/CheepCheep.png")
+    gfx.green = ctx.loadImage("images/CheepCheepGreen.png")
+end
+
+local function grabBounds(actor)
+    return { x = actor.pixelX - 1, y = actor.pixelY + 4, width = 19, height = 18 }
+end
+
+local function render(actor, renderer)
+    local image = actor.fields.type == 1 and gfx.green or gfx.plain
+    return renderer:draw(image, { x = actor.pixelX - 1, y = actor.pixelY + 4, width = 19, height = 18 })
+end
+
 return {
-    schema = 1,
     objectId = 28,
     name = "Cheep Cheep",
     category = "Enemies - Water",
-    color = "#3f7fc4",
-    shape = "ellipse",
-    known = true,
-    complete = false,
     notes = "There are more values that are used by the Cheep Cheep spawner.",
-    grabBounds = { x = -1, y = 4, width = 19, height = 18 },
-    renderBounds = { x = -1, y = 4, width = 19, height = 18 },
-    sourceFiles = {
-        "/enemy/pukupuku.nsbmd",
-    },
     fields = {
         {
             key = "slower",
@@ -49,5 +55,8 @@ return {
             },
         },
     },
-    model = readModel("pukupuku.nsbmd"),
+    init = init,
+    render = render,
+    grabBounds = grabBounds,
+    renderBounds = grabBounds,
 }
