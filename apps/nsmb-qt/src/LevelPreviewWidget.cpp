@@ -169,8 +169,16 @@ void paintActorCommand(QPainter& painter, const nsmb::project::LuaActorDrawComma
                            static_cast<int>(command.image->height),
                            static_cast<int>(command.image->width * 4U),
                            QImage::Format_RGBA8888);
+        // An axis-aligned blit is drawn with antialiasing off: feathered edges
+        // let the background through where two actors touch, which reads as a
+        // gap between them. A rotated blit keeps the hint, since there the
+        // jagged silhouette is the worse artefact.
+        const auto axis_aligned = std::fmod(command.rotation, 360.0) == 0.0;
+        const auto antialiased = painter.testRenderHint(QPainter::Antialiasing);
+        if (axis_aligned) painter.setRenderHint(QPainter::Antialiasing, false);
         painter.drawImage(destination, image,
                           QRectF(command.source_x, command.source_y, command.source_width, command.source_height));
+        if (axis_aligned) painter.setRenderHint(QPainter::Antialiasing, antialiased);
     }
     painter.restore();
 }
@@ -301,6 +309,16 @@ QColor entityStroke(const QColor& color, const CanvasColors& colors) {
     return colors.dark ? color.lighter(140) : color.darker(160);
 }
 
+// The scale that puts the whole scene inside `target`. Zoom is absolute, so a
+// panel that must show everything -- the minimap, or a level being opened --
+// asks for this rather than passing 1.0 and hoping it means "fit".
+double fitZoomFor(const QRectF& target, const QRectF& bounds) {
+    if (bounds.width() <= 0.0 || bounds.height() <= 0.0 || target.width() <= 0.0 || target.height() <= 0.0) {
+        return 1.0;
+    }
+    return std::min(target.width() / bounds.width(), target.height() / bounds.height());
+}
+
 QTransform mapTransform(const QRectF& target,
                         const LevelPreviewWidget::Scene& scene,
                         const SpriteDefinitions& definitions,
@@ -309,11 +327,18 @@ QTransform mapTransform(const QRectF& target,
                         double zoom,
                         const QPointF& pan) {
     const auto bounds = sceneBounds(scene, definitions, actor_definitions, object_ids);
-    const auto scale = std::min(target.width() / bounds.width(), target.height() / bounds.height()) * zoom;
+    // Zoom is the scene-to-widget scale itself, so 100% puts one scene pixel on
+    // one widget pixel and a 16x16 tile covers exactly 16x16. Fitting the level
+    // to the viewport is a starting zoom (see `fitZoom`), not a hidden factor
+    // baked in here -- as a factor it made every zoom level a fraction nobody
+    // asked for, and tile art was resampled at all of them.
+    const auto scale = zoom;
     const auto left = target.left() + (target.width() - bounds.width() * scale) / 2.0 + pan.x();
     const auto top = target.top() + (target.height() - bounds.height() * scale) / 2.0 + pan.y();
     QTransform transform;
-    transform.translate(left, top);
+    // Whole-pixel origin: a half-pixel offset makes nearest-neighbour sampling
+    // land mid-texel, which widens some tile rows and drops others.
+    transform.translate(std::round(left), std::round(top));
     transform.scale(scale, scale);
     transform.translate(-bounds.left(), -bounds.top());
     return transform;
@@ -450,6 +475,17 @@ void drawMap(QPainter& painter,
             painter.drawRect(QRectF(centre - QPointF(size / 2.0, size / 2.0), QSizeF(size, size)));
         }
     };
+    // Blitting with antialiasing on feathers the edges of the destination
+    // rect, so two objects that share an edge each fade into the background
+    // along it and the seam reads as a gap -- visible even with the grid off.
+    // Tile art is therefore blitted with the hint off, which snaps the edges
+    // to whole device pixels and leaves touching artwork solid.
+    const auto drawArt = [&](const QRectF& rect, const QImage& image) {
+        const auto antialiased = painter.testRenderHint(QPainter::Antialiasing);
+        painter.setRenderHint(QPainter::Antialiasing, false);
+        painter.drawImage(rect, image);
+        painter.setRenderHint(QPainter::Antialiasing, antialiased);
+    };
     // A resize adjusts the edges the grabbed knob owns; anything else moves.
     const auto preview = [&](QRectF& rect, int kind, int index) {
         if (!selected(selections, kind, index)) return;
@@ -548,7 +584,7 @@ void drawMap(QPainter& painter,
                 }
             }
             if (image != object_images.end()) {
-                painter.drawImage(rect, image->second);
+                drawArt(rect, image->second);
                 rendered = true;
             }
         }
@@ -587,12 +623,12 @@ void drawMap(QPainter& painter,
 
         if (!rendered && !custom_hash) {
             if (const auto image = actor_images.find(sprite.id); image != actor_images.end()) {
-                painter.drawImage(render_rect, image->second);
+                drawArt(render_rect, image->second);
                 rendered = true;
             }
         } else if (!rendered) {
             if (const auto image = custom_actor_images.find(*custom_hash); image != custom_actor_images.end()) {
-                painter.drawImage(render_rect, image->second);
+                drawArt(render_rect, image->second);
                 rendered = true;
             }
         }
@@ -707,6 +743,7 @@ LevelPreviewWidget::LevelPreviewWidget(QWidget* parent) : QWidget(parent) {
     auto* snap8 = toolbar_->addAction("8 px"); snap8->setCheckable(true); connect(snap8,&QAction::toggled,this,[this](bool enabled){snap_size_=enabled?8:16;});
     auto* screens = toolbar_->addAction("DS Screen"); screens->setCheckable(true); connect(screens,&QAction::toggled,this,[this](bool enabled){show_ds_screen_=enabled;update();});
     toolbar_->addAction("Reference…",this,[this]{const auto path=QFileDialog::getOpenFileName(this,"Reference Background",{},"Images (*.png *.jpg *.bmp)");if(!path.isEmpty()){reference_image_.load(path);reference_offset_={};update();}});
+    toolbar_->addAction("Fit",this,[this]{zoomToFit();});
     for(const auto& [name,zoom]:std::array{std::pair{"50%",0.5},std::pair{"100%",1.0},std::pair{"200%",2.0}})toolbar_->addAction(name,this,[this,zoom]{setZoom(zoom);});
     toolbar_->addAction("Fullscreen",this,[this]{window()->isFullScreen()?window()->showNormal():window()->showFullScreen();});
     toolbar_->hide();
@@ -757,8 +794,11 @@ void LevelPreviewWidget::showLevel(const QString& level_name,
         0,
     };
     selections_.clear();
-    zoom_ = 1.0;
     pan_ = {};
+    // A level opens fitted to the viewport: 1:1 on an 8192-pixel course would
+    // drop you into one corner of it with no idea where you are.
+    zoom_pinned_ = false;
+    zoom_ = std::clamp(fitZoom(), 0.02, 16.0);
     message_.clear();
     update();
 }
@@ -812,11 +852,14 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
         }
         if (show_minimap_) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
-            drawMap(painter, mini, *scene_, {}, {}, 1.0, {}, tilesets_, background_, foreground_, object_images_,
+            // The minimap is the whole level in a thumbnail, whatever the canvas zoom is.
+            const auto mini_zoom = fitZoomFor(mini, sceneBounds(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_));
+            drawMap(painter, mini, *scene_, {}, {}, mini_zoom, {}, tilesets_, background_, foreground_, object_images_,
                     actor_images_, custom_actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_,
                     actor_definition_catalog_, actor_object_ids_, false, {}, colors);
             bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, zoom_, pan_).inverted(&invertible).mapRect(outer);
-            if (invertible) { painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, 1.0, {}).mapRect(visible)); }
+            // Clipped, because zoomed out past the fit the visible region is larger than the level.
+            if (invertible) { painter.save(); painter.setClipRect(mini); painter.setPen(QPen(colors.highlight, 2)); painter.setBrush(withAlpha(colors.highlight, 25)); painter.drawRect(mapTransform(mini, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, mini_zoom, {}).mapRect(visible)); painter.restore(); }
             painter.setPen(QPen(colors.outline, 2)); painter.setBrush(Qt::NoBrush); painter.drawRect(mini);
         }
         return;
@@ -902,6 +945,8 @@ void LevelPreviewWidget::setEditable(bool editable) {
     if (!editable) {
         selections_.clear();
     }
+    // The toolbar and the preview header change how much room the map gets.
+    refitIfUnpinned();
     update();
 }
 
@@ -914,8 +959,31 @@ void LevelPreviewWidget::setCreateKind(int kind) {
 int LevelPreviewWidget::createKind() const noexcept { return create_kind_; }
 double LevelPreviewWidget::zoom() const noexcept { return zoom_; }
 void LevelPreviewWidget::setZoom(double zoom) {
-    zoom_ = std::clamp(zoom, 0.25, 16.0);
+    // The floor is low enough that a full-width level still fits on screen,
+    // which it must, now that zoom is an absolute scale.
+    zoom_ = std::clamp(zoom, 0.02, 16.0);
+    // Choosing a zoom pins it: the view stops re-fitting itself behind your back.
+    zoom_pinned_ = true;
     update();
+}
+
+double LevelPreviewWidget::fitZoom() const {
+    if (!scene_) return 1.0;
+    return fitZoomFor(mapRect(), sceneBounds(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_));
+}
+
+void LevelPreviewWidget::zoomToFit() {
+    pan_ = {};
+    zoom_ = std::clamp(fitZoom(), 0.02, 16.0);
+    zoom_pinned_ = false;
+    update();
+}
+
+// A level the user has not zoomed themselves stays fitted, so resizing the
+// window or gaining the editing toolbar reframes it instead of cropping it.
+void LevelPreviewWidget::refitIfUnpinned() {
+    if (zoom_pinned_ || !scene_) return;
+    zoom_ = std::clamp(fitZoom(), 0.02, 16.0);
 }
 QPointF LevelPreviewWidget::pan() const noexcept { return pan_; }
 void LevelPreviewWidget::setPan(QPointF pan) {
@@ -933,6 +1001,7 @@ void LevelPreviewWidget::changeEvent(QEvent* event) {
 
 void LevelPreviewWidget::resizeEvent(QResizeEvent* event) {
     toolbar_->setGeometry(0, 0, event->size().width(), 36);
+    refitIfUnpinned();
     QWidget::resizeEvent(event);
 }
 

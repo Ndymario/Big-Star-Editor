@@ -58,7 +58,11 @@ public:
     void setCreateKind(int kind);
     [[nodiscard]] int createKind() const noexcept;
     [[nodiscard]] double zoom() const noexcept;
+    // The scene-to-widget scale: 1.0 is 1:1, where tile art is pixel exact.
     void setZoom(double zoom);
+    // The zoom that fits the whole course in the viewport. Where a level starts.
+    [[nodiscard]] double fitZoom() const;
+    void zoomToFit();
     [[nodiscard]] QPointF pan() const noexcept;
     void setPan(QPointF pan);
     void setGraphicsResources(nsmb::project::LevelGraphicsResources resources, nsmb::project::LevelTilesetReferences references);
@@ -137,6 +141,7 @@ public:
     };
 
 private:
+    void refitIfUnpinned();
     [[nodiscard]] QRectF mapRect() const;
     [[nodiscard]] QTransform sceneTransform() const;
     [[nodiscard]] QPointF toScene(const QPointF& point) const;
@@ -160,6 +165,7 @@ private:
     class QToolBar* toolbar_{};
     int create_kind_{1};
     double zoom_{1.0};
+    bool zoom_pinned_{false};
     QPointF pan_;
     QPointF press_position_;
     QPointF last_position_;

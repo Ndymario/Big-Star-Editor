@@ -1162,7 +1162,12 @@ private slots:
         // Page margin follows Window, the map surface follows Base: neither may stay light on a dark theme.
         QVERIFY(QColor(light.pixel(4, 4)).lightness() > 200);
         QVERIFY(QColor(dark.pixel(4, 4)).lightness() < 80);
-        QVERIFY(QColor(light.pixel(40, 140)).lightness() > 200);
+        // Inside the map the 16 px grid is finer than one device pixel at the
+        // fitted zoom, so the surface reads as a wash a few units off the flat
+        // colour, and it moves with any sub-pixel shift of the grid. The
+        // threshold has room for that: what is under test is the theme, not
+        // where the lines land.
+        QVERIFY(QColor(light.pixel(40, 140)).lightness() > 180);
         QVERIFY(QColor(dark.pixel(40, 140)).lightness() < 80);
     }
 
