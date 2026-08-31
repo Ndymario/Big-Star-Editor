@@ -8,26 +8,26 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 8
-    y = y - 48
-    height = 48
     if actor.fields.number_of_c_chomps == 1 then
-        x = x - 29
-        width = 45
+        return { x = actor.pixelX - 37, y = actor.pixelY - 48, width = 45, height = 48 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 8, y = actor.pixelY - 48, width = 16, height = 48 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.ChainChompLog, RenderX - 8, RenderY - 48) or drawn
+    local drawn = renderer:draw(images.ChainChompLog, {
+        x = actor.pixelX - 8,
+        y = actor.pixelY - 48,
+        width = 16,
+        height = 48,
+    })
     if actor.fields.number_of_c_chomps == 1 then
-        drawn = gfx.blit(renderer, images.ChainChomp, RenderX - 37, RenderY - 28) or drawn
+        return renderer:draw(images.ChainChomp, {
+            x = actor.pixelX - 37,
+            y = actor.pixelY - 28,
+            width = 44,
+            height = 28,
+        }) or drawn
     end
     return drawn
 end

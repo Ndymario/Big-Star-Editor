@@ -8,35 +8,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 32
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 32, height = 32 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    local direction = d[2] % 8
-    if direction == 0 or direction == 2 or direction == 4 or direction == 6 then
-        img = images.Arrow
-    else
-        img = images.ArrowRotate45
-    end
-    if direction == 2 or direction == 3 then
-        img = gfx.transform(img, 90, false, false)
-    end
-    if direction == 4 or direction == 5 then
-        img = gfx.transform(img, 180, false, false)
-    end
-    if direction == 6 or direction == 7 then
-        img = gfx.transform(img, 270, false, false)
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY, 32, 32) or drawn
-    return drawn
+    local direction = actor.fields.direction
+    local image = direction % 2 == 0 and images.Arrow or images.ArrowRotate45
+    local bounds = grabBounds(actor)
+    bounds.rotation = (direction // 2) * 90
+    return renderer:draw(image, bounds)
 end
 
 return {
@@ -61,7 +41,7 @@ return {
             key = "direction",
             label = "Direction",
             bitOffset = 24,
-            bitWidth = 4,
+            bitWidth = 3,
             choices = {
                 { value = 0, label = "Up" },
                 { value = 1, label = "Up/right" },

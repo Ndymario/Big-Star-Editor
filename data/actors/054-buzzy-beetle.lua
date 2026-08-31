@@ -8,17 +8,8 @@ local function init(ctx)
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    if actor.fields.spawn_as == 1 then
-        img = images.BuzzyBeetleU
-    else
-        img = images.BuzzyBeetle
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    local image = actor.fields.spawn_as == 1 and images.BuzzyBeetleU or images.BuzzyBeetle
+    return renderer:draw(image, { x = actor.pixelX, y = actor.pixelY })
 end
 
 return {

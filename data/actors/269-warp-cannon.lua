@@ -8,28 +8,25 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 9
-    y = y - 26
-    width = 66
-    height = 90
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 9, y = actor.pixelY - 26, width = 66, height = 90 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local drawn = false
-    drawn = gfx.blit(renderer, images.WarpCannon, RenderX - 9, RenderY - 26) or drawn
+    local drawn = renderer:draw(images.WarpCannon, grabBounds(actor))
     local world = actor.fields.destination_world
     if world >= 5 and world <= 8 then
         world = world - 5
     else
         world = 0
     end
-    drawn = gfx.blit(renderer, images.WarpWorlds, RenderX + 26, RenderY + 23, nil, nil, { x = world * 18, y = 0, width = 18, height = 19 }) or drawn
+    drawn = renderer:draw(images.WarpWorlds, {
+        x = actor.pixelX + 26,
+        y = actor.pixelY + 23,
+        sourceX = world * 18,
+        sourceY = 0,
+        sourceWidth = 18,
+        sourceHeight = 19,
+    }) or drawn
     return drawn
 end
 

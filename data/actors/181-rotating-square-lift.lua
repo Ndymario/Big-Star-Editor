@@ -8,36 +8,20 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 16
-    y = y - 16
-    if (d[2] & 0x10) // 0x10 == 1 then
-        y = y + 8
-    end
-    width = 48
-    height = 48
-    return { x = x, y = y, width = width, height = height }
+    local shift = actor.fields.shift_8_pixels_down and 8 or 0
+    return { x = actor.pixelX - 16, y = actor.pixelY - 16 + shift, width = 48, height = 48 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img
-    local drawn = false
-    if (d[2] & 0x10) // 0x10 == 1 then
-        RenderY = RenderY + 8
-        RenderY2 = RenderY2 + 8
-    end
-    drawn = gfx.blit(renderer, images.SpinningSquarePlatform, RenderX - 16, RenderY - 16) or drawn
-    img = images.Clockwise
-    if d[3] % 0x2 == 0 then
-        img = gfx.transform(img, 0, true, false)
-    end
-    drawn = gfx.blit(renderer, img, RenderX2 - 8, RenderY2 - 8, 32, 32) or drawn
-    return drawn
+    local box = grabBounds(actor)
+    renderer:draw(images.SpinningSquarePlatform, box)
+    return renderer:draw(images.Clockwise, {
+        x = actor.pixelX - 8,
+        y = box.y + 8,
+        width = 32,
+        height = 32,
+        flipX = actor.fields.rotation == 0,
+    })
 end
 
 return {
@@ -49,7 +33,7 @@ return {
             key = "rotation",
             label = "Rotation",
             bitOffset = 16,
-            bitWidth = 4,
+            bitWidth = 1,
             notes = "Does not apply if Nybble 9 is set to 2.",
             choices = {
                 { value = 0, label = "Counterclockwise" },
@@ -68,10 +52,10 @@ return {
             },
         },
         {
-            key = "shift_block_down",
-            label = "Shift ½ block down",
+            key = "shift_8_pixels_down",
+            label = "Shift 8 pixels down",
             bitOffset = 28,
-            bitWidth = 4,
+            bitWidth = 1,
             checkboxValue = 1,
         },
         {

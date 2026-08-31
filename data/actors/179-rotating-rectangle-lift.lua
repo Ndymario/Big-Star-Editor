@@ -8,36 +8,20 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 24
-    y = y - 8
-    if (d[2] & 0x10) // 0x10 == 1 then
-        y = y + 8
-    end
-    width = 64
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    local shift = actor.fields.shift_8_pixels_down and 8 or 0
+    return { x = actor.pixelX - 24, y = actor.pixelY - 8 + shift, width = 64, height = 32 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img
-    local drawn = false
-    if (d[2] & 0x10) // 0x10 == 1 then
-        RenderY = RenderY + 8
-        RenderY2 = RenderY2 + 8
-    end
-    drawn = gfx.blit(renderer, images.SpinningRectanglePlatform, RenderX - 24, RenderY - 8) or drawn
-    img = images.Clockwise
-    if d[3] % 0x2 == 0 then
-        img = gfx.transform(img, 0, true, false)
-    end
-    drawn = gfx.blit(renderer, img, RenderX2 - 8, RenderY2 - 8, 32, 32) or drawn
-    return drawn
+    local box = grabBounds(actor)
+    renderer:draw(images.SpinningRectanglePlatform, box)
+    return renderer:draw(images.Clockwise, {
+        x = actor.pixelX - 8,
+        y = box.y,
+        width = 32,
+        height = 32,
+        flipX = actor.fields.rotation == 0,
+    })
 end
 
 return {
@@ -50,7 +34,7 @@ return {
             key = "rotation",
             label = "Rotation",
             bitOffset = 16,
-            bitWidth = 4,
+            bitWidth = 1,
             notes = "Does not apply if Nybble 9 is set to 2.",
             choices = {
                 { value = 0, label = "Counterclockwise" },
@@ -72,7 +56,7 @@ return {
             key = "shift_8_pixels_down",
             label = "Shift 8 pixels down",
             bitOffset = 28,
-            bitWidth = 4,
+            bitWidth = 1,
             checkboxValue = 1,
         },
         {

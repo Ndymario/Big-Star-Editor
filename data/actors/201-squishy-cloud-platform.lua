@@ -9,26 +9,26 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    height = 32
-    width = 32 * (d[5] + 2)
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX,
+        y = actor.pixelY,
+        width = 32 * (actor.fields.length + 2),
+        height = 32,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.CloudLeftEdge, RenderX, RenderY) or drawn
-    RenderX = RenderX + 16
-    for l = 0, d[5] do
-        drawn = gfx.blit(renderer, images.CloudSection, RenderX, RenderY) or drawn
-        RenderX = RenderX + 32
+    renderer:draw(images.CloudLeftEdge, { x = actor.pixelX, y = actor.pixelY })
+    for section = 0, actor.fields.length do
+        renderer:draw(images.CloudSection, {
+            x = actor.pixelX + 16 + 32 * section,
+            y = actor.pixelY,
+        })
     end
-    drawn = gfx.blit(renderer, images.CloudRightEdge, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.CloudRightEdge, {
+        x = actor.pixelX + 16 + 32 * (actor.fields.length + 1),
+        y = actor.pixelY,
+    })
 end
 
 return {
@@ -41,7 +41,7 @@ return {
             key = "length",
             label = "Length",
             bitOffset = 0,
-            bitWidth = 4,
+            bitWidth = 8,
             notes = "Cloud extends from sprite position to the right.",
         },
     },

@@ -9,29 +9,26 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    local VineH = math.min(actor.fields.length, 4)
-    x = x - 16
-    width = 32
-    height = 16 * (VineH + 4)
-    return { x = x, y = y, width = width, height = height }
+    local extraSegments = math.min(actor.fields.length, 4)
+    return {
+        x = actor.pixelX - 16,
+        y = actor.pixelY,
+        width = 32,
+        height = 16 * (extraSegments + 4),
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    RenderX = RenderX - 16
-    local VineMax = math.min(actor.fields.length, 4)
-    drawn = gfx.blit(renderer, images.VineTop, RenderX, RenderY) or drawn
-    for l = 0, (VineMax + 2) - 1 do
-        RenderY = RenderY + 16
-        drawn = gfx.blit(renderer, images.Vine, RenderX, RenderY) or drawn
+    local x = actor.pixelX - 16
+    local middleSegments = math.min(actor.fields.length, 4) + 2
+    renderer:draw(images.VineTop, { x = x, y = actor.pixelY })
+    for segment = 1, middleSegments do
+        renderer:draw(images.Vine, { x = x, y = actor.pixelY + 16 * segment })
     end
-    drawn = gfx.blit(renderer, images.VineBottom, RenderX, RenderY + 16) or drawn
-    return drawn
+    return renderer:draw(images.VineBottom, {
+        x = x,
+        y = actor.pixelY + 16 * (middleSegments + 1),
+    })
 end
 
 return {

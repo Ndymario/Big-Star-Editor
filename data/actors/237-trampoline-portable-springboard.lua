@@ -8,7 +8,6 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
     local width, height = 16, 16
     if actor.fields.larger then
@@ -24,22 +23,8 @@ local function grabBounds(actor)
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    if actor.fields.larger then
-        img = images.SpringGiant
-        RenderY = RenderY - 16
-        RenderX = RenderX - 8
-    else
-        img = images.Spring
-    end
-    if actor.fields.shift_block_right then
-        RenderX = RenderX + 8
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    local image = actor.fields.larger and images.SpringGiant or images.Spring
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {

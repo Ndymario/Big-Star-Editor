@@ -7,19 +7,11 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    x = x + 73
-    y = y - 8
-    height = 19
-    return { x = x, y = y, width = 16, height = height }
+    return { x = actor.pixelX + 73, y = actor.pixelY - 8, width = 16, height = 19 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.MegaGoomba, RenderX + 73, RenderY - 8) or drawn
-    return drawn
+    return renderer:draw(images.MegaGoomba, grabBounds(actor))
 end
 
 return {

@@ -8,24 +8,13 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    y = y - 25
-    width = 32
-    height = 41
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 25, width = 32, height = 41 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if (d[5] & 0xF0) == 0 or (d[5] & 0xF0) == 0x30 then
-        drawn = gfx.blit(renderer, images.BowserJrMasked, RenderX, RenderY - 25) or drawn
-    else
-        drawn = gfx.blit(renderer, images.BowserJr, RenderX, RenderY - 25) or drawn
-    end
-    return drawn
+    local behaviour = actor.fields.behaviour
+    local image = (behaviour == 0 or behaviour == 3) and images.BowserJrMasked or images.BowserJr
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {

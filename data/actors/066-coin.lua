@@ -8,53 +8,32 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.type == 1 then
-        x = x - 4
-        y = y - 4
-        width = 24
-        height = 24
+        return { x = x - 4, y = y - 4, width = 24, height = 24 }
     elseif actor.fields.type == 2 then
-        x = x - 4
-        y = y - 20
-        width = 72
-        height = 40
+        return { x = x - 4, y = y - 20, width = 72, height = 40 }
     end
-    if actor.fields.type ~= 1 and actor.fields.type ~= 2 then
-        if actor.fields.shift_8_pixels_down then
-            y = y + 8
-        end
-        if actor.fields.shift_8_pixels_right then
-            x = x + 8
-        end
-    end
-    return { x = x, y = y, width = width, height = height }
+    if actor.fields.shift_8_pixels_down then y = y + 8 end
+    if actor.fields.shift_8_pixels_right then x = x + 8 end
+    return { x = x, y = y, width = 16, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.type ~= 1 and actor.fields.type ~= 2 then
-        if actor.fields.shift_8_pixels_down then
-            RenderY = RenderY + 8
-        end
-        if actor.fields.shift_8_pixels_right then
-            RenderX = RenderX + 8
-        end
-    end
     if actor.fields.type == 1 then
-        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX - 4, RenderY - 4) or drawn
+        return renderer:draw(images.CoinInBubble, grabBounds(actor))
     elseif actor.fields.type == 2 then
-        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX - 4, RenderY - 4) or drawn
-        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX + 20, RenderY - 20) or drawn
-        drawn = gfx.blit(renderer, images.CoinInBubble, RenderX + 44, RenderY - 4) or drawn
-    else
-        drawn = gfx.blit(renderer, images.Coin, RenderX, RenderY) or drawn
+        local drawn = renderer:draw(images.CoinInBubble, {
+            x = actor.pixelX - 4, y = actor.pixelY - 4, width = 24, height = 24,
+        })
+        drawn = renderer:draw(images.CoinInBubble, {
+            x = actor.pixelX + 20, y = actor.pixelY - 20, width = 24, height = 24,
+        }) or drawn
+        return renderer:draw(images.CoinInBubble, {
+            x = actor.pixelX + 44, y = actor.pixelY - 4, width = 24, height = 24,
+        }) or drawn
     end
-    return drawn
+    return renderer:draw(images.Coin, grabBounds(actor))
 end
 
 return {

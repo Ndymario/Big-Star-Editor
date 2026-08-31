@@ -19,12 +19,12 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = math.max(16 * (d[5] % 0x10 + 1), 32)
-    height = 16 * (d[5] // 0x10 + 1)
+    local width = math.max(16 * actor.fields.length, 32)
+    local height = 16 * actor.fields.height
     local spikes = actor.fields.spikes
+
+    -- These expansions are inherited selection behavior: vertical spikes
+    -- enlarge the width, while horizontal spikes enlarge the height.
     if width == 32 and (spikes == 1 or spikes == 2) then
         width = 48
     end
@@ -37,135 +37,103 @@ local function grabBounds(actor)
     if height == 16 and spikes == 6 then
         height = 48
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = width, height = height }
+end
+
+local function drawBody(renderer, x, y, columns, rows)
+    if rows == 1 then
+        renderer:draw(images.StoneBlockFlatHorizLeft, { x = x, y = y })
+        for column = 1, columns - 2 do
+            renderer:draw(images.StoneBlockFlatHorizMiddle, { x = x + 16 * column, y = y })
+        end
+        renderer:draw(images.StoneBlockFlatHorizRight, { x = x + 16 * (columns - 1), y = y })
+        return
+    end
+
+    renderer:draw(images.StoneBlockTopLeft, { x = x, y = y })
+    for column = 1, columns - 2 do
+        renderer:draw(images.StoneBlockTop, { x = x + 16 * column, y = y })
+    end
+    renderer:draw(images.StoneBlockTopRight, { x = x + 16 * (columns - 1), y = y })
+    for row = 1, rows - 2 do
+        renderer:draw(images.StoneBlockRight, { x = x + 16 * (columns - 1), y = y + 16 * row })
+    end
+    renderer:draw(images.StoneBlockBottomRight, {
+        x = x + 16 * (columns - 1),
+        y = y + 16 * (rows - 1),
+    })
+    for column = columns - 2, 1, -1 do
+        renderer:draw(images.StoneBlockBottom, { x = x + 16 * column, y = y + 16 * (rows - 1) })
+    end
+    renderer:draw(images.StoneBlockBottomLeft, { x = x, y = y + 16 * (rows - 1) })
+    for row = rows - 2, 1, -1 do
+        renderer:draw(images.StoneBlockLeft, { x = x, y = y + 16 * row })
+    end
+    for row = 1, rows - 2 do
+        for column = 1, columns - 2 do
+            renderer:draw(images.StoneBlockMiddle, { x = x + 16 * column, y = y + 16 * row })
+        end
+    end
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local drawn = false
-    width = d[5] % 0x10
-    if actor.objectId == 165 then
-        width = d[5] % 0x8
-    end
-    local spikes = 0
-    if actor.objectId == 168 then
-        height = d[5] // 0x10
-        spikes = actor.fields.spikes
-        if spikes == 1 or spikes == 3 then
-            height = height - 1
-            RenderY = RenderY + 16
-        end
-        if spikes == 2 or spikes == 3 then
-            height = height - 1
-        end
-        if spikes == 4 or spikes == 6 then
-            width = width - 1
-        end
-        if spikes == 5 or spikes == 6 then
-            width = width - 1
-            RenderX = RenderX + 16
-        end
-    else
-        height = (((2) ^ (((d[4] & 0x30) / 0x10))) - 1)
-    end
-    if width < 1 then
-        width = 1
-    end
-    if height < 0 then
-        height = 0
-    end
-    local xp = RenderX
-    local yp = RenderY
-    if height == 0 then
-        drawn = gfx.blit(renderer, images.StoneBlockFlatHorizLeft, RenderX, RenderY) or drawn
-        for l = 0, (width - 1) - 1 do
-            RenderX = RenderX + 16
-            drawn = gfx.blit(renderer, images.StoneBlockFlatHorizMiddle, RenderX, RenderY) or drawn
-        end
-        drawn = gfx.blit(renderer, images.StoneBlockFlatHorizRight, RenderX + 16, RenderY) or drawn
-    else
-        drawn = gfx.blit(renderer, images.StoneBlockTopLeft, RenderX, RenderY) or drawn
-        for l = 0, (width - 1) - 1 do
-            RenderX = RenderX + 16
-            drawn = gfx.blit(renderer, images.StoneBlockTop, RenderX, RenderY) or drawn
-        end
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, images.StoneBlockTopRight, RenderX, RenderY) or drawn
-        for l = 0, (height - 1) - 1 do
-            RenderY = RenderY + 16
-            drawn = gfx.blit(renderer, images.StoneBlockRight, RenderX, RenderY) or drawn
-        end
-        RenderY = RenderY + 16
-        drawn = gfx.blit(renderer, images.StoneBlockBottomRight, RenderX, RenderY) or drawn
-        for l = 0, (width - 1) - 1 do
-            RenderX = RenderX - 16
-            drawn = gfx.blit(renderer, images.StoneBlockBottom, RenderX, RenderY) or drawn
-        end
-        RenderX = RenderX - 16
-        drawn = gfx.blit(renderer, images.StoneBlockBottomLeft, RenderX, RenderY) or drawn
-        for l = 0, (height - 1) - 1 do
-            RenderY = RenderY - 16
-            drawn = gfx.blit(renderer, images.StoneBlockLeft, RenderX, RenderY) or drawn
-        end
-        RenderX = xp
-        RenderY = yp
-        local xStart = RenderX
-        for l = 0, (height - 1) - 1 do
-            RenderY = RenderY + 16
-            for m = 0, (width - 1) - 1 do
-                RenderX = RenderX + 16
-                drawn = gfx.blit(renderer, images.StoneBlockMiddle, RenderX, RenderY) or drawn
-            end
-            RenderX = xStart
-        end
-    end
+    local spikes = actor.fields.spikes
+    local bodyX, bodyY = actor.pixelX, actor.pixelY
+    local columns, rows = actor.fields.length, actor.fields.height
+
     if spikes == 1 or spikes == 3 then
-        RenderX = xp
-        RenderY = yp - 16
-        for l = 0, width do
-            drawn = gfx.blit(renderer, images.StoneBlockSpikes, RenderX, RenderY) or drawn
-            RenderX = RenderX + 16
+        rows = rows - 1
+        bodyY = bodyY + 16
+    end
+    if spikes == 2 or spikes == 3 then
+        rows = rows - 1
+    end
+    if spikes == 4 or spikes == 6 then
+        columns = columns - 1
+    end
+    if spikes == 5 or spikes == 6 then
+        columns = columns - 1
+        bodyX = bodyX + 16
+    end
+    columns = math.max(columns, 2)
+    rows = math.max(rows, 1)
+
+    drawBody(renderer, bodyX, bodyY, columns, rows)
+
+    if spikes == 1 or spikes == 3 then
+        for column = 0, columns - 1 do
+            renderer:draw(images.StoneBlockSpikes, { x = bodyX + 16 * column, y = bodyY - 16 })
         end
     end
     if spikes == 2 or spikes == 3 then
-        RenderX = xp
-        RenderY = ((actor.pixelY / 16) + height + 1) * 16
-        if spikes == 3 then
-            RenderY = RenderY + 16
-        end
-        local spikes2 = images.StoneBlockSpikes
-        spikes2 = gfx.transform(spikes2, 0, false, true)
-        for l = 0, d[5] % 0x10 do
-            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
-            RenderX = RenderX + 16
+        for column = 0, actor.fields.length - 1 do
+            renderer:draw(images.StoneBlockSpikes, {
+                x = bodyX + 16 * column,
+                y = bodyY + 16 * rows,
+                flipY = true,
+            })
         end
     end
     if spikes == 4 or spikes == 6 then
-        RenderX = ((actor.pixelX / 16) + width + 1) * 16
-        RenderY = yp
-        if spikes == 6 then
-            RenderX = RenderX + 16
-        end
-        local spikes2 = images.StoneBlockSpikes
-        spikes2 = gfx.transform(spikes2, 90, false, false)
-        for l = 0, d[5] // 0x10 do
-            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
-            RenderY = RenderY + 16
+        for row = 0, actor.fields.height - 1 do
+            renderer:draw(images.StoneBlockSpikes, {
+                x = bodyX + 16 * columns,
+                y = bodyY + 16 * row,
+                rotation = 90,
+            })
         end
     end
     if spikes == 5 or spikes == 6 then
-        RenderX = xp - 16
-        RenderY = yp
-        local spikes2 = images.StoneBlockSpikes
-        spikes2 = gfx.transform(spikes2, 90, true, false)
-        for l = 0, height do
-            drawn = gfx.blit(renderer, spikes2, RenderX, RenderY) or drawn
-            RenderY = RenderY + 16
+        for row = 0, rows - 1 do
+            renderer:draw(images.StoneBlockSpikes, {
+                x = bodyX - 16,
+                y = bodyY + 16 * row,
+                rotation = 90,
+                flipX = true,
+            })
         end
     end
-    return drawn
+    return true
 end
 
 return {

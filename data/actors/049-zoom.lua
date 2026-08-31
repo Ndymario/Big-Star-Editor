@@ -10,75 +10,73 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    local ZoomLength = actor.fields.zone_width
-    local ZoomHeight = math.max(actor.fields.zone_height, 1)
-    local ZoomOffset = d[5] >> 5
-    if ZoomLength > ZoomOffset or ZoomLength == 0 then
-        if ZoomLength == 0 then
-            ZoomLength = 8
-        end
-        x = x - (16 * ZoomLength)
-        y = y - (16 * ZoomHeight)
-        width = ZoomLength * 32
-        height = ZoomHeight * 16
-    else
-        width = 72
-        height = 28
+    local zoneWidth = actor.fields.zone_width
+    if zoneWidth <= actor.fields.zone_offset and zoneWidth ~= 0 then
+        return { x = actor.pixelX, y = actor.pixelY, width = 72, height = 28 }
     end
-    return { x = x, y = y, width = width, height = height }
+
+    local effectiveWidth = zoneWidth == 0 and 8 or zoneWidth
+    local effectiveHeight = math.max(actor.fields.zone_height, 1)
+    return {
+        x = actor.pixelX - 16 * effectiveWidth,
+        y = actor.pixelY - 16 * effectiveHeight,
+        width = 32 * effectiveWidth,
+        height = 16 * effectiveHeight,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local img, img2
-    local drawn = false
-    local ZoomLength = actor.fields.zone_width
-    local ZoomHeight = actor.fields.zone_height
-    local ZoomOffset = d[5] >> 5
-    if ZoomLength > ZoomOffset or ZoomLength == 0 then
-        local ZoomLength2 = ZoomLength
-        local ZoomHeight2 = math.max(ZoomHeight, 1)
-        if ZoomLength == 0 then
-            ZoomLength2 = 8
-        end
-        for i = 0, (ZoomHeight2) - 1 do
-            local ZoomY = RenderY - 16 * (i + 1)
-            for j = ZoomOffset, (ZoomLength2) - 1 do
-                local ZoomX1 = RenderX - 16 * (j + 1)
-                local ZoomX2 = RenderX + 16 * j
-                drawn = gfx.blit(renderer, images.Zoom1, ZoomX1, ZoomY) or drawn
-                drawn = gfx.blit(renderer, images.Zoom2, ZoomX2, ZoomY) or drawn
+    local zoneWidth = actor.fields.zone_width
+    if zoneWidth > actor.fields.zone_offset or zoneWidth == 0 then
+        local effectiveWidth = zoneWidth == 0 and 8 or zoneWidth
+        local effectiveHeight = math.max(actor.fields.zone_height, 1)
+        local drawn = false
+        for row = 1, effectiveHeight do
+            local y = actor.pixelY - 16 * row
+            for offset = actor.fields.zone_offset, effectiveWidth - 1 do
+                drawn = renderer:draw(images.Zoom1, {
+                    x = actor.pixelX - 16 * (offset + 1),
+                    y = y,
+                }) or drawn
+                drawn = renderer:draw(images.Zoom2, {
+                    x = actor.pixelX + 16 * offset,
+                    y = y,
+                }) or drawn
             end
         end
-        if ZoomLength == 0 then
-            img = images.arrow_down
-            img2 = images.arrow_down
-            img = gfx.transform(img, 90, false, false)
-            img2 = gfx.transform(img2, 270, false, false)
-            drawn = gfx.blit(renderer, img, RenderX - 144, RenderY - 8 * (ZoomHeight2 + 1), 16, 16) or drawn
-            drawn = gfx.blit(renderer, img2, RenderX + 128, RenderY - 8 * (ZoomHeight2 + 1), 16, 16) or drawn
-            drawn = gfx.blit(renderer, images.Infinity, RenderX - 160, RenderY - 8 * (ZoomHeight2 + 1), 16, 16) or drawn
-            drawn = gfx.blit(renderer, images.Infinity, RenderX + 144, RenderY - 8 * (ZoomHeight2 + 1), 16, 16) or drawn
+
+        if zoneWidth == 0 then
+            local markerY = actor.pixelY - 8 * (effectiveHeight + 1)
+            drawn = renderer:draw(images.arrow_down, {
+                x = actor.pixelX - 144,
+                y = markerY,
+                rotation = 90,
+            }) or drawn
+            drawn = renderer:draw(images.arrow_down, {
+                x = actor.pixelX + 128,
+                y = markerY,
+                rotation = 270,
+            }) or drawn
+            drawn = renderer:draw(images.Infinity, { x = actor.pixelX - 160, y = markerY }) or drawn
+            drawn = renderer:draw(images.Infinity, { x = actor.pixelX + 144, y = markerY }) or drawn
         end
-        if ZoomHeight == 0 then
-            img = images.arrow_down
-            img2 = images.arrow_down
-            img2 = gfx.transform(img2, 180, false, false)
-            drawn = gfx.blit(renderer, img, RenderX - 8, RenderY, 16, 16) or drawn
-            drawn = gfx.blit(renderer, img2, RenderX - 8, RenderY - 32, 16, 16) or drawn
-            drawn = gfx.blit(renderer, images.Infinity, RenderX - 8, RenderY + 16, 16, 16) or drawn
-            drawn = gfx.blit(renderer, images.Infinity, RenderX - 8, RenderY - 48, 16, 16) or drawn
+
+        if actor.fields.zone_height == 0 then
+            drawn = renderer:draw(images.arrow_down, { x = actor.pixelX - 8, y = actor.pixelY }) or drawn
+            drawn = renderer:draw(images.arrow_down, {
+                x = actor.pixelX - 8,
+                y = actor.pixelY - 32,
+                rotation = 180,
+            }) or drawn
+            drawn = renderer:draw(images.Infinity, { x = actor.pixelX - 8, y = actor.pixelY + 16 }) or drawn
+            drawn = renderer:draw(images.Infinity, { x = actor.pixelX - 8, y = actor.pixelY - 48 }) or drawn
         end
-    else
-        local r = { x = RenderX, y = RenderY, width = 72, height = 28 }
-        drawn = renderer:fillRect(gfx.colored(r, "#000000")) or drawn
-        renderer:drawText("Zoom", r)
+        return drawn
     end
+
+    local box = grabBounds(actor)
+    local drawn = renderer:fillRect(gfx.colored(box, "#000000"))
+    renderer:drawText("Zoom", box)
     return drawn
 end
 
@@ -121,6 +119,13 @@ return {
             bitOffset = 0,
             bitWidth = 8,
             notes = "Ditto. Setting this to a value equal to nybbles 8-9 (the previous field) is recommended.",
+        },
+        {
+            key = "zone_offset",
+            label = "Zone offset",
+            bitOffset = 5,
+            bitWidth = 3,
+            notes = "The visualization also interprets the high three bits of Zoom right as the zone's inner offset.",
         },
     },
     init = init,

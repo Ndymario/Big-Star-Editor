@@ -7,30 +7,16 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 96
-    height = 16
     if actor.fields.direction == 0 then
-        x = x - 80
+        return { x = actor.pixelX - 80, y = actor.pixelY, width = 96, height = 16 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 96, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.ThruWallPlatform
-    if actor.fields.direction == 0 then
-        drawn = gfx.blit(renderer, img, RenderX - 80, RenderY) or drawn
-    else
-        img = gfx.transform(img, 0, true, false)
-        drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    end
-    return drawn
+    local box = grabBounds(actor)
+    box.flipX = actor.fields.direction ~= 0
+    return renderer:draw(images.ThruWallPlatform, box)
 end
 
 return {

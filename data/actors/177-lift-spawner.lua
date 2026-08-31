@@ -2,6 +2,13 @@
 
 local images = {}
 
+local geometry = {
+    [0] = { platformX = 0, platformY = 16, arrowX = 24, rotation = 180 },
+    [1] = { platformX = 0, platformY = -16, arrowX = 24, rotation = 0 },
+    [2] = { platformX = -64, platformY = 0, arrowX = 0, rotation = 270 },
+    [3] = { platformX = 64, platformY = 0, arrowX = 48, rotation = 90 },
+}
+
 local function init(ctx)
     images.MovingPlatformLeft = ctx.loadImage("images/MovingPlatformLeft.png")
     images.MovingPlatformRight = ctx.loadImage("images/MovingPlatformRight.png")
@@ -10,51 +17,24 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
-    if d[3] % 0x4 == 1 then
-        y = y - 16
-    elseif d[3] % 0x4 == 2 then
-        x = x - 64
-    elseif d[3] % 0x4 == 3 then
-        x = x + 64
-    else
-        y = y + 16
-    end
-    width = 64
-    return { x = x, y = y, width = width, height = 16 }
+    local g = geometry[actor.fields.direction]
+    return { x = actor.pixelX + g.platformX, y = actor.pixelY + g.platformY, width = 64, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img
-    local drawn = false
-    img = images.arrow_down
-    local arrowLiftX = RenderX2
-    if d[3] % 0x4 == 1 then
-        RenderY = RenderY - 16
-        arrowLiftX = arrowLiftX + 24
-    elseif d[3] % 0x4 == 2 then
-        RenderX = RenderX - 64
-        img = gfx.transform(img, 270, false, false)
-    elseif d[3] % 0x4 == 3 then
-        RenderX = RenderX + 64
-        arrowLiftX = arrowLiftX + 48
-        img = gfx.transform(img, 90, false, false)
-    else
-        RenderY = RenderY + 16
-        arrowLiftX = arrowLiftX + 24
-        img = gfx.transform(img, 180, false, false)
-    end
-    drawn = gfx.blit(renderer, images.MovingPlatformLeft, RenderX, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 16, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 32, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformRight, RenderX + 48, RenderY) or drawn
-    drawn = gfx.blit(renderer, img, arrowLiftX, RenderY2, 16, 16) or drawn
-    return drawn
+    local g = geometry[actor.fields.direction]
+    local box = grabBounds(actor)
+    renderer:draw(images.MovingPlatformLeft, { x = box.x, y = box.y })
+    renderer:draw(images.MovingPlatformSection, { x = box.x + 16, y = box.y })
+    renderer:draw(images.MovingPlatformSection, { x = box.x + 32, y = box.y })
+    renderer:draw(images.MovingPlatformRight, { x = box.x + 48, y = box.y })
+    return renderer:draw(images.arrow_down, {
+        x = actor.pixelX + g.arrowX,
+        y = actor.pixelY,
+        width = 16,
+        height = 16,
+        rotation = g.rotation,
+    })
 end
 
 return {
@@ -77,7 +57,7 @@ return {
             key = "direction",
             label = "Direction",
             bitOffset = 16,
-            bitWidth = 4,
+            bitWidth = 2,
             notes = "2 (Right) and 3 (Left) are unused.",
             choices = {
                 { value = 0, label = "Up" },

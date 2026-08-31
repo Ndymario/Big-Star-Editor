@@ -9,24 +9,17 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 112
-    height = 16
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 112, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.ManualPlatform, RenderX, RenderY) or drawn
+    renderer:draw(images.ManualPlatform, grabBounds(actor))
     if actor.fields.directions_arrows == 0 or actor.fields.directions_arrows == 2 then
-        drawn = gfx.blit(renderer, images.UpArrow, RenderX + 51, RenderY + 4) or drawn
+        return renderer:draw(images.UpArrow, { x = actor.pixelX + 51, y = actor.pixelY + 4 })
     elseif actor.fields.directions_arrows == 1 then
-        drawn = gfx.blit(renderer, images.DownArrow, RenderX + 51, RenderY + 4) or drawn
+        return renderer:draw(images.DownArrow, { x = actor.pixelX + 51, y = actor.pixelY + 4 })
     end
-    return drawn
+    return true
 end
 
 return {

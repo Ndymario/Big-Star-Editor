@@ -9,48 +9,41 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = (actor.fields.radius) * 10
+    local width = actor.fields.radius * 10
     y = y - width
     if actor.fields.enable_second_bar then
         x = x - width
         width = width * 2
     end
     width = width + 12
-    height = width
-    return { x = x, y = y, width = width, height = height }
+    return { x = x, y = y, width = width, height = width }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img
+    local x, y = actor.pixelX, actor.pixelY
+    local radius = actor.fields.radius * 10
     local drawn = false
-    local clockFireBarX = RenderX2 - 8
-    local clockFireBarY = RenderY2 - 8
-    RenderY2 = (actor.fields.radius) * 10
     if actor.fields.enable_second_bar then
-        RenderX = RenderX - RenderY2
-        RenderY = RenderY + RenderY2
+        x = x - radius
+        y = y + radius
     end
-    while not (RenderX == RenderX2 + RenderY2 + 10) do
-        if RenderX == RenderX2 then
-            drawn = gfx.blit(renderer, images.FireBarMiddle, RenderX + 4, RenderY + 4) or drawn
+    while x ~= actor.pixelX + radius + 10 do
+        if x == actor.pixelX then
+            drawn = renderer:draw(images.FireBarMiddle, { x = x + 4, y = y + 4 }) or drawn
         else
-            drawn = gfx.blit(renderer, images.FireBarBall, RenderX, RenderY) or drawn
+            drawn = renderer:draw(images.FireBarBall, { x = x, y = y }) or drawn
         end
-        RenderX = RenderX + 10
-        RenderY = RenderY - 10
+        x = x + 10
+        y = y - 10
     end
-    img = images.Clockwise
-    if (d[4] & 0x10) // 0x10 == 0 then
-        img = gfx.transform(img, 0, true, false)
-    end
-    drawn = gfx.blit(renderer, img, clockFireBarX, clockFireBarY, 32, 32) or drawn
-    return drawn
+    return renderer:draw(images.Clockwise, {
+        x = actor.pixelX - 8,
+        y = actor.pixelY - 8,
+        width = 32,
+        height = 32,
+        flipX = actor.fields.rotation == 0,
+    }) or drawn
 end
 
 return {

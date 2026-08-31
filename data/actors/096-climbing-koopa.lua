@@ -8,25 +8,12 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 18
-    height = 26
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 18, height = 26 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    if actor.fields.color == 1 then
-        img = images.FenceKoopaRed
-    else
-        img = images.FenceKoopaGreen
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    local image = actor.fields.color == 1 and images.FenceKoopaRed or images.FenceKoopaGreen
+    return renderer:draw(image, { x = actor.pixelX, y = actor.pixelY })
 end
 
 return {

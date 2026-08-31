@@ -7,22 +7,14 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
-    width = 48 + (d[4] & 0xF0)
-    return { x = x, y = y, width = width, height = 16 }
+    return { x = actor.pixelX, y = actor.pixelY, width = 16 * actor.fields.length, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    for l = 0, ((d[4] & 0xF0) // 0x10) + 2 do
-        drawn = gfx.blit(renderer, images.SnakeBlock, RenderX, RenderY) or drawn
-        RenderX = RenderX + 16
+    for block = 0, actor.fields.length - 1 do
+        renderer:draw(images.SnakeBlock, { x = actor.pixelX + 16 * block, y = actor.pixelY })
     end
-    return drawn
+    return true
 end
 
 return {

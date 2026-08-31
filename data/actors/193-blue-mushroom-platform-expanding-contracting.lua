@@ -11,52 +11,49 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.start_expanded then
         if actor.fields.short_when_expanded then
-            x = x - 32
-            width = 80
-        else
-            x = x - 72
-            width = 160
+            return {
+                x = actor.pixelX - 32,
+                y = actor.pixelY,
+                width = 80,
+                height = 32 + 16 * actor.fields.stalk_height,
+            }
         end
-    else
-        x = x - 8
-        width = 32
+        return {
+            x = actor.pixelX - 72,
+            y = actor.pixelY,
+            width = 160,
+            height = 32 + 16 * actor.fields.stalk_height,
+        }
     end
-    height = 32 + 16 * actor.fields.stalk_height
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 8,
+        y = actor.pixelY,
+        width = 32,
+        height = 32 + 16 * actor.fields.stalk_height,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local drawn = false
-    RenderX2 = actor.fields.stalk_height
+    local cap
+    local segments = actor.fields.stalk_height
+    local stalkY = actor.pixelY + 32
     if actor.fields.start_expanded then
-        if actor.fields.short_when_expanded then
-            drawn = gfx.blit(renderer, images.ExpandedMushroomS, RenderX - 32, RenderY) or drawn
-        else
-            drawn = gfx.blit(renderer, images.ExpandedMushroomL, RenderX - 72, RenderY) or drawn
-        end
-        RenderX2 = RenderX2 + 1
-        RenderY2 = RenderY2 - 16
+        cap = actor.fields.short_when_expanded and images.ExpandedMushroomS or images.ExpandedMushroomL
+        segments = segments + 1
+        stalkY = actor.pixelY + 16
     else
-        drawn = gfx.blit(renderer, images.ContractedMushroom, RenderX - 8, RenderY) or drawn
+        cap = images.ContractedMushroom
     end
-    RenderY2 = RenderY2 + 32
-    for l = 0, (RenderX2) - 1 do
-        if l == 0 then
-            drawn = gfx.blit(renderer, images.ExpandMushroomStalkTop, RenderX, RenderY2) or drawn
-        else
-            drawn = gfx.blit(renderer, images.ExpandMushroomStalk, RenderX, RenderY2) or drawn
-        end
-        RenderY2 = RenderY2 + 16
+
+    local box = grabBounds(actor)
+    renderer:draw(cap, { x = box.x, y = box.y })
+    for segment = 0, segments - 1 do
+        local stalk = segment == 0 and images.ExpandMushroomStalkTop or images.ExpandMushroomStalk
+        renderer:draw(stalk, { x = actor.pixelX, y = stalkY + 16 * segment })
     end
-    return drawn
+    return true
 end
 
 return {

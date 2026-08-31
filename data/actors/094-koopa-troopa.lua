@@ -12,35 +12,23 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    if not actor.fields.empty_shell then
-        y = y - 13
-        height = 29
+    if actor.fields.empty_shell then
+        return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
     end
-    return { x = x, y = y, width = 16, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 13, width = 16, height = 29 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    local inShell = actor.fields.empty_shell
+    local in_shell = actor.fields.empty_shell
+    local image
     if actor.fields.color == 1 then
-        img = (inShell and images.RedKoopaShell or images.KoopaRed)
+        image = in_shell and images.RedKoopaShell or images.KoopaRed
     elseif actor.fields.color == 2 or actor.fields.color == 3 then
-        img = (inShell and images.BlueKoopaShell or images.KoopaBlue)
+        image = in_shell and images.BlueKoopaShell or images.KoopaBlue
     else
-        img = (inShell and images.GreenKoopaShell or images.KoopaGreen)
+        image = in_shell and images.GreenKoopaShell or images.KoopaGreen
     end
-    if inShell then
-        drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    else
-        drawn = gfx.blit(renderer, img, RenderX, RenderY - 13) or drawn
-    end
-    return drawn
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {

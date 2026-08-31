@@ -12,45 +12,32 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (16 * (((d[4] & 0x70) // 0x10) + 1))
-    width = 32 * (((d[4] & 0x70) // 0x10) + 2)
-    height = 64
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 16 * (actor.fields.width + 1),
+        y = actor.pixelY,
+        width = 32 * (actor.fields.width + 2),
+        height = 64,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderY2 = RenderY
-    local img, img2
-    local drawn = false
-    RenderY = RenderY + 24
-    RenderX = RenderX + 6
-    drawn = gfx.blit(renderer, images.MushroomStalkTop, RenderX, RenderY) or drawn
-    RenderY = RenderY + 8
-    drawn = gfx.blit(renderer, images.MushroomStalk, RenderX, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.MushroomStalk, RenderX, RenderY + 16) or drawn
-    local GreenMax = (d[4] & 0x70) // 0x10
-    RenderX = (actor.pixelX / 16) * 16 - 16 * (GreenMax + 1)
-    RenderY = RenderY2
-    img = images.MushroomEdge
-    img2 = images.MushroomSection
-    if (actor.fields.color) == 1 then
-        img = images.MushroomEdgeGreen
-        img2 = images.MushroomSectionGreen
+    local stalkX = actor.pixelX + 6
+    renderer:draw(images.MushroomStalkTop, { x = stalkX, y = actor.pixelY + 24 })
+    renderer:draw(images.MushroomStalk, { x = stalkX, y = actor.pixelY + 32 })
+    renderer:draw(images.MushroomStalk, { x = stalkX, y = actor.pixelY + 48 })
+
+    local edge = actor.fields.color == 1 and images.MushroomEdgeGreen or images.MushroomEdge
+    local section = actor.fields.color == 1 and images.MushroomSectionGreen or images.MushroomSection
+    local box = grabBounds(actor)
+    renderer:draw(edge, { x = box.x, y = box.y })
+    for column = 1, actor.fields.width do
+        renderer:draw(section, { x = box.x + 32 * column, y = box.y })
     end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    RenderX = RenderX + 32
-    for l = 0, (GreenMax) - 1 do
-        drawn = gfx.blit(renderer, img2, RenderX, RenderY) or drawn
-        RenderX = RenderX + 32
-    end
-    img = gfx.transform(img, 0, true, false)
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(edge, {
+        x = box.x + 32 * (actor.fields.width + 1),
+        y = box.y,
+        flipX = true,
+    })
 end
 
 return {

@@ -8,28 +8,24 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 2
-    y = y - 7
-    width = 19
-    height = 26
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 2, y = actor.pixelY - 7, width = 19, height = 26 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderY2 = RenderY
-    local width, height = 0, 0
-    local drawn = false
-    drawn = gfx.blit(renderer, images.SpikedBlock, RenderX - 2, RenderY - 7) or drawn
-    RenderY2 = actor.fields.contents
-    if RenderY2 == 2 then
-        RenderY2 = 3
+    local drawn = renderer:draw(images.SpikedBlock, grabBounds(actor))
+    local frame = actor.fields.contents
+    if frame == 2 then
+        frame = 3
     end
-    if RenderY2 <= 3 then
-        drawn = gfx.blit(renderer, images.FlyingQBlockOverrides, RenderX, RenderY + 1, nil, nil, { x = RenderY2 * 16, y = 0, width = 16, height = 16 }) or drawn
+    if frame <= 3 then
+        drawn = renderer:draw(images.FlyingQBlockOverrides, {
+            x = actor.pixelX,
+            y = actor.pixelY + 1,
+            sourceX = frame * 16,
+            sourceY = 0,
+            sourceWidth = 16,
+            sourceHeight = 16,
+        }) or drawn
     end
     return drawn
 end

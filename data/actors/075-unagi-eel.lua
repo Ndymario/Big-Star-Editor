@@ -8,47 +8,27 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    if d[5] % 0x10 == 1 then
-        x = x + 3
-        y = y + 7
-        width = 25
-        height = 23
-    elseif d[5] // 0x10 == 1 then
-        x = x + 45
-        y = y + 3
-        width = 104
-        height = 28
-    else
-        x = x + 12
-        y = y + 3
-        width = 104
-        height = 28
+    if actor.fields.stays_in_place then
+        return { x = actor.pixelX + 3, y = actor.pixelY + 7, width = 25, height = 23 }
+    elseif actor.fields.moves_left then
+        return { x = actor.pixelX + 45, y = actor.pixelY + 3, width = 104, height = 28 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX + 12, y = actor.pixelY + 3, width = 104, height = 28 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local img
-    local drawn = false
-    if d[5] % 0x10 == 1 then
-        drawn = gfx.blit(renderer, images.EelNonMoving, RenderX + 3, RenderY + 7) or drawn
-    elseif d[5] // 0x10 == 1 then
-        img = images.Eel
-        img = gfx.transform(img, 0, true, false)
-        drawn = gfx.blit(renderer, img, RenderX + 45, RenderY + 3) or drawn
-    elseif d[3] % 0x10 == 1 then
-        drawn = gfx.blit(renderer, images.Eel, RenderX + 12, RenderY + 3) or drawn
-    else
-        local r = { x = RenderX + 12, y = RenderY + 3, width = 104, height = 28 }
-        drawn = renderer:fillRect(gfx.colored(r, "#000000")) or drawn
-        renderer:drawText("Eel", r)
+    local bounds = grabBounds(actor)
+    if actor.fields.stays_in_place then
+        return renderer:draw(images.EelNonMoving, bounds)
+    elseif actor.fields.moves_left then
+        bounds.flipX = true
+        return renderer:draw(images.Eel, bounds)
+    elseif actor.fields.moves_right then
+        return renderer:draw(images.Eel, bounds)
     end
+
+    local drawn = renderer:fillRect(gfx.colored(bounds, "#000000"))
+    renderer:drawText("Eel", bounds)
     return drawn
 end
 
@@ -59,17 +39,26 @@ return {
     notes = "This sprite will not spawn if none of the values are checked.\nOfficially known as the 'Unagi'.",
     fields = {
         {
-            key = "direction",
-            label = "Direction",
+            key = "stays_in_place",
+            label = "Stays in place",
             bitOffset = 0,
-            bitWidth = 20,
+            bitWidth = 4,
+            checkboxValue = 1,
             notes = "use with the Auto-scrolling controller sprite, to avoid the bug of when the unagi appears as a glich",
-            choices = {
-                { value = 0, label = "Doesn't spawn" },
-                { value = 1, label = "Stays in place" },
-                { value = 16, label = "Left" },
-                { value = 65536, label = "Right" },
-            },
+        },
+        {
+            key = "moves_left",
+            label = "Moves left",
+            bitOffset = 4,
+            bitWidth = 4,
+            checkboxValue = 1,
+        },
+        {
+            key = "moves_right",
+            label = "Moves right",
+            bitOffset = 16,
+            bitWidth = 4,
+            checkboxValue = 1,
         },
     },
     init = init,

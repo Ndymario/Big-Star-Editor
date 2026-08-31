@@ -1,21 +1,16 @@
 -- Ported from NSMB Editor 5's NSMBStageObj.cs case 285.
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2 = RenderX
-    local width, height = 0, 0
-    local drawn, customRendered = false, true
-    customRendered = false
-    RenderX2 = math.max(0, ((d[4] >> 4) + ((d[4] & 0xF) << 4) - 15) * 16)
-    if RenderX2 ~= 0 then
-        drawn = renderer:fillRect(gfx.colored({ x = RenderX, y = RenderY + 6, width = RenderX2, height = 4 }, "#000000")) or drawn
-        drawn = renderer:fillRect(gfx.colored({ x = RenderX + RenderX2 - 4, y = RenderY, width = 4, height = 10 }, "#000000")) or drawn
-        drawn = renderer:fillRect(gfx.colored({ x = RenderX + 1, y = RenderY + 7, width = RenderX2 - 2, height = 2 }, "#ffffff")) or drawn
-        drawn = renderer:fillRect(gfx.colored({ x = RenderX + RenderX2 - 3, y = RenderY + 1, width = 2, height = 8 }, "#ffffff")) or drawn
-    end
-    customRendered = false
-    return drawn and customRendered
+    local encodedLength = actor.fields.length
+    local pathWidth = math.max(0, ((encodedLength % 16) * 16 + encodedLength // 16 - 15) * 16)
+    if pathWidth == 0 then return false end
+
+    local x, y = actor.pixelX, actor.pixelY
+    renderer:fillRect({ x = x, y = y + 6, width = pathWidth, height = 4, color = "#000000" })
+    renderer:fillRect({ x = x + pathWidth - 4, y = y, width = 4, height = 10, color = "#000000" })
+    renderer:fillRect({ x = x + 1, y = y + 7, width = pathWidth - 2, height = 2, color = "#ffffff" })
+    renderer:fillRect({ x = x + pathWidth - 3, y = y + 1, width = 2, height = 8, color = "#ffffff" })
+    return false
 end
 
 return {

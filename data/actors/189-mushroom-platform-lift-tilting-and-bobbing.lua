@@ -12,47 +12,33 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (16 * (((d[4] & 0x70) // 0x10) + 1))
-    width = 32 * (((d[4] & 0x70) // 0x10) + 2)
-    height = 16 * (d[3] % 0x10 + 4)
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 16 * (actor.fields.length + 1),
+        y = actor.pixelY,
+        width = 32 * (actor.fields.length + 2),
+        height = 16 * (actor.fields.stalk_height + 4),
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img, img2
-    local drawn = false
-    RenderY = RenderY + 24
-    RenderX = RenderX + 6
-    drawn = gfx.blit(renderer, images.MushroomStalkTop, RenderX, RenderY) or drawn
-    RenderY = RenderY + 8
-    drawn = gfx.blit(renderer, images.MushroomStalk, RenderX, RenderY) or drawn
-    for l = 0, d[3] % 0x10 do
-        RenderY = RenderY + 16
-        drawn = gfx.blit(renderer, images.MushroomStalk, RenderX, RenderY) or drawn
+    local stalkX = actor.pixelX + 6
+    renderer:draw(images.MushroomStalkTop, { x = stalkX, y = actor.pixelY + 24 })
+    for segment = 0, actor.fields.stalk_height + 1 do
+        renderer:draw(images.MushroomStalk, { x = stalkX, y = actor.pixelY + 32 + 16 * segment })
     end
-    local RedMax = (d[4] & 0x70) // 0x10
-    RenderX = (actor.pixelX / 16) * 16 - 16 * (RedMax + 1)
-    RenderY = (actor.pixelY / 16) * 16
-    img = images.MushroomEdge
-    img2 = images.MushroomSection
-    if ((d[3] & 0x80) // 0x80) == 1 then
-        img = images.MushroomEdgeGreen
-        img2 = images.MushroomSectionGreen
+
+    local edge = actor.fields.color == 1 and images.MushroomEdgeGreen or images.MushroomEdge
+    local section = actor.fields.color == 1 and images.MushroomSectionGreen or images.MushroomSection
+    local box = grabBounds(actor)
+    renderer:draw(edge, { x = box.x, y = box.y })
+    for column = 1, actor.fields.length do
+        renderer:draw(section, { x = box.x + 32 * column, y = box.y })
     end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    RenderX = RenderX + 32
-    for l = 0, (RedMax) - 1 do
-        drawn = gfx.blit(renderer, img2, RenderX, RenderY) or drawn
-        RenderX = RenderX + 32
-    end
-    img = gfx.transform(img, 0, true, false)
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(edge, {
+        x = box.x + 32 * (actor.fields.length + 1),
+        y = box.y,
+        flipX = true,
+    })
 end
 
 return {
@@ -83,7 +69,7 @@ return {
             key = "stalk_height",
             label = "Stalk height",
             bitOffset = 16,
-            bitWidth = 3,
+            bitWidth = 4,
             notes = "Max 7. Add tiles under it.",
         },
         {

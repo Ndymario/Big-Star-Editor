@@ -9,21 +9,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
-    y = y + 8
-    width = 64
-    return { x = x, y = y, width = width, height = 16 }
+    return { x = actor.pixelX, y = actor.pixelY + 8, width = 64, height = 16 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.MovingPlatformLeft, RenderX, RenderY + 8) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 16, RenderY + 8) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX + 32, RenderY + 8) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformRight, RenderX + 48, RenderY + 8) or drawn
-    return drawn
+    local box = grabBounds(actor)
+    renderer:draw(images.MovingPlatformLeft, { x = box.x, y = box.y })
+    renderer:draw(images.MovingPlatformSection, { x = box.x + 16, y = box.y })
+    renderer:draw(images.MovingPlatformSection, { x = box.x + 32, y = box.y })
+    return renderer:draw(images.MovingPlatformRight, { x = box.x + 48, y = box.y })
 end
 
 return {
@@ -65,8 +59,8 @@ return {
             },
         },
         {
-            key = "0_disable_1_enable_trigger_id_check",
-            label = "0=Disable/1=Enable Trigger ID check",
+            key = "enable_trigger_id_check",
+            label = "Enable trigger ID check",
             bitOffset = 28,
             bitWidth = 4,
             checkboxValue = 1,

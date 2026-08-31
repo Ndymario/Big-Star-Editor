@@ -7,42 +7,29 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 8
-    width = (actor.fields.length + 1) * 16
-    height = (d[2] % 0x10)
-    if height >= 8 then
-        height = height - 16
-    end
-    if height >= 0 then
-        y = y - (height * 16)
-        height = height + 1
-    else
-        height = height - 1
-    end
-    height = height * 16
-    height = math.abs(height)
-    return { x = x, y = y, width = width, height = height }
+    local endY = actor.pixelY - 16 * actor.fields.height
+    return {
+        x = actor.pixelX - 8,
+        y = math.min(actor.pixelY, endY),
+        width = 16 * (actor.fields.length + 1),
+        height = math.abs(endY - actor.pixelY) + 16,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local drawn = false
-    RenderX = RenderX - 8
-    RenderX2 = RenderX + actor.fields.length * 16
-    RenderY2 = d[2] % 0x10
-    if RenderY2 >= 8 then
-        RenderY2 = RenderY2 - 16
-    end
-    RenderY2 = RenderY - RenderY2 * 16
-    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY + 8, x2 = RenderX2 + 8, y2 = RenderY2 + 8, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = gfx.blit(renderer, images.TightRopeEnd, RenderX, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.TightRopeEnd, RenderX2, RenderY2) or drawn
-    return drawn
+    local startX = actor.pixelX - 8
+    local endX = startX + 16 * actor.fields.length
+    local endY = actor.pixelY - 16 * actor.fields.height
+    renderer:drawLine({
+        x = startX + 8,
+        y = actor.pixelY + 8,
+        x2 = endX + 8,
+        y2 = endY + 8,
+        color = "#ffffff",
+        strokeWidth = 1,
+    })
+    renderer:draw(images.TightRopeEnd, { x = startX, y = actor.pixelY })
+    return renderer:draw(images.TightRopeEnd, { x = endX, y = endY })
 end
 
 return {

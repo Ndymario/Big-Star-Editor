@@ -2,6 +2,13 @@
 
 local images = {}
 
+local geometry = {
+    [0] = { image = "SpinyBeetleUp", x = 0, y = -4, width = 16, height = 20 },
+    [1] = { image = "SpinyBeetleLeft", x = -4, y = 0, width = 20, height = 16 },
+    [2] = { image = "SpinyBeetleDown", x = 0, y = 0, width = 16, height = 20 },
+    [3] = { image = "SpinyBeetleRight", x = 0, y = 0, width = 20, height = 16 },
+}
+
 local function init(ctx)
     images.SpinyBeetleDown = ctx.loadImage("images/SpinyBeetleDown.png")
     images.SpinyBeetleLeft = ctx.loadImage("images/SpinyBeetleLeft.png")
@@ -10,37 +17,13 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    if d[5] // 0x10 == 1 then
-        x = x - 4
-        width = 20
-    elseif d[5] // 0x10 == 2 then
-        height = 20
-    elseif d[5] // 0x10 == 3 then
-        width = 20
-    else
-        y = y - 4
-        height = 20
-    end
-    return { x = x, y = y, width = width, height = height }
+    local g = geometry[actor.fields.spike_direction] or geometry[0]
+    return { x = actor.pixelX + g.x, y = actor.pixelY + g.y, width = g.width, height = g.height }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if d[5] // 0x10 == 1 then
-        drawn = gfx.blit(renderer, images.SpinyBeetleLeft, RenderX - 4, RenderY) or drawn
-    elseif d[5] // 0x10 == 2 then
-        drawn = gfx.blit(renderer, images.SpinyBeetleDown, RenderX, RenderY) or drawn
-    elseif d[5] // 0x10 == 3 then
-        drawn = gfx.blit(renderer, images.SpinyBeetleRight, RenderX, RenderY) or drawn
-    else
-        drawn = gfx.blit(renderer, images.SpinyBeetleUp, RenderX, RenderY - 4) or drawn
-    end
-    return drawn
+    local g = geometry[actor.fields.spike_direction] or geometry[0]
+    return renderer:draw(images[g.image], grabBounds(actor))
 end
 
 return {
@@ -50,19 +33,25 @@ return {
     notes = "A beetle with a spike on its head, that crawls slowly on all sides of a surface.\n\nUnused behaviours:\n- Can be defeated by Drill Stomp [may be spiny leftover?]",
     fields = {
         {
-            key = "direction",
-            label = "Direction",
-            bitOffset = 0,
-            bitWidth = 8,
+            key = "spike_direction",
+            label = "Spike direction",
+            bitOffset = 4,
+            bitWidth = 4,
             choices = {
-                { value = 0, label = "Right" },
+                { value = 0, label = "Up" },
                 { value = 1, label = "Left" },
-                { value = 16, label = "Up (spike on left)" },
-                { value = 17, label = "Down (spike on right)" },
-                { value = 32, label = "Left (upside down)" },
-                { value = 33, label = "Right (upside down)" },
-                { value = 48, label = "Down (spike on left)" },
-                { value = 49, label = "Up (spike on right)" },
+                { value = 2, label = "Down" },
+                { value = 3, label = "Right" },
+            },
+        },
+        {
+            key = "travel_direction",
+            label = "Travel direction",
+            bitOffset = 0,
+            bitWidth = 4,
+            choices = {
+                { value = 0, label = "Clockwise" },
+                { value = 1, label = "Counter-clockwise" },
             },
         },
     },

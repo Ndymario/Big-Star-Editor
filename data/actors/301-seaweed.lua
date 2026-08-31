@@ -7,20 +7,11 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 32
-    y = y - 127
-    width = 90
-    height = 147
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 32, y = actor.pixelY - 127, width = 90, height = 147 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.SeaWeed, RenderX - 32, RenderY - 127) or drawn
-    return drawn
+    return renderer:draw(images.SeaWeed, grabBounds(actor))
 end
 
 return {

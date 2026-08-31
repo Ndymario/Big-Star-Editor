@@ -11,49 +11,34 @@ local function init(ctx)
     images.MovingPlatformSectionE = ctx.loadImage("images/MovingPlatformSectionE.png")
 end
 
+local function drawPlatform(renderer, x, y, length, ghost)
+    local left = ghost and images.MovingPlatformLeftE or images.MovingPlatformLeft
+    local middle = ghost and images.MovingPlatformSectionE or images.MovingPlatformSection
+    local right = ghost and images.MovingPlatformRightE or images.MovingPlatformRight
+    local drawn = renderer:draw(left, { x = x, y = y })
+    for section = 2, length - 1 do
+        drawn = renderer:draw(middle, { x = x + 16 * (section - 1), y = y }) or drawn
+    end
+    return renderer:draw(right, { x = x + 16 * (length - 1), y = y }) or drawn
+end
+
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
-    width = math.max(16 * (d[5] % 0x10 + 1), 32)
-    return { x = x, y = y, width = width, height = 16 }
+    return { x = actor.pixelX, y = actor.pixelY, width = 16 * math.max(actor.fields.length, 2), height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local width, height = 0, 0
-    local drawn = false
-    local dist = (actor.fields.tiles_to_move) * 16
-    local LiftLength = (d[5] % 0x10)
+    local distance = actor.fields.tiles_to_move * 16
     if actor.fields.starting_direction == 1 then
-        dist = -dist
+        distance = -distance
     end
-    if actor.objectId == 161 then
-        RenderY2 = RenderY2 - dist
-        LiftLength = (d[5] % 0x8)
-    else
-        RenderX2 = RenderX2 + dist
-    end
-    width = math.max(16 * (LiftLength + 1), 32) // 2
-    drawn = renderer:drawLine({ x = RenderX + width, y = RenderY + 8, x2 = RenderX2 + width, y2 = RenderY2 + 8, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:fillEllipse(gfx.colored({ x = RenderX2 + width - 4, y = RenderY2 + 4, width = 7, height = 7 }, "#ffffff")) or drawn
-    drawn = gfx.blit(renderer, images.MovingPlatformLeft, RenderX, RenderY) or drawn
-    for l = 0, (LiftLength - 1) - 1 do
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX, RenderY, 16, 16) or drawn
-    end
-    drawn = gfx.blit(renderer, images.MovingPlatformRight, RenderX + 16, RenderY) or drawn
-    RenderX = (actor.pixelX / 16) * 16
-    RenderY = (actor.pixelY / 16) * 16
-    if RenderX ~= RenderX2 or RenderY ~= RenderY2 then
-        drawn = gfx.blit(renderer, images.MovingPlatformLeftE, RenderX2, RenderY2) or drawn
-        for l = 0, (LiftLength - 1) - 1 do
-            RenderX2 = RenderX2 + 16
-            drawn = gfx.blit(renderer, images.MovingPlatformSectionE, RenderX2, RenderY2) or drawn
-        end
-        drawn = gfx.blit(renderer, images.MovingPlatformRightE, RenderX2 + 16, RenderY2) or drawn
+    local target_x = actor.pixelX + distance
+    local length = math.max(actor.fields.length, 2)
+    local center = length * 8
+    local drawn = renderer:drawLine({ x = actor.pixelX + center, y = actor.pixelY + 8, x2 = target_x + center, y2 = actor.pixelY + 8, color = "#ffffff", strokeWidth = 1 })
+    drawn = renderer:fillEllipse(gfx.colored({ x = target_x + center - 4, y = actor.pixelY + 4, width = 7, height = 7 }, "#ffffff")) or drawn
+    drawn = drawPlatform(renderer, actor.pixelX, actor.pixelY, length, false) or drawn
+    if target_x ~= actor.pixelX then
+        drawn = drawPlatform(renderer, target_x, actor.pixelY, length, true) or drawn
     end
     return drawn
 end

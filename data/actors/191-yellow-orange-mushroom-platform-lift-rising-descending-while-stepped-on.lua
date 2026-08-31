@@ -12,43 +12,41 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (8 * (actor.fields.width + 1))
-    width = 16 * (actor.fields.width + 2)
-    height = 16 * (math.max(actor.fields.stalk_height_and_move_direction, actor.fields.distance) + 1) + 32
-    return { x = x, y = y, width = width, height = height }
+    local stalkHeight = math.max(actor.fields.stalk_height_and_move_direction, actor.fields.distance)
+    return {
+        x = actor.pixelX - 8 * (actor.fields.width + 1),
+        y = actor.pixelY,
+        width = 16 * (actor.fields.width + 2),
+        height = 16 * (stalkHeight + 1) + 32,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderY2 = RenderY
-    local img, img2
-    local drawn = false
-    drawn = gfx.blit(renderer, images.RiseLowerMushroomStalkTop, RenderX, RenderY + 24) or drawn
-    RenderY = RenderY + 32
-    for l = 0, math.max(actor.fields.stalk_height_and_move_direction, actor.fields.distance) do
-        drawn = gfx.blit(renderer, images.RiseLowerMushroomStalk, RenderX, RenderY) or drawn
-        RenderY = RenderY + 16
+    local stalkHeight = math.max(actor.fields.stalk_height_and_move_direction, actor.fields.distance)
+    renderer:draw(images.RiseLowerMushroomStalkTop, { x = actor.pixelX, y = actor.pixelY + 24 })
+    for segment = 0, stalkHeight do
+        renderer:draw(images.RiseLowerMushroomStalk, { x = actor.pixelX, y = actor.pixelY + 32 + 16 * segment })
     end
-    RenderX = RenderX - ((actor.fields.width + 1) * 8)
+
+    local edge, middle
     if actor.fields.stalk_height_and_move_direction > actor.fields.distance then
-        img = images.LoweringMushroomEdge
-        img2 = images.LoweringMushroomMiddle
+        edge = images.LoweringMushroomEdge
+        middle = images.LoweringMushroomMiddle
     else
-        img = images.RisingMushroomEdge
-        img2 = images.RisingMushroomMiddle
+        edge = images.RisingMushroomEdge
+        middle = images.RisingMushroomMiddle
     end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY2) or drawn
-    for l = 0, (actor.fields.width) - 1 do
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, img2, RenderX, RenderY2) or drawn
+
+    local box = grabBounds(actor)
+    renderer:draw(edge, { x = box.x, y = box.y })
+    for column = 1, actor.fields.width do
+        renderer:draw(middle, { x = box.x + 16 * column, y = box.y })
     end
-    img = gfx.transform(img, 0, true, false)
-    drawn = gfx.blit(renderer, img, RenderX + 16, RenderY2) or drawn
-    return drawn
+    return renderer:draw(edge, {
+        x = box.x + 16 * (actor.fields.width + 1),
+        y = box.y,
+        flipX = true,
+    })
 end
 
 return {

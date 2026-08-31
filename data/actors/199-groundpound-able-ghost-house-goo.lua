@@ -7,20 +7,16 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = (d[5] % 0x10 + 1) * 16
-    height = (d[5] // 0x10 + 1) * 16
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX,
+        y = actor.pixelY,
+        width = actor.fields.length * 16,
+        height = actor.fields.height * 16,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.GroundpoundGoo, RenderX, RenderY, (d[5] % 0x10 + 1) * 16, (d[5] // 0x10 + 1) * 16) or drawn
-    return drawn
+    return renderer:draw(images.GroundpoundGoo, grabBounds(actor))
 end
 
 return {

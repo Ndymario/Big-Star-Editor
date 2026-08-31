@@ -8,36 +8,29 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 24
-    y = y - 10
-    width = 16 * actor.fields.distance_between_steps + 48
-    height = 16 * math.max(actor.fields.right_side_rope_height, actor.fields.left_side_rope_height) + 18
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 24,
+        y = actor.pixelY - 10,
+        width = 16 * actor.fields.distance_between_steps + 48,
+        height = 16 * math.max(actor.fields.right_side_rope_height, actor.fields.left_side_rope_height) + 18,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local drawn = false
-    RenderX2 = RenderX + 16 * actor.fields.distance_between_steps - 10
-    drawn = gfx.blit(renderer, images.ScalePlatformBolt, RenderX - 2, RenderY - 10) or drawn
-    drawn = gfx.blit(renderer, images.ScalePlatformBolt, RenderX2, RenderY - 10) or drawn
-    local rope = { color = "#31184a", strokeWidth = 1 }
-    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY - 9, x2 = RenderX2 + 2, y2 = RenderY - 9, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:drawLine({ x = RenderX + 9, y = RenderY - 8, x2 = RenderX2 + 1, y2 = RenderY - 8, color = rope.color, strokeWidth = rope.strokeWidth }) or drawn
-    RenderY2 = RenderY + 16 * actor.fields.left_side_rope_height - 8
-    local RenderY3 = RenderY + 16 * actor.fields.right_side_rope_height - 8
-    drawn = renderer:drawLine({ x = RenderX - 1, y = RenderY, x2 = RenderX - 1, y2 = RenderY2 - 1, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:drawLine({ x = RenderX, y = RenderY + 1, x2 = RenderX, y2 = RenderY2 - 1, color = rope.color, strokeWidth = rope.strokeWidth }) or drawn
-    drawn = renderer:drawLine({ x = RenderX2 + 9, y = RenderY + 3, x2 = RenderX2 + 9, y2 = RenderY3 - 1, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:drawLine({ x = RenderX2 + 10, y = RenderY + 1, x2 = RenderX2 + 10, y2 = RenderY3 - 1, color = rope.color, strokeWidth = rope.strokeWidth }) or drawn
-    drawn = gfx.blit(renderer, images.ScalePlatformEnd, RenderX2 - 14, RenderY3) or drawn
-    drawn = gfx.blit(renderer, images.ScalePlatformEnd, RenderX - 24, RenderY2) or drawn
-    return drawn
+    local x, y = actor.pixelX, actor.pixelY
+    local right_x = x + 16 * actor.fields.distance_between_steps - 10
+    local left_y = y + 16 * actor.fields.left_side_rope_height - 8
+    local right_y = y + 16 * actor.fields.right_side_rope_height - 8
+    local drawn = renderer:draw(images.ScalePlatformBolt, { x = x - 2, y = y - 10 })
+    drawn = renderer:draw(images.ScalePlatformBolt, { x = right_x, y = y - 10 }) or drawn
+    drawn = renderer:drawLine({ x = x + 8, y = y - 9, x2 = right_x + 2, y2 = y - 9, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = x + 9, y = y - 8, x2 = right_x + 1, y2 = y - 8, color = "#31184a", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = x - 1, y = y, x2 = x - 1, y2 = left_y - 1, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = x, y = y + 1, x2 = x, y2 = left_y - 1, color = "#31184a", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = right_x + 9, y = y + 3, x2 = right_x + 9, y2 = right_y - 1, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = right_x + 10, y = y + 1, x2 = right_x + 10, y2 = right_y - 1, color = "#31184a", strokeWidth = 1 }) or drawn
+    drawn = renderer:draw(images.ScalePlatformEnd, { x = right_x - 14, y = right_y }) or drawn
+    return renderer:draw(images.ScalePlatformEnd, { x = x - 24, y = left_y }) or drawn
 end
 
 return {

@@ -8,21 +8,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 192
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 192, height = 32 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.HangingPlatform, RenderX, RenderY) or drawn
-    RenderX = RenderX + 92
-    for l = 0, (6) - 1 do
-        RenderY = RenderY - 32
-        drawn = gfx.blit(renderer, images.HangingPlatformChain, RenderX, RenderY) or drawn
+    local drawn = renderer:draw(images.HangingPlatform, grabBounds(actor))
+    for link = 1, 6 do
+        drawn = renderer:draw(images.HangingPlatformChain, {
+            x = actor.pixelX + 92,
+            y = actor.pixelY - 32 * link,
+            width = 8,
+            height = 32,
+        }) or drawn
     end
     return drawn
 end

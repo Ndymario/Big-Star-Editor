@@ -8,21 +8,12 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 27
-    y = y - 8
-    width = 71
-    height = 26
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 27, y = actor.pixelY - 8, width = 71, height = 26 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.Shark, RenderX - 27, RenderY - 8) or drawn
-    drawn = gfx.blit(renderer, images.Infinity, RenderX - 4, RenderY + 1) or drawn
-    return drawn
+    local drawn = renderer:draw(images.Shark, grabBounds(actor))
+    return renderer:draw(images.Infinity, { x = actor.pixelX - 4, y = actor.pixelY + 1 }) or drawn
 end
 
 return {

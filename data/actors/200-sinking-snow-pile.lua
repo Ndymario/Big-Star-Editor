@@ -8,29 +8,25 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 16
-    height = 35
-    width = (actor.fields.length + 3) * 16
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 16,
+        y = actor.pixelY,
+        width = 16 * (actor.fields.length + 3),
+        height = 35,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.SinkingSnowEdge
-    drawn = gfx.blit(renderer, img, RenderX - 16, RenderY) or drawn
-    for l = 0, actor.fields.length do
-        drawn = gfx.blit(renderer, images.SinkingSnow, RenderX, RenderY) or drawn
-        RenderX = RenderX + 16
+    local box = grabBounds(actor)
+    renderer:draw(images.SinkingSnowEdge, { x = box.x, y = box.y })
+    for section = 0, actor.fields.length do
+        renderer:draw(images.SinkingSnow, { x = box.x + 16 * (section + 1), y = box.y })
     end
-    img = gfx.transform(img, 0, true, false)
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.SinkingSnowEdge, {
+        x = box.x + 16 * (actor.fields.length + 2),
+        y = box.y,
+        flipX = true,
+    })
 end
 
 return {

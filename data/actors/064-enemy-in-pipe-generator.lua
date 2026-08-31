@@ -10,46 +10,34 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 32
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY, width = 32, height = 32 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img, img2
-    local drawn = false
-    img = images.BomOmb
-    if actor.fields.enemy == 0 then
-        img = images.Goomba
-    end
-    drawn = gfx.blit(renderer, img, RenderX + 7, RenderY + 8) or drawn
-    drawn = gfx.blit(renderer, images.EnemyGenerator, RenderX, RenderY) or drawn
-    img2 = images.arrow_down
-    local arrowEnemyGenX = RenderX2
-    local arrowEnemyGenY = RenderY2
-    if d[5] % 0x4 == 0 then
-        arrowEnemyGenX = arrowEnemyGenX + 8
-        arrowEnemyGenY = arrowEnemyGenY - 16
-        img2 = gfx.transform(img2, 180, false, false)
-    elseif d[5] % 0x4 == 2 then
-        arrowEnemyGenX = arrowEnemyGenX - 16
-        arrowEnemyGenY = arrowEnemyGenY + 8
-        img2 = gfx.transform(img2, 90, false, false)
-    elseif d[5] % 0x4 == 3 then
-        arrowEnemyGenX = arrowEnemyGenX + 32
-        arrowEnemyGenY = arrowEnemyGenY + 8
-        img2 = gfx.transform(img2, 270, false, false)
+    local enemy = actor.fields.enemy == 0 and images.Goomba or images.BomOmb
+    local drawn = renderer:draw(enemy, {
+        x = actor.pixelX + 7, y = actor.pixelY + 8, width = 16, height = 18,
+    })
+    drawn = renderer:draw(images.EnemyGenerator, grabBounds(actor)) or drawn
+
+    local arrow = { x = actor.pixelX + 8, y = actor.pixelY + 32, width = 16, height = 16 }
+    local direction = actor.fields.direction % 4
+    if direction == 0 then
+        arrow.x = actor.pixelX + 8
+        arrow.y = actor.pixelY - 16
+        arrow.rotation = 180
+    elseif direction == 2 then
+        arrow.x = actor.pixelX - 16
+        arrow.y = actor.pixelY + 8
+        arrow.rotation = 90
+    elseif direction == 3 then
+        arrow.x = actor.pixelX + 32
+        arrow.y = actor.pixelY + 8
+        arrow.rotation = 270
     else
-        arrowEnemyGenX = arrowEnemyGenX + 8
-        arrowEnemyGenY = arrowEnemyGenY + 32
+        arrow.rotation = 0
     end
-    drawn = gfx.blit(renderer, img2, arrowEnemyGenX, arrowEnemyGenY, 16, 16) or drawn
-    return drawn
+    return renderer:draw(images.arrow_down, arrow) or drawn
 end
 
 return {

@@ -7,32 +7,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.shift_block_right then
         x = x + 8
     end
     if actor.fields.shift_block_down then
         y = y + 8
     end
-    width = 32
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    return { x = x, y = y, width = 32, height = 32 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.shift_block_right then
-        RenderX = RenderX + 8
-    end
-    if actor.fields.shift_block_down then
-        RenderY = RenderY + 8
-    end
-    drawn = gfx.blit(renderer, images.StarCoin, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.StarCoin, grabBounds(actor))
 end
 
 return {

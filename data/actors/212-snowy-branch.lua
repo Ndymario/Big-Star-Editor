@@ -8,33 +8,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.branch_side == 1 then
-        x = x - 31
-        y = y - 12
-        width = 34
-        height = 23
-    else
-        x = x + 15
-        y = y - 12
-        width = 30
-        height = 23
+        return { x = actor.pixelX - 31, y = actor.pixelY - 12, width = 34, height = 23 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX + 15, y = actor.pixelY - 12, width = 30, height = 23 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.branch_side == 1 then
-        drawn = gfx.blit(renderer, images.SnowBranchLeft, RenderX - 31, RenderY - 12) or drawn
-    else
-        drawn = gfx.blit(renderer, images.SnowBranchRight, RenderX + 15, RenderY - 12) or drawn
-    end
-    return drawn
+    local branch = actor.fields.branch_side == 1 and images.SnowBranchLeft or images.SnowBranchRight
+    return renderer:draw(branch, grabBounds(actor))
 end
 
 return {

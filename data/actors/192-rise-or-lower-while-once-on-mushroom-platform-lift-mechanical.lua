@@ -10,38 +10,30 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = (actor.fields.width + 2) * 16
-    x = x - ((width - 16) // 2)
-    height = (d[5] & 0xF0) + 49
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 8 * (actor.fields.width + 1),
+        y = actor.pixelY,
+        width = 16 * (actor.fields.width + 2),
+        height = 16 * actor.fields.stalk_height_and_move_direction + 49,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2 = RenderX
-    local width = 0
-    local img
-    local drawn = false
-    img = images.GreenMushroomEdge
-    img = gfx.transform(img, 0, true, false)
-    width = actor.fields.width + 1
-    RenderX = RenderX - (width * 8)
-    drawn = gfx.blit(renderer, images.GreenMushroomEdge, RenderX, RenderY) or drawn
-    for l = 0, width - 2 do
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, images.GreenMushroomMiddle, RenderX, RenderY) or drawn
+    local box = grabBounds(actor)
+    renderer:draw(images.GreenMushroomEdge, { x = box.x, y = box.y })
+    for column = 1, actor.fields.width do
+        renderer:draw(images.GreenMushroomMiddle, { x = box.x + 16 * column, y = box.y })
     end
-    drawn = gfx.blit(renderer, img, RenderX + 16, RenderY) or drawn
-    drawn = gfx.blit(renderer, images.GreenMushroomStalkTop, RenderX2, RenderY + 24) or drawn
-    for l = 0, (actor.fields.stalk_height_and_move_direction) - 1 do
-        drawn = gfx.blit(renderer, images.GreenMushroomStalk, RenderX2, RenderY + 49) or drawn
-        RenderY = RenderY + 16
+    renderer:draw(images.GreenMushroomEdge, {
+        x = box.x + 16 * (actor.fields.width + 1),
+        y = box.y,
+        flipX = true,
+    })
+    renderer:draw(images.GreenMushroomStalkTop, { x = actor.pixelX, y = actor.pixelY + 24 })
+    for segment = 0, actor.fields.stalk_height_and_move_direction - 1 do
+        renderer:draw(images.GreenMushroomStalk, { x = actor.pixelX, y = actor.pixelY + 49 + 16 * segment })
     end
-    return drawn
+    return true
 end
 
 return {

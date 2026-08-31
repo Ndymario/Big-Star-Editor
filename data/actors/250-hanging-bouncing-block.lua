@@ -8,34 +8,33 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    y = y - 80
-    height = actor.fields.drop_swing_amount
-    if height == 0 then
-        height = 8
+    local drop = actor.fields.drop_swing_amount
+    if drop == 0 then
+        drop = 8
     end
-    height = (height + 1) * 16
-    return { x = x, y = y, width = 16, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 80, width = 16, height = (drop + 1) * 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderY2 = RenderY
-    local width, height = 0, 0
+    local drop = actor.fields.drop_swing_amount
+    if drop == 0 then
+        drop = 8
+    end
+    local blockY = actor.pixelY + (drop - 5) * 16
     local drawn = false
-    RenderY2 = actor.fields.drop_swing_amount
-    if RenderY2 == 0 then
-        RenderY2 = 8
-    end
-    drawn = gfx.blit(renderer, images.QBlock, RenderX, RenderY + (RenderY2 - 5) * 16) or drawn
+    drawn = renderer:draw(images.QBlock, { x = actor.pixelX, y = blockY }) or drawn
     if actor.fields.contents <= 8 then
-        drawn = gfx.blit(renderer, images.HangingBlockOverrides, RenderX, RenderY + (RenderY2 - 5) * 16, nil, nil, { x = (actor.fields.contents) * 16, y = 0, width = 16, height = 16 }) or drawn
+        drawn = renderer:draw(images.HangingBlockOverrides, {
+            x = actor.pixelX,
+            y = blockY,
+            sourceX = actor.fields.contents * 16,
+            sourceY = 0,
+            sourceWidth = 16,
+            sourceHeight = 16,
+        }) or drawn
     end
-    drawn = renderer:drawLine({ x = RenderX + 7, y = RenderY + (RenderY2 - 5) * 16, x2 = RenderX + 7, y2 = RenderY - 80, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY + (RenderY2 - 5) * 16, x2 = RenderX + 8, y2 = RenderY - 80, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = actor.pixelX + 7, y = blockY, x2 = actor.pixelX + 7, y2 = actor.pixelY - 80, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = actor.pixelX + 8, y = blockY, x2 = actor.pixelX + 8, y2 = actor.pixelY - 80, color = "#ffffff", strokeWidth = 1 }) or drawn
     return drawn
 end
 

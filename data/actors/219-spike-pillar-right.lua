@@ -7,22 +7,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 128
-    width = 144
-    height = 64
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 128, y = actor.pixelY, width = 144, height = 64 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.GiantSpike
-    img = gfx.transform(img, 270, false, false)
-    drawn = gfx.blit(renderer, img, RenderX - 128, RenderY) or drawn
-    return drawn
+    local box = grabBounds(actor)
+    return renderer:draw(images.GiantSpike, {
+        x = box.x + 40,
+        y = box.y - 40,
+        width = 64,
+        height = 144,
+        rotation = 270,
+    })
 end
 
 return {

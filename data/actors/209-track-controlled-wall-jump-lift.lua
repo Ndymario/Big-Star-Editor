@@ -8,34 +8,29 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (d[5] % 0x4 * 8 + 24)
-    y = y + 5
-    width = d[5] % 0x4 * 16 + 64
-    height = (d[4] & 0x30) // 0x10 * 16 + 83
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 8 * (actor.fields.length - 4) - 24,
+        y = actor.pixelY + 5,
+        width = 16 * actor.fields.length,
+        height = 16 * actor.fields.height + 19,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    RenderX = RenderX - (d[5] % 0x4 * 8 + 24)
-    RenderY = RenderY + ((d[4] & 0x30) // 0x10 * 16 + 88)
-    local XOff = d[5] % 0x4 * 16 + 48
-    for l = 0, ((d[4] & 0x30) // 0x10 + 4) - 1 do
-        RenderY = RenderY - 16
-        drawn = gfx.blit(renderer, images.WallJumpPlatformBlock, RenderX, RenderY) or drawn
-        drawn = gfx.blit(renderer, images.WallJumpPlatformBlock, RenderX + XOff, RenderY) or drawn
+    local box = grabBounds(actor)
+    local rightX = box.x + 16 * (actor.fields.length - 1)
+    for row = actor.fields.height, 1, -1 do
+        local y = actor.pixelY + 8 + 16 * row
+        renderer:draw(images.WallJumpPlatformBlock, { x = box.x, y = y })
+        renderer:draw(images.WallJumpPlatformBlock, { x = rightX, y = y })
     end
-    for l = 0, (d[5] % 0x4 + 2) - 1 do
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, images.WallJumpPlatformBlock, RenderX, RenderY) or drawn
+    for column = 1, actor.fields.length - 2 do
+        renderer:draw(images.WallJumpPlatformBlock, {
+            x = box.x + 16 * column,
+            y = actor.pixelY + 24,
+        })
     end
-    drawn = gfx.blit(renderer, images.LineAttachment, (actor.pixelX / 16) * 16 - 3, (actor.pixelY / 16) * 16 + 5) or drawn
-    return drawn
+    return renderer:draw(images.LineAttachment, { x = actor.pixelX - 3, y = actor.pixelY + 5 })
 end
 
 return {
@@ -79,7 +74,7 @@ return {
             key = "length",
             label = "Length",
             bitOffset = 0,
-            bitWidth = 4,
+            bitWidth = 2,
             notes = "Width is 4+(N11 mod 4)",
             valueOffset = 4,
         },
@@ -87,7 +82,7 @@ return {
             key = "height",
             label = "Height",
             bitOffset = 12,
-            bitWidth = 4,
+            bitWidth = 2,
             notes = "Height is 4+(N8 mod 4)",
             valueOffset = 4,
         },

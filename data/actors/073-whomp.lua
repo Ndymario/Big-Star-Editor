@@ -8,39 +8,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.bigger then
-        x = x - 38
-        y = y - 74
-        width = 96
-        height = 90
-    else
-        x = x - 29
-        y = y - 57
-        width = 78
-        height = 73
+        return { x = actor.pixelX - 38, y = actor.pixelY - 74, width = 96, height = 90 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 29, y = actor.pixelY - 57, width = 78, height = 73 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    if actor.fields.bigger then
-        img = images.WhompL
-        RenderX = RenderX - 38
-        RenderY = RenderY - 74
-    else
-        img = images.Whomp
-        RenderX = RenderX - 29
-        RenderY = RenderY - 57
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    local image = actor.fields.bigger and images.WhompL or images.Whomp
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {

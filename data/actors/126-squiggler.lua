@@ -7,33 +7,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.pipe_exit_facing == 1 then
-        y = y + 16
-    else
-        y = y - 15
+        return { x = actor.pixelX + 10, y = actor.pixelY + 16, width = 13, height = 15 }
     end
-    x = x + 10
-    width = 13
-    height = 15
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX + 10, y = actor.pixelY - 15, width = 13, height = 15 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.PipeCaterpiller
+    local bounds = grabBounds(actor)
     if actor.fields.pipe_exit_facing == 1 then
-        img = gfx.transform(img, 180, false, false)
-        drawn = gfx.blit(renderer, img, RenderX + 10, RenderY + 16) or drawn
-    else
-        drawn = gfx.blit(renderer, img, RenderX + 10, RenderY - 15) or drawn
+        bounds.rotation = 180
     end
-    return drawn
+    return renderer:draw(images.PipeCaterpiller, bounds)
 end
 
 return {

@@ -12,47 +12,36 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
     local width, height = 16, 16
-    if (d[2] & 0x10) // 0x10 == 1 then
+    if actor.fields.bonus_game == 1 then
         x = x - 12
         y = y - 12
         width = 40
         height = 40
     end
-    if (d[5] & 0x10) // 0x10 == 1 then
+    if actor.fields.shift_position == 1 then
         x = x + 8
     end
     return { x = x, y = y, width = width, height = height }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.QBlock
-    if (d[2] & 0x10) // 0x10 == 1 then
-        RenderX = RenderX - 12
-        RenderY = RenderY - 12
+    local image = images.QBlock
+    if actor.fields.bonus_game == 1 then
         if actor.fields.block_id == 1 then
-            img = images.ToadBackground2
+            image = images.ToadBackground2
         elseif actor.fields.block_id == 2 then
-            img = images.ToadBackground3
+            image = images.ToadBackground3
         elseif actor.fields.block_id == 3 then
-            img = images.ToadBackground4
+            image = images.ToadBackground4
         elseif actor.fields.block_id == 4 then
-            img = images.ToadBackground5
+            image = images.ToadBackground5
         else
-            img = images.ToadBackground1
+            image = images.ToadBackground1
         end
     end
-    if (d[5] & 0x10) // 0x10 == 1 then
-        RenderX = RenderX + 8
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {
@@ -64,7 +53,7 @@ return {
             key = "bonus_game",
             label = "Bonus game",
             bitOffset = 28,
-            bitWidth = 4,
+            bitWidth = 1,
             choices = {
                 { value = 0, label = "1-Up Minigame" },
                 { value = 1, label = "Background Chooser" },
@@ -81,7 +70,7 @@ return {
             key = "shift_position",
             label = "Shift position",
             bitOffset = 4,
-            bitWidth = 4,
+            bitWidth = 1,
             choices = {
                 { value = 0, label = "No shifting" },
                 { value = 1, label = "8 pixels right" },

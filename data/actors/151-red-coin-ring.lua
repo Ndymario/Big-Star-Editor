@@ -7,28 +7,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 7
-    y = y - 26
-    width = 30
-    height = 42
+    local x = actor.pixelX - 7
     if actor.fields.shift_8_pixels_right then
         x = x + 8
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = x, y = actor.pixelY - 26, width = 30, height = 42 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.shift_8_pixels_right then
-        RenderX = RenderX + 8
-    end
-    drawn = gfx.blit(renderer, images.RedCoinRing, RenderX - 7, RenderY - 26) or drawn
-    return drawn
+    return renderer:draw(images.RedCoinRing, grabBounds(actor))
 end
 
 return {

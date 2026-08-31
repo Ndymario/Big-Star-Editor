@@ -1,24 +1,22 @@
 -- Ported from NSMB Editor 5's NSMBStageObj.cs case 87.
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 16 * (d[4] % 0x10 + 1)
-    height = 16 * (d[5] // 0x10 + 1)
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX,
+        y = actor.pixelY,
+        width = 16 * actor.fields.length,
+        height = 16 * actor.fields.height,
+    }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
     local rect = grabBounds(actor)
     rect.x, rect.y = rect.x + 1, rect.y + 1
-    drawn = renderer:strokeRect(gfx.colored(rect, "#000000")) or drawn
-    rect.x, rect.y = rect.x + (-1), rect.y + (-1)
+    local drawn = renderer:strokeRect(gfx.colored(rect, "#000000"))
+    rect.x, rect.y = rect.x - 1, rect.y - 1
     drawn = renderer:strokeRect(gfx.colored(rect, "#00ff00")) or drawn
-    renderer:drawText("Warp", { x = RenderX + 1, y = RenderY + 1 })
-    renderer:drawText("Warp", { x = RenderX, y = RenderY })
+    renderer:drawText("Warp", { x = actor.pixelX + 1, y = actor.pixelY + 1 })
+    renderer:drawText("Warp", { x = actor.pixelX, y = actor.pixelY })
     return drawn
 end
 

@@ -9,25 +9,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 128
-    width = 276
-    height = 128
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 128, y = actor.pixelY, width = 276, height = 128 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.SwellingGround, RenderX - 128, RenderY) or drawn
-    if (actor.fields.direction) == 0 then
-        drawn = gfx.blit(renderer, images.SwellingGroundOut, RenderX - 128, RenderY - 112) or drawn
-    elseif (actor.fields.direction) == 1 then
-        drawn = gfx.blit(renderer, images.SwellingGroundIn, RenderX - 128, RenderY) or drawn
+    local box = grabBounds(actor)
+    renderer:draw(images.SwellingGround, box)
+    if actor.fields.direction == 0 then
+        return renderer:draw(images.SwellingGroundOut, { x = box.x, y = box.y - 112 })
+    elseif actor.fields.direction == 1 then
+        return renderer:draw(images.SwellingGroundIn, box)
     end
-    return drawn
+    return true
 end
 
 return {
@@ -36,8 +29,8 @@ return {
     category = "Platforms and ropes",
     fields = {
         {
-            key = "0_disable_1_enable_trigger_id_check",
-            label = "0=Disable/1=Enable Trigger ID check",
+            key = "enable_trigger_id_check",
+            label = "Enable trigger ID check",
             bitOffset = 28,
             bitWidth = 4,
             checkboxValue = 1,

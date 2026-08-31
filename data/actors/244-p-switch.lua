@@ -4,46 +4,25 @@ local images = {}
 
 local function init(ctx)
     images.PSwitch = ctx.loadImage("images/PSwitch.png")
-    images.QSwitch = ctx.loadImage("images/QSwitch.png")
-    images.RedSwitch = ctx.loadImage("images/RedSwitch.png")
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
-    local height = 16
     if not actor.fields.upside_down then
         y = y - 2
     end
     if actor.fields.shift_block_right then
         x = x + 8
     end
-    height = 18
-    return { x = x, y = y, width = 16, height = height }
+    return { x = x, y = y, width = 16, height = 18 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.QSwitch
-    if actor.objectId == 244 then
-        img = images.PSwitch
-    end
-    if actor.objectId == 246 then
-        img = images.RedSwitch
-    end
+    local box = grabBounds(actor)
     if actor.fields.upside_down then
-        img = gfx.transform(img, 180, false, false)
-    else
-        RenderY = RenderY - 2
+        box.rotation = 180
     end
-    if actor.fields.shift_block_right then
-        RenderX = RenderX + 8
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.PSwitch, box)
 end
 
 return {

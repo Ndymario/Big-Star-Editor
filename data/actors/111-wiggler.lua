@@ -8,31 +8,21 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
     if actor.fields.bigger then
-        y = y - 44
-        width = 92
-        height = 60
-    else
-        y = y - 14
-        width = 52
-        height = 30
+        return { x = actor.pixelX, y = actor.pixelY - 44, width = 92, height = 60 }
     end
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 14, width = 52, height = 30 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if d[5] == 1 then
-        drawn = gfx.blit(renderer, images.WigglerL, RenderX, RenderY - 44) or drawn
-    else
-        drawn = gfx.blit(renderer, images.Wiggler, RenderX, RenderY - 14) or drawn
+    if actor.fields.bigger and actor.fields.unknown_10 == 0 then
+        return renderer:draw(images.WigglerL, {
+            x = actor.pixelX, y = actor.pixelY - 44, width = 92, height = 60,
+        })
     end
-    return drawn
+    return renderer:draw(images.Wiggler, {
+        x = actor.pixelX, y = actor.pixelY - 14, width = 52, height = 30,
+    })
 end
 
 return {
@@ -47,6 +37,12 @@ return {
             bitWidth = 4,
             notes = "1 is unused and gives it glitchy animations and hitbox.",
             checkboxValue = 1,
+        },
+        {
+            key = "unknown_10",
+            label = "Unknown 10",
+            bitOffset = 4,
+            bitWidth = 4,
         },
         {
             key = "unknown_4",

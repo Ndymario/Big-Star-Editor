@@ -7,10 +7,7 @@ local function init(ctx)
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.ExpandableBlock, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.ExpandableBlock, { x = actor.pixelX, y = actor.pixelY })
 end
 
 return {

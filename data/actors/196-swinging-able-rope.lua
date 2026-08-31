@@ -7,26 +7,16 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    local RopeH = math.min(d[5] % 0x10, 4)
-    x = x - 3
-    width = 8
-    height = 16 * (RopeH + 4)
-    return { x = x, y = y, width = width, height = height }
+    local segments = math.min(actor.fields.length_in_tiles, 8)
+    return { x = actor.pixelX - 3, y = actor.pixelY, width = 8, height = 16 * segments }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    local RopeMax = math.min(d[5] % 0x10, 4)
-    for l = 0, (RopeMax + 4) - 1 do
-        drawn = gfx.blit(renderer, images.Rope, RenderX - 3, RenderY) or drawn
-        RenderY = RenderY + 16
+    local segments = math.min(actor.fields.length_in_tiles, 8)
+    for segment = 0, segments - 1 do
+        renderer:draw(images.Rope, { x = actor.pixelX - 3, y = actor.pixelY + 16 * segment })
     end
-    return drawn
+    return true
 end
 
 return {

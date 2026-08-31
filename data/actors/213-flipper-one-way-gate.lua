@@ -2,12 +2,24 @@
 
 local images = {}
 
+-- gfx.transform replaces an earlier transform instead of composing it. These
+-- are the exact low-level commands emitted by the original two-pass logic.
+local renderGeometry = {
+    [0] = { x = 0, y = -39, flipX = true },
+    [1] = { x = 0, y = -39, flipY = true },
+    [2] = { x = 0, y = 16, flipX = true },
+    [3] = { x = 0, y = 16 },
+    [4] = { x = 16, y = 0, flipY = true },
+    [5] = { x = 27.5, y = -11.5, rotation = 270 },
+    [6] = { x = -39, y = 0, flipY = true },
+    [7] = { x = -27.5, y = -11.5, rotation = 270, flipX = true },
+}
+
 local function init(ctx)
     images.OneWayDoor = ctx.loadImage("images/OneWayDoor.png")
 end
 
 local function grabBounds(actor)
-    local d = actor.data
     local x, y = actor.pixelX, actor.pixelY
     local width, height = 16, 16
     local nvalue = actor.fields.type
@@ -32,30 +44,18 @@ local function grabBounds(actor)
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.OneWayDoor
-    if d[5] == 0 or d[5] == 1 then
-        img = gfx.transform(img, 0, false, true)
-        RenderY = RenderY - 39
-    elseif d[5] == 2 or d[5] == 3 then
-        RenderY = RenderY + 16
-    elseif d[5] == 4 or d[5] == 5 then
-        img = gfx.transform(img, 270, false, false)
-        RenderX = RenderX + 16
-    elseif d[5] == 6 or d[5] == 7 then
-        img = gfx.transform(img, 270, true, false)
-        RenderX = RenderX - 39
+    local g
+    if actor.fields.unknown_10 == 0 then
+        g = renderGeometry[actor.fields.type]
     end
-    if d[5] == 0 or d[5] == 2 then
-        img = gfx.transform(img, 0, true, false)
-    elseif d[5] == 4 or d[5] == 6 then
-        img = gfx.transform(img, 0, false, true)
-    end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    g = g or { x = 0, y = 0 }
+    return renderer:draw(images.OneWayDoor, {
+        x = actor.pixelX + g.x,
+        y = actor.pixelY + g.y,
+        rotation = g.rotation,
+        flipX = g.flipX,
+        flipY = g.flipY,
+    })
 end
 
 return {
@@ -79,6 +79,12 @@ return {
                 { value = 6, label = "Faces left; opens from bottom" },
                 { value = 7, label = "Faces left; opens from top" },
             },
+        },
+        {
+            key = "unknown_10",
+            label = "Unknown 10",
+            bitOffset = 4,
+            bitWidth = 4,
         },
     },
     init = init,

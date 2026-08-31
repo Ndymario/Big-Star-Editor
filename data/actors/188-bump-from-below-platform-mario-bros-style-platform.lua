@@ -9,30 +9,29 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (d[5] * 8 + 6)
-    width = 16 * (d[5] - 1) + 28
-    height = 10
-    return { x = x, y = y, width = width, height = height }
+    local length = actor.fields.length
+    return {
+        x = actor.pixelX - (length * 8 + 6),
+        y = actor.pixelY,
+        width = 16 * (length - 1) + 28,
+        height = 10,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    RenderX = RenderX - (d[5] * 8 + 6)
-    drawn = gfx.blit(renderer, images.BumpPlatformLeft, RenderX, RenderY) or drawn
-    RenderX = RenderX + 14
-    for l = 0, (d[5] - 1) - 1 do
-        drawn = gfx.blit(renderer, images.BumpPlatformSection, RenderX, RenderY) or drawn
-        RenderX = RenderX + 16
+    local box = grabBounds(actor)
+    local length = actor.fields.length
+    renderer:draw(images.BumpPlatformLeft, { x = box.x, y = box.y })
+    for section = 0, length - 2 do
+        renderer:draw(images.BumpPlatformSection, { x = box.x + 14 + 16 * section, y = box.y })
     end
-    if d[5] > 0 then
-        drawn = gfx.blit(renderer, images.BumpPlatformRight, RenderX, RenderY) or drawn
+    if length > 0 then
+        return renderer:draw(images.BumpPlatformRight, {
+            x = box.x + 14 + 16 * (length - 1),
+            y = box.y,
+        })
     end
-    return drawn
+    return true
 end
 
 return {
@@ -44,7 +43,7 @@ return {
             key = "length",
             label = "Length",
             bitOffset = 0,
-            bitWidth = 4,
+            bitWidth = 8,
         },
     },
     init = init,

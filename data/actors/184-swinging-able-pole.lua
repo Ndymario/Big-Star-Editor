@@ -8,27 +8,19 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 11
-    y = y - 11
-    width = 22
-    height = (d[5] % 0x8) * 16 + 75
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 11,
+        y = actor.pixelY - 11,
+        width = 22,
+        height = 16 * actor.fields.height + 11,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local drawn = false
-    for l = 0, (d[5] % 0x8 + 4) - 1 do
-        drawn = gfx.blit(renderer, images.SwingingPole, RenderX - 3, RenderY) or drawn
-        RenderY = RenderY + 16
+    for segment = 0, actor.fields.height - 1 do
+        renderer:draw(images.SwingingPole, { x = actor.pixelX - 3, y = actor.pixelY + 16 * segment })
     end
-    drawn = gfx.blit(renderer, images.LineAttachment, RenderX2 - 11, RenderY2 - 11) or drawn
-    return drawn
+    return renderer:draw(images.LineAttachment, { x = actor.pixelX - 11, y = actor.pixelY - 11 })
 end
 
 return {
@@ -40,7 +32,7 @@ return {
             key = "height",
             label = "Height",
             bitOffset = 0,
-            bitWidth = 4,
+            bitWidth = 3,
             notes = "Height is 4+(N11 mod 8).",
             valueOffset = 4,
         },

@@ -7,20 +7,11 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 38
-    y = y - 29
-    width = 91
-    height = 75
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 38, y = actor.pixelY - 29, width = 91, height = 75 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.Spinning4PointedPlatform, RenderX - 38, RenderY - 29) or drawn
-    return drawn
+    return renderer:draw(images.Spinning4PointedPlatform, grabBounds(actor))
 end
 
 return {

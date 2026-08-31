@@ -8,28 +8,18 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 144
-    y = y - 104
-    width = 288
-    height = 208
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 144, y = actor.pixelY - 104, width = 288, height = 208 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local RenderX2, RenderY2 = RenderX, RenderY
-    local img
-    local drawn = false
-    drawn = gfx.blit(renderer, images.GiantSpinningPlatform, RenderX - 144, RenderY - 104) or drawn
-    img = images.Clockwise
-    if d[3] % 0x2 == 0 then
-        img = gfx.transform(img, 0, true, false)
-    end
-    drawn = gfx.blit(renderer, img, RenderX2 - 16, RenderY2 - 16, 32, 32) or drawn
-    return drawn
+    renderer:draw(images.GiantSpinningPlatform, grabBounds(actor))
+    return renderer:draw(images.Clockwise, {
+        x = actor.pixelX - 16,
+        y = actor.pixelY - 16,
+        width = 32,
+        height = 32,
+        flipX = actor.fields.rotation == 0,
+    })
 end
 
 return {
@@ -41,15 +31,15 @@ return {
             key = "rotation",
             label = "Rotation",
             bitOffset = 16,
-            bitWidth = 4,
+            bitWidth = 1,
             choices = {
                 { value = 0, label = "Counterclockwise" },
                 { value = 1, label = "Clockwise" },
             },
         },
         {
-            key = "0_disable_1_enable_trigger_id_check",
-            label = "0=Disable/1=Enable Trigger ID check",
+            key = "enable_trigger_id_check",
+            label = "Enable trigger ID check",
             bitOffset = 28,
             bitWidth = 4,
             notes = "Unused.",

@@ -8,31 +8,21 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    y = y - 56
-    width = 32
-    height = 72
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 56, width = 32, height = 72 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    local PumpX = RenderX + (d[5] & 0xF0)
-    local PumpY = RenderY - (d[4] & 0xF0)
-    local PumpShiftX = (d[4] % 0x2)
-    local PumpShiftY = (d[3] % 0x2)
-    if PumpShiftX == 1 then
-        PumpX = PumpX - 336
+    local pumpX = actor.pixelX + 48 + 16 * actor.fields.horizontal_distance_between_pump_and_tube
+    local pumpY = actor.pixelY - 15 - 16 * actor.fields.vertical_distance_between_pump_and_tube
+    if actor.fields.shift_21_tiles_left then
+        pumpX = pumpX - 336
     end
-    if PumpShiftY == 1 then
-        PumpY = PumpY + 256
+    if actor.fields.shift_16_tiles_down then
+        pumpY = pumpY + 256
     end
-    drawn = gfx.blit(renderer, images.SwollenPipe, RenderX, RenderY - 56) or drawn
-    drawn = gfx.blit(renderer, images.Pump, PumpX + 48, PumpY - 15) or drawn
-    return drawn
+
+    renderer:draw(images.SwollenPipe, grabBounds(actor))
+    return renderer:draw(images.Pump, { x = pumpX, y = pumpY })
 end
 
 return {
@@ -68,21 +58,15 @@ return {
             key = "shift_21_tiles_left",
             label = "Shift 21 tiles left",
             bitOffset = 8,
-            bitWidth = 4,
-            choices = {
-                { value = 1, label = "Yes" },
-                { value = 0, label = "No" },
-            },
+            bitWidth = 1,
+            checkboxValue = 1,
         },
         {
             key = "shift_16_tiles_down",
             label = "Shift 16 tiles down",
             bitOffset = 16,
-            bitWidth = 4,
-            choices = {
-                { value = 1, label = "Yes" },
-                { value = 0, label = "No" },
-            },
+            bitWidth = 1,
+            checkboxValue = 1,
         },
     },
     init = init,

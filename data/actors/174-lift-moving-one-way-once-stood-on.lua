@@ -9,42 +9,23 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
-    width = d[5] % 0x8
-    local s = 2
-    if actor.objectId == 174 then
-        width = d[5] % 0x10
-        width = math.max(0, width - 1)
-        s = 1
-        x = x - 8
-    end
-    x = x - ((width * s + 1) * 8)
-    width = (width * s + 2) * 16
-    return { x = x, y = y, width = width, height = 16 }
+    local tiles = math.max(actor.fields.length, 2)
+    return {
+        x = actor.pixelX - tiles * 8,
+        y = actor.pixelY,
+        width = tiles * 16,
+        height = 16,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    local w = d[5] % 0x8
-    local s = 2
-    if actor.objectId == 174 then
-        w = d[5] % 0x10
-        w = math.max(0, w - 1)
-        s = 1
-        RenderX = RenderX - 8
+    local box = grabBounds(actor)
+    local tiles = math.max(actor.fields.length, 2)
+    renderer:draw(images.MovingPlatformLeft, { x = box.x, y = box.y })
+    for column = 1, tiles - 2 do
+        renderer:draw(images.MovingPlatformSection, { x = box.x + 16 * column, y = box.y })
     end
-    RenderX = RenderX - ((w * s + 1) * 8)
-    drawn = gfx.blit(renderer, images.MovingPlatformLeft, RenderX, RenderY) or drawn
-    for l = 0, (w * s) - 1 do
-        RenderX = RenderX + 16
-        drawn = gfx.blit(renderer, images.MovingPlatformSection, RenderX, RenderY) or drawn
-    end
-    drawn = gfx.blit(renderer, images.MovingPlatformRight, RenderX + 16, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.MovingPlatformRight, { x = box.x + 16 * (tiles - 1), y = box.y })
 end
 
 return {

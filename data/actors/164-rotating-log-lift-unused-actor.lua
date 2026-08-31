@@ -8,29 +8,15 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width = 16
     if actor.fields.longer then
-        x = x - 56
-        width = 128
-    else
-        x = x - 24
-        width = 64
+        return { x = actor.pixelX - 56, y = actor.pixelY, width = 128, height = 16 }
     end
-    return { x = x, y = y, width = width, height = 16 }
+    return { x = actor.pixelX - 24, y = actor.pixelY, width = 64, height = 16 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.longer then
-        drawn = gfx.blit(renderer, images.SpinningLogL, RenderX - 56, RenderY) or drawn
-    else
-        drawn = gfx.blit(renderer, images.SpinningLog, RenderX - 24, RenderY) or drawn
-    end
-    return drawn
+    local image = actor.fields.longer and images.SpinningLogL or images.SpinningLog
+    return renderer:draw(image, grabBounds(actor))
 end
 
 return {

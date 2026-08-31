@@ -8,32 +8,30 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    width = 23
-    height = ((d[3] % 0x8) + 1) * 16
-    y = y - (height - 16)
-    x = x - 3
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 3,
+        y = actor.pixelY - 16 * (actor.fields.height - 1),
+        width = 23,
+        height = 16 * actor.fields.height,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
     local drawn = false
-    img = images.RotatingCannon
-    img = gfx.transform(img, 0, true, false)
-    for l = 0, d[3] % 0x8 do
-        if (d[4] & (1 << l)) > 0 then
-            drawn = gfx.blit(renderer, images.RotatingCannonEmpty, RenderX + 2, RenderY) or drawn
-        elseif (d[5] & (1 << l)) > 0 then
-            drawn = gfx.blit(renderer, img, RenderX - 3, RenderY) or drawn
+    for level = 0, actor.fields.height - 1 do
+        local y = actor.pixelY - 16 * level
+        local bit = 1 << level
+        if (actor.fields.empty_spots & bit) > 0 then
+            drawn = renderer:draw(images.RotatingCannonEmpty, { x = actor.pixelX + 2, y = y }) or drawn
+        elseif (actor.fields.cannons_to_flip & bit) > 0 then
+            drawn = renderer:draw(images.RotatingCannon, {
+                x = actor.pixelX - 3,
+                y = y,
+                flipX = true,
+            }) or drawn
         else
-            drawn = gfx.blit(renderer, images.RotatingCannon, RenderX + 1, RenderY) or drawn
+            drawn = renderer:draw(images.RotatingCannon, { x = actor.pixelX + 1, y = y }) or drawn
         end
-        RenderY = RenderY - 16
     end
     return drawn
 end
@@ -62,7 +60,7 @@ return {
             key = "height",
             label = "Height",
             bitOffset = 16,
-            bitWidth = 4,
+            bitWidth = 3,
             notes = "Height is 1 + (N7 mod 8)",
             valueOffset = 1,
         },

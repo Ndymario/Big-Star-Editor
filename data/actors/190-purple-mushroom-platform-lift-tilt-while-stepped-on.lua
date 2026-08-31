@@ -10,39 +10,30 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - (16 * (((d[5] & 0x30) // 0x10) + 1))
-    width = 32 * (((d[5] & 0x30) // 0x10) + 2)
-    height = 112
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX - 16 * (actor.fields.length + 1),
+        y = actor.pixelY,
+        width = 32 * (actor.fields.length + 2),
+        height = 112,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    drawn = gfx.blit(renderer, images.MushroomStalkTop, RenderX + 6, RenderY + 24) or drawn
-    RenderY = RenderY + 32
-    for l = 0, (5) - 1 do
-        drawn = gfx.blit(renderer, images.MushroomStalk, RenderX + 6, RenderY) or drawn
-        RenderY = RenderY + 16
+    renderer:draw(images.MushroomStalkTop, { x = actor.pixelX + 6, y = actor.pixelY + 24 })
+    for segment = 0, 4 do
+        renderer:draw(images.MushroomStalk, { x = actor.pixelX + 6, y = actor.pixelY + 32 + 16 * segment })
     end
-    local PurpleMax = (d[5] & 0x30) // 0x10
-    RenderX = (actor.pixelX / 16) * 16 - 16 * (PurpleMax + 1)
-    RenderY = (actor.pixelY / 16) * 16
-    img = images.MushroomEdgePurple
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    RenderX = RenderX + 32
-    for l = 0, (PurpleMax) - 1 do
-        drawn = gfx.blit(renderer, images.MushroomSectionPurple, RenderX, RenderY) or drawn
-        RenderX = RenderX + 32
+
+    local box = grabBounds(actor)
+    renderer:draw(images.MushroomEdgePurple, { x = box.x, y = box.y })
+    for column = 1, actor.fields.length do
+        renderer:draw(images.MushroomSectionPurple, { x = box.x + 32 * column, y = box.y })
     end
-    img = gfx.transform(img, 0, true, false)
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.MushroomEdgePurple, {
+        x = box.x + 32 * (actor.fields.length + 1),
+        y = box.y,
+        flipX = true,
+    })
 end
 
 return {
@@ -54,7 +45,7 @@ return {
             key = "length",
             label = "Length",
             bitOffset = 4,
-            bitWidth = 4,
+            bitWidth = 2,
         },
         {
             key = "unknown_value_11",

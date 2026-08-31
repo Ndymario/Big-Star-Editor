@@ -8,23 +8,20 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 9
-    y = y - 13
-    width = 38
-    height = 28
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 9, y = actor.pixelY - 13, width = 38, height = 28 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local drawn = false
-    drawn = gfx.blit(renderer, images.FlyingQBlock, RenderX - 9, RenderY - 13) or drawn
+    local drawn = renderer:draw(images.FlyingQBlock, grabBounds(actor))
     if actor.fields.item < 8 then
-        drawn = gfx.blit(renderer, images.FlyingQBlockOverrides, RenderX, RenderY, nil, nil, { x = (actor.fields.item) * 16, y = 0, width = 16, height = 16 }) or drawn
+        drawn = renderer:draw(images.FlyingQBlockOverrides, {
+            x = actor.pixelX,
+            y = actor.pixelY,
+            sourceX = actor.fields.item * 16,
+            sourceY = 0,
+            sourceWidth = 16,
+            sourceHeight = 16,
+        }) or drawn
     end
     return drawn
 end

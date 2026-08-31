@@ -10,27 +10,23 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    y = y - 15
-    width = 20
-    height = 31
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 15, width = 20, height = 31 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.Toadsworth, RenderX, RenderY - 15) or drawn
+    local drawn = renderer:draw(images.Toadsworth, grabBounds(actor))
     if actor.fields.type == 0 then
-        drawn = gfx.blit(renderer, images.ToadHouse1UP, RenderX - 188, RenderY - 88) or drawn
-    end
-    if actor.fields.type == 2 then
-        drawn = gfx.blit(renderer, images.ToadHouseItem, RenderX - 116, RenderY - 76) or drawn
-    end
-    if actor.fields.type == 3 then
-        drawn = gfx.blit(renderer, images.ToadHouseMega, RenderX - 116, RenderY - 76) or drawn
+        return renderer:draw(images.ToadHouse1UP, {
+            x = actor.pixelX - 188, y = actor.pixelY - 88, width = 184, height = 31,
+        }) or drawn
+    elseif actor.fields.type == 2 then
+        return renderer:draw(images.ToadHouseItem, {
+            x = actor.pixelX - 116, y = actor.pixelY - 76, width = 40, height = 40,
+        }) or drawn
+    elseif actor.fields.type == 3 then
+        return renderer:draw(images.ToadHouseMega, {
+            x = actor.pixelX - 116, y = actor.pixelY - 76, width = 40, height = 40,
+        }) or drawn
     end
     return drawn
 end

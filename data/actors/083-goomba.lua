@@ -7,18 +7,11 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    y = y - 2
-    height = 18
-    return { x = x, y = y, width = 16, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 2, width = 16, height = 18 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.Goomba, RenderX, RenderY - 2) or drawn
-    return drawn
+    return renderer:draw(images.Goomba, grabBounds(actor))
 end
 
 return {

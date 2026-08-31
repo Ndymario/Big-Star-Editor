@@ -2,6 +2,29 @@
 
 local images = {}
 
+local geometry = {
+    {
+        side = { image = "Dorrie", x = 51, y = 59, width = 115, height = 76 },
+        away = { image = "DorrieAway", x = 40, y = 59, width = 82, height = 75 },
+        toward = { image = "DorrieTowards", x = 40, y = 59, width = 83, height = 75 },
+    },
+    {
+        side = { image = "DorrieBig", x = 86, y = 81, width = 185, height = 120 },
+        away = { image = "DorrieAwayBig", x = 64, y = 81, width = 131, height = 120 },
+        toward = { image = "DorrieTowardsBig", x = 66, y = 81, width = 135, height = 120 },
+    },
+    {
+        side = { image = "DorrieBigger", x = 97, y = 89, width = 208, height = 136 },
+        away = { image = "DorrieAwayBigger", x = 73, y = 89, width = 148, height = 136 },
+        toward = { image = "DorrieTowardsBigger", x = 74, y = 89, width = 151, height = 135 },
+    },
+    {
+        side = { image = "DorrieBiggest", x = 132, y = 111, width = 277, height = 181 },
+        away = { image = "DorrieAwayBiggest", x = 98, y = 112, width = 198, height = 181 },
+        toward = { image = "DorrieTowardsBiggest", x = 99, y = 112, width = 202, height = 181 },
+    },
+}
+
 local function init(ctx)
     images.Dorrie = ctx.loadImage("images/Dorrie.png")
     images.DorrieAway = ctx.loadImage("images/DorrieAway.png")
@@ -17,148 +40,23 @@ local function init(ctx)
     images.DorrieTowardsBiggest = ctx.loadImage("images/DorrieTowardsBiggest.png")
 end
 
+local function actorGeometry(actor)
+    local size = geometry[actor.fields.size]
+    if actor.fields.direction == 2 then return size.away end
+    if actor.fields.direction == 3 then return size.toward end
+    return size.side
+end
+
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    local DorrieShiftX1 = 40
-    local DorrieShiftX2 = 40
-    local DorrieShiftX3 = 51
-    local DorrieShiftY1 = 59
-    local DorrieShiftY2 = 59
-    local DorrieShiftY3 = 59
-    local DorrieWidth1 = 82
-    local DorrieWidth2 = 83
-    local DorrieWidth3 = 115
-    local DorrieHeight1 = 75
-    local DorrieHeight2 = 75
-    local DorrieHeight3 = 76
-    if (d[3] & 0x30) // 0x10 == 1 then
-        DorrieShiftX1 = 64
-        DorrieShiftX2 = 66
-        DorrieShiftX3 = 86
-        DorrieShiftY1 = 81
-        DorrieShiftY2 = 81
-        DorrieShiftY3 = 81
-        DorrieWidth1 = 131
-        DorrieWidth2 = 135
-        DorrieWidth3 = 185
-        DorrieHeight1 = 120
-        DorrieHeight2 = 120
-        DorrieHeight3 = 120
-    end
-    if (d[3] & 0x30) // 0x10 == 2 then
-        DorrieShiftX1 = 73
-        DorrieShiftX2 = 74
-        DorrieShiftX3 = 97
-        DorrieShiftY1 = 89
-        DorrieShiftY2 = 89
-        DorrieShiftY3 = 89
-        DorrieWidth1 = 148
-        DorrieWidth2 = 151
-        DorrieWidth3 = 208
-        DorrieHeight1 = 136
-        DorrieHeight2 = 135
-        DorrieHeight3 = 136
-    end
-    if (d[3] & 0x30) // 0x10 == 3 then
-        DorrieShiftX1 = 98
-        DorrieShiftX2 = 99
-        DorrieShiftX3 = 132
-        DorrieShiftY1 = 112
-        DorrieShiftY2 = 112
-        DorrieShiftY3 = 111
-        DorrieWidth1 = 198
-        DorrieWidth2 = 202
-        DorrieWidth3 = 277
-        DorrieHeight1 = 181
-        DorrieHeight2 = 181
-        DorrieHeight3 = 181
-    end
-    if actor.fields.direction == 2 then
-        x = x - DorrieShiftX1
-        y = y - DorrieShiftY1
-        width = DorrieWidth1
-        height = DorrieHeight1
-    elseif actor.fields.direction == 3 then
-        x = x - DorrieShiftX2
-        y = y - DorrieShiftY2
-        width = DorrieWidth2
-        height = DorrieHeight2
-    else
-        x = x - DorrieShiftX3
-        y = y - DorrieShiftY3
-        width = DorrieWidth3
-        height = DorrieHeight3
-    end
-    return { x = x, y = y, width = width, height = height }
+    local g = actorGeometry(actor)
+    return { x = actor.pixelX - g.x, y = actor.pixelY - g.y, width = g.width, height = g.height }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    local Dorrie1 = images.Dorrie
-    local Dorrie2 = images.DorrieAway
-    local Dorrie3 = images.DorrieTowards
-    local DorrieX1 = 51
-    local DorrieX2 = 40
-    local DorrieX3 = 40
-    local DorrieX4 = 51
-    local DorrieY1 = 59
-    local DorrieY2 = 59
-    local DorrieY3 = 59
-    local DorrieY4 = 59
-    if (d[3] & 0x30) // 0x10 == 1 then
-        Dorrie1 = images.DorrieBig
-        Dorrie2 = images.DorrieAwayBig
-        Dorrie3 = images.DorrieTowardsBig
-        DorrieX1 = 86
-        DorrieX2 = 64
-        DorrieX3 = 66
-        DorrieX4 = 86
-        DorrieY1 = 81
-        DorrieY2 = 81
-        DorrieY3 = 81
-        DorrieY4 = 81
-    end
-    if (d[3] & 0x30) // 0x10 == 2 then
-        Dorrie1 = images.DorrieBigger
-        Dorrie2 = images.DorrieAwayBigger
-        Dorrie3 = images.DorrieTowardsBigger
-        DorrieX1 = 97
-        DorrieX2 = 73
-        DorrieX3 = 74
-        DorrieX4 = 97
-        DorrieY1 = 89
-        DorrieY2 = 89
-        DorrieY3 = 89
-        DorrieY4 = 89
-    end
-    if (d[3] & 0x30) // 0x10 == 3 then
-        Dorrie1 = images.DorrieBiggest
-        Dorrie2 = images.DorrieAwayBiggest
-        Dorrie3 = images.DorrieTowardsBiggest
-        DorrieX1 = 132
-        DorrieX2 = 98
-        DorrieX3 = 99
-        DorrieX4 = 132
-        DorrieY1 = 111
-        DorrieY2 = 112
-        DorrieY3 = 112
-        DorrieY4 = 111
-    end
-    if actor.fields.direction == 1 then
-        Dorrie1 = gfx.transform(Dorrie1, 0, true, false)
-        drawn = gfx.blit(renderer, Dorrie1, RenderX - DorrieX1, RenderY - DorrieY1) or drawn
-    elseif actor.fields.direction == 2 then
-        drawn = gfx.blit(renderer, Dorrie2, RenderX - DorrieX2, RenderY - DorrieY2) or drawn
-    elseif actor.fields.direction == 3 then
-        drawn = gfx.blit(renderer, Dorrie3, RenderX - DorrieX3, RenderY - DorrieY3) or drawn
-    else
-        drawn = gfx.blit(renderer, Dorrie1, RenderX - DorrieX4, RenderY - DorrieY4) or drawn
-    end
-    return drawn
+    local g = actorGeometry(actor)
+    local bounds = grabBounds(actor)
+    bounds.flipX = actor.fields.direction == 1
+    return renderer:draw(images[g.image], bounds)
 end
 
 return {
@@ -184,7 +82,7 @@ return {
             key = "size",
             label = "Size",
             bitOffset = 20,
-            bitWidth = 4,
+            bitWidth = 2,
             notes = "Size is 1+(N6 mod 4).",
             valueOffset = 1,
         },

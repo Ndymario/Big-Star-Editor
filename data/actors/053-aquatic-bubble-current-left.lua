@@ -7,22 +7,17 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    x = x - 90
-    width = 74
-    height = 32
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX - 90, y = actor.pixelY, width = 74, height = 32 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local img
-    local drawn = false
-    img = images.TubeBubbles
-    img = gfx.transform(img, 270, false, false)
-    drawn = gfx.blit(renderer, img, RenderX - 90, RenderY) or drawn
-    return drawn
+    return renderer:draw(images.TubeBubbles, {
+        x = actor.pixelX - 69,
+        y = actor.pixelY - 21,
+        width = 32,
+        height = 74,
+        rotation = 270,
+    })
 end
 
 return {

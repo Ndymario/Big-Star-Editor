@@ -3,23 +3,15 @@
 local images = {}
 
 local function init(ctx)
-    images.Door2 = ctx.loadImage("images/Door.png")
+    images.Door = ctx.loadImage("images/Door.png")
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
-    y = y - 32
-    width = 32
-    height = 48
-    return { x = x, y = y, width = width, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 32, width = 32, height = 48 }
 end
 
 local function render(actor, renderer)
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    drawn = gfx.blit(renderer, images.Door2, RenderX, RenderY - 32) or drawn
-    return drawn
+    return renderer:draw(images.Door, grabBounds(actor))
 end
 
 return {

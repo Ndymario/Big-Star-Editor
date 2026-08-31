@@ -8,26 +8,27 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    height = (d[5] & 0xF0) + 32
-    y = y - (height - 16)
-    return { x = x, y = y, width = 16, height = height }
+    local height = actor.fields.height
+    return {
+        x = actor.pixelX,
+        y = actor.pixelY - 16 * (height - 1),
+        width = 16,
+        height = 16 * height,
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
     local drawn = false
-    for l = 0, d[5] // 0x10 do
-        if l == d[5] // 0x10 then
-            drawn = gfx.blit(renderer, images.BulletBillCannonTop, RenderX, RenderY - 16) or drawn
-        else
-            drawn = gfx.blit(renderer, images.BulletBillCannon, RenderX, RenderY) or drawn
-            RenderY = RenderY - 16
-        end
+    for section = 0, actor.fields.height - 3 do
+        drawn = renderer:draw(images.BulletBillCannon, {
+            x = actor.pixelX,
+            y = actor.pixelY - 16 * section,
+        }) or drawn
     end
+    drawn = renderer:draw(images.BulletBillCannonTop, {
+        x = actor.pixelX,
+        y = actor.pixelY - 16 * (actor.fields.height - 1),
+    }) or drawn
     return drawn
 end
 

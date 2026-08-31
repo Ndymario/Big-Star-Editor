@@ -8,24 +8,23 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    y = y - 128
-    height = height + 128
-    return { x = x, y = y, width = 16, height = height }
+    return { x = actor.pixelX, y = actor.pixelY - 128, width = 16, height = 144 }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local drawn = false
-    drawn = gfx.blit(renderer, images.QBlock, RenderX, RenderY) or drawn
+    local drawn = renderer:draw(images.QBlock, { x = actor.pixelX, y = actor.pixelY })
     if actor.fields.contents < 10 then
-        drawn = gfx.blit(renderer, images.HangingBlockOverrides, RenderX, RenderY, nil, nil, { x = (actor.fields.contents) * 16, y = 0, width = 16, height = 16 }) or drawn
+        drawn = renderer:draw(images.HangingBlockOverrides, {
+            x = actor.pixelX,
+            y = actor.pixelY,
+            sourceX = actor.fields.contents * 16,
+            sourceY = 0,
+            sourceWidth = 16,
+            sourceHeight = 16,
+        }) or drawn
     end
-    drawn = renderer:drawLine({ x = RenderX + 7, y = RenderY - 128, x2 = RenderX + 7, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
-    drawn = renderer:drawLine({ x = RenderX + 8, y = RenderY - 128, x2 = RenderX + 8, y2 = RenderY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = actor.pixelX + 7, y = actor.pixelY - 128, x2 = actor.pixelX + 7, y2 = actor.pixelY, color = "#ffffff", strokeWidth = 1 }) or drawn
+    drawn = renderer:drawLine({ x = actor.pixelX + 8, y = actor.pixelY - 128, x2 = actor.pixelX + 8, y2 = actor.pixelY, color = "#ffffff", strokeWidth = 1 }) or drawn
     return drawn
 end
 

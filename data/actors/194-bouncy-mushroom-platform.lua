@@ -8,37 +8,30 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local width, height = 16, 16
+    local shift = 0
     if actor.fields.shift_position == 1 then
-        x = x - 8
+        shift = -8
     elseif actor.fields.shift_position == 2 then
-        x = x + 8
+        shift = 8
     end
-    x = x - 40
-    width = 96
-    height = 16 * (actor.fields.stalk_height + 2)
-    return { x = x, y = y, width = width, height = height }
+    return {
+        x = actor.pixelX + shift - 40,
+        y = actor.pixelY,
+        width = 96,
+        height = 16 * (actor.fields.stalk_height + 2),
+    }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local drawn = false
-    if actor.fields.shift_position == 1 then
-        RenderX = RenderX - 8
-    elseif actor.fields.shift_position == 2 then
-        RenderX = RenderX + 8
+    local box = grabBounds(actor)
+    renderer:draw(images.BouncingMushroom, { x = box.x, y = box.y })
+    for segment = 0, actor.fields.stalk_height - 1 do
+        renderer:draw(images.BouncingMushroomStalk, {
+            x = box.x + 43,
+            y = box.y + 32 + 16 * segment,
+        })
     end
-    drawn = gfx.blit(renderer, images.BouncingMushroom, RenderX - 40, RenderY) or drawn
-    RenderY = RenderY + 32
-    RenderX = RenderX + 3
-    for l = 0, (actor.fields.stalk_height) - 1 do
-        drawn = gfx.blit(renderer, images.BouncingMushroomStalk, RenderX, RenderY) or drawn
-        RenderY = RenderY + 16
-    end
-    return drawn
+    return true
 end
 
 return {

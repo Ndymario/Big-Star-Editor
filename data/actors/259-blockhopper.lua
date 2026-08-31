@@ -10,32 +10,29 @@ local function init(ctx)
 end
 
 local function grabBounds(actor)
-    local d = actor.data
-    local x, y = actor.pixelX, actor.pixelY
-    local height = 16
-    height = (d[5] % 0x10) * 16 + 30
-    y = y - (height - 16)
-    return { x = x, y = y, width = 16, height = height }
+    local height = actor.fields.height * 16 + 14
+    return { x = actor.pixelX, y = actor.pixelY - (height - 16), width = 16, height = height }
 end
 
 local function render(actor, renderer)
-    local d = actor.data
-    local RenderX, RenderY = actor.pixelX, actor.pixelY
-    local width, height = 0, 0
-    local img
-    local drawn = false
-    RenderY = RenderY - 14
-    img = images.JumpingQBlock
-    if (d[5] & 0x10) // 0x10 == 1 then
-        img = images.JumpingBrickBlock
+    local head = actor.fields.brick_head and images.JumpingBrickBlock or images.JumpingQBlock
+    local headY = actor.pixelY - 14
+    local drawn = renderer:draw(head, { x = actor.pixelX, y = headY })
+    if actor.fields.item <= 3 then
+        drawn = renderer:draw(images.JumpingQBlockOverrides, {
+            x = actor.pixelX,
+            y = headY + 3,
+            sourceX = actor.fields.item * 16,
+            sourceY = 0,
+            sourceWidth = 16,
+            sourceHeight = 16,
+        }) or drawn
     end
-    drawn = gfx.blit(renderer, img, RenderX, RenderY) or drawn
-    if (actor.fields.item) <= 3 then
-        drawn = gfx.blit(renderer, images.JumpingQBlockOverrides, RenderX, RenderY + 3, nil, nil, { x = (actor.fields.item) * 16, y = 0, width = 16, height = 16 }) or drawn
-    end
-    for l = 0, (d[5] % 0x10) - 1 do
-        RenderY = RenderY - 16
-        drawn = gfx.blit(renderer, images.Brick, RenderX, RenderY) or drawn
+    for section = 1, actor.fields.height - 1 do
+        drawn = renderer:draw(images.Brick, {
+            x = actor.pixelX,
+            y = headY - 16 * section,
+        }) or drawn
     end
     return drawn
 end
@@ -75,7 +72,7 @@ return {
             key = "brick_head",
             label = "Brick Head",
             bitOffset = 4,
-            bitWidth = 4,
+            bitWidth = 1,
             notes = "Makes Blockhopper a bit like the Pile Driver Micro-Goombas in SMB3. Same behaviour as far as I can tell. Unused.",
             checkboxValue = 1,
         },
