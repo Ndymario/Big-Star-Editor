@@ -63,6 +63,73 @@ struct LuaContext {
     std::size_t instructions{};
 };
 
+// A render is pure in its input: the same program given the same
+// LuaActorRenderInput always draws the same commands. A repaint re-asks for
+// every visible sprite, and scrolling or zooming changes none of their inputs,
+// so the answer is kept rather than recomputed. Position is part of the key
+// because commands carry absolute scene coordinates -- a sprite being dragged
+// misses until it is dropped, while the rest of the level keeps hitting.
+struct CallCacheKey {
+    std::int32_t x{}, y{};
+    double pixel_x{}, pixel_y{};
+    std::uint32_t object_id{};
+    std::uint16_t type{};
+    std::uint32_t hash{};
+    std::array<std::uint8_t, 6> data{};
+    std::uint32_t settings{};
+    bool has_hash{};
+    bool valid{};
+    bool operator==(const CallCacheKey&) const = default;
+};
+
+struct CallCacheKeyHash {
+    std::size_t operator()(const CallCacheKey& key) const noexcept {
+        std::size_t seed = 0;
+        const auto mix = [&seed](std::size_t value) {
+            seed ^= value + 0x9E3779B97F4A7C15ULL + (seed << 6U) + (seed >> 2U);
+        };
+        mix(static_cast<std::uint32_t>(key.x)); mix(static_cast<std::uint32_t>(key.y));
+        mix(std::hash<double>{}(key.pixel_x)); mix(std::hash<double>{}(key.pixel_y));
+        mix(key.object_id); mix(key.type); mix(key.settings);
+        for (const auto byte : key.data) mix(byte);
+        mix(key.has_hash ? key.hash : 0U);
+        mix(static_cast<std::size_t>(key.valid) | (static_cast<std::size_t>(key.has_hash) << 1U));
+        return seed;
+    }
+};
+
+// Bounds are asked per sprite for the grab box and again for the render box, so
+// which function ran is part of the key. It is keyed on the resolved reference
+// rather than on the caller's flag: an actor that declares no renderBounds
+// answers both questions from grabBounds, and should not pay twice for it.
+struct BoundsCacheKey {
+    CallCacheKey input;
+    int function{};
+    bool operator==(const BoundsCacheKey&) const = default;
+};
+
+struct BoundsCacheKeyHash {
+    std::size_t operator()(const BoundsCacheKey& key) const noexcept {
+        return CallCacheKeyHash{}(key.input) * 31U + static_cast<std::size_t>(key.function);
+    }
+};
+
+// A script that raises is cached too: an actor whose render() is broken is the
+// worst case for repaint cost otherwise, since it pays a full pcall and a
+// message build on every frame to arrive at the same failure.
+struct RenderCacheEntry {
+    std::vector<LuaActorDrawCommand> commands;
+    std::string error;
+    bool custom_rendered{};
+};
+
+// An absent box is a real answer, and the common one, so nullopt is cached as
+// readily as a box.
+struct BoundsCacheEntry {
+    std::optional<SpriteBounds> bounds;
+    std::string error;
+};
+
 struct LuaActorProgram {
     LuaMemory memory;
     LuaContext context;
@@ -70,6 +137,13 @@ struct LuaActorProgram {
     int render{LUA_NOREF};
     int grab_bounds{LUA_NOREF};
     int render_bounds{LUA_NOREF};
+    // Keyed only on the call input: everything else a script reads -- the
+    // resource resolver, the layer, the field definitions -- is fixed for the
+    // program's lifetime, so the cache lives here and dies with the program it
+    // answers for. Reloading a layer builds new programs, which is what makes
+    // an edited script take effect without an invalidation step of its own.
+    std::unordered_map<CallCacheKey, RenderCacheEntry, CallCacheKeyHash> render_cache;
+    std::unordered_map<BoundsCacheKey, BoundsCacheEntry, BoundsCacheKeyHash> bounds_cache;
     ~LuaActorProgram() { if (state) lua_close(state); }
 };
 
@@ -82,6 +156,9 @@ constexpr std::size_t max_instructions = 200000U;
 // rather than raised, so an actor given nonsense settings still draws the
 // part that fits instead of vanishing.
 constexpr std::size_t max_draw_commands = 4096U;
+// Sized past the sprite count a course reaches, so a level's steady state fits
+// and only a drag -- which mints a key per mouse position -- can fill it.
+constexpr std::size_t max_call_cache_entries = 1024U;
 
 void* allocate(void* opaque, void* pointer, std::size_t old_size, std::size_t new_size) {
     auto& memory = *static_cast<LuaMemory*>(opaque);
@@ -995,6 +1072,21 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
     return actor;
 }
 
+CallCacheKey call_cache_key(const LuaActorRenderInput& input) {
+    return {input.x, input.y, input.pixel_x, input.pixel_y, input.object_id, input.type,
+            input.hash.value_or(0U), input.data, input.settings, input.hash.has_value(), input.valid};
+}
+
+// Dragging mints a fresh key every mouse position, so a map is capped and
+// dropped whole once it fills rather than carrying per-entry age. Refilling
+// costs one pass over the visible sprites, once every few hundred drag frames,
+// which is what the paint path used to pay on every frame.
+template <typename Map, typename Key>
+void remember(Map& map, const Key& key, typename Map::mapped_type entry) {
+    if (map.size() >= max_call_cache_entries) map.clear();
+    map.emplace(key, std::move(entry));
+}
+
 } // namespace
 
 bool has_lua_renderer(const LuaActorDefinition& actor) {
@@ -1008,6 +1100,13 @@ core::Result<std::vector<LuaActorDrawCommand>> render_lua_actor(const LuaActorDe
     if (custom_rendered) *custom_rendered = false;
     if (!has_lua_renderer(actor)) return commands;
     auto& program = *actor.program;
+    const auto key = call_cache_key(input);
+    if (const auto cached = program.render_cache.find(key); cached != program.render_cache.end()) {
+        if (!cached->second.error.empty())
+            return core::make_error(core::ErrorCode::ParseError, cached->second.error);
+        if (custom_rendered) *custom_rendered = cached->second.custom_rendered;
+        return cached->second.commands;
+    }
     auto& value = program.context;
     value.instructions = 0;
     value.commands = &commands;
@@ -1023,14 +1122,17 @@ core::Result<std::vector<LuaActorDrawCommand>> render_lua_actor(const LuaActorDe
         value.commands = nullptr;
         value.input = nullptr;
         lua_settop(program.state, 0);
+        remember(program.render_cache, key, {{}, error, false});
         return core::make_error(core::ErrorCode::ParseError, error);
     }
     // A falsy return is NSMBe's `customRendered = false`: whatever the script
     // drew stands, and the stock numbered marker is drawn over it as well.
-    if (custom_rendered) *custom_rendered = lua_toboolean(program.state, -1) != 0;
+    const bool custom = lua_toboolean(program.state, -1) != 0;
+    if (custom_rendered) *custom_rendered = custom;
     value.commands = nullptr;
     value.input = nullptr;
     lua_settop(program.state, 0);
+    remember(program.render_cache, key, {commands, {}, custom});
     return commands;
 }
 
@@ -1041,6 +1143,12 @@ core::Result<std::optional<SpriteBounds>> lua_actor_bounds(const LuaActorDefinit
     auto& program = *actor.program;
     const auto function = render_bounds && program.render_bounds != LUA_NOREF ? program.render_bounds : program.grab_bounds;
     if (function == LUA_NOREF) return std::optional<SpriteBounds>{};
+    const BoundsCacheKey key{call_cache_key(input), function};
+    if (const auto cached = program.bounds_cache.find(key); cached != program.bounds_cache.end()) {
+        if (!cached->second.error.empty())
+            return core::make_error(core::ErrorCode::ParseError, cached->second.error);
+        return cached->second.bounds;
+    }
     program.context.instructions = 0;
     program.context.input = &input;
     program.context.fields = &actor.sprite.fields;
@@ -1052,13 +1160,21 @@ core::Result<std::optional<SpriteBounds>> lua_actor_bounds(const LuaActorDefinit
         const std::string error = message ? message : "actor bounds function failed";
         program.context.input = nullptr;
         lua_settop(program.state, 0);
+        remember(program.bounds_cache, key, {std::nullopt, error});
         return core::make_error(core::ErrorCode::ParseError, error);
     }
-    if (lua_isnil(program.state, -1)) { program.context.input = nullptr; lua_settop(program.state, 0); return std::optional<SpriteBounds>{}; }
+    if (lua_isnil(program.state, -1)) {
+        program.context.input = nullptr;
+        lua_settop(program.state, 0);
+        remember(program.bounds_cache, key, {std::nullopt, {}});
+        return std::optional<SpriteBounds>{};
+    }
     if (!lua_istable(program.state, -1)) {
         program.context.input = nullptr;
         lua_settop(program.state, 0);
-        return core::make_error(core::ErrorCode::ParseError, actor.sprite.name + " bounds function must return a table or nil");
+        const auto error = actor.sprite.name + " bounds function must return a table or nil";
+        remember(program.bounds_cache, key, {std::nullopt, error});
+        return core::make_error(core::ErrorCode::ParseError, error);
     }
     const auto table = lua_gettop(program.state);
     auto x = bounds_number(program.state, table, "x", -32768, 32767, actor.sprite.name);
@@ -1069,12 +1185,14 @@ core::Result<std::optional<SpriteBounds>> lua_actor_bounds(const LuaActorDefinit
         const auto error = !x ? x.error() : !y ? y.error() : !width ? width.error() : height.error();
         program.context.input = nullptr;
         lua_settop(program.state, 0);
+        remember(program.bounds_cache, key, {std::nullopt, error.message});
         return error;
     }
     const SpriteBounds bounds{static_cast<std::int16_t>(x.value()), static_cast<std::int16_t>(y.value()),
                               static_cast<std::uint16_t>(width.value()), static_cast<std::uint16_t>(height.value())};
     program.context.input = nullptr;
     lua_settop(program.state, 0);
+    remember(program.bounds_cache, key, {bounds, {}});
     return std::optional<SpriteBounds>(bounds);
 }
 

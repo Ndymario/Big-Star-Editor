@@ -147,6 +147,104 @@ return {objectId=83, name="Goomba", category="Enemies / Ground", notes="Walks.",
 
     auto commands_again = nsmb::project::render_lua_actor(*goomba, input);
     assert(commands_again && commands_again.value().front().image == commands.value().front().image);
+
+    // A repaint re-asks for every visible sprite, so a render is kept and
+    // replayed rather than re-run. The counter is the only way to see it: it
+    // advances once per actual call into the script.
+    fs::create_directories(root / "cache");
+    {
+        std::ofstream file(root / "cache" / "counter.lua");
+        file << R"(local runs = 0
+local function render(actor, renderer)
+ runs = runs + 1
+ renderer:drawText(tostring(runs), {x=actor.pixelX, y=actor.pixelY})
+ return true
+end
+return {objectId=84, name="Counter", render=render})";
+    }
+    const std::vector<nsmb::project::LuaActorLayer> cache_layers{{"cache", root / "cache"}};
+    auto cache_catalog = nsmb::project::load_lua_actor_layers(cache_layers, resolve, decode_image);
+    assert(cache_catalog);
+    const auto* counter = cache_catalog.value().by_object_id(84);
+    assert(counter && nsmb::project::has_lua_renderer(*counter));
+    const auto runs = [&](const nsmb::project::LuaActorRenderInput& at) {
+        auto result = nsmb::project::render_lua_actor(*counter, at);
+        assert(result && result.value().size() == 1);
+        return result.value().front().text;
+    };
+    nsmb::project::LuaActorRenderInput counted;
+    counted.object_id = 84;
+    counted.pixel_x = 32;
+    assert(runs(counted) == "1");
+    assert(runs(counted) == "1");
+    // Settings, position and the event bytes all reach the script, so each one
+    // is part of the key.
+    counted.settings = 4;
+    assert(runs(counted) == "2");
+    counted.pixel_x = 48;
+    assert(runs(counted) == "3");
+    counted.data[2] = 9;
+    assert(runs(counted) == "4");
+    // And going back to a key already seen replays it instead of running again.
+    counted.data[2] = 0;
+    counted.pixel_x = 32;
+    counted.settings = 0;
+    assert(runs(counted) == "1");
+    // custom_rendered is part of what is kept, not recomputed as false.
+    bool counter_custom_rendered = false;
+    auto replayed = nsmb::project::render_lua_actor(*counter, counted, &counter_custom_rendered);
+    assert(replayed && counter_custom_rendered);
+
+    // Bounds are kept the same way, and the paint path asks for them twice per
+    // sprite. The width counts calls, so a repeat is visible in the answer.
+    fs::create_directories(root / "boxes");
+    {
+        std::ofstream file(root / "boxes" / "shared.lua");
+        file << R"(local runs = 0
+local function bounds(actor)
+ runs = runs + 1
+ return {x=actor.pixelX, y=actor.pixelY, width=runs, height=16}
+end
+return {objectId=85, name="Shared Box", grabBounds=bounds})";
+    }
+    {
+        std::ofstream file(root / "boxes" / "split.lua");
+        file << R"(local grabs, renders = 0, 0
+local function grab(actor) grabs = grabs + 1 return {x=0, y=0, width=grabs, height=16} end
+local function render(actor) renders = renders + 1 return {x=0, y=0, width=100+renders, height=16} end
+return {objectId=86, name="Split Box", grabBounds=grab, renderBounds=render})";
+    }
+    const std::vector<nsmb::project::LuaActorLayer> box_layers{{"boxes", root / "boxes"}};
+    auto box_catalog = nsmb::project::load_lua_actor_layers(box_layers, resolve, decode_image);
+    assert(box_catalog);
+    const auto width_of = [](const nsmb::project::LuaActorDefinition& actor,
+                             const nsmb::project::LuaActorRenderInput& at, bool render_box) {
+        auto box = nsmb::project::lua_actor_bounds(actor, at, render_box);
+        assert(box && box.value());
+        return box.value()->width;
+    };
+    nsmb::project::LuaActorRenderInput boxed;
+    boxed.pixel_x = 64;
+    // Loading probes both boxes at the origin to fill the definition, so the
+    // count starts above zero; what matters is that it stops moving.
+    const auto* shared = box_catalog.value().by_object_id(85);
+    assert(shared);
+    const auto first = width_of(*shared, boxed, false);
+    assert(width_of(*shared, boxed, false) == first);
+    // An actor with no renderBounds answers both questions from grabBounds, and
+    // the key follows the function that ran, so the render box hits too.
+    assert(width_of(*shared, boxed, true) == first);
+    boxed.pixel_x = 96;
+    assert(width_of(*shared, boxed, false) == first + 1);
+
+    // Two functions on one input are two entries, not one overwriting the other.
+    const auto* split = box_catalog.value().by_object_id(86);
+    assert(split);
+    const auto grab_width = width_of(*split, boxed, false);
+    const auto render_width = width_of(*split, boxed, true);
+    assert(grab_width < 100 && render_width > 100);
+    assert(width_of(*split, boxed, false) == grab_width);
+    assert(width_of(*split, boxed, true) == render_width);
     // An actor that declares no bounds function grabs as the tile it sits on,
     // which is where NSMBStageObj.cs starts before its per-class adjustments.
     const auto* custom = catalog.value().sprite_definitions().by_hash(0x12345678);
