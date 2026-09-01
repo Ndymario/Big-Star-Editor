@@ -18,8 +18,7 @@ void usage() {
               << "  inspect-rom <path>\n"
               << "  import-rom <rom> <project-dir>\n"
               << "  run-patcher <project-dir> [--variant <name>]\n"
-              << "  patcher-info <project-dir>\n"
-              << "  build-rom <project-dir> <output-rom>\n";
+              << "  patcher-info <project-dir>\n";
 }
 
 std::size_t count_graphics_candidates(const nsmb::project::Project& project) {
@@ -64,7 +63,6 @@ int main(int argc, char** argv) {
     if (command == "import-rom" && argc == 4) {
         const fs::path rom_path = argv[2];
         const fs::path project_dir = argv[3];
-        const fs::path extracted_dir = project_dir / "extracted-rom";
 
         std::error_code ec;
         fs::create_directories(project_dir, ec);
@@ -93,11 +91,17 @@ int main(int argc, char** argv) {
             return 6;
         }
 
-        nsmb::nds::NitroRomService rom_service;
-        auto extracted = rom_service.extract(rom_path, extracted_dir);
-        if (!extracted) {
-            std::cerr << extracted.error().message << '\n';
-            return 7;
+        // The ROM is read where it lies rather than unpacked, so importing one
+        // is copying it in and reading its table -- and a manifest path has to
+        // stay inside the project, so a ROM from elsewhere is copied rather
+        // than pointed at.
+        const auto imported = project_dir / nsmb::project::input_rom_file_name;
+        if (fs::weakly_canonical(rom_path, ec) != fs::weakly_canonical(imported, ec)) {
+            fs::copy_file(rom_path, imported, fs::copy_options::overwrite_existing, ec);
+            if (ec) {
+                std::cerr << "Could not copy the ROM into the project: " << ec.message() << '\n';
+                return 7;
+            }
         }
 
         auto project_name = project_dir.filename().string();
@@ -105,8 +109,8 @@ int main(int argc, char** argv) {
             project_name = header.value().game_title.empty() ? "Imported ROM" : header.value().game_title;
         }
         auto project = nsmb::project::create_empty_project(project_name, project_dir).value();
-        project.attach_extracted_rom("extracted-rom", header.value());
-        auto indexed = nsmb::project::index_project_files(project, extracted_dir);
+        project.attach_rom(nsmb::project::input_rom_file_name, header.value());
+        auto indexed = nsmb::project::index_rom_files(project);
         if (!indexed) {
             std::cerr << indexed.error().message << '\n';
             return 8;
@@ -207,30 +211,6 @@ int main(int argc, char** argv) {
                 }
                 std::cout << '\n';
             }
-        }
-        return 0;
-    }
-
-    if (command == "build-rom" && argc == 4) {
-        const fs::path project_dir = argv[2];
-        auto project = nsmb::project::load_manifest(project_dir / nsmb::project::manifest_file_name);
-        if (!project) {
-            std::cerr << project.error().message << '\n';
-            return 11;
-        }
-        if (!project.value().rom() || project.value().rom()->extracted_path.empty()) {
-            std::cerr << "Project does not contain an imported ROM\n";
-            return 11;
-        }
-        auto extracted_path = project.value().rom()->extracted_path;
-        if (!extracted_path.is_absolute()) {
-            extracted_path = project_dir / extracted_path;
-        }
-        nsmb::nds::NitroRomService service;
-        auto result = service.build(extracted_path, argv[3]);
-        if (!result) {
-            std::cerr << result.error().message << '\n';
-            return 11;
         }
         return 0;
     }

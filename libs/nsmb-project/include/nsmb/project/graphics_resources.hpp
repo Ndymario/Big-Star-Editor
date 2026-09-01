@@ -10,6 +10,7 @@
 
 #include "nsmb/formats/graphics.hpp"
 #include "nsmb/project/editable_level.hpp"
+#include "nsmb/project/effective_filesystem.hpp"
 #include "nsmb/project/project.hpp"
 
 namespace nsmb::project {
@@ -24,14 +25,24 @@ struct NsmbGraphicsProfile {
     std::size_t sprite_object_ids{};
 };
 
+// One resource, named the way the game names it and carrying what the editor
+// would read there now -- which is the module's copy when a build has not caught
+// up with an edit yet, and the ROM's otherwise.
+struct ResourceFile {
+    std::string rom_path;
+    std::vector<std::uint8_t> data;
+
+    [[nodiscard]] bool empty() const noexcept { return rom_path.empty(); }
+};
+
 struct TilesetResourceFiles {
-    std::filesystem::path graphics, palette, map16, objects, object_index, behaviors;
+    ResourceFile graphics, palette, map16, objects, object_index, behaviors;
     std::uint16_t tile_offset{};
     std::uint8_t palette_offset{}, tile_page_offset{};
 };
 
 struct BackgroundResourceFiles {
-    std::filesystem::path graphics, palette, screen;
+    ResourceFile graphics, palette, screen;
 };
 
 struct ActorResourceFiles {
@@ -45,27 +56,12 @@ struct LevelGraphicsResources {
     std::array<TilesetResourceFiles, 3> tilesets;
     BackgroundResourceFiles background, foreground;
     std::vector<ActorResourceFiles> actors;
+
+    // Files on disk that, if they change, change these resources: the module
+    // sources supplying them, and the ROM everything else comes from. There is
+    // nothing to watch inside the ROM, so it is watched whole.
     std::vector<std::filesystem::path> watched_files;
 };
-
-// Visits every path this struct holds, so a caller can redirect the whole set
-// in one pass. `resolve_level_graphics` reads the ROM's own file table and so
-// only ever names files in the extracted tree; a frontend that knows about
-// module layers uses this to point each one at the layer actually supplying it.
-// Empty paths are visited too -- the callback decides what to do with them.
-template <typename F>
-void for_each_resource_path(LevelGraphicsResources& resources, F&& visit) {
-    for (auto& tileset : resources.tilesets) {
-        for (auto* path : {&tileset.graphics, &tileset.palette, &tileset.map16,
-                           &tileset.objects, &tileset.object_index, &tileset.behaviors}) {
-            visit(*path);
-        }
-    }
-    for (auto* background : {&resources.background, &resources.foreground}) {
-        for (auto* path : {&background->graphics, &background->palette, &background->screen}) visit(*path);
-    }
-    for (auto& path : resources.watched_files) visit(path);
-}
 
 using ObjectBankOverlayTable = std::array<std::array<std::uint32_t, 10>, 16>;
 core::Result<ObjectBankOverlayTable> find_object_bank_overlays(std::span<const std::uint8_t> arm9);
@@ -76,10 +72,13 @@ struct DecodedTileset {
 };
 
 [[nodiscard]] const NsmbGraphicsProfile* nsmb_graphics_profile(std::string_view game_code);
-core::Result<std::filesystem::path> resolve_nitro_file_id(const std::filesystem::path& extracted_root,
-                                                          std::span<const std::uint8_t> fnt,
-                                                          std::uint16_t file_id);
-core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& project,
+
+// What the level's graphics are, read through `files` rather than off a tree
+// somebody unpacked earlier. The game's own resource tables address files by
+// id, so this walks the ROM's file table to turn each id into an address, and
+// then asks `files` what that address holds -- which is how a module's pending
+// edit reaches the canvas without a rebuild.
+core::Result<LevelGraphicsResources> resolve_level_graphics(EffectiveFilesystem& files,
                                                             LevelTilesetReferences references);
 core::Result<DecodedTileset> load_tileset_graphics(const TilesetResourceFiles& files);
 core::Result<formats::RgbaImage> render_tileset_object(const DecodedTileset& tileset,

@@ -36,17 +36,11 @@ constexpr std::array profiles{
     NsmbGraphicsProfile{"A2DC", 131, 0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC},
 };
 
-std::filesystem::path extracted_path(const Project& project) {
-    if (!project.rom()) return {};
-    return project.rom()->extracted_path.is_absolute() ? project.rom()->extracted_path : project.directory() / project.rom()->extracted_path;
-}
-
-core::Result<std::vector<std::uint8_t>> read_resource(const std::filesystem::path& path) {
-    auto data = core::read_file(path);
-    if (!data) return data.error();
-    if (!data.value().empty() && (data.value()[0] == 0x10 || data.value()[0] == 0x11)) {
-        return formats::decompress_nitro_lz(data.value());
-    }
+// A graphics resource may be stored LZ-wrapped whether it comes from the ROM or
+// from a module tree, so the unwrap belongs to the bytes rather than to where
+// they were read.
+core::Result<std::vector<std::uint8_t>> unwrap_resource(const std::vector<std::uint8_t>& data) {
+    if (!data.empty() && (data[0] == 0x10 || data[0] == 0x11)) return formats::decompress_nitro_lz(data);
     return data;
 }
 
@@ -61,11 +55,9 @@ core::Result<std::uint16_t> table_file_id(std::span<const std::uint8_t> overlay,
     return static_cast<std::uint16_t>(overlay[offset] | (overlay[offset + 1U] << 8U)) + base;
 }
 
-std::filesystem::path find_named_file(std::span<const nds::NitroFileEntry> files,
-                                      const std::filesystem::path& root,
-                                      std::string_view name) {
+std::string find_named_file(std::span<const nds::NitroFileEntry> files, std::string_view name) {
     const auto found = std::find_if(files.begin(), files.end(), [name](const auto& file) { return file.path.filename() == name; });
-    return found == files.end() ? std::filesystem::path{} : root / "root" / found->path;
+    return found == files.end() ? std::string{} : found->path.generic_string();
 }
 
 void copy_image(const formats::RgbaImage& source,
@@ -98,59 +90,53 @@ const NsmbGraphicsProfile* nsmb_graphics_profile(std::string_view game_code) {
     return found == profiles.end() ? nullptr : &*found;
 }
 
-core::Result<std::filesystem::path> resolve_nitro_file_id(const std::filesystem::path& root,
-                                                          std::span<const std::uint8_t> fnt,
-                                                          std::uint16_t file_id) {
-    auto files = nds::parse_fnt(fnt);
-    if (!files) return files.error();
-    const auto found = std::lower_bound(files.value().begin(), files.value().end(), file_id, [](const auto& file, auto id) { return file.id < id; });
-    if (found == files.value().end() || found->id != file_id) {
-        return core::make_error(core::ErrorCode::NotFound, "graphics resource file ID is not present in fnt.bin");
-    }
-    return root / "root" / found->path;
-}
-
-core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& project,
+core::Result<LevelGraphicsResources> resolve_level_graphics(EffectiveFilesystem& files,
                                                             LevelTilesetReferences references) {
-    if (!project.rom() || !project.rom()->header) {
-        return core::make_error(core::ErrorCode::InvalidArgument, "project does not have an imported ROM header");
-    }
-    const auto* profile = nsmb_graphics_profile(project.rom()->header->game_code);
+    auto* rom = files.rom();
+    if (!rom) return core::make_error(core::ErrorCode::InvalidArgument, "the project has no built ROM to read graphics from");
+    const auto* profile = nsmb_graphics_profile(rom->header().game_code);
     if (!profile) return core::make_error(core::ErrorCode::Unsupported, "ROM game code does not have a graphics resource profile");
-    const auto root = extracted_path(project);
-    auto fnt = core::read_file(root / "fnt.bin");
-    auto overlay_file = core::read_file(root / "overlay9" / nds::overlay_file_name(0));
-    if (!fnt) return fnt.error();
-    if (!overlay_file) return overlay_file.error();
-    auto overlay = formats::decompress_blz_overlay(overlay_file.value());
+    auto overlay = rom->read_overlay(0);
     if (!overlay) return overlay.error();
-    auto entries = nds::parse_fnt(fnt.value());
-    if (!entries) return entries.error();
 
-    auto table = [&](std::size_t offset, std::uint8_t id) -> core::Result<std::filesystem::path> {
+    // Where each resource is addressed from. The game's tables hold file ids,
+    // and two of the three tilesets are named outright rather than indexed.
+    auto table = [&](std::size_t offset, std::uint8_t id) -> core::Result<std::string> {
         auto file_id = table_file_id(overlay.value(), offset, id, profile->file_id_offset);
-        return file_id ? resolve_nitro_file_id(root, fnt.value(), file_id.value()) : core::Result<std::filesystem::path>(file_id.error());
+        if (!file_id) return file_id.error();
+        auto path = files.path_for_id(file_id.value());
+        if (!path) return core::make_error(core::ErrorCode::NotFound,
+                                           "graphics resource file ID " + std::to_string(file_id.value()) + " is not in the ROM");
+        return std::move(path.value());
     };
-    auto named = [&](std::string_view name) -> core::Result<std::filesystem::path> {
-        auto path = find_named_file(entries.value(), root, name);
-        return path.empty() ? core::Result<std::filesystem::path>(core::make_error(core::ErrorCode::NotFound,
-                                                                                  "required ROM graphics file is missing: " + std::string(name)))
-                            : core::Result<std::filesystem::path>(std::move(path));
+    auto named = [&](std::string_view name) -> core::Result<std::string> {
+        auto path = find_named_file(rom->files(), name);
+        if (path.empty()) return core::make_error(core::ErrorCode::NotFound,
+                                                  "required ROM graphics file is missing: " + std::string(name));
+        return path;
     };
+
     LevelGraphicsResources result;
-    auto fill = [&](std::filesystem::path& target, core::Result<std::filesystem::path> value) -> core::Result<void> {
-        if (!value) return value.error();
-        target = std::move(value.value());
-        result.watched_files.push_back(target);
+    // The ROM is watched whole, because a build replaces it whole and nothing
+    // inside it changes on its own.
+    result.watched_files.push_back(rom->path());
+    auto fill = [&](ResourceFile& target, core::Result<std::string> address) -> core::Result<void> {
+        if (!address) return address.error();
+        auto data = files.read(address.value());
+        if (!data) return data.error();
+        // A module supplying this resource is the file to watch; when the ROM
+        // supplies it there is nothing to add, since the ROM is already there.
+        if (auto source = files.source(address.value()); !source.empty()) result.watched_files.push_back(std::move(source));
+        target = ResourceFile{std::move(address.value()), std::move(data.value())};
         return {};
     };
     auto fill_tileset = [&](TilesetResourceFiles& set,
-                            core::Result<std::filesystem::path> graphics,
-                            core::Result<std::filesystem::path> palette,
-                            core::Result<std::filesystem::path> map16,
-                            core::Result<std::filesystem::path> objects,
-                            core::Result<std::filesystem::path> index,
-                            core::Result<std::filesystem::path> behaviors = std::filesystem::path{}) -> core::Result<void> {
+                            core::Result<std::string> graphics,
+                            core::Result<std::string> palette,
+                            core::Result<std::string> map16,
+                            core::Result<std::string> objects,
+                            core::Result<std::string> index,
+                            core::Result<std::string> behaviors = std::string{}) -> core::Result<void> {
         if (auto value = fill(set.graphics, std::move(graphics)); !value) return value;
         if (auto value = fill(set.palette, std::move(palette)); !value) return value;
         if (auto value = fill(set.map16, std::move(map16)); !value) return value;
@@ -178,15 +164,15 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
                                   named("NoHaRaSubUnitChangeData.bin"));
         !value) return value.error();
 
-    auto fill_background = [&](BackgroundResourceFiles& files,
+    auto fill_background = [&](BackgroundResourceFiles& background,
                                std::size_t graphics_table,
                                std::size_t palette_table,
                                std::size_t screen_table,
                                std::uint8_t graphics_id,
                                std::uint8_t screen_id) -> core::Result<void> {
-        if (auto value = fill(files.graphics, table(graphics_table, graphics_id)); !value) return value;
-        if (auto value = fill(files.palette, table(palette_table, graphics_id)); !value) return value;
-        return fill(files.screen, table(screen_table, screen_id));
+        if (auto value = fill(background.graphics, table(graphics_table, graphics_id)); !value) return value;
+        if (auto value = fill(background.palette, table(palette_table, graphics_id)); !value) return value;
+        return fill(background.screen, table(screen_table, screen_id));
     };
     if (auto value = fill_background(result.background, profile->background_graphics, profile->background_palette,
                                      profile->background_screen, references.background_graphics_id, references.background_screen_id);
@@ -194,8 +180,7 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
     if (auto value = fill_background(result.foreground, profile->foreground_graphics, profile->foreground_palette,
                                      profile->foreground_screen, references.foreground_graphics_id, references.foreground_screen_id);
         !value) return value.error();
-    result.watched_files.push_back(root / "fnt.bin");
-    result.watched_files.push_back(root / "overlay9" / nds::overlay_file_name(0));
+
     constexpr std::uint16_t actor_type_count = 326;
     for (std::uint16_t type = 0; type < actor_type_count; ++type) {
         const auto class_offset = profile->sprite_object_ids + static_cast<std::size_t>(type) * 2U;
@@ -213,20 +198,14 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(const Project& proje
 }
 
 core::Result<DecodedTileset> load_tileset_graphics(const TilesetResourceFiles& files) {
-    auto graphics = read_resource(files.graphics);
-    auto palette_data = read_resource(files.palette);
-    auto map16_data = core::read_file(files.map16);
-    auto object_data = core::read_file(files.objects);
-    auto index_data = core::read_file(files.object_index);
+    auto graphics = unwrap_resource(files.graphics.data);
+    auto palette_data = unwrap_resource(files.palette.data);
     if (!graphics) return graphics.error();
     if (!palette_data) return palette_data.error();
-    if (!map16_data) return map16_data.error();
-    if (!object_data) return object_data.error();
-    if (!index_data) return index_data.error();
     auto tiles = formats::decode_8bpp_tiles(graphics.value());
     auto palette = formats::decode_bgr555_palette(palette_data.value());
-    auto map16 = formats::decode_map16(map16_data.value(), files.tile_offset, files.palette_offset);
-    auto objects = formats::decode_object_layouts(object_data.value(), index_data.value(), files.tile_page_offset);
+    auto map16 = formats::decode_map16(files.map16.data, files.tile_offset, files.palette_offset);
+    auto objects = formats::decode_object_layouts(files.objects.data, files.object_index.data, files.tile_page_offset);
     if (!tiles) return tiles.error();
     if (!palette) return palette.error();
     if (!map16) return map16.error();
@@ -264,9 +243,9 @@ core::Result<formats::RgbaImage> render_tileset_object(const DecodedTileset& til
 }
 
 core::Result<formats::RgbaImage> load_background_graphics(const BackgroundResourceFiles& files) {
-    auto graphics = read_resource(files.graphics);
-    auto palette_data = read_resource(files.palette);
-    auto screen_data = read_resource(files.screen);
+    auto graphics = unwrap_resource(files.graphics.data);
+    auto palette_data = unwrap_resource(files.palette.data);
+    auto screen_data = unwrap_resource(files.screen.data);
     if (!graphics) return graphics.error();
     if (!palette_data) return palette_data.error();
     if (!screen_data) return screen_data.error();

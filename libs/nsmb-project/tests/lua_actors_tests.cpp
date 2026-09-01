@@ -1,5 +1,7 @@
 #include "nsmb/project/lua_actors.hpp"
 
+#include "nsmb/core/file_io.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -8,6 +10,14 @@
 #include <iostream>
 
 namespace {
+
+// The host reads the bytes now, so the test plays the host: an address, the
+// file it came from, and what is in it.
+nsmb::core::Result<nsmb::project::ActorResource> resource_at(const std::filesystem::path& path, std::string_view name) {
+    auto bytes = nsmb::core::read_file(path);
+    if (!bytes) return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "missing " + std::string(name));
+    return nsmb::project::ActorResource{std::string(name), path, std::move(bytes.value())};
+}
 
 // A 2x2 red PNG, so the injected decoder has something real to chew on.
 constexpr std::array<unsigned char, 82> red_png{
@@ -100,7 +110,7 @@ return {objectId=83, name="Goomba", category="Enemies / Ground", notes="Walks.",
         file << R"(return {objectId=83, name="Loses"})";
     }
     const std::vector<nsmb::project::LuaActorLayer> layers{{"first", root / "first"}, {"last", root / "last"}};
-    const auto resolve = [&](auto, std::string_view name) { return nsmb::core::Result<fs::path>(root / "rom" / name); };
+    const auto resolve = [&](auto, std::string_view name) { return resource_at(root / "rom" / name, name); };
     auto catalog = nsmb::project::load_lua_actor_layers(layers, resolve, decode_image);
     if (!catalog) std::cerr << catalog.error().message << '\n';
     assert(catalog);
@@ -257,12 +267,9 @@ return {objectId=86, name="Split Box", grabBounds=grab, renderBounds=render})";
     // The shipped catalog draws from stills on disk, so the resolver points at
     // the real ones: a script naming an image that is not there must fail here.
     const auto shipped_resolve = [&](nsmb::project::ActorResourceKind kind,
-                                     std::string_view name) -> nsmb::core::Result<fs::path> {
+                                     std::string_view name) -> nsmb::core::Result<nsmb::project::ActorResource> {
         if (kind != nsmb::project::ActorResourceKind::Image) return resolve(kind, name);
-        auto path = fs::path(BSE_TEST_SOURCE_DIR) / "data" / "actors" / name;
-        if (!fs::exists(path))
-            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, std::string("missing ") + std::string(name));
-        return path;
+        return resource_at(fs::path(BSE_TEST_SOURCE_DIR) / "data" / "actors" / name, name);
     };
     auto shipped_catalog = nsmb::project::load_lua_actor_layers(shipped, shipped_resolve, decode_image);
     if (!shipped_catalog) std::cerr << shipped_catalog.error().message << '\n';
@@ -2001,7 +2008,8 @@ return {objectId=86, name="Split Box", grabBounds=grab, renderBounds=render})";
     // A resource the project does not supply costs the actor its drawing, not
     // its metadata, and never the whole catalog.
     auto missing_resources = nsmb::project::load_lua_actor_layers(layers, [](auto, std::string_view) {
-        return nsmb::core::Result<fs::path>(nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "missing"));
+        return nsmb::core::Result<nsmb::project::ActorResource>(
+            nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "missing"));
     }, decode_image);
     assert(missing_resources && missing_resources.value().actors.size() == 2);
     const auto* without = missing_resources.value().by_object_id(83);

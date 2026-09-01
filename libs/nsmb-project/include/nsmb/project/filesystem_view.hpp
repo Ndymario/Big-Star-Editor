@@ -9,6 +9,7 @@
 
 #include "nsmb/core/result.hpp"
 #include "nsmb/patching/ncpatcher.hpp"
+#include "nsmb/project/rom_reader.hpp"
 
 namespace nsmb::project {
 
@@ -33,8 +34,10 @@ struct FilesystemEntry {
     bool id_is_planned{false};
 
     std::uintmax_t size{};
+
+    // The module file supplying this entry, empty when the ROM does. There is
+    // no second path any more: what the ROM holds is read from the ROM.
     std::filesystem::path source;
-    std::filesystem::path extracted;
 };
 
 struct FilesystemView {
@@ -47,11 +50,14 @@ struct FilesystemView {
 
 // What the view is a join of. Nothing here is resolved by this library: the
 // plan is NCPatcher's answer to "what would a build place", the manifest is the
-// last build's own record of what it did place, and the extracted tree is what
-// the ROM holds now. Layering, module order, `into:`, the archive-folder
+// last build's own record of what it did place, and the ROM is what the game
+// holds now. Layering, module order, `into:`, the archive-folder
 // convention and component subtraction all happen in NCPatcher, once.
 struct FilesystemViewRequest {
-    std::filesystem::path extracted_rom;
+    // The built ROM. Absent before a first build, which leaves the view with
+    // only what the plan and the last manifest say.
+    RomReader* rom{};
+
     std::filesystem::path project_dir;
 
     // Only for the directories to watch and for `module_file_target`. The view

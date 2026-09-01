@@ -365,6 +365,14 @@ public:
 
     core::Result<RunSummary> build(const BuildRequest& request, const BuildObserver& observer = {});
 
+    // Unpacks a ROM into a directory NCPatcher itself can read back. There is
+    // one extractor and one layout on purpose: an editor with a second one
+    // produces a tree that looks right and that the patcher cannot open.
+    // `rom_override` unpacks a ROM other than the project's own.
+    core::Result<RunSummary> extract_rom(const std::filesystem::path& project_dir,
+                                         const std::filesystem::path& output_dir,
+                                         const std::filesystem::path& rom_override = {});
+
     // Converts a legacy `ncpatcher.json`. Without `write` this is a dry run that
     // verifies the resolved build is unchanged.
     core::Result<RunSummary> migrate(const std::filesystem::path& project_dir, bool write);

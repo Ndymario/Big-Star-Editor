@@ -1,12 +1,8 @@
 #include "nsmb/project/filesystem_view.hpp"
 
 #include "nsmb/core/file_io.hpp"
-#include "nsmb/formats/graphics.hpp"
-#include "nsmb/formats/narc.hpp"
 
 #include <algorithm>
-#include <array>
-#include <fstream>
 #include <map>
 #include <set>
 
@@ -19,47 +15,32 @@ bool safe_path(std::string_view path) {
         if(part.empty()||part=="."||part==".."||part.size()>0x7f)return false;if(slash==path.npos)break;start=slash+1;}return true;
 }
 
-core::Result<std::vector<std::filesystem::path>> files_under(const std::filesystem::path& root){
-    std::vector<std::filesystem::path> files;std::error_code ec;
-    std::filesystem::recursive_directory_iterator it(root,std::filesystem::directory_options::skip_permission_denied,ec),end;
-    if(ec)return core::make_error(core::ErrorCode::IoError,"could not read "+root.string());
-    while(it!=end){if(it->is_regular_file(ec))files.push_back(it->path());if(ec)return core::make_error(core::ErrorCode::IoError,"could not inspect "+root.string());it.increment(ec);if(ec)return core::make_error(core::ErrorCode::IoError,"could not continue reading "+root.string());}
-    std::ranges::sort(files);return files;
-}
-
-bool same_bytes(const std::filesystem::path& left,const std::filesystem::path& right){
-    std::error_code ec;if(!std::filesystem::is_regular_file(left,ec)||!std::filesystem::is_regular_file(right,ec))return false;
-    if(std::filesystem::file_size(left,ec)!=std::filesystem::file_size(right,ec)||ec)return false;
-    std::ifstream a(left,std::ios::binary),b(right,std::ios::binary);std::array<char,65536> x{},y{};
-    if(!a||!b)return false;
-    while(a&&b){a.read(x.data(),x.size());b.read(y.data(),y.size());if(a.gcount()!=b.gcount()||!std::equal(x.begin(),x.begin()+a.gcount(),y.begin()))return false;}return true;
+// Does the module's copy of a file already match what the ROM holds? The FAT
+// answers the size for nothing, and a size that disagrees settles it without
+// reading either.
+bool source_matches_rom(const std::filesystem::path& source,RomReader& rom,std::string_view path){
+    const auto id=rom.file_id(path);if(!id)return false;
+    const auto size=rom.file_size(*id);if(!size)return false;
+    std::error_code ec;if(!std::filesystem::is_regular_file(source,ec)||std::filesystem::file_size(source,ec)!=*size||ec)return false;
+    auto stored=rom.read(*id);if(!stored)return false;
+    auto edited=core::read_file(source);if(!edited)return false;
+    return stored.value()==edited.value();
 }
 
 std::filesystem::path source_path(const std::filesystem::path& project_dir,std::string_view source){auto path=std::filesystem::path(source);return path.is_absolute()?path:project_dir/path;}
 
-// A container may have arrived compressed -- Mario Kart DS names those `.carc`
-// -- and is still an ordinary NARC underneath. The wrapper is decided by what
-// the bytes decode to, never by the extension: `dwc/utility.bin` starts with
-// 0x10 and is not compressed at all.
-core::Result<formats::NarcArchive> open_archive(std::span<const std::uint8_t> data){
-    if(formats::is_narc(data))return formats::parse_narc(data);
-    auto raw=formats::decompress_nitro_lz(data);if(!raw)return raw.error();
-    return formats::parse_narc(raw.value());
-}
-
 // Does the container the ROM holds already carry the members the plan would
 // write into it? Addressed by index, which is how the game addresses a member
 // and how the plan reports one; a member path is a label, not an address.
-bool archive_members_match(const std::filesystem::path& container,const std::filesystem::path& project_dir,const std::vector<patching::RomArchiveMember>& members){
-    auto bytes=core::read_file(container);if(!bytes)return false;
-    auto archive=open_archive(bytes.value());if(!archive)return false;
+bool archive_members_match(RomReader& rom,std::string_view container,const std::filesystem::path& project_dir,const std::vector<patching::RomArchiveMember>& members){
     for(const auto& member:members){
         // A hook writes this one, so there is nothing on disk to compare and
         // nothing the user can do about it either way.
         if(member.source_missing)continue;
-        if(member.index<0||std::size_t(member.index)>=archive.value().files.size())return false;
+        if(member.index<0)return false;
+        auto stored=rom.read_member(container,std::size_t(member.index));if(!stored)return false;
         auto expected=core::read_file(source_path(project_dir,member.source));
-        if(!expected||archive.value().files[std::size_t(member.index)]!=expected.value())return false;
+        if(!expected||stored.value()!=expected.value())return false;
     }
     return true;
 }
@@ -109,18 +90,13 @@ core::Result<FilesystemView> build_filesystem_view(FilesystemViewRequest request
     if(request.plan)for(const auto& file:request.plan->files)planned[file.path]=&file;
     if(request.manifest)for(const auto& file:request.manifest->files)manifested[file.path]=&file;
 
-    std::map<std::string,std::filesystem::path> extracted;const auto root=request.extracted_rom/"root";std::error_code ec;
-    if(std::filesystem::is_directory(root,ec)){auto files=files_under(root);if(!files)return files.error();
-        for(const auto& file:files.value()){auto relative=std::filesystem::relative(file,root,ec);if(ec)return core::make_error(core::ErrorCode::IoError,"could not resolve extracted ROM path");extracted[relative.generic_string()]=file;}}
-
     std::set<std::string> paths;
-    for(const auto& [path,file]:extracted)paths.insert(path);
+    if(request.rom)for(const auto& file:request.rom->files())paths.insert(file.path.generic_string());
     for(const auto& [path,file]:manifested)paths.insert(path);
     for(const auto& [path,file]:planned)paths.insert(path);
 
     for(const auto& path:paths){
         FilesystemEntry entry;entry.path=path;
-        const auto disk=extracted.find(path);if(disk!=extracted.end())entry.extracted=disk->second;
         const auto found_manifest=manifested.find(path);const auto* manifest=found_manifest==manifested.end()?nullptr:found_manifest->second;
         const auto found_plan=planned.find(path);const auto* plan=found_plan==planned.end()?nullptr:found_plan->second;
 
@@ -132,6 +108,10 @@ core::Result<FilesystemView> build_filesystem_view(FilesystemViewRequest request
             // cannot confirm, and only a plan can predict one.
             entry.id=plan->id;entry.size=std::uintmax_t(plan->size);
             entry.id_is_planned=request.plan->planned&&plan->action==patching::FileAction::Created;
+        }else if(request.rom){
+            // Neither document mentions it, so the ROM is the only record there
+            // is -- which is the state before a first build.
+            if(const auto id=request.rom->file_id(path)){entry.id=*id;entry.size=request.rom->file_size(*id).value_or(0U);}
         }
 
         // A build writes a file when a module supplies it, and also when it
@@ -146,14 +126,14 @@ core::Result<FilesystemView> build_filesystem_view(FilesystemViewRequest request
         if(!plan->source.empty())entry.source=source_path(request.project_dir,plan->source);
         if(!plan->source_missing)entry.size=std::uintmax_t(plan->size);
 
-        bool agrees=manifest!=nullptr;
+        bool agrees=manifest!=nullptr&&request.rom!=nullptr;
         if(agrees)agrees=manifest->module==plan->module&&manifest->component==plan->component&&manifest->from_variant==plan->from_variant;
         if(agrees&&!plan->members.empty())
-            agrees=same_members(manifest->members,plan->members)&&archive_members_match(entry.extracted,request.project_dir,plan->members);
+            agrees=same_members(manifest->members,plan->members)&&archive_members_match(*request.rom,path,request.project_dir,plan->members);
         // A source a pre-build hook writes is not on disk to be compared, so
         // there is no honest way to call it stale. Reporting the last build is
         // better than a Pending mark nothing the user does can clear.
-        else if(agrees&&!entry.source.empty()&&!plan->source_missing)agrees=same_bytes(entry.source,entry.extracted);
+        else if(agrees&&!entry.source.empty()&&!plan->source_missing)agrees=source_matches_rom(entry.source,*request.rom,path);
 
         entry.status=!agrees?FilesystemStatus::Pending
             :(path.starts_with("z_new/")||manifest->action==patching::FileAction::Created?FilesystemStatus::Added:FilesystemStatus::Replaced);

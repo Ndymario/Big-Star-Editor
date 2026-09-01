@@ -83,8 +83,17 @@ struct LuaActorLayer {
     std::filesystem::path directory;
 };
 
-using ActorResourceResolver = std::function<core::Result<std::filesystem::path>(ActorResourceKind,
-                                                                               std::string_view)>;
+// What the host found for a resource name. The address is what identifies the
+// format and keys the cache; `source` is the file on disk it came from, empty
+// when the ROM supplied it and therefore nothing for a watcher to follow.
+struct ActorResource {
+    std::string rom_path;
+    std::filesystem::path source;
+    std::vector<std::uint8_t> data;
+};
+
+using ActorResourceResolver = std::function<core::Result<ActorResource>(ActorResourceKind,
+                                                                       std::string_view)>;
 // nsmb-project stays free of an image codec, so the host injects one. The Qt
 // app supplies a QImage-backed decoder; headless callers may supply none, in
 // which case loadImage reports every still as unavailable.

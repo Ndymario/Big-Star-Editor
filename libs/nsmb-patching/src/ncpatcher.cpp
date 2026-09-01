@@ -502,6 +502,31 @@ Result<FileManifest> NCPatcherClient::rom_files(const std::filesystem::path& pro
     return parse_file_manifest(run.value().stdout_text);
 }
 
+Result<RunSummary> NCPatcherClient::extract_rom(const std::filesystem::path& project_dir,
+                                                const std::filesystem::path& output_dir,
+                                                const std::filesystem::path& rom_override) {
+    std::vector<std::string> arguments{"-C", project_dir.string()};
+    if (!rom_override.empty()) {
+        arguments.push_back("--rom");
+        arguments.push_back(rom_override.string());
+    }
+    arguments.insert(arguments.end(), {"rom", "extract", output_dir.string()});
+
+    auto run = capture(project_dir, std::move(arguments));
+    if (!run) {
+        return run.error();
+    }
+    RunSummary summary;
+    summary.exit_code = run.value().exit_code;
+    summary.stage = stage_from_exit_code(run.value().exit_code);
+    summary.status = run.value().exit_code == 0 ? "ok" : "error";
+    if (run.value().exit_code != 0) {
+        summary.errors = 1;
+        summary.diagnostics.push_back(Diagnostic{DiagnosticLevel::Error, {}, run.value().stderr_text, {}});
+    }
+    return summary;
+}
+
 Result<FileManifest> NCPatcherClient::plan_files(const std::filesystem::path& project_dir,
                                                  std::string_view variant) {
     std::vector<std::string> arguments{"-C", project_dir.string()};

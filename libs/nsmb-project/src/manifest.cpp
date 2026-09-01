@@ -111,6 +111,13 @@ core::Result<std::uintmax_t> parse_size(std::string value) {
 
 } // namespace
 
+std::filesystem::path default_rom_path(const std::filesystem::path& project_dir) {
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(project_dir / built_rom_file_name, ec)) return built_rom_file_name;
+    if (std::filesystem::is_regular_file(project_dir / input_rom_file_name, ec)) return input_rom_file_name;
+    return built_rom_file_name;
+}
+
 core::Result<std::filesystem::path> make_project_relative(const std::filesystem::path& project_dir,
                                                           const std::filesystem::path& path) {
     auto normalized = path.lexically_normal();
@@ -141,12 +148,12 @@ core::Result<void> save_manifest(const Project& project, const std::filesystem::
     out << yaml_scalar("name", project.name());
 
     if (project.rom()) {
-        auto extracted_path = make_project_relative(project_dir, project.rom()->extracted_path);
-        if (!extracted_path) {
-            return extracted_path.error();
+        auto rom_path = make_project_relative(project_dir, project.rom()->rom_path);
+        if (!rom_path) {
+            return rom_path.error();
         }
         out << "rom:\n";
-        out << "  " << yaml_scalar("extracted_path", path_to_manifest_string(extracted_path.value()));
+        out << "  " << yaml_scalar("rom_path", path_to_manifest_string(rom_path.value()));
         if (project.rom()->header) {
             out << "  " << yaml_scalar("game_title", project.rom()->header->game_title);
             out << "  " << yaml_scalar("game_code", project.rom()->header->game_code);
@@ -170,7 +177,8 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     bool saw_name = false;
     bool in_rom = false;
     std::optional<nds::RomHeader> header;
-    std::filesystem::path extracted_path;
+    std::filesystem::path rom_path;
+    bool saw_rom = false;
     std::string line;
 
     while (std::getline(in, line)) {
@@ -198,17 +206,26 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
             in_rom = false;
         } else if (stripped == "rom:") {
             in_rom = true;
+            saw_rom = true;
         } else if (stripped == "files:") {
             // Version 1 mirrored the whole extracted tree here. That list is derived from
             // the tree itself and carries no IDs, so it is neither written nor read now --
             // its entries fall through unmatched and the tree is indexed below instead.
             in_rom = false;
+        } else if (in_rom && stripped.rfind("rom_path:", 0) == 0) {
+            auto parsed = parse_manifest_path(stripped.substr(9), "rom.rom_path");
+            if (!parsed) {
+                return parsed.error();
+            }
+            rom_path = std::move(parsed.value());
         } else if (in_rom && stripped.rfind("extracted_path:", 0) == 0) {
+            // Version 2 named a derived directory here. It is still validated,
+            // so a corrupt manifest is still refused, and then discarded: what
+            // it pointed at is not something a version 3 project reads.
             auto parsed = parse_manifest_path(stripped.substr(15), "rom.extracted_path");
             if (!parsed) {
                 return parsed.error();
             }
-            extracted_path = std::move(parsed.value());
         } else if (in_rom && stripped.rfind("game_title:", 0) == 0) {
             if (!header) {
                 header = nds::RomHeader{};
@@ -239,66 +256,22 @@ core::Result<Project> load_manifest(const std::filesystem::path& path) {
     if (!saw_name || project.name().empty()) {
         return core::make_error(core::ErrorCode::ParseError, "project name is missing");
     }
-    if (!extracted_path.empty()) {
-        project.attach_extracted_rom(extracted_path, header);
-        // The file index is a cache of the extracted tree, so it is rebuilt on open rather
-        // than persisted. A project whose ROM has not been extracted yet still loads --
-        // it just has an empty index until the next import or NCPatcher build.
-        static_cast<void>(index_project_files(project, project.directory() / extracted_path));
+    if (saw_rom) {
+        project.attach_rom(rom_path.empty() ? default_rom_path(project.directory()) : rom_path, header);
+        // The file index is the ROM's own table, so it is read on open rather
+        // than persisted. A project whose ROM has not been built yet still
+        // loads -- it just has an empty index until the next build.
+        static_cast<void>(index_rom_files(project));
     }
     project.mark_clean();
     return project;
 }
 
-core::Result<void> index_project_files(Project& project, const std::filesystem::path& extracted_dir) {
-    if (project.directory().empty()) {
-        return core::make_error(core::ErrorCode::InvalidArgument, "project directory is required before indexing files");
-    }
-    if (!project.rom() || project.rom()->extracted_path.empty()) {
-        return core::make_error(core::ErrorCode::InvalidArgument, "project needs an extracted ROM before indexing files");
-    }
-    auto relative_root = make_project_relative(project.directory(), extracted_dir);
-    if (!relative_root) {
-        return relative_root.error();
-    }
-    auto configured_root = make_project_relative(project.directory(), project.rom()->extracted_path);
-    if (!configured_root) {
-        return configured_root.error();
-    }
-    if (relative_root.value() != configured_root.value()) {
-        return core::make_error(core::ErrorCode::InvalidArgument, "indexed directory does not match rom.extracted_path");
-    }
-    std::error_code ec;
-    if (!std::filesystem::is_directory(extracted_dir, ec)) {
-        return core::make_error(core::ErrorCode::NotFound, "extracted ROM directory does not exist");
-    }
-
+core::Result<void> index_rom_files(Project& project, const RomReader& rom) {
     std::vector<GameFile> files;
-    std::filesystem::recursive_directory_iterator current(extracted_dir, ec);
-    const std::filesystem::recursive_directory_iterator end;
-    if (ec) {
-        return core::make_error(core::ErrorCode::IoError, "could not read extracted ROM directory");
-    }
-    while (current != end) {
-        const auto regular = current->is_regular_file(ec);
-        if (ec) {
-            return core::make_error(core::ErrorCode::IoError, "could not inspect " + current->path().string());
-        }
-        if (regular) {
-            auto relative = make_project_relative(project.directory(), current->path());
-            if (!relative) {
-                return relative.error();
-            }
-            const auto size = current->file_size(ec);
-            if (ec) {
-                return core::make_error(core::ErrorCode::IoError, "could not read file size for " + current->path().string());
-            }
-            files.push_back({std::move(relative.value()), size});
-        }
-        current.increment(ec);
-        if (ec) {
-            return core::make_error(core::ErrorCode::IoError, "could not continue reading extracted ROM directory");
-        }
+    files.reserve(rom.files().size());
+    for (const auto& file : rom.files()) {
+        files.push_back({file.path, rom.file_size(file.id).value_or(0U)});
     }
     std::sort(files.begin(), files.end(), [](const auto& lhs, const auto& rhs) {
         return lhs.path.generic_string() < rhs.path.generic_string();
@@ -308,6 +281,18 @@ core::Result<void> index_project_files(Project& project, const std::filesystem::
         project.add_game_file(std::move(file));
     }
     return {};
+}
+
+core::Result<void> index_rom_files(Project& project) {
+    if (!project.rom() || project.rom()->rom_path.empty()) {
+        return core::make_error(core::ErrorCode::InvalidArgument, "project needs a ROM before indexing files");
+    }
+    const auto& configured = project.rom()->rom_path;
+    auto rom = RomReader::open(configured.is_absolute() ? configured : project.directory() / configured);
+    if (!rom) {
+        return rom.error();
+    }
+    return index_rom_files(project, rom.value());
 }
 
 } // namespace nsmb::project

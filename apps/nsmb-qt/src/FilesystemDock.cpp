@@ -146,10 +146,12 @@ std::vector<std::size_t> magic_offsets(std::span<const std::uint8_t> header) {
 // Classifies an entry for its icon only. Formats the shared identifier knows come from there.
 // Magic wins over the file name throughout: the identifier's own name hints treat any path
 // containing "course" as a level, which would otherwise mislabel script/course.bmg and friends.
-EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry) {
-    const auto& source = !entry.source.empty() ? entry.source : entry.extracted;
+EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry, nsmb::project::EffectiveFilesystem* files) {
+    // The head is enough to recognise a format, and a dock that read two
+    // thousand entries whole to draw its icons would read a game's worth of
+    // bytes to do it.
     std::vector<std::uint8_t> header;
-    if (!source.empty()) if (auto prefix = nsmb::core::read_file_prefix(source, 32)) header = std::move(prefix.value());
+    if (files) if (auto prefix = files->read_prefix(entry.path, 32)) header = std::move(prefix.value());
 
     using nsmb::formats::FormatKind;
     using nsmb::formats::GraphicsFormatKind;
@@ -311,13 +313,14 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
 }
 
 void FilesystemDock::setData(std::filesystem::path projectDir,
+                             nsmb::project::EffectiveFilesystem* files,
                              nsmb::patching::ModuleGraph modules,
                              nsmb::project::FilesystemView view,
                              QStringList variants,
                              QString activeModule,
                              QString activeVariant,
                              std::vector<nsmb::project::ModuleVariantMapping> mappings) {
-    projectDir_ = std::move(projectDir); modules_ = std::move(modules); view_ = std::move(view); mappings_ = std::move(mappings);
+    projectDir_ = std::move(projectDir); files_ = files; modules_ = std::move(modules); view_ = std::move(view); mappings_ = std::move(mappings);
     const QSignalBlocker moduleBlock(module_);
     module_->clear();
     for (const auto& entry : modules_.modules) if (entry.enabled && entry.nitrofs)
@@ -386,14 +389,14 @@ void FilesystemDock::rebuildTree() {
             provenance(entry), QString::fromStdString(entry.variant), fileId, QString::number(entry.size)});
         if (entry.id_is_planned) item->setToolTip(FileIdColumn, "The ID the next build would assign. Nothing holds it yet.");
         item->setData(0, path_role, path);
-        item->setIcon(0, entry_icon(classify_entry(entry), icons));
+        item->setIcon(0, entry_icon(classify_entry(entry, files_), icons));
         if (entry.status == nsmb::project::FilesystemStatus::Pending) item->setForeground(1, bse::theme::warning(palette()));
         if (entry.status == nsmb::project::FilesystemStatus::Orphaned) item->setForeground(1, bse::theme::danger(palette()));
     }
     root->setExpanded(true);
     const bool hasPending = view_.has_pending();
     pending_->setVisible(hasPending); run_->setVisible(hasPending);
-    pending_->setText(hasPending ? "⏳ Module files differ from the last build. Run NCPatcher to assign IDs and refresh the extracted ROM." : QString{});
+    pending_->setText(hasPending ? "⏳ Module files differ from the last build. Run NCPatcher to assign IDs and rebuild the ROM." : QString{});
     const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); open_->setEnabled(false); hex_->setEnabled(false);
     selectedEditor_ = bse::editors::Kind::None;
     updateDetails();
@@ -518,8 +521,8 @@ void FilesystemDock::removeFile() {
 }
 
 void FilesystemDock::extractFile() {
-    const auto* entry = selectedEntry(); if (!entry) return; const auto source = !entry->source.empty() ? entry->source : entry->extracted;
-    auto data = nsmb::core::read_file(source); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
+    const auto* entry = selectedEntry(); if (!entry || !files_) return;
+    auto data = files_->read(entry->path); if (!data) { emit errorOccurred(QString::fromStdString(data.error().message)); return; }
     const auto destination = QFileDialog::getSaveFileName(this, "Extract file", QString::fromStdString(entry->path)); if (destination.isEmpty()) return;
     auto result = nsmb::core::write_file_atomically(destination.toStdString(), data.value()); if (!result) emit errorOccurred(QString::fromStdString(result.error().message));
 }
@@ -532,9 +535,8 @@ void FilesystemDock::hexEditFile() {
 // Which editor claims the selected file, if any. Read straight from the bytes so the answer is
 // the same one the Open button acts on.
 bse::editors::Kind FilesystemDock::editorFor(const nsmb::project::FilesystemEntry* entry) const {
-    if (!entry) return bse::editors::Kind::None;
-    const auto source = !entry->source.empty() ? entry->source : entry->extracted;
-    const auto data = nsmb::core::read_file(source);
+    if (!entry || !files_) return bse::editors::Kind::None;
+    const auto data = files_->read(entry->path);
     if (!data) return bse::editors::Kind::None;
     return bse::editors::classify(data.value(), entry->path, entry->id && *entry->id == rom_user_metadata_id);
 }
@@ -549,9 +551,9 @@ bse::editors::Companions FilesystemDock::companionsFor(const QString& romPath) c
     }
     companions.paths.sort();
     companions.load = [this](const QString& path) -> nsmb::core::Result<std::vector<std::uint8_t>> {
-        const auto* found = view_.find(path.toStdString());
-        if (!found) return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "no such file in this variant");
-        auto data = nsmb::core::read_file(!found->source.empty() ? found->source : found->extracted);
+        if (!view_.find(path.toStdString()) || !files_)
+            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "no such file in this variant");
+        auto data = files_->read(path.toStdString());
         if (!data) return data.error();
         return bse::editors::unwrapped(data.value());
     };

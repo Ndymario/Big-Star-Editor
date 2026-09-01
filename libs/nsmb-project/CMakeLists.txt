@@ -1,5 +1,6 @@
 add_library(nsmb-project
   src/editable_level.cpp
+  src/effective_filesystem.cpp
   src/filesystem_view.cpp
   src/graphics_resources.cpp
   src/level_catalog.cpp
@@ -38,6 +39,9 @@ if(BSE_BUILD_TESTS)
   add_executable(nsmb-rom-reader-tests tests/rom_reader_tests.cpp)
   target_link_libraries(nsmb-rom-reader-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-rom-reader-tests COMMAND nsmb-rom-reader-tests)
+  add_executable(nsmb-effective-filesystem-tests tests/effective_filesystem_tests.cpp)
+  target_link_libraries(nsmb-effective-filesystem-tests PRIVATE nsmb-project)
+  add_test(NAME nsmb-effective-filesystem-tests COMMAND nsmb-effective-filesystem-tests)
   add_executable(nsmb-filesystem-view-tests tests/filesystem_view_tests.cpp)
   target_link_libraries(nsmb-filesystem-view-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-filesystem-view-tests COMMAND nsmb-filesystem-view-tests)

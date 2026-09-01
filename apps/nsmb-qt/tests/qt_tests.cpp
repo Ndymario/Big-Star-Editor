@@ -9,6 +9,8 @@
 #include "TilesetEditorDialog.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "MainWindow.hpp"
+
+#include "synthetic_rom.hpp"
 #include "ProjectTreeModel.hpp"
 #include "PatcherPanel.hpp"
 #include "nsmb/core/file_io.hpp"
@@ -77,20 +79,41 @@ void write_file(const std::filesystem::path& path, const std::vector<std::uint8_
     output.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
 }
 
+// A project the editor can actually open: one built ROM holding one level, read
+// where it lies. There is no unpacked copy of it to write any more.
 nsmb::project::Project make_project(const std::filesystem::path& root) {
-    const auto course = root / "extracted-rom/root/course/A01_1.bin";
-    const auto bgdat = root / "extracted-rom/root/course/A01_1_bgdat.bin";
     auto empty = make_level();
-    write_file(course, empty.serialize_course().value());
-    write_file(bgdat, empty.serialize_bgdat().value());
+    synthetic::write_bytes(root / "big-star-build.nds",
+                           synthetic::make_rom({{"course/A01_1.bin", empty.serialize_course().value()},
+                                                {"course/A01_1_bgdat.bin", empty.serialize_bgdat().value()}}));
     auto project = nsmb::project::create_empty_project("Workspace Test", root).value();
     nsmb::nds::RomHeader header;
     header.game_code = "A2DE";
-    project.attach_extracted_rom("extracted-rom", header);
-    project.add_game_file({"extracted-rom/root/course/A01_1.bin", std::filesystem::file_size(course)});
-    project.add_game_file({"extracted-rom/root/course/A01_1_bgdat.bin", std::filesystem::file_size(bgdat)});
+    project.attach_rom("big-star-build.nds", header);
+    auto indexed = nsmb::project::index_rom_files(project);
+    Q_ASSERT(indexed.has_value());
     project.mark_clean();
     return project;
+}
+
+// The dock reads its bytes through the window's reader now, so a dock test
+// needs a ROM rather than a directory of loose files.
+nsmb::project::EffectiveFilesystem romFixture(const QString& directory,
+                                              nsmb::project::FilesystemView& view,
+                                              const std::vector<std::pair<std::string, std::vector<std::uint8_t>>>& files) {
+    std::vector<synthetic::RomFile> contents;
+    for (const auto& [path, body] : files) {
+        contents.push_back({path, body});
+        nsmb::project::FilesystemEntry entry;
+        entry.path = path;
+        view.entries.push_back(std::move(entry));
+    }
+    const auto rom = std::filesystem::path(directory.toStdString()) / "fixture.nds";
+    synthetic::write_bytes(rom, synthetic::make_rom(contents));
+    nsmb::project::EffectiveFilesystem effective;
+    auto opened = nsmb::project::RomReader::open(rom);
+    if (opened) effective.set_rom(std::move(opened.value()));
+    return effective;
 }
 
 // A BMG the message editor can be pointed at: two messages, MID1 IDs, INF1 attributes.
@@ -252,22 +275,13 @@ private slots:
         QTemporaryDir files;
         QVERIFY(files.isValid());
         nsmb::project::FilesystemView view;
-        const auto add = [&](const char* romPath, const std::vector<std::uint8_t>& body) {
-            const auto onDisk = files.filePath(QString::fromLatin1(romPath).replace('/', '_'));
-            QFile file(onDisk);
-            QVERIFY(file.open(QIODevice::WriteOnly));
-            file.write(reinterpret_cast<const char*>(body.data()), static_cast<qint64>(body.size()));
-            file.close();
-            nsmb::project::FilesystemEntry entry;
-            entry.path = romPath;
-            entry.extracted = onDisk.toStdString();
-            view.entries.push_back(std::move(entry));
-        };
-        add("script/course.bmg", sampleBmg());
-        add("BG_unt/a.bin", std::vector<std::uint8_t>(16, 0));  // nothing edits raw tileset data
+        auto effective = romFixture(files.path(), view,
+                                    {{"script/course.bmg", sampleBmg()},
+                                     // nothing edits raw tileset data
+                                     {"BG_unt/a.bin", std::vector<std::uint8_t>(16, 0)}});
 
         FilesystemDock dock;
-        dock.setData({}, {}, std::move(view), {}, {}, {});
+        dock.setData({}, &effective, {}, std::move(view), {}, {}, {});
         // The two format-specific buttons are gone; one Open button covers every editor.
         QVERIFY(!dock.findChild<QPushButton*>("GraphicsEdit"));
         QVERIFY(!dock.findChild<QPushButton*>("UiResourceEdit"));
@@ -310,7 +324,6 @@ private slots:
 
         nsmb::project::FilesystemEntry entry;
         entry.path = "script/course.bmg";
-        entry.extracted = onDisk.toStdString();
         window.filesystemView_.entries.push_back(entry);
         window.openFileDocument("\nscript/course.bmg", "script/course.bmg", body, false, {},
                                 [](const std::vector<std::uint8_t>&) { return nsmb::core::Result<void>{}; });
@@ -439,8 +452,8 @@ private slots:
         QVERIFY(selector->findData(QString("fr")) >= 0);
 
         // Opening a level caches a session keyed to the variant it was loaded in.
-        const QString course = "extracted-rom/root/course/A01_1.bin";
-        const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
+        const QString course = "course/A01_1.bin";
+        const QString bgdat = "course/A01_1_bgdat.bin";
         const auto index = window.findLevelIndex(course, bgdat);
         QVERIFY(index.isValid());
         window.openLevelEditor(index);
@@ -764,8 +777,8 @@ private slots:
 
         MainWindow window;
         window.setProject(project);
-        const QString course = "extracted-rom/root/course/A01_1.bin";
-        const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
+        const QString course = "course/A01_1.bin";
+        const QString bgdat = "course/A01_1_bgdat.bin";
         const auto index = window.findLevelIndex(course, bgdat);
         QVERIFY(index.isValid());
 
@@ -775,7 +788,7 @@ private slots:
         QCOMPARE(window.projectModel_->data(row, Qt::DisplayRole).toString(), QString("course/A01_1.bin"));
         QCOMPARE(window.projectModel_->data(index.sibling(index.row(), 2), Qt::DisplayRole).toString(),
                  QString("course/A01_1_bgdat.bin"));
-        QCOMPARE(window.projectModel_->data(index, ProjectTreeModel::CourseRomPathRole).toString(),
+        QCOMPARE(window.projectModel_->data(index, ProjectTreeModel::CoursePathRole).toString(),
                  QString("course/A01_1.bin"));
         // The path roles the rest of the window opens levels with are unchanged.
         QCOMPARE(window.projectModel_->data(index, ProjectTreeModel::CoursePathRole).toString(), course);
@@ -815,8 +828,8 @@ private slots:
         const auto project = make_project(std::filesystem::path(directory.path().toStdString()));
         MainWindow window;
         window.setProject(project);
-        const auto index = window.findLevelIndex("extracted-rom/root/course/A01_1.bin",
-                                                 "extracted-rom/root/course/A01_1_bgdat.bin");
+        const auto index = window.findLevelIndex("course/A01_1.bin",
+                                                 "course/A01_1_bgdat.bin");
         QVERIFY(index.isValid());
         window.openLevelEditor(index);
         QCOMPARE(window.documents_.size(), 1U);
@@ -1342,7 +1355,7 @@ private slots:
     void autosaveSnapshotIsWrittenAndClearedWhenClean() {
         QTemporaryDir directory; QVERIFY(directory.isValid()); const auto project=make_project(directory.path().toStdString());
         MainWindow window; window.setProject(project);
-        auto session=window.levelSession("extracted-rom/root/course/A01_1.bin","extracted-rom/root/course/A01_1_bgdat.bin");QVERIFY(session);QVERIFY(session.value()->add_object({4,0,1,1,1,1}));
+        auto session=window.levelSession("course/A01_1.bin","course/A01_1_bgdat.bin");QVERIFY(session);QVERIFY(session.value()->add_object({4,0,1,1,1,1}));
         window.writeRecoverySnapshots(); const auto recovery=std::filesystem::path(directory.path().toStdString())/".big-star-autosave";
         std::size_t count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover"){auto bytes=nsmb::core::read_file(entry.path());QVERIFY(bytes);auto decoded=nsmb::project::decode_level_recovery(bytes.value());QVERIFY(decoded);++count;}QCOMPARE(count,1U);
         session.value()->mark_clean();window.writeRecoverySnapshots();count=0;for(const auto& entry:std::filesystem::directory_iterator(recovery))if(entry.path().extension()==".bsrecover")++count;QCOMPARE(count,0U);
@@ -1390,8 +1403,8 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         const auto project = make_project(directory.path().toStdString());
-        const QString course = "extracted-rom/root/course/A01_1.bin";
-        const QString bgdat = "extracted-rom/root/course/A01_1_bgdat.bin";
+        const QString course = "course/A01_1.bin";
+        const QString bgdat = "course/A01_1_bgdat.bin";
 
         MainWindow first;
         first.setProject(project);
@@ -1451,13 +1464,14 @@ private slots:
 
         // The module already owns this level, and its copy is what the last
         // build put in the ROM. Editing it is what has to show up as Pending.
-        const auto extractedCourse = root / "extracted-rom/root/course/A01_1.bin";
-        const auto extractedBgdat = root / "extracted-rom/root/course/A01_1_bgdat.bin";
+        auto rom = nsmb::project::RomReader::open(root / "big-star-build.nds");
+        QVERIFY(rom);
         const auto moduleCourse = nitrofs / "en/course/A01_1.bin";
         const auto moduleBgdat = nitrofs / "en/course/A01_1_bgdat.bin";
         std::filesystem::create_directories(moduleCourse.parent_path());
-        std::filesystem::copy_file(extractedCourse, moduleCourse);
-        std::filesystem::copy_file(extractedBgdat, moduleBgdat);
+        const auto romCourse = rom.value().read("course/A01_1.bin").value();
+        QVERIFY(nsmb::core::write_file_atomically(moduleCourse, romCourse));
+        QVERIFY(nsmb::core::write_file_atomically(moduleBgdat, rom.value().read("course/A01_1_bgdat.bin").value()));
 
         const auto entries = [&] {
             std::ostringstream out;
@@ -1482,7 +1496,6 @@ private slots:
         std::ofstream(root / "fake-ncpatcher/config-dump.json")
             << "{\"schema\":\"ncpatcher.config/1\",\"version\":2,\"variants\":{\"en\":{\"defines\":[]}}}";
 
-        const auto before = nsmb::core::read_file(extractedCourse).value();
         MainWindow window;
         window.patcherPanel_->setExecutable(BSE_FAKE_NCPATCHER);
         window.setProject(project);
@@ -1493,13 +1506,15 @@ private slots:
         QCOMPARE(window.filesystemView_.find("course/A01_1_bgdat.bin")->status,
                  nsmb::project::FilesystemStatus::Replaced);
 
-        auto session = window.levelSession("extracted-rom/root/course/A01_1.bin", "extracted-rom/root/course/A01_1_bgdat.bin");
+        auto session = window.levelSession("course/A01_1.bin", "course/A01_1_bgdat.bin");
         QVERIFY(session);
         QVERIFY(session.value()->add_object({7, 0, 1, 2, 1, 1}));
         QVERIFY(window.saveEditedLevels());
         QVERIFY(std::filesystem::is_regular_file(moduleCourse));
         QVERIFY(std::filesystem::is_regular_file(moduleBgdat));
-        QCOMPARE(nsmb::core::read_file(extractedCourse).value(), before);
+        // Nothing wrote into the ROM: a build does that, and only a build.
+        QCOMPARE(nsmb::project::RomReader::open(root / "big-star-build.nds").value().read("course/A01_1.bin").value(),
+                 romCourse);
 
         // An object lives in the bgdat, so that is the file whose bytes moved.
         // The edit went into the module tree, so what a build would place no
@@ -1560,7 +1575,7 @@ private slots:
         add("z_new/pending.bin", std::nullopt);  // not built yet, so no ID
 
         FilesystemDock dock;
-        dock.setData({}, {}, std::move(view), {}, {}, {});
+        dock.setData({}, nullptr, {}, std::move(view), {}, {}, {});
         auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
         QVERIFY(tree);
         QCOMPARE(tree->topLevelItemCount(), 1);
@@ -1589,7 +1604,7 @@ private slots:
             view.entries.push_back({.path = path});
 
         FilesystemDock dock;
-        dock.setData({}, {}, std::move(view), {}, {}, {});
+        dock.setData({}, nullptr, {}, std::move(view), {}, {}, {});
         auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
         QVERIFY(tree);
 
@@ -1618,7 +1633,7 @@ private slots:
 
         {
             FilesystemDock dock;
-            dock.setData({}, {}, view, {}, {}, {});
+            dock.setData({}, nullptr, {}, view, {}, {}, {});
             auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
             QVERIFY(tree);
             QCOMPARE(tree->columnCount(), 6);
@@ -1662,7 +1677,7 @@ private slots:
 
         // Column choices and widths survive into the next dock.
         FilesystemDock restored;
-        restored.setData({}, {}, view, {}, {}, {});
+        restored.setData({}, nullptr, {}, view, {}, {}, {});
         auto* tree = restored.findChild<QTreeWidget*>("FilesystemTree");
         QVERIFY(tree);
         QVERIFY(!tree->isColumnHidden(4));
@@ -1700,17 +1715,9 @@ private slots:
 
         QTemporaryDir files;
         QVERIFY(files.isValid());
-        nsmb::project::FilesystemView view;
+        std::vector<std::pair<std::string, std::vector<std::uint8_t>>> contents;
         const auto add = [&](const char* romPath, const QByteArray& header) {
-            const auto onDisk = files.filePath(QString::fromLatin1(romPath).replace('/', '_'));
-            QFile file(onDisk);
-            QVERIFY(file.open(QIODevice::WriteOnly));
-            QCOMPARE(file.write(header), header.size());
-            file.close();
-            nsmb::project::FilesystemEntry entry;
-            entry.path = romPath;
-            entry.extracted = onDisk.toStdString();
-            view.entries.push_back(std::move(entry));
+            contents.emplace_back(romPath, std::vector<std::uint8_t>(header.begin(), header.end()));
         };
         const QByteArray pad(24, '\0');
         add("ARCHIVE/a.narc", QByteArray("NARC") + pad);
@@ -1732,8 +1739,11 @@ private slots:
         add("course/A01_1.bin", QByteArray(16, '\x00'));            // no magic, so the name decides
         add("BG_unt/a.bin", QByteArray(16, '\x00'));                // tileset data: nothing identifies it
 
+        nsmb::project::FilesystemView view;
+        auto effective = romFixture(files.path(), view, contents);
+
         FilesystemDock dock;
-        dock.setData({}, {}, std::move(view), {}, {}, {});
+        dock.setData({}, &effective, {}, std::move(view), {}, {}, {});
         auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
         QVERIFY(tree);
 

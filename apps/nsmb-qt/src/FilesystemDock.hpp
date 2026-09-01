@@ -4,6 +4,7 @@
 
 #include "FileEditors.hpp"
 
+#include "nsmb/project/effective_filesystem.hpp"
 #include "nsmb/project/filesystem_view.hpp"
 
 class QComboBox;
@@ -23,7 +24,10 @@ class FilesystemDock final : public QWidget {
 public:
     explicit FilesystemDock(QWidget* parent = nullptr);
 
+    // `files` is the window's own reader, borrowed rather than copied: the dock
+    // reads bytes to classify, extract and open, and there is one ROM open.
     void setData(std::filesystem::path projectDir,
+                 nsmb::project::EffectiveFilesystem* files,
                  nsmb::patching::ModuleGraph modules,
                  nsmb::project::FilesystemView view,
                  QStringList variants,
@@ -77,6 +81,7 @@ private:
                                          const nsmb::project::FilesystemEntry* entry = nullptr);
 
     std::filesystem::path projectDir_;
+    nsmb::project::EffectiveFilesystem* files_{};
     nsmb::patching::ModuleGraph modules_;
     nsmb::project::FilesystemView view_;
     std::vector<nsmb::project::ModuleVariantMapping> mappings_;

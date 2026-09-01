@@ -41,7 +41,14 @@ enum class LuaResourceType { Palette, Drawable };
 
 struct ResourceRef {
     LuaResourceType type{};
-    std::filesystem::path path;
+    // What the asset cache is keyed on: the file on disk when a module supplies
+    // this resource, and the ROM address otherwise. Two variants name the same
+    // address and hand back different bytes, so the address alone would serve a
+    // stale image after a variant switch.
+    std::string key;
+    // The file to watch, empty when the ROM supplied it -- the ROM changes only
+    // when a build replaces it, and is watched once rather than per resource.
+    std::filesystem::path watch;
     std::shared_ptr<const LuaPalette> palette;
     std::shared_ptr<const formats::RgbaImage> image;
 };
@@ -222,15 +229,18 @@ bool option_boolean(lua_State* state, int table, const char* key, bool fallback)
     return value;
 }
 
-core::Result<std::vector<std::uint8_t>> actor_resource_bytes(const std::filesystem::path& path) {
-    auto bytes = core::read_file(path);
-    if (!bytes) return bytes.error();
-    if (!bytes.value().empty() && (bytes.value().front() == 0x10 || bytes.value().front() == 0x11))
-        return formats::decompress_nitro_lz(bytes.value());
+core::Result<std::vector<std::uint8_t>> actor_resource_bytes(const std::vector<std::uint8_t>& bytes) {
+    if (!bytes.empty() && (bytes.front() == 0x10 || bytes.front() == 0x11))
+        return formats::decompress_nitro_lz(bytes);
     return bytes;
 }
 
-std::optional<std::filesystem::path> resolve_resource(lua_State* state, ActorResourceKind kind, const char* name) {
+// The address when the ROM supplies this, the disk path when a module does.
+std::string resource_key(const ActorResource& resource) {
+    return resource.source.empty() ? resource.rom_path : resource.source.string();
+}
+
+std::optional<ActorResource> resolve_resource(lua_State* state, ActorResourceKind kind, const char* name) {
     auto& value = context(state);
     if (!value.resolve) luaL_error(state, "actor resources must be loaded before onRender");
     auto resolved = (*value.resolve)(kind, name);
@@ -247,17 +257,17 @@ std::shared_ptr<const T> cached(std::unordered_map<std::string, std::weak_ptr<co
     return found == cache.end() ? nullptr : found->second.lock();
 }
 
-core::Result<std::shared_ptr<const formats::RgbaImage>> decode_bitmap(const std::filesystem::path& path,
+core::Result<std::shared_ptr<const formats::RgbaImage>> decode_bitmap(const ActorResource& resource,
                                                                              int bpp,
                                                                              std::size_t width,
                                                                              std::size_t height,
                                                                              std::size_t tile_offset,
                                                                              const LuaPalette& palette) {
-    auto bytes = actor_resource_bytes(path);
+    auto bytes = actor_resource_bytes(resource.data);
     if (!bytes) return bytes.error();
     std::span<const std::uint8_t> characters(bytes.value());
     std::optional<formats::Ncgr> ncgr;
-    if (formats::identify_graphics_format(bytes.value(), path.string()) == formats::GraphicsFormatKind::NitroCharacterGraphics) {
+    if (formats::identify_graphics_format(bytes.value(), resource.rom_path) == formats::GraphicsFormatKind::NitroCharacterGraphics) {
         auto parsed = formats::parse_ncgr(bytes.value());
         if (!parsed) return parsed.error();
         ncgr = std::move(parsed.value());
@@ -308,15 +318,15 @@ core::Result<std::shared_ptr<const formats::RgbaImage>> decode_bitmap(const std:
     return std::shared_ptr<const formats::RgbaImage>(std::move(result));
 }
 
-core::Result<std::shared_ptr<const LuaPalette>> decode_palette(const std::filesystem::path& path,
+core::Result<std::shared_ptr<const LuaPalette>> decode_palette(const ActorResource& resource,
                                                                std::size_t bank,
                                                                std::size_t color_count,
                                                                bool transparent) {
-    auto bytes = actor_resource_bytes(path);
+    auto bytes = actor_resource_bytes(resource.data);
     if (!bytes) return bytes.error();
     std::span<const std::uint8_t> raw(bytes.value());
     std::optional<formats::Nclr> nclr;
-    if (formats::identify_graphics_format(bytes.value(), path.string()) == formats::GraphicsFormatKind::NitroPalette) {
+    if (formats::identify_graphics_format(bytes.value(), resource.rom_path) == formats::GraphicsFormatKind::NitroPalette) {
         auto parsed = formats::parse_nclr(bytes.value());
         if (!parsed) return parsed.error();
         nclr = std::move(parsed.value());
@@ -335,10 +345,10 @@ core::Result<std::shared_ptr<const LuaPalette>> decode_palette(const std::filesy
     return std::shared_ptr<const LuaPalette>(std::move(result));
 }
 
-core::Result<std::shared_ptr<const formats::RgbaImage>> decode_texture(const std::filesystem::path& path,
+core::Result<std::shared_ptr<const formats::RgbaImage>> decode_texture(const ActorResource& resource,
                                                                        std::size_t texture,
                                                                        std::size_t palette) {
-    auto bytes = actor_resource_bytes(path);
+    auto bytes = actor_resource_bytes(resource.data);
     if (!bytes) return bytes.error();
     auto tex0 = formats::parse_tex0(bytes.value());
     if (!tex0) return tex0.error();
@@ -392,12 +402,12 @@ int load_image(lua_State* state) {
     if (name.is_absolute()) return luaL_error(state, "loadImage filename must be relative to the actor directory");
     for (const auto& part : name)
         if (part == "..") return luaL_error(state, "loadImage filename may not leave the actor directory");
-    ResourceRef resource{LuaResourceType::Drawable, {}};
+    ResourceRef resource{LuaResourceType::Drawable, {}, {}};
     const auto path = value.layer / name;
     std::error_code ec;
     if (std::filesystem::exists(path, ec) && !ec) {
-        resource.path = path;
-        const auto key = path.string();
+        resource.watch = path;
+        const auto key = resource.key = path.string();
         resource.image = cached(value.cache->images, key);
         if (!resource.image && value.decode_image && *value.decode_image) {
             auto bytes = core::read_file(path);
@@ -422,14 +432,15 @@ int load_palette(lua_State* state) {
     const auto colors = table ? static_cast<std::size_t>(option_integer(state, table, "colors", 0, 0, 65536)) : 0U;
     const bool transparent = table ? option_boolean(state, table, "transparent", true) : true;
     const auto* name = lua_tostring(state, 1);
-    auto path = resolve_resource(state, ActorResourceKind::Palette, name);
-    ResourceRef resource{LuaResourceType::Palette, path.value_or(std::filesystem::path{})};
-    if (path) {
-        const auto key = path->string() + ":" + std::to_string(bank) + ":" + std::to_string(colors) + ":" +
+    auto found = resolve_resource(state, ActorResourceKind::Palette, name);
+    ResourceRef resource{LuaResourceType::Palette, found ? resource_key(*found) : std::string{},
+                         found ? found->source : std::filesystem::path{}};
+    if (found) {
+        const auto key = resource.key + ":" + std::to_string(bank) + ":" + std::to_string(colors) + ":" +
                          (transparent ? "1" : "0");
         resource.palette = cached(context(state).cache->palettes, key);
         if (!resource.palette) {
-            auto decoded = decode_palette(*path, bank, colors, transparent);
+            auto decoded = decode_palette(*found, bank, colors, transparent);
             if (decoded) context(state).cache->palettes[key] = resource.palette = std::move(decoded.value());
         }
     }
@@ -454,16 +465,17 @@ int load_bitmap(lua_State* state) {
     const auto* palette = resource_handle(state, lua_gettop(state), LuaResourceType::Palette,
                                           "loadBitmap palette must come from loadPalette");
     auto palette_colors = palette->palette;
-    const auto palette_key = palette->path.string();
+    const auto palette_key = palette->key;
     lua_pop(state, 1);
-    auto path = resolve_resource(state, ActorResourceKind::Graphics, name);
-    ResourceRef resource{LuaResourceType::Drawable, path.value_or(std::filesystem::path{})};
-    if (path && palette_colors) {
-        const auto key = path->string() + ":" + std::to_string(bpp) + ":" + std::to_string(width) + ":" +
+    auto found = resolve_resource(state, ActorResourceKind::Graphics, name);
+    ResourceRef resource{LuaResourceType::Drawable, found ? resource_key(*found) : std::string{},
+                         found ? found->source : std::filesystem::path{}};
+    if (found && palette_colors) {
+        const auto key = resource.key + ":" + std::to_string(bpp) + ":" + std::to_string(width) + ":" +
                          std::to_string(height) + ":" + std::to_string(offset) + ":" + palette_key;
         resource.image = cached(context(state).cache->images, key);
         if (!resource.image) {
-            auto decoded = decode_bitmap(*path, bpp, width, height, offset, *palette_colors);
+            auto decoded = decode_bitmap(*found, bpp, width, height, offset, *palette_colors);
             if (decoded) context(state).cache->images[key] = resource.image = std::move(decoded.value());
         }
     }
@@ -479,13 +491,14 @@ int load_texture(lua_State* state) {
     const auto texture = table ? static_cast<std::size_t>(option_integer(state, table, "texture", 0, 0, 65535)) : 0U;
     const auto palette = table ? static_cast<std::size_t>(option_integer(state, table, "palette", 0, 0, 65535)) : 0U;
     const auto* name = lua_tostring(state, 1);
-    auto path = resolve_resource(state, ActorResourceKind::Model, name);
-    ResourceRef resource{LuaResourceType::Drawable, path.value_or(std::filesystem::path{})};
-    if (path) {
-        const auto key = path->string() + ":tex:" + std::to_string(texture) + ":" + std::to_string(palette);
+    auto found = resolve_resource(state, ActorResourceKind::Model, name);
+    ResourceRef resource{LuaResourceType::Drawable, found ? resource_key(*found) : std::string{},
+                         found ? found->source : std::filesystem::path{}};
+    if (found) {
+        const auto key = resource.key + ":tex:" + std::to_string(texture) + ":" + std::to_string(palette);
         resource.image = cached(context(state).cache->images, key);
         if (!resource.image) {
-            auto decoded = decode_texture(*path, texture, palette);
+            auto decoded = decode_texture(*found, texture, palette);
             if (decoded) context(state).cache->images[key] = resource.image = std::move(decoded.value());
         }
     }
@@ -1047,7 +1060,7 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
         luaL_unref(state, LUA_REGISTRYINDEX, init.value());
     }
     for (const auto& resource : program->context.resources)
-        if (!resource.path.empty()) actor.render_resources.push_back(resource.path);
+        if (!resource.watch.empty()) actor.render_resources.push_back(resource.watch);
     std::ranges::sort(actor.render_resources);
     actor.render_resources.erase(std::unique(actor.render_resources.begin(), actor.render_resources.end()), actor.render_resources.end());
     // Loaders exist only for init(); clearing them here makes a later call fail

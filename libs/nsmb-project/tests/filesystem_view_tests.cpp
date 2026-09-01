@@ -1,6 +1,6 @@
 #include "nsmb/project/filesystem_view.hpp"
-#include "nsmb/formats/graphics.hpp"
-#include "nsmb/formats/narc.hpp"
+
+#include "synthetic_rom.hpp"
 
 #include <cassert>
 #include <filesystem>
@@ -8,6 +8,7 @@
 
 namespace {
 using nsmb::patching::FileAction;
+using synthetic::text;
 
 void write(const std::filesystem::path& path,std::string_view value){std::filesystem::create_directories(path.parent_path());std::ofstream(path,std::ios::binary)<<value;}
 void write(const std::filesystem::path& path,const std::vector<std::uint8_t>& value){std::filesystem::create_directories(path.parent_path());std::ofstream output(path,std::ios::binary);output.write(reinterpret_cast<const char*>(value.data()),value.size());}
@@ -17,11 +18,10 @@ nsmb::patching::ModuleInfo module(std::string key,const std::filesystem::path& r
     result.nitrofs=nsmb::patching::ModuleNitroFs{root,layered,std::move(base),std::move(into)};return result;
 }
 
-// One NARC holding one member, so a container's bytes can be compared against
-// what a plan says its members should be.
+// One NARC holding one member, so a container can be compared against what a
+// plan says its members should be.
 std::vector<std::uint8_t> one_member_narc(std::string_view contents){
-    nsmb::formats::NarcArchive narc;narc.name_table={8,0,0,0,0,0,1,0,10,'m','e','m','b','e','r','.','b','i','n',0};
-    narc.files={{contents.begin(),contents.end()}};return nsmb::formats::write_narc(narc).value();
+    return synthetic::make_narc({{"member.bin",text(contents)}});
 }
 }
 
@@ -29,22 +29,23 @@ int main(){
     namespace fs=std::filesystem;using namespace nsmb::project;
     const auto root=fs::temp_directory_path()/"big-star-filesystem-view";fs::remove_all(root);
 
-    // The ROM as the last build left it.
-    const auto extracted=root/"extracted";
-    write(extracted/"root/vanilla.bin","V");
-    write(extracted/"root/shared.bin","FR");
-    write(extracted/"root/moved.bin","SAME");
-    write(extracted/"root/explicit.bin","EXPLICIT");
-    write(extracted/"root/generated.bin","BUILT");
-    write(extracted/"root/stale.bin","OLD");
-    write(extracted/"root/gone.bin","LEFTOVER");
-    write(extracted/"root/z_new/reserved","");
-    write(extracted/"root/z_new/add.bin","ADD");
-    write(extracted/"root/ARCHIVE/menu.narc",one_member_narc("M"));
-    write(extracted/"root/ARCHIVE/other.narc",one_member_narc("OLD"));
-    // A compressed container is an ordinary archive under an LZ10 wrapper, and
-    // has to be compared through it rather than written off as unreadable.
-    write(extracted/"root/ARCHIVE/menu.carc",nsmb::formats::compress_nitro_lz10(one_member_narc("C")).value());
+    // The ROM as the last build left it, read where it lies.
+    const auto rom_path=root/"big-star-build.nds";
+    const auto write_rom=[&](std::string_view stale,std::string_view other,bool with_fresh){
+        std::vector<synthetic::RomFile> files{
+            {"vanilla.bin",text("V")},{"shared.bin",text("FR")},{"moved.bin",text("SAME")},
+            {"explicit.bin",text("EXPLICIT")},{"generated.bin",text("BUILT")},{"stale.bin",text(stale)},
+            {"gone.bin",text("LEFTOVER")},{"z_new/reserved",{}},{"z_new/add.bin",text("ADD")},
+            {"ARCHIVE/menu.narc",one_member_narc("M")},{"ARCHIVE/other.narc",one_member_narc(other)},
+            // A compressed container is an ordinary archive under an LZ10
+            // wrapper, and has to be compared through it rather than written
+            // off as unreadable.
+            {"ARCHIVE/menu.carc",nsmb::formats::compress_nitro_lz10(one_member_narc("C")).value()}};
+        if(with_fresh)files.push_back({"z_new/fresh.bin",text("FRESH")});
+        synthetic::write_bytes(rom_path,synthetic::make_rom(files));
+    };
+    write_rom("OLD","OLD",false);
+    auto rom=nsmb::project::RomReader::open(rom_path);assert(rom);
 
     // The module trees. Nothing here is walked any more -- they exist so the
     // sources a plan names are on disk, and so there is something to watch.
@@ -96,7 +97,7 @@ int main(){
     at("gone.bin")={7,"gone.bin",8,FileAction::Unchanged};
     plan.files.push_back({13,"z_new/fresh.bin",5,FileAction::Created,"modules/second/nitrofs/fr/z_new/fresh.bin","second","Assets","fr"});
 
-    FilesystemViewRequest request;request.extracted_rom=extracted;request.project_dir=root;
+    FilesystemViewRequest request;request.rom=&rom.value();request.project_dir=root;
     request.modules=graph;request.manifest=manifest;request.plan=plan;request.variant="fr";
     auto view=build_filesystem_view(std::move(request));assert(view);
     const auto find=[&](std::string_view path){const auto* entry=view.value().find(path);assert(entry);return entry;};
@@ -143,25 +144,23 @@ int main(){
     // still fail this on the project that matters.
     {
         nsmb::patching::FileManifest built=plan;built.planned=false;
-        write(extracted/"root/stale.bin","NEW");
-        write(extracted/"root/ARCHIVE/other.narc",one_member_narc("NEW"));
-        write(extracted/"root/z_new/fresh.bin","FRESH");
-        FilesystemViewRequest agreed;agreed.extracted_rom=extracted;agreed.project_dir=root;
+        write_rom("NEW","NEW",true);
+        auto rebuilt=nsmb::project::RomReader::open(rom_path);assert(rebuilt);
+        FilesystemViewRequest agreed;agreed.rom=&rebuilt.value();agreed.project_dir=root;
         agreed.modules=graph;agreed.manifest=built;agreed.plan=plan;agreed.variant="fr";
         auto same=build_filesystem_view(std::move(agreed));assert(same);
         assert(!same.value().has_pending());
         assert(same.value().find("gone.bin")->status==FilesystemStatus::Vanilla);
         assert(!same.value().find("z_new/fresh.bin")->id_is_planned);
-        write(extracted/"root/stale.bin","OLD");
-        write(extracted/"root/ARCHIVE/other.narc",one_member_narc("OLD"));
-        fs::remove(extracted/"root/z_new/fresh.bin");
     }
 
     // A project that has never been built has no manifest, so everything a
     // build would place is pending -- including the files it would only
     // rewrite in place.
+    write_rom("OLD","OLD",false);
+    auto reopened=nsmb::project::RomReader::open(rom_path);assert(reopened);
     {
-        FilesystemViewRequest fresh_project;fresh_project.extracted_rom=extracted;fresh_project.project_dir=root;
+        FilesystemViewRequest fresh_project;fresh_project.rom=&reopened.value();fresh_project.project_dir=root;
         fresh_project.modules=graph;fresh_project.plan=plan;fresh_project.variant="fr";
         auto unbuilt=build_filesystem_view(std::move(fresh_project));assert(unbuilt);
         assert(unbuilt.value().find("shared.bin")->status==FilesystemStatus::Pending);
@@ -172,7 +171,7 @@ int main(){
     // Without NCPatcher there is no plan, and the view reports the last build
     // rather than inventing an answer of its own.
     {
-        FilesystemViewRequest unplanned;unplanned.extracted_rom=extracted;unplanned.project_dir=root;
+        FilesystemViewRequest unplanned;unplanned.rom=&reopened.value();unplanned.project_dir=root;
         unplanned.modules=graph;unplanned.manifest=manifest;unplanned.variant="fr";
         auto reported=build_filesystem_view(std::move(unplanned));assert(reported);
         assert(reported.value().find("shared.bin")->status==FilesystemStatus::Orphaned);

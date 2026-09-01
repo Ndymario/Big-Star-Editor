@@ -75,10 +75,6 @@ QString projectTitle(const nsmb::project::Project& project) {
     return QString::fromStdString(project.name()) + " - Big Star Editor";
 }
 
-nsmb::core::Result<std::vector<std::uint8_t>> readBinaryFile(const std::filesystem::path& path) {
-    return nsmb::core::read_file(path);
-}
-
 nsmb::core::Result<std::string> readTextFile(const std::filesystem::path& path) {
     auto bytes = nsmb::core::read_file(path);
     if (!bytes) return bytes.error();
@@ -120,11 +116,11 @@ QString manifestPathText(const nsmb::project::Project& project) {
     return QString::fromStdString((project.directory() / nsmb::project::manifest_file_name).string());
 }
 
-std::filesystem::path extractedProjectPath(const nsmb::project::Project& project) {
+std::filesystem::path projectRomPath(const nsmb::project::Project& project) {
     if (!project.rom()) {
         return {};
     }
-    auto path = project.rom()->extracted_path;
+    auto path = project.rom()->rom_path;
     return path.is_absolute() ? path : project.directory() / path;
 }
 
@@ -207,6 +203,14 @@ MainWindow::MainWindow() {
         graphicsRefreshTimer_->start();
     });
     connect(graphicsRefreshTimer_, &QTimer::timeout, this, &MainWindow::refreshChangedGraphics);
+
+    // The ROM a build replaces. It is one file, so watching it costs one
+    // handle where the extracted tree cost thousands.
+    romWatcher_ = new QFileSystemWatcher(this);
+    connect(romWatcher_, &QFileSystemWatcher::fileChanged, this, [this] {
+        reloadRom();
+        moduleRefreshTimer_->start();
+    });
 
     moduleWatcher_ = new QFileSystemWatcher(this);
     moduleRefreshTimer_ = new QTimer(this);
@@ -315,11 +319,16 @@ void MainWindow::createMenus() {
         runPatcher();
     });
     runPatcherAction->setObjectName("RunPatcherAction");
-    auto* buildRomAction = file->addAction("Build ROM...", this, [this] {
-        log("File > Build ROM selected.");
-        buildRom();
+    // Repacking a tree the editor unpacked was never a legitimate way to
+    // produce a ROM: it went through a second builder that had to agree with
+    // NCPatcher's and could not. Exporting one, on the other hand, is somebody
+    // wanting the files -- and NCPatcher's own extractor writes a directory it
+    // can read back, so that is the one that runs.
+    auto* extractRomAction = file->addAction("Extract ROM...", this, [this] {
+        log("File > Extract ROM selected.");
+        extractRom();
     });
-    buildRomAction->setObjectName("BuildRomAction");
+    extractRomAction->setObjectName("ExtractRomAction");
     file->addSeparator();
     file->addAction("Exit", this, [this] {
         log("File > Exit selected.");
@@ -357,7 +366,6 @@ void MainWindow::createMenus() {
     for (auto* action : {forward, backward}) main_bar->addAction(action);
     main_bar->addSeparator();
     main_bar->addAction(runPatcherAction);
-    main_bar->addAction(buildRomAction);
     // One variant selector for the whole window. There used to be two, in the
     // Filesystem and Build Output docks, kept in sync by hand and each showing
     // only part of what a variant governs.
@@ -544,7 +552,7 @@ void MainWindow::createDocks() {
     connect(filesystemPanel_, &FilesystemDock::openInEditorRequested, this, [this](const QString& romPath) {
         const auto* entry = filesystemView_.find(romPath.toStdString());
         if (!entry) return;
-        auto data = nsmb::core::read_file(!entry->source.empty() ? entry->source : entry->extracted);
+        auto data = effectiveFiles_.read(romPath.toStdString());
         if (!data) { log("Open file: " + QString::fromStdString(data.error().message)); return; }
         const auto metadata = entry->id && *entry->id == rom_user_metadata_id;
         openFileDocument(activeVariant_ + "\n" + romPath, romPath, std::move(data.value()), metadata,
@@ -554,9 +562,8 @@ void MainWindow::createDocks() {
                          });
     });
     connect(filesystemPanel_, &FilesystemDock::hexEditRequested, this, [this](const QString& romPath) {
-        const auto* entry = filesystemView_.find(romPath.toStdString());
-        if (!entry) return;
-        auto data = nsmb::core::read_file(!entry->source.empty() ? entry->source : entry->extracted);
+        if (!filesystemView_.find(romPath.toStdString())) return;
+        auto data = effectiveFiles_.read(romPath.toStdString());
         if (!data) { log("Hex edit: " + QString::fromStdString(data.error().message)); return; }
         const auto key = activeVariant_ + "\nhex\n" + romPath;
         if (raiseFileDocument(key)) return;
@@ -585,13 +592,8 @@ void MainWindow::createDocks() {
     connect(patcherPanel_, &PatcherPanel::diagnosticActivated, this,
             &MainWindow::openDiagnosticLocation);
     connect(patcherPanel_, &PatcherPanel::buildFinished, this, &MainWindow::onPatcherFinished);
-    connect(patcherPanel_, &PatcherPanel::treeApplied, this,
-            [this](const QString& backupDir, const QString& builtRom) {
-                log("Built ROM: " + builtRom);
-                if (!backupDir.isEmpty()) {
-                    log("Previous extracted tree kept at: " + backupDir);
-                }
-            });
+    connect(patcherPanel_, &PatcherPanel::romApplied, this,
+            [this](const QString& builtRom) { log("Built ROM: " + builtRom); });
 
     for (auto* dock : {levelsDock_, propertiesDock_, paletteDock_, filesystemDock_, buildDock_}) {
         viewMenu_->addAction(dock->toggleViewAction());
@@ -675,14 +677,10 @@ bool MainWindow::importRom() {
     const auto rom_path = std::filesystem::path(rom_text.toStdString());
     const auto project_dir = std::filesystem::path(directory.toStdString());
     const auto manifest = project_dir / nsmb::project::manifest_file_name;
-    const auto extracted_dir = project_dir / "extracted-rom";
+    const auto imported_rom = project_dir / nsmb::project::input_rom_file_name;
     std::error_code ec;
     if (std::filesystem::exists(manifest)) {
         QMessageBox::warning(this, "Import ROM Failed", "The selected folder already contains a Big Star project.");
-        return false;
-    }
-    if (std::filesystem::exists(extracted_dir) && !std::filesystem::is_empty(extracted_dir, ec)) {
-        QMessageBox::warning(this, "Import ROM Failed", "The selected folder already contains a non-empty extracted-rom directory.");
         return false;
     }
 
@@ -698,16 +696,17 @@ bool MainWindow::importRom() {
     }
 
     log("Importing ROM: " + rom_text);
-    nsmb::nds::NitroRomService service;
-    nsmb::core::Result<nsmb::nds::ExtractedRom> extracted = nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "import did not start");
-    {
+    // The ROM is read where it lies, so importing one is copying it in and
+    // reading its table -- and a manifest path has to stay inside the project,
+    // so a ROM from elsewhere is copied rather than pointed at.
+    if (std::filesystem::weakly_canonical(rom_path, ec) != std::filesystem::weakly_canonical(imported_rom, ec)) {
         WaitCursor cursor;
-        extracted = service.extract(rom_path, extracted_dir);
-    }
-    if (!extracted) {
-        QMessageBox::warning(this, "Import ROM Failed", QString::fromStdString(extracted.error().message));
-        log("ROM import failed: " + QString::fromStdString(extracted.error().message));
-        return false;
+        std::filesystem::copy_file(rom_path, imported_rom, std::filesystem::copy_options::overwrite_existing, ec);
+        if (ec) {
+            QMessageBox::warning(this, "Import ROM Failed",
+                                 "The ROM could not be copied into the project: " + QString::fromStdString(ec.message()));
+            return false;
+        }
     }
 
     auto name = project_dir.filename().string();
@@ -715,8 +714,8 @@ bool MainWindow::importRom() {
         name = header.value().game_title.empty() ? "Imported ROM" : header.value().game_title;
     }
     auto project = nsmb::project::create_empty_project(name, project_dir).value();
-    project.attach_extracted_rom("extracted-rom", header.value());
-    auto indexed = nsmb::project::index_project_files(project, extracted_dir);
+    project.attach_rom(nsmb::project::input_rom_file_name, header.value());
+    auto indexed = nsmb::project::index_rom_files(project);
     if (!indexed) {
         QMessageBox::warning(this, "Import ROM Failed", QString::fromStdString(indexed.error().message));
         log("ROM indexing failed: " + QString::fromStdString(indexed.error().message));
@@ -730,7 +729,7 @@ bool MainWindow::importRom() {
     project.mark_clean();
     setProject(project);
     log(QString("Imported %1 files from %2.").arg(static_cast<qulonglong>(project.game_files().size())).arg(rom_text));
-    QMessageBox::information(this, "ROM Imported", "The ROM was extracted and the project is ready.");
+    QMessageBox::information(this, "ROM Imported", "The ROM is in the project and ready to read.");
     return true;
 }
 
@@ -867,16 +866,8 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         if (!paths) {
             return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "level session path is invalid");
         }
-        auto course_relative = nsmb::project::make_project_relative(currentProject_.directory(), paths->course);
-        auto bgdat_relative = nsmb::project::make_project_relative(currentProject_.directory(), paths->bgdat);
-        if (!course_relative) {
-            return course_relative.error();
-        }
-        if (!bgdat_relative) {
-            return bgdat_relative.error();
-        }
-        auto course_target = moduleSaveTarget(course_relative.value());
-        auto bgdat_target = moduleSaveTarget(bgdat_relative.value());
+        auto course_target = moduleSaveTarget(paths->course);
+        auto bgdat_target = moduleSaveTarget(paths->bgdat);
         if (!course_target) return course_target.error();
         if (!bgdat_target) return bgdat_target.error();
 
@@ -1014,9 +1005,9 @@ void MainWindow::runPatcher() {
     }
 
     patcherPanel_->setProjectDirectory(currentProject_.directory());
-    // A successful build replaces this tree, but only after its ROM has been
-    // validated and extracted in staging.
-    patcherPanel_->setExtractedDirectory(extractedProjectPath(currentProject_));
+    // A successful build becomes the ROM the editor reads, but only after the
+    // one it produced in staging has been validated.
+    patcherPanel_->setApplyToProject(true);
     patcherPanel_->setExecutable(std::filesystem::path(executable.toStdString()));
     patcherPanel_->setSelectedVariant(ncpatcherVariant_);
 
@@ -1090,14 +1081,17 @@ void MainWindow::onPatcherFinished(bool ok, int exitCode, const QString& stage, 
         return;
     }
 
-    // The apply replaced the extracted tree wholesale, so every cached level
-    // session now points at bytes that are no longer on disk.
+    // The apply replaced the ROM wholesale, so every cached level session now
+    // holds bytes from a ROM that no longer exists.
     clearDocuments();
     levelSessions_.clear();
     currentLevel_ = nullptr;
 
     auto refreshed = currentProject_;
-    auto indexed = nsmb::project::index_project_files(refreshed, extractedProjectPath(refreshed));
+    // A build writes `big-star-build.nds`, which is not necessarily what the
+    // project was reading before its first one.
+    refreshed.attach_rom(nsmb::project::built_rom_file_name, refreshed.rom() ? refreshed.rom()->header : std::nullopt);
+    auto indexed = nsmb::project::index_rom_files(refreshed);
     if (!indexed) {
         QMessageBox::warning(this,
                              "NCPatcher Refresh Failed",
@@ -1137,7 +1131,7 @@ void MainWindow::exportLevelPackage() {
     auto course=currentLevel_->serialize_course(),bgdat=currentLevel_->serialize_bgdat();if(!course||!bgdat){QMessageBox::warning(this,"Export Level",QString::fromStdString(!course?course.error().message:bgdat.error().message));return;}
     nsmb::project::LevelPackage package; package.course=std::move(course.value()); package.bgdat=std::move(bgdat.value());
     QString suggested="level.nml";
-    for(const auto& [key,document]:documents_)if(document.view->level()==currentLevel_){suggested=document.name+".nml";for(auto [path,id]:{std::pair{document.course_path,&package.course_file_id},std::pair{document.bgdat_path,&package.bgdat_file_id}}){auto rom=romPathForProjectFile(path.toStdString());if(rom)if(const auto* entry=filesystemView_.find(rom.value());entry&&entry->id&&*entry->id>=0&&*entry->id<=65535)*id=static_cast<std::uint16_t>(*entry->id);}break;}
+    for(const auto& [key,document]:documents_)if(document.view->level()==currentLevel_){suggested=document.name+".nml";for(auto [path,id]:{std::pair{document.course_path,&package.course_file_id},std::pair{document.bgdat_path,&package.bgdat_file_id}})if(const auto* entry=filesystemView_.find(path.toStdString());entry&&entry->id&&*entry->id>=0&&*entry->id<=65535)*id=static_cast<std::uint16_t>(*entry->id);break;}
     auto encoded=nsmb::project::encode_nml(package);if(!encoded){QMessageBox::warning(this,"Export Level",QString::fromStdString(encoded.error().message));return;}
     const auto path=QFileDialog::getSaveFileName(this,"Export Level",suggested,"NSMB levels (*.nml)");if(path.isEmpty())return;auto result=nsmb::core::write_file_atomically(path.toStdString(),encoded.value());if(!result)QMessageBox::warning(this,"Export Level",QString::fromStdString(result.error().message));
 }
@@ -1159,7 +1153,7 @@ void MainWindow::findEntity(bool sprites) {
 }
 
 void MainWindow::showSpriteEvents() {
-    if(!currentLevel_){QMessageBox::information(this,"Sprite Events","Open an editable level first.");return;}std::unordered_map<std::uint16_t,QString> names;auto resources=nsmb::project::resolve_level_graphics(currentProject_,currentLevel_->tileset_references());if(resources)for(const auto& actor:resources.value().actors){const auto* definition=actorDefinitions_.by_object_id(actor.object_id);names.emplace(actor.type,QString::fromStdString(definition?definition->sprite.name:actor.name));}
+    if(!currentLevel_){QMessageBox::information(this,"Sprite Events","Open an editable level first.");return;}std::unordered_map<std::uint16_t,QString> names;auto resources=nsmb::project::resolve_level_graphics(effectiveFiles_,currentLevel_->tileset_references());if(resources)for(const auto& actor:resources.value().actors){const auto* definition=actorDefinitions_.by_object_id(actor.object_id);names.emplace(actor.type,QString::fromStdString(definition?definition->sprite.name:actor.name));}
     QDialog dialog(this);dialog.setWindowTitle("Sprite Event Viewer");dialog.resize(620,420);auto* layout=new QVBoxLayout(&dialog);auto* table=new QTreeWidget(&dialog);table->setHeaderLabels({"Event","Sprite","Type","Name"});for(std::size_t i=0;i<currentLevel_->course().sprites.size();++i){const auto& sprite=currentLevel_->course().sprites[i];for(const auto event:sprite.events)if(event){auto* item=new QTreeWidgetItem(table,{QString::number(event),QString::number(i),QString::number(sprite.id),names.contains(sprite.id)?names.at(sprite.id):QString("Actor %1").arg(sprite.id)});item->setData(0,Qt::UserRole,static_cast<int>(i));}}table->sortItems(0,Qt::AscendingOrder);layout->addWidget(table);auto* close=new QDialogButtonBox(QDialogButtonBox::Close,&dialog);layout->addWidget(close);connect(close,&QDialogButtonBox::rejected,&dialog,&QDialog::reject);connect(table,&QTreeWidget::itemDoubleClicked,&dialog,[&](QTreeWidgetItem* item){const auto index=item->data(0,Qt::UserRole).toInt();levelProperties_->select(LevelPropertiesWidget::Kind::Sprite,index);if(auto* view=activeLevelView())view->setSelection(2,index,-1);});dialog.exec();
 }
 
@@ -1245,22 +1239,19 @@ void MainWindow::openTilesetEditor() {
         QMessageBox::information(this, "Tilesets and Backgrounds", "Open an editable level first.");
         return;
     }
-    auto resources = nsmb::project::resolve_level_graphics(currentProject_, currentLevel_->tileset_references());
+    auto resources = nsmb::project::resolve_level_graphics(effectiveFiles_, currentLevel_->tileset_references());
     if (!resources) { QMessageBox::warning(this, "Tilesets and Backgrounds", QString::fromStdString(resources.error().message)); return; }
-    auto read = [](const std::filesystem::path& path) -> nsmb::core::Result<std::vector<std::uint8_t>> {
-        return path.empty() ? nsmb::core::Result<std::vector<std::uint8_t>>(std::vector<std::uint8_t>{}) : nsmb::core::read_file(path);
-    };
+    // The resources arrive with their bytes: resolving them is one read each,
+    // through whatever supplies them, rather than a path the caller re-opens.
     std::array<nsmb::formats::TilesetResourceData, 3> source_tilesets;
     std::array<nsmb::formats::EditableTileset, 3> tilesets;
     for (std::size_t slot = 0; slot < tilesets.size(); ++slot) {
         const auto& files = resources.value().tilesets[slot];
-        auto graphics=read(files.graphics),palette=read(files.palette),map16=read(files.map16),objects=read(files.objects),index=read(files.object_index),behaviors=read(files.behaviors);
-        if(!graphics||!palette||!map16||!objects||!index||!behaviors){const auto message=!graphics?graphics.error().message:!palette?palette.error().message:!map16?map16.error().message:!objects?objects.error().message:!index?index.error().message:behaviors.error().message;QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(message));return;}
-        source_tilesets[slot]={std::move(graphics.value()),std::move(palette.value()),std::move(map16.value()),std::move(objects.value()),std::move(index.value()),std::move(behaviors.value())};
+        source_tilesets[slot]={files.graphics.data,files.palette.data,files.map16.data,files.objects.data,files.object_index.data,files.behaviors.data};
         auto parsed=nsmb::formats::parse_tileset(source_tilesets[slot],files.tile_offset,files.palette_offset,files.tile_page_offset);
         if(!parsed){QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(parsed.error().message));return;}tilesets[slot]=std::move(parsed.value());
     }
-    auto load_map=[&](const nsmb::project::BackgroundResourceFiles& files,nsmb::formats::TilemapResourceData& source)->nsmb::core::Result<nsmb::formats::EditableTilemap>{auto graphics=read(files.graphics),palette=read(files.palette),screen=read(files.screen);if(!graphics)return graphics.error();if(!palette)return palette.error();if(!screen)return screen.error();source={std::move(graphics.value()),std::move(palette.value()),std::move(screen.value())};return nsmb::formats::parse_tilemap(source);};
+    auto load_map=[&](const nsmb::project::BackgroundResourceFiles& files,nsmb::formats::TilemapResourceData& source)->nsmb::core::Result<nsmb::formats::EditableTilemap>{source={files.graphics.data,files.palette.data,files.screen.data};return nsmb::formats::parse_tilemap(source);};
     nsmb::formats::TilemapResourceData source_background,source_foreground;
     auto background=load_map(resources.value().background,source_background),foreground=load_map(resources.value().foreground,source_foreground);
     if(!background||!foreground){QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(!background?background.error().message:foreground.error().message));return;}
@@ -1270,9 +1261,9 @@ void MainWindow::openTilesetEditor() {
     for(std::size_t slot=0;slot<encoded_tilesets.size();++slot){auto value=dialog.tilesetData(slot);if(!value){QMessageBox::warning(this,"Save tileset",QString::fromStdString(value.error().message));return;}encoded_tilesets[slot]=std::move(value.value());}
     auto encoded_background=dialog.backgroundData(),encoded_foreground=dialog.foregroundData();
     if(!encoded_background||!encoded_foreground){QMessageBox::warning(this,"Save backgrounds",QString::fromStdString(!encoded_background?encoded_background.error().message:encoded_foreground.error().message));return;}
-    struct Write { std::filesystem::path source; std::vector<std::uint8_t> bytes; std::filesystem::path target; };
+    struct Write { std::string rom_path; std::vector<std::uint8_t> bytes; std::filesystem::path target; };
     std::vector<Write> writes;
-    auto queue=[&](const std::filesystem::path& source,const std::vector<std::uint8_t>& before,std::vector<std::uint8_t> after)->nsmb::core::Result<void>{if(before==after)return{};if(source.empty())return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument,"edited resource has no ROM file target");std::error_code ec;auto relative=std::filesystem::relative(source,currentProject_.directory(),ec);if(ec)return nsmb::core::make_error(nsmb::core::ErrorCode::IoError,"could not resolve the edited resource path");auto target=moduleSaveTarget(relative);if(!target)return target.error();writes.push_back({source,std::move(after),std::move(target.value())});return{};};
+    auto queue=[&](const nsmb::project::ResourceFile& resource,const std::vector<std::uint8_t>& before,std::vector<std::uint8_t> after)->nsmb::core::Result<void>{if(before==after)return{};if(resource.empty())return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument,"edited resource has no ROM file target");auto target=moduleSaveTarget(resource.rom_path);if(!target)return target.error();writes.push_back({resource.rom_path,std::move(after),std::move(target.value())});return{};};
     auto queue_tileset=[&](std::size_t slot)->nsmb::core::Result<void>{const auto& paths=resources.value().tilesets[slot];const auto& before=source_tilesets[slot];auto& after=encoded_tilesets[slot];if(auto r=queue(paths.graphics,before.graphics,std::move(after.graphics));!r)return r;if(auto r=queue(paths.palette,before.palette,std::move(after.palette));!r)return r;if(auto r=queue(paths.map16,before.map16,std::move(after.map16));!r)return r;if(auto r=queue(paths.objects,before.objects,std::move(after.objects));!r)return r;if(auto r=queue(paths.object_index,before.object_index,std::move(after.object_index));!r)return r;return queue(paths.behaviors,before.behaviors,std::move(after.behaviors));};
     for(std::size_t slot=0;slot<3;++slot)if(auto result=queue_tileset(slot);!result){QMessageBox::warning(this,"Save tileset",QString::fromStdString(result.error().message));return;}
     auto queue_map=[&](const nsmb::project::BackgroundResourceFiles& paths,const nsmb::formats::TilemapResourceData& before,nsmb::formats::TilemapResourceData after)->nsmb::core::Result<void>{if(auto r=queue(paths.graphics,before.graphics,std::move(after.graphics));!r)return r;if(auto r=queue(paths.palette,before.palette,std::move(after.palette));!r)return r;return queue(paths.screen,before.screen,std::move(after.screen));};
@@ -1301,8 +1292,8 @@ void MainWindow::showLevelTreeMenu(const QPoint& position) {
     menu.addSeparator();
 
     for (const auto& [label, name, role] :
-         std::array{std::tuple{"Show Course in Filesystem", "LevelTreeShowCourse", ProjectTreeModel::CourseRomPathRole},
-                    std::tuple{"Show BGDat in Filesystem", "LevelTreeShowBgdat", ProjectTreeModel::BgdatRomPathRole}}) {
+         std::array{std::tuple{"Show Course in Filesystem", "LevelTreeShowCourse", ProjectTreeModel::CoursePathRole},
+                    std::tuple{"Show BGDat in Filesystem", "LevelTreeShowBgdat", ProjectTreeModel::BgdatPathRole}}) {
         const auto path = projectModel_->data(index, role).toString();
         auto* action = menu.addAction(label, this, [this, path] { showInFilesystem(path); });
         action->setObjectName(name);
@@ -1433,12 +1424,19 @@ void MainWindow::editRomBanner() {
         }
         if (target.is_relative()) target = currentProject_.directory() / target;
     } else {
-        target = extractedProjectPath(currentProject_) / "banner.bin";
+        QMessageBox::information(this, "ROM Banner",
+            "NCPatcher has not reported this project's configuration yet, so there is nowhere "
+            "for an edited banner to go.");
+        return;
     }
 
-    const auto extracted = extractedProjectPath(currentProject_) / "banner.bin";
-    const auto source = std::filesystem::is_regular_file(target) ? target : extracted;
-    auto bytes = nsmb::core::read_file(source);
+    // The configured banner once it exists, and otherwise the one in the ROM,
+    // which is what the game is showing today.
+    auto bytes = std::filesystem::is_regular_file(target)
+                     ? nsmb::core::read_file(target)
+                     : (effectiveFiles_.rom() ? effectiveFiles_.rom()->read_banner()
+                                              : nsmb::core::Result<std::vector<std::uint8_t>>(nsmb::core::make_error(
+                                                    nsmb::core::ErrorCode::NotFound, "no built ROM is open")));
     if (!bytes) {
         QMessageBox::warning(this, "ROM Banner", QString::fromStdString(bytes.error().message));
         return;
@@ -1472,8 +1470,7 @@ void MainWindow::editRomUserMetadata() {
         QMessageBox::information(this, "ROM User Metadata", "NitroFS file ID 131 is not present in this ROM.");
         return;
     }
-    const auto source = !found->source.empty() ? found->source : found->extracted;
-    auto bytes = nsmb::core::read_file(source);
+    auto bytes = effectiveFiles_.read(found->path);
     if (!bytes) {
         QMessageBox::warning(this, "ROM User Metadata", QString::fromStdString(bytes.error().message));
         return;
@@ -1486,7 +1483,7 @@ void MainWindow::editRomUserMetadata() {
         return;
     }
 
-    std::filesystem::path target = found->extracted;
+    std::filesystem::path target;
     if (!moduleGraph_.modules.empty()) {
         std::string key = found->module.empty() ? activeModule_.toStdString() : found->module;
         const auto* module = moduleGraph_.find(key);
@@ -1517,39 +1514,71 @@ void MainWindow::editRomUserMetadata() {
     log("Saved ROM user metadata: " + QString::fromStdString(target.string()));
 }
 
-void MainWindow::buildRom() {
-    if (currentProject_.directory().empty() || !currentProject_.rom() || currentProject_.rom()->extracted_path.empty()) {
-        log("Build ROM requires an imported ROM project.");
-        QMessageBox::information(this, "Build ROM", "Open or import a ROM project first.");
+// Delegated on purpose. NCPatcher's `rom extract` writes a directory NCPatcher
+// itself can read back; a second extractor in the editor produced a tree that
+// looked right and that the patcher could not open.
+void MainWindow::extractRom() {
+    if (currentProject_.directory().empty() || !currentProject_.rom()) {
+        QMessageBox::information(this, "Extract ROM", "Open or import a ROM project first.");
         return;
     }
-    if (!saveProject()) {
+    const auto rom = projectRomPath(currentProject_);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(rom, ec)) {
+        QMessageBox::information(this, "Extract ROM",
+            "This project has no built ROM yet. Run NCPatcher first.");
+        return;
+    }
+    auto executable = patcherPanel_ && !patcherPanel_->executable().empty()
+        ? QString::fromStdString(patcherPanel_->executable().string())
+        : QStandardPaths::findExecutable("ncpatcher");
+    if (executable.isEmpty()) {
+        executable = QFileDialog::getOpenFileName(this, "Select NCPatcher Executable");
+        if (executable.isEmpty()) return;
+    }
+    const auto directory = QFileDialog::getExistingDirectory(this, "Extract ROM Into");
+    if (directory.isEmpty()) {
+        log("Extract ROM cancelled before choosing a folder.");
         return;
     }
 
-    const auto default_name = QString::fromStdString(currentProject_.name().empty() ? "rebuilt.nds" : currentProject_.name() + ".nds");
-    const auto default_path = QString::fromStdString((currentProject_.directory() / default_name.toStdString()).string());
-    const auto output = QFileDialog::getSaveFileName(this, "Build Nintendo DS ROM", default_path, "Nintendo DS ROMs (*.nds)");
-    if (output.isEmpty()) {
-        log("Build ROM cancelled before choosing an output file.");
-        return;
-    }
-
-    const auto extracted_path = extractedProjectPath(currentProject_);
-    log("Building ROM: " + output);
-    nsmb::nds::NitroRomService service;
-    nsmb::core::Result<void> result;
+    nsmb::patching::NCPatcherClient client(executable.toStdString());
+    nsmb::core::Result<nsmb::patching::RunSummary> extracted =
+        nsmb::core::make_error(nsmb::core::ErrorCode::IoError, "extraction did not start");
     {
         WaitCursor cursor;
-        result = service.build(extracted_path, std::filesystem::path(output.toStdString()));
+        extracted = client.extract_rom(currentProject_.directory(), std::filesystem::path(directory.toStdString()), rom);
     }
-    if (!result) {
-        QMessageBox::warning(this, "Build ROM Failed", QString::fromStdString(result.error().message));
-        log("ROM build failed: " + QString::fromStdString(result.error().message));
+    if (!extracted || !extracted.value().succeeded()) {
+        const auto message = !extracted ? extracted.error().message
+                                        : (extracted.value().diagnostics.empty() ? "NCPatcher refused the extraction."
+                                                                                 : extracted.value().diagnostics.front().message);
+        QMessageBox::warning(this, "Extract ROM Failed", QString::fromStdString(message));
+        log("ROM extraction failed: " + QString::fromStdString(message));
         return;
     }
-    log("Built ROM: " + output);
-    QMessageBox::information(this, "ROM Built", "The rebuilt ROM was written successfully.");
+    log("Extracted ROM into " + directory);
+    QMessageBox::information(this, "ROM Extracted", "NCPatcher wrote the ROM into " + directory + ".");
+}
+
+// One ROM, opened once and kept open. Everything that reads a ROM address goes
+// through it, so re-pointing it is all a rebuild has to do here.
+void MainWindow::reloadRom() {
+    effectiveFiles_.set_rom({});
+    const auto rom = projectRomPath(currentProject_);
+    if (rom.empty()) return;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(rom, ec)) {
+        log("No built ROM at " + QString::fromStdString(rom.string()) + " yet.");
+        return;
+    }
+    auto opened = nsmb::project::RomReader::open(rom);
+    if (!opened) { log("ROM: " + QString::fromStdString(opened.error().message)); return; }
+    effectiveFiles_.set_rom(std::move(opened.value()));
+    if (romWatcher_) {
+        if (!romWatcher_->files().isEmpty()) romWatcher_->removePaths(romWatcher_->files());
+        romWatcher_->addPath(QString::fromStdString(rom.string()));
+    }
 }
 
 void MainWindow::setProject(const nsmb::project::Project& project) {
@@ -1570,6 +1599,7 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     fileManifest_.reset();
     filePlan_.reset();
     filesystemView_ = {};
+    effectiveFiles_.clear();
     activeModule_.clear();
     activeVariant_.clear();
     moduleData_={};
@@ -1581,8 +1611,9 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
     levelData_->setLevel(nullptr, &moduleData_);
     levelProperties_->setObjectBankOverlays(std::nullopt);
-    if(currentProject_.rom()){
-        const auto arm9=nsmb::core::read_file(extractedProjectPath(currentProject_)/"arm9.bin");
+    reloadRom();
+    if(auto* rom=effectiveFiles_.rom()){
+        const auto arm9=rom->read_arm9();
         if(arm9){const auto decoded=nsmb::formats::decompress_blz_overlay(arm9.value());if(decoded){auto table=nsmb::project::find_object_bank_overlays(decoded.value());if(table)levelProperties_->setObjectBankOverlays(table.value());}}
     }
     projectModel_->setProject(currentProject_);
@@ -1655,7 +1686,7 @@ void MainWindow::reloadFilesystemView() {
     if (currentProject_.directory().empty() || !currentProject_.rom()) {
         moduleGraph_ = {}; fileManifest_.reset(); filePlan_.reset(); filesystemView_ = {};
         actorDefinitions_ = {}; spriteDefinitions_ = {};
-        filesystemPanel_->setData({}, {}, {}, {}, {}, {});
+        filesystemPanel_->setData({}, nullptr, {}, {}, {}, {}, {});
         return;
     }
 
@@ -1747,8 +1778,10 @@ void MainWindow::reloadFilesystemView() {
         else log("Filesystem plan: " + QString::fromStdString(planned.error().message));
     }
 
+    effectiveFiles_.set_plan(currentProject_.directory(), filePlan_);
+
     nsmb::project::FilesystemViewRequest request;
-    request.extracted_rom = extractedProjectPath(currentProject_);
+    request.rom = effectiveFiles_.rom();
     request.project_dir = currentProject_.directory();
     request.modules = moduleGraph_;
     request.plan = filePlan_;
@@ -1758,7 +1791,7 @@ void MainWindow::reloadFilesystemView() {
     if (!built) { log("Filesystem view: " + QString::fromStdString(built.error().message)); filesystemView_ = {}; }
     else filesystemView_ = std::move(built.value());
     reloadActorDefinitions();
-    filesystemPanel_->setData(currentProject_.directory(), moduleGraph_, filesystemView_, variants, activeModule_, activeVariant_, activeModuleMappings());
+    filesystemPanel_->setData(currentProject_.directory(), &effectiveFiles_, moduleGraph_, filesystemView_, variants, activeModule_, activeVariant_, activeModuleMappings());
     if (moduleWatcher_) {
         QStringList watch; for (const auto& path : filesystemView_.watched_directories) if (std::filesystem::is_directory(path, ec)) watch.push_back(QString::fromStdString(path.string()));
         if (!watch.isEmpty()) moduleWatcher_->addPaths(watch);
@@ -1772,7 +1805,7 @@ void MainWindow::reloadActorDefinitions() {
         if (module.enabled && !module.dir.empty()) layers.push_back({"module " + module.key, module.dir / "actors"});
     layers.push_back({"local", std::filesystem::path(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation).toStdString()) / "actors"});
     layers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "actors"});
-    auto definitions = nsmb::project::load_lua_actor_layers(layers, [this](auto, std::string_view name) -> nsmb::core::Result<std::filesystem::path> {
+    auto definitions = nsmb::project::load_lua_actor_layers(layers, [this](auto, std::string_view name) -> nsmb::core::Result<nsmb::project::ActorResource> {
         const std::filesystem::path requested(name);
         if (requested.empty() || requested.filename() != requested)
             return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "actor resources must be read by file name");
@@ -1781,7 +1814,11 @@ void MainWindow::reloadActorDefinitions() {
         });
         if (found == filesystemView_.entries.end())
             return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "actor resource file is missing: " + std::string(name));
-        return !found->source.empty() ? found->source : found->extracted;
+        // Read through the same object the canvas reads through, which is what
+        // finally makes an actor's artwork follow a pending module edit.
+        auto data = effectiveFiles_.read(found->path);
+        if (!data) return data.error();
+        return nsmb::project::ActorResource{found->path, found->source, std::move(data.value())};
     }, [](std::span<const std::uint8_t> bytes) -> nsmb::core::Result<nsmb::formats::RgbaImage> {
         // nsmb-project carries no image codec, so the Qt layer supplies one for
         // the stills that ship beside actor scripts.
@@ -1811,25 +1848,12 @@ void MainWindow::reloadActorDefinitions() {
     for (auto& [key, document] : documents_) { (void)key; document.view->setActorDefinitions(actorDefinitions_); }
 }
 
-nsmb::core::Result<std::string> MainWindow::romPathForProjectFile(const std::filesystem::path& projectRelative) const {
-    if (!currentProject_.rom()) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "no extracted ROM is open");
-    const auto root = (currentProject_.rom()->extracted_path / "root").lexically_normal();
-    const auto relative = projectRelative.lexically_normal();
-    auto file = relative.begin(), prefix = root.begin();
-    for (; prefix != root.end(); ++prefix, ++file) if (file == relative.end() || *file != *prefix)
-        return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "edited file is outside the extracted NitroFS root");
-    std::filesystem::path romPath; for (; file != relative.end(); ++file) romPath /= *file;
-    if (romPath.empty()) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "edited file has no ROM path");
-    return romPath.generic_string();
-}
-
-nsmb::core::Result<std::filesystem::path> MainWindow::moduleSaveTarget(const std::filesystem::path& projectRelative) const {
-    auto romPath = romPathForProjectFile(projectRelative); if (!romPath) return romPath.error();
+nsmb::core::Result<std::filesystem::path> MainWindow::moduleSaveTarget(const std::string& romPath) const {
     std::string moduleKey = activeModule_.toStdString();
-    if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->module.empty()) moduleKey = entry->module;
+    if (const auto* entry = filesystemView_.find(romPath); entry && !entry->module.empty()) moduleKey = entry->module;
     const auto* module = moduleGraph_.find(moduleKey);
     if (!module) return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "choose an active module in the Filesystem dock before saving");
-    return nsmb::project::module_file_target(*module, activeVariant_.toStdString(), romPath.value(), activeModuleMappings());
+    return nsmb::project::module_file_target(*module, activeVariant_.toStdString(), romPath, activeModuleMappings());
 }
 
 void MainWindow::updateProjectSummary() {
@@ -2274,7 +2298,7 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
     view->setActorDefinitions(actorDefinitions_);
     const auto references = view->level()->tileset_references();
     if (view->graphicsMatch(references)) return;
-    auto resources = nsmb::project::resolve_level_graphics(currentProject_, references);
+    auto resources = nsmb::project::resolve_level_graphics(effectiveFiles_, references);
     if (!resources) {
         log("Graphics fallback: " + QString::fromStdString(resources.error().message));
         return;
@@ -2296,16 +2320,6 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         for (const auto& path : definition.render_resources)
             if (!path.empty()) resources.value().watched_files.push_back(path);
     }
-    // resolve_level_graphics walks the ROM's own file table, so it can only name
-    // files in the extracted tree. Point each one at the layer the active
-    // variant actually supplies it from, the same redirect levels already got.
-    nsmb::project::for_each_resource_path(resources.value(), [this](std::filesystem::path& path) {
-        if (path.empty()) return;
-        std::error_code ec;
-        const auto relative = std::filesystem::relative(path, currentProject_.directory(), ec);
-        if (ec || relative.empty() || *relative.begin() == "..") return;
-        path = effectiveFile(relative);
-    });
     std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids;
     for (const auto& actor : resources.value().actors) actor_object_ids.emplace(actor.type, actor.object_id);
     if (view->level() == currentLevel_) levelProperties_->setSpriteDefinitions(spriteDefinitions_, std::move(actor_object_ids));
@@ -2469,18 +2483,6 @@ std::string MainWindow::documentKey(const QString& course_path, const QString& b
     return activeVariant_.toStdString() + "\n" + course_path.toStdString() + "\n" + bgdat_path.toStdString();
 }
 
-std::filesystem::path MainWindow::effectiveFile(const std::filesystem::path& projectRelative) const {
-    auto fallback = currentProject_.directory() / projectRelative;
-    auto romPath = romPathForProjectFile(projectRelative);
-    if (romPath) {
-        if (const auto* entry = filesystemView_.find(romPath.value()); entry && !entry->source.empty()) {
-            std::error_code ec;
-            if (std::filesystem::is_regular_file(entry->source, ec)) return entry->source;
-        }
-    }
-    return fallback;
-}
-
 nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const QString& course_path, const QString& bgdat_path) {
     if (course_path.isEmpty() || bgdat_path.isEmpty()) {
         return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "course or BGDat file is missing");
@@ -2490,13 +2492,11 @@ nsmb::core::Result<nsmb::project::EditableLevel*> MainWindow::levelSession(const
         return found->second.get();
     }
 
-    const auto course_file = effectiveFile(std::filesystem::path(course_path.toStdString()));
-    const auto bgdat_file = effectiveFile(std::filesystem::path(bgdat_path.toStdString()));
-    auto course_data = readBinaryFile(course_file);
+    auto course_data = effectiveFiles_.read(course_path.toStdString());
     if (!course_data) {
         return course_data.error();
     }
-    auto bgdat_data = readBinaryFile(bgdat_file);
+    auto bgdat_data = effectiveFiles_.read(bgdat_path.toStdString());
     if (!bgdat_data) {
         return bgdat_data.error();
     }

@@ -32,12 +32,12 @@ public:
 
     [[nodiscard]] bool running() const { return running_; }
 
-    // With an extracted directory the run is a transactional apply: NCPatcher
-    // builds to a staging ROM, the result is validated and extracted there, and
-    // only then does the live tree get backed up and replaced. Without one it
-    // is a plain build.
+    // With `apply` the run is a transactional apply: NCPatcher builds to a
+    // staging ROM, the result is validated there, and only a ROM that parses
+    // becomes the one the editor reads. Without it the build is a plain one and
+    // the project is left alone.
     void start(const std::filesystem::path& projectDir,
-               const std::filesystem::path& extractedDir,
+               bool apply,
                const std::filesystem::path& executable,
                const QString& variant,
                bool verbose);
@@ -59,9 +59,8 @@ signals:
     void logged(const QString& line);
     void artifactProduced(const QString& description);
 
-    // The live extracted tree was replaced. Carries where the previous one was
-    // moved and which ROM is now the built one.
-    void treeApplied(const QString& backupDir, const QString& builtRom);
+    // The build became the project's ROM, and this is where it is.
+    void romApplied(const QString& builtRom);
 
     // `ok` is the whole answer: NCPatcher can exit zero with errors recorded,
     // and a run that never started has no exit code worth reporting.
@@ -88,9 +87,9 @@ public:
     void setProjectDirectory(const std::filesystem::path& projectDir);
     [[nodiscard]] const std::filesystem::path& projectDirectory() const { return projectDir_; }
 
-    // The live extracted tree a successful build replaces. Empty means run a
-    // plain build and leave the project alone.
-    void setExtractedDirectory(const std::filesystem::path& extractedDir);
+    // Whether a successful build becomes the project's ROM. False runs a plain
+    // build and leaves the project alone.
+    void setApplyToProject(bool apply);
 
     // The executable to run. Empty means "look for ncpatcher on PATH".
     void setExecutable(const std::filesystem::path& executable);
@@ -113,7 +112,7 @@ public:
 
 signals:
     void buildFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
-    void treeApplied(const QString& backupDir, const QString& builtRom);
+    void romApplied(const QString& builtRom);
     void diagnosticActivated(const QString& file, int line, int column);
     void logMessage(const QString& message);
 
@@ -128,7 +127,7 @@ private slots:
 
 private:
     std::filesystem::path projectDir_;
-    std::filesystem::path extractedDir_;
+    bool applyToProject_{};
     std::filesystem::path executable_;
 
     QString variant_;

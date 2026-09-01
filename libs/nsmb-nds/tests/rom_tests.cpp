@@ -126,27 +126,16 @@ int main() {
     assert(fnt.value()[0].id == 0);
     assert(fnt.value()[0].path == "course.bin");
 
-    nsmb::nds::NitroRomService service;
-    const auto occupied_dir = dir / "occupied";
-    write_bytes(occupied_dir / "keep.txt", {'K'});
-    assert(!service.extract(rom_path, occupied_dir));
-    assert(read_bytes(occupied_dir / "keep.txt") == std::vector<std::uint8_t>{'K'});
+    auto fat = nsmb::nds::parse_fat(std::span<const std::uint8_t>(rom.data() + header.value().fat.rom_offset, header.value().fat.size));
+    assert(fat);
+    assert(fat.value().size() == 1 && fat.value()[0].used() && fat.value()[0].size() == 5);
 
-    const auto extracted_dir = dir / "extracted-rom";
-    auto extracted = service.extract(rom_path, extracted_dir);
-    assert(extracted);
-    assert(read_bytes(extracted_dir / "root" / "course.bin") == std::vector<std::uint8_t>({'L', 'E', 'V', 'E', 'L'}));
-    assert(!service.build(extracted_dir, extracted_dir / "root" / "invalid.nds"));
-
-    write_bytes(extracted_dir / "root" / "course.bin", std::vector<std::uint8_t>{'P', 'A', 'T', 'C', 'H'});
-    const auto rebuilt_path = dir / "rebuilt.nds";
-    auto built = service.build(extracted_dir, rebuilt_path);
-    assert(built);
-
-    const auto rebuilt_extract_dir = dir / "rebuilt-extract";
-    auto rebuilt_extracted = service.extract(rebuilt_path, rebuilt_extract_dir);
-    assert(rebuilt_extracted);
-    assert(read_bytes(rebuilt_extract_dir / "root" / "course.bin") == std::vector<std::uint8_t>({'P', 'A', 'T', 'C', 'H'}));
+    // The banner's own version says how long it is; the next region after it
+    // says how much room there is. A reader with only the header and the FAT
+    // needs both, and this ROM declares no banner at all.
+    assert(nsmb::nds::banner_size_from_version(std::vector<std::uint8_t>{1, 0}) == 0x0A00);
+    assert(nsmb::nds::banner_size_from_version(std::vector<std::uint8_t>{9, 9}) == 0);
+    assert(nsmb::nds::banner_region_limit(header.value(), fat.value(), rom.size()) == 0x4000);
 
     fs::remove_all(dir);
     return 0;

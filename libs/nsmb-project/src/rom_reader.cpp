@@ -93,6 +93,11 @@ std::optional<std::uint16_t> RomReader::file_id(std::string_view rom_path) const
     return found == files_.end() ? std::optional<std::uint16_t>{} : found->id;
 }
 
+std::optional<std::uint32_t> RomReader::file_size(std::uint16_t id) const {
+    if (id >= fat_.size()) return {};
+    return fat_[id].used() ? fat_[id].size() : 0U;
+}
+
 core::Result<std::vector<std::uint8_t>> RomReader::read(std::uint16_t id) {
     if (id >= fat_.size()) return make_error(ErrorCode::NotFound, "no FAT entry for file id " + std::to_string(id));
     const auto& entry = fat_[id];
@@ -104,6 +109,16 @@ core::Result<std::vector<std::uint8_t>> RomReader::read(std::string_view rom_pat
     const auto id = file_id(rom_path);
     if (!id) return make_error(ErrorCode::NotFound, "the ROM does not hold " + std::string(rom_path));
     return read(*id);
+}
+
+core::Result<std::vector<std::uint8_t>> RomReader::read_prefix(std::string_view rom_path, std::size_t maximum) {
+    const auto id = file_id(rom_path);
+    if (!id) return make_error(ErrorCode::NotFound, "the ROM does not hold " + std::string(rom_path));
+    if (*id >= fat_.size()) return make_error(ErrorCode::NotFound, "no FAT entry for " + std::string(rom_path));
+    const auto& entry = fat_[*id];
+    if (!entry.used()) return std::vector<std::uint8_t>{};
+    return read_region(entry.start_address, static_cast<std::uint32_t>(std::min<std::uintmax_t>(entry.size(), maximum)),
+                       "NitroFS file");
 }
 
 core::Result<std::vector<std::uint8_t>> RomReader::read_overlay(std::uint32_t overlay_id) {

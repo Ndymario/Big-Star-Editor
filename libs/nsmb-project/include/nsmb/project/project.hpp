@@ -17,7 +17,11 @@ struct GameFile {
 
 struct Rom {
     std::optional<nds::RomHeader> header;
-    std::filesystem::path extracted_path;
+
+    // The built `.nds` the editor reads, project-relative. Not an input to
+    // NCPatcher and not a copy of one: it is what the last build produced.
+    std::filesystem::path rom_path;
+
     std::vector<GameFile> files;
 };
 
@@ -35,7 +39,7 @@ public:
     [[nodiscard]] bool dirty() const noexcept;
     void mark_clean() noexcept;
 
-    void attach_extracted_rom(std::filesystem::path relative_path, std::optional<nds::RomHeader> header = std::nullopt);
+    void attach_rom(std::filesystem::path relative_path, std::optional<nds::RomHeader> header = std::nullopt);
     [[nodiscard]] const std::optional<Rom>& rom() const noexcept;
 
     void add_game_file(GameFile file);

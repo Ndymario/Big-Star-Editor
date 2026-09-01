@@ -24,9 +24,9 @@ bool Project::dirty() const noexcept { return dirty_; }
 
 void Project::mark_clean() noexcept { dirty_ = false; }
 
-void Project::attach_extracted_rom(std::filesystem::path relative_path, std::optional<nds::RomHeader> header) {
+void Project::attach_rom(std::filesystem::path relative_path, std::optional<nds::RomHeader> header) {
     rom_ = Rom{};
-    rom_->extracted_path = std::move(relative_path);
+    rom_->rom_path = std::move(relative_path);
     rom_->header = std::move(header);
     dirty_ = true;
 }

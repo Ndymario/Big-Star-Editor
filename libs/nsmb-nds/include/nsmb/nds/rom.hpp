@@ -90,38 +90,6 @@ struct OverlayTableEntry {
     std::uint32_t reserved{};
 };
 
-struct FileTreeNode {
-    std::string name;
-    std::filesystem::path path;
-    bool directory{};
-    std::vector<FileTreeNode> children;
-};
-
-struct ExtractedRom {
-    std::filesystem::path root;
-    FileTreeNode files;
-};
-
-class RomExtractionService {
-public:
-    virtual ~RomExtractionService() = default;
-    virtual core::Result<ExtractedRom> extract(const std::filesystem::path& rom, const std::filesystem::path& output_dir) = 0;
-};
-
-class RomBuildService {
-public:
-    virtual ~RomBuildService() = default;
-    virtual core::Result<void> build(const std::filesystem::path& extracted_dir, const std::filesystem::path& output_rom) = 0;
-};
-
-class NitroRomService final : public RomExtractionService, public RomBuildService {
-public:
-    core::Result<ExtractedRom> extract(const std::filesystem::path& rom, const std::filesystem::path& output_dir) override;
-    core::Result<void> build(const std::filesystem::path& extracted_dir, const std::filesystem::path& output_rom) override;
-};
-
-[[nodiscard]] std::string overlay_file_name(std::uint32_t overlay_id);
-
 // How long the banner at `header.banner_rom_offset` is, from its own version
 // word, and where the next region after it starts. A banner declares no length,
 // so a reader that only has the header and the FAT needs both: the version says
@@ -134,6 +102,5 @@ core::Result<RomHeader> parse_rom_header(std::span<const std::uint8_t> data);
 core::Result<std::vector<FatEntry>> parse_fat(std::span<const std::uint8_t> data);
 core::Result<std::vector<NitroFileEntry>> parse_fnt(std::span<const std::uint8_t> data);
 core::Result<std::vector<OverlayTableEntry>> parse_overlay_table(std::span<const std::uint8_t> data);
-core::Result<FileTreeNode> scan_file_tree(const std::filesystem::path& root);
 
 } // namespace nsmb::nds

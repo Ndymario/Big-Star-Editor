@@ -4,6 +4,8 @@
 #include "nsmb/project/manifest.hpp"
 #include "nsmb/project/patch_apply.hpp"
 
+#include "synthetic_rom.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cassert>
@@ -29,16 +31,6 @@ void append_block(std::vector<std::uint8_t>& course, std::size_t index, const st
     course.insert(course.end(), block.begin(), block.end());
 }
 
-std::vector<std::uint8_t> make_fnt() {
-    std::vector<std::uint8_t> fnt(8, 0);
-    put_u32(fnt, 0, 8);
-    fnt[6] = 1;
-    const std::string name = "graphic.bin";
-    fnt.push_back(static_cast<std::uint8_t>(name.size()));
-    fnt.insert(fnt.end(), name.begin(), name.end());
-    fnt.push_back(0);
-    return fnt;
-}
 } // namespace
 
 
@@ -130,27 +122,28 @@ std::vector<std::uint8_t> make_rom() {
     return rom;
 }
 
-// Lays out a project the way the apply expects to find one: an ncpatcher.yaml,
-// and a live extracted tree with a marker file that must survive a failure and
-// must be gone after a success.
+// Lays out a project the way the apply expects to find one: an ncpatcher.yaml
+// and the ROM a previous build left, whose contents must survive a failure and
+// must be replaced after a success.
+constexpr std::string_view previous_rom = "the ROM that was here before";
+
 fs::path make_project(const std::string& name) {
     const auto root = fs::temp_directory_path() / ("big-star-apply-" + name);
     fs::remove_all(root);
     fs::create_directories(root);
     { std::ofstream(root / "ncpatcher.yaml") << "version: 2\n"; }
-    fs::create_directories(root / "extracted-rom" / "root");
-    { std::ofstream(root / "extracted-rom" / "marker.txt") << "the tree that was here before\n"; }
+    { std::ofstream(root / "big-star-build.nds", std::ios::binary) << previous_rom; }
     return root;
 }
 
-bool live_tree_is_untouched(const fs::path& project) {
-    return fs::exists(project / "extracted-rom" / "marker.txt");
+bool previous_rom_is_untouched(const fs::path& project) {
+    std::ifstream in(project / "big-star-build.nds", std::ios::binary);
+    return std::string(std::istreambuf_iterator<char>(in), {}) == previous_rom;
 }
 
 nsmb::project::PatchApplyRequest request_for(const fs::path& project, const std::string& mode) {
     nsmb::project::PatchApplyRequest request;
     request.project_dir = project;
-    request.extracted_dir = project / "extracted-rom";
     // The stand-in reads its behaviour out of the argument vector NCPatcher
     // would have received, so the real command construction is exercised too.
     request.ncpatcher_executable = self_path;
@@ -161,18 +154,16 @@ nsmb::project::PatchApplyRequest request_for(const fs::path& project, const std:
 void test_build_failure_changes_nothing() {
     using nsmb::project::PatchApplyOutcome;
     const auto project = make_project("build-failed");
-    nsmb::nds::NitroRomService service;
 
-    auto result = nsmb::project::apply_patch_transactionally(
-        request_for(project, "fake-fail"), service);
+    auto result = nsmb::project::apply_patch_transactionally(request_for(project, "fake-fail"));
     assert(result);
     assert(result.value().outcome == PatchApplyOutcome::BuildFailed);
     assert(!result.value().summary.succeeded());
     assert(result.value().summary.exit_code == 6);
-    assert(result.value().backup_dir.empty());
+    assert(result.value().built_rom.empty());
 
     // Nothing moved, and no staging directory left to confuse the next run.
-    assert(live_tree_is_untouched(project));
+    assert(previous_rom_is_untouched(project));
     assert(!fs::exists(nsmb::project::patch_staging_dir(project)));
     fs::remove_all(project);
 }
@@ -180,17 +171,14 @@ void test_build_failure_changes_nothing() {
 void test_success_without_a_rom_is_rejected() {
     using nsmb::project::PatchApplyOutcome;
     const auto project = make_project("no-rom");
-    nsmb::nds::NitroRomService service;
 
     // NCPatcher exits zero but writes nothing. Trusting the exit code alone
-    // would replace the project's tree with an extraction of a file that is
-    // not there.
-    auto result = nsmb::project::apply_patch_transactionally(
-        request_for(project, "fake-ok-no-rom"), service);
+    // would leave the editor reading a ROM that is not there.
+    auto result = nsmb::project::apply_patch_transactionally(request_for(project, "fake-ok-no-rom"));
     assert(result);
     assert(result.value().outcome == PatchApplyOutcome::OutputRejected);
     assert(!result.value().rejection.empty());
-    assert(live_tree_is_untouched(project));
+    assert(previous_rom_is_untouched(project));
     assert(!fs::exists(nsmb::project::patch_staging_dir(project)));
     fs::remove_all(project);
 }
@@ -198,62 +186,57 @@ void test_success_without_a_rom_is_rejected() {
 void test_unparseable_output_is_rejected() {
     using nsmb::project::PatchApplyOutcome;
     const auto project = make_project("bad-rom");
-    nsmb::nds::NitroRomService service;
 
     // A successful build that produced something that is not an NDS ROM. The
-    // live tree must survive that too.
-    auto result = nsmb::project::apply_patch_transactionally(
-        request_for(project, "fake-ok-bad-rom"), service);
+    // ROM the editor is reading must survive that too.
+    auto result = nsmb::project::apply_patch_transactionally(request_for(project, "fake-ok-bad-rom"));
     assert(result);
     assert(result.value().outcome == PatchApplyOutcome::OutputRejected);
     assert(result.value().rejection.find("NDS ROM") != std::string::npos ||
            result.value().rejection.find("could not be") != std::string::npos);
-    assert(live_tree_is_untouched(project));
+    assert(previous_rom_is_untouched(project));
     assert(!fs::exists(nsmb::project::patch_staging_dir(project)));
     fs::remove_all(project);
 }
 
-void test_successful_build_swaps_the_tree() {
+void test_successful_build_replaces_the_rom() {
     using nsmb::project::PatchApplyOutcome;
     const auto project = make_project("applied");
-    nsmb::nds::NitroRomService service;
 
-    auto result = nsmb::project::apply_patch_transactionally(
-        request_for(project, "fake-ok"), service);
+    auto result = nsmb::project::apply_patch_transactionally(request_for(project, "fake-ok"));
     assert(result);
     assert(result.value().outcome == PatchApplyOutcome::Applied);
     assert(result.value().summary.succeeded());
 
-    // The new tree is in place...
-    assert(fs::exists(project / "extracted-rom" / "header.bin"));
-    assert(fs::exists(project / "extracted-rom" / "root" / "course.bin"));
-    // ...and the old one was moved aside rather than deleted, so a bad build is
-    // recoverable by hand.
-    assert(!result.value().backup_dir.empty());
-    assert(fs::exists(result.value().backup_dir / "marker.txt"));
-    assert(!fs::exists(project / "extracted-rom" / "marker.txt"));
+    // The whole of the apply: one ROM arriving where the editor reads it, which
+    // is also the file to run in an emulator.
+    assert(result.value().built_rom == nsmb::project::built_rom_path(project));
+    assert(!previous_rom_is_untouched(project));
+    auto reopened = nsmb::project::RomReader::open(result.value().built_rom);
+    assert(reopened && reopened.value().read("course.bin").value() ==
+                           std::vector<std::uint8_t>({'L', 'E', 'V', 'E', 'L'}));
 
-    // The built ROM is kept so it can be run without rebuilding.
-    assert(fs::exists(result.value().built_rom));
+    // Nothing was unpacked and nothing was moved aside, so a project built a
+    // hundred times is the size of one built once.
+    assert(!fs::exists(project / "extracted-rom"));
+    assert(!fs::exists(nsmb::project::patch_backup_root(project)));
     assert(!fs::exists(nsmb::project::patch_staging_dir(project)));
     fs::remove_all(project);
 }
 
 void test_legacy_and_missing_projects_are_refused() {
-    nsmb::nds::NitroRomService service;
-
     const auto legacy = fs::temp_directory_path() / "big-star-apply-legacy";
     fs::remove_all(legacy);
     fs::create_directories(legacy);
     { std::ofstream(legacy / "ncpatcher.json") << "{}\n"; }
     auto request = request_for(legacy, "fake-ok");
-    auto refused = nsmb::project::apply_patch_transactionally(request, service);
+    auto refused = nsmb::project::apply_patch_transactionally(request);
     assert(!refused && refused.error().code == nsmb::core::ErrorCode::Unsupported);
     fs::remove_all(legacy);
 
     nsmb::project::PatchApplyRequest missing;
     missing.project_dir = fs::temp_directory_path() / "big-star-apply-nowhere";
-    auto absent = nsmb::project::apply_patch_transactionally(missing, service);
+    auto absent = nsmb::project::apply_patch_transactionally(missing);
     assert(!absent && absent.error().code == nsmb::core::ErrorCode::NotFound);
 }
 
@@ -304,7 +287,7 @@ void run_all() {
     test_build_failure_changes_nothing();
     test_success_without_a_rom_is_rejected();
     test_unparseable_output_is_rejected();
-    test_successful_build_swaps_the_tree();
+    test_successful_build_replaces_the_rom();
     test_legacy_and_missing_projects_are_refused();
 }
 
@@ -320,15 +303,16 @@ int main(int argc, char** argv) {
     namespace fs = std::filesystem;
     const auto dir = fs::temp_directory_path() / "big-star-project-test";
     fs::remove_all(dir);
-    fs::create_directories(dir / "extracted-rom/root/course");
+    fs::create_directories(dir);
+    const auto built_rom = dir / "big-star-build.nds";
+    synthetic::write_bytes(built_rom, synthetic::make_rom({{"course/course1.bin", synthetic::text("0123456789ab")}}));
 
     auto project = nsmb::project::create_empty_project("Test \"Project\"\nName", dir).value();
     nsmb::nds::RomHeader project_header;
     project_header.game_title = "TEST \"ROM\"";
     project_header.game_code = "TST1";
-    project.attach_extracted_rom(dir / "extracted-rom", project_header);
-    { std::ofstream course(dir / "extracted-rom/root/course/course1.bin", std::ios::binary); course << "0123456789ab"; }
-    assert(nsmb::project::index_project_files(project, dir / "extracted-rom"));
+    project.attach_rom(built_rom, project_header);
+    assert(nsmb::project::index_rom_files(project));
 
     const auto manifest = dir / nsmb::project::manifest_file_name;
     assert(nsmb::project::save_manifest(project, manifest));
@@ -340,9 +324,9 @@ int main(int argc, char** argv) {
     assert(text.find("format: big-star-editor-project") != std::string::npos);
     assert(text.find("root:") == std::string::npos);
     assert(text.find(dir.string()) == std::string::npos);
-    assert(text.find("extracted_path: \"extracted-rom\"") != std::string::npos);
+    assert(text.find("rom_path: \"big-star-build.nds\"") != std::string::npos);
     assert(text.find("name: \"Test \\\"Project\\\"\\nName\"") != std::string::npos);
-    // The extracted tree is derived output; the manifest must not mirror it.
+    // The ROM's file table is derived output; the manifest must not mirror it.
     assert(text.find("files:") == std::string::npos);
     assert(text.find("course1.bin") == std::string::npos);
 
@@ -350,19 +334,21 @@ int main(int argc, char** argv) {
     assert(loaded);
     assert(loaded.value().name() == "Test \"Project\"\nName");
     assert(loaded.value().rom());
-    assert(loaded.value().rom()->extracted_path == "extracted-rom");
+    assert(loaded.value().rom()->rom_path == "big-star-build.nds");
     assert(loaded.value().rom()->header);
     assert(loaded.value().rom()->header->game_title == "TEST \"ROM\"");
     assert(loaded.value().game_files().size() == 1);
-    assert(loaded.value().game_files()[0].path == "extracted-rom/root/course/course1.bin");
+    assert(loaded.value().game_files()[0].path == "course/course1.bin");
     assert(loaded.value().game_files()[0].size == 12);
     assert(!loaded.value().dirty());
-    loaded.value().update_game_file_size("extracted-rom/root/course/course1.bin", 99);
+    loaded.value().update_game_file_size("course/course1.bin", 99);
     assert(loaded.value().game_files()[0].size == 99);
     assert(loaded.value().dirty());
     loaded.value().mark_clean();
 
-    // A version 1 manifest still opens; its stale `files:` block is ignored, not parsed.
+    // A version 1 manifest still opens; its stale `files:` block is ignored, not
+    // parsed, and the directory its `extracted_path` named is read and dropped:
+    // that tree is derived, so a version 3 project finds the ROM instead.
     {
         std::ofstream legacy_manifest(dir / "legacy-v1.yaml");
         legacy_manifest << "format: big-star-editor-project\nversion: 1\nname: \"Legacy\"\nrom:\n"
@@ -371,8 +357,9 @@ int main(int argc, char** argv) {
     }
     auto legacy = nsmb::project::load_manifest(dir / "legacy-v1.yaml");
     assert(legacy);
+    assert(legacy.value().rom() && legacy.value().rom()->rom_path == "big-star-build.nds");
     assert(legacy.value().game_files().size() == 1);
-    assert(legacy.value().game_files()[0].path == "extracted-rom/root/course/course1.bin");
+    assert(legacy.value().game_files()[0].path == "course/course1.bin");
     {
         std::ofstream bad(dir / "bad-path.yaml");
         bad << "format: big-star-editor-project\nversion: 1\nname: \"Bad\"\nrom:\n"
@@ -387,34 +374,34 @@ int main(int argc, char** argv) {
     assert(!nsmb::project::load_manifest(dir / "bad-drive-path.yaml"));
     {
         std::ofstream bad(dir / "bad-version.yaml");
-        bad << "format: big-star-editor-project\nversion: 3\nname: \"Bad\"\n";
+        bad << "format: big-star-editor-project\nversion: 4\nname: \"Bad\"\n";
     }
     assert(!nsmb::project::load_manifest(dir / "bad-version.yaml"));
     assert(!nsmb::project::make_project_relative(dir, {}));
 
-    // A project whose ROM has not been extracted yet still opens, with an empty index.
+    // A project whose ROM has not been built yet still opens, with an empty index.
     {
         std::ofstream unbuilt_manifest(dir / "unbuilt.yaml");
-        unbuilt_manifest << "format: big-star-editor-project\nversion: 2\nname: \"Unbuilt\"\nrom:\n"
-                            "  extracted_path: \"not-extracted-yet\"\n";
+        unbuilt_manifest << "format: big-star-editor-project\nversion: 3\nname: \"Unbuilt\"\nrom:\n"
+                            "  rom_path: \"not-built-yet.nds\"\n";
     }
     auto unbuilt = nsmb::project::load_manifest(dir / "unbuilt.yaml");
     assert(unbuilt);
     assert(unbuilt.value().rom());
     assert(unbuilt.value().game_files().empty());
 
-    {
-        std::ofstream first(dir / "extracted-rom/root/course/a.bin", std::ios::binary);
-        first << "abc";
-        std::ofstream second(dir / "extracted-rom/root/course/z.bin", std::ios::binary);
-        second << "z";
-    }
-    assert(nsmb::project::index_project_files(loaded.value(), dir / "extracted-rom"));
+    // A rebuild that adds files re-indexes from the ROM, not from a directory
+    // somebody has to remember to refresh.
+    synthetic::write_bytes(built_rom, synthetic::make_rom({{"course/course1.bin", synthetic::text("0123456789ab")},
+                                                           {"course/a.bin", synthetic::text("abc")},
+                                                           {"course/z.bin", synthetic::text("z")}}));
+    assert(nsmb::project::index_rom_files(loaded.value()));
     assert(loaded.value().game_files().size() == 3);
-    assert(loaded.value().game_files()[0].path == "extracted-rom/root/course/a.bin");
+    assert(loaded.value().game_files()[0].path == "course/a.bin");
     assert(loaded.value().game_files()[0].size == 3);
-    assert(loaded.value().game_files()[2].path == "extracted-rom/root/course/z.bin");
-    assert(!nsmb::project::index_project_files(loaded.value(), dir / "missing"));
+    assert(loaded.value().game_files()[2].path == "course/z.bin");
+    nsmb::project::Project without_rom;
+    assert(!nsmb::project::index_rom_files(without_rom));
 
     const auto& catalog = nsmb::project::nsmb_level_catalog();
     assert(!catalog.empty());
@@ -443,10 +430,6 @@ int main(int argc, char** argv) {
     assert(nsmb::project::nsmb_graphics_profile("A2DK"));
     assert(nsmb::project::nsmb_graphics_profile("A2DC"));
     assert(!nsmb::project::nsmb_graphics_profile("TST1"));
-    auto resolved_file = nsmb::project::resolve_nitro_file_id(dir / "extracted-rom", make_fnt(), 0);
-    assert(resolved_file && resolved_file.value() == dir / "extracted-rom/root/graphic.bin");
-    assert(!nsmb::project::resolve_nitro_file_id(dir / "extracted-rom", make_fnt(), 1));
-
     std::vector<std::uint8_t> empty_course(nsmb::formats::nsmb_level_block_count * 8U);
     for (std::size_t i = 0; i < nsmb::formats::nsmb_level_block_count; ++i) {
         put_u32(empty_course, i * 8U, static_cast<std::uint32_t>(empty_course.size()));

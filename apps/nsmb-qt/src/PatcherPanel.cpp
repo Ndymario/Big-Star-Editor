@@ -43,7 +43,7 @@ void PatcherRunner::join() {
 }
 
 void PatcherRunner::start(const std::filesystem::path& projectDir,
-                          const std::filesystem::path& extractedDir,
+                          bool apply,
                           const std::filesystem::path& executable,
                           const QString& variant,
                           bool verbose) {
@@ -64,7 +64,7 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
     const std::filesystem::path tool = executable.empty() ? std::filesystem::path("ncpatcher")
                                                           : executable;
 
-    worker_ = std::thread([this, request, extractedDir, tool]() mutable {
+    worker_ = std::thread([this, request, apply, tool]() mutable {
         request.cancel = &cancel_;
         nsmb::core::CallbackLogger logger(
             [this](nsmb::core::LogLevel, std::string_view message) {
@@ -100,7 +100,7 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
             emit logged(QString::fromUtf8(line.data(), static_cast<int>(line.size())));
         };
 
-        if (extractedDir.empty()) {
+        if (!apply) {
             auto result = client.build(request, observer);
             running_ = false;
 
@@ -119,16 +119,14 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
             return;
         }
 
-        nsmb::project::PatchApplyRequest apply;
-        apply.project_dir = request.project_dir;
-        apply.extracted_dir = extractedDir;
-        apply.variant = request.variant;
-        apply.ncpatcher_executable = tool;
-        apply.verbose = request.verbose;
-        apply.cancel = &cancel_;
+        nsmb::project::PatchApplyRequest transaction;
+        transaction.project_dir = request.project_dir;
+        transaction.variant = request.variant;
+        transaction.ncpatcher_executable = tool;
+        transaction.verbose = request.verbose;
+        transaction.cancel = &cancel_;
 
-        nsmb::nds::NitroRomService extraction;
-        auto applied = nsmb::project::apply_patch_transactionally(apply, extraction, observer);
+        auto applied = nsmb::project::apply_patch_transactionally(transaction, observer);
         running_ = false;
 
         if (!applied) {
@@ -152,8 +150,7 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
         }
 
         if (outcome.outcome == nsmb::project::PatchApplyOutcome::Applied) {
-            emit treeApplied(QString::fromStdString(outcome.backup_dir.string()),
-                             QString::fromStdString(outcome.built_rom.string()));
+            emit romApplied(QString::fromStdString(outcome.built_rom.string()));
         }
 
         emit finished(outcome.outcome == nsmb::project::PatchApplyOutcome::Applied,
@@ -208,7 +205,7 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
     connect(runner_, &PatcherRunner::artifactProduced, this,
             [this](const QString& description) { appendLog("  -> " + description); });
     connect(runner_, &PatcherRunner::diagnosed, this, &PatcherPanel::onDiagnostic);
-    connect(runner_, &PatcherRunner::treeApplied, this, &PatcherPanel::treeApplied);
+    connect(runner_, &PatcherRunner::romApplied, this, &PatcherPanel::romApplied);
     connect(runner_, &PatcherRunner::progressed, this,
             [this](const QString& phase, qint64 current, qint64 total, const QString& item) {
                 if (total > 0) {
@@ -260,8 +257,8 @@ void PatcherPanel::setProjectDirectory(const std::filesystem::path& projectDir) 
     projectDir_ = projectDir;
 }
 
-void PatcherPanel::setExtractedDirectory(const std::filesystem::path& extractedDir) {
-    extractedDir_ = extractedDir;
+void PatcherPanel::setApplyToProject(bool apply) {
+    applyToProject_ = apply;
 }
 
 void PatcherPanel::setExecutable(const std::filesystem::path& executable) {
@@ -289,7 +286,7 @@ bool PatcherPanel::startBuild(bool verbose) {
     progress_->setRange(0, 0);
     cancelButton_->setEnabled(true);
     cancelButton_->setVisible(true);
-    runner_->start(projectDir_, extractedDir_, executable_, selectedVariant(), verbose);
+    runner_->start(projectDir_, applyToProject_, executable_, selectedVariant(), verbose);
     return true;
 }
 

@@ -47,6 +47,9 @@ public:
     // The id a ROM path has, or nothing when the ROM does not hold that path.
     [[nodiscard]] std::optional<std::uint16_t> file_id(std::string_view rom_path) const;
 
+    // How big a file is, straight out of the FAT, without reading it.
+    [[nodiscard]] std::optional<std::uint32_t> file_size(std::uint16_t file_id) const;
+
     // Whether the ROM holds an archive at this path -- decided by what the bytes
     // decode to, never by the extension, so a compressed container named `.carc`
     // and a plain one named `.narc` both answer true and `dwc/utility.bin`,
@@ -55,6 +58,11 @@ public:
 
     core::Result<std::vector<std::uint8_t>> read(std::string_view rom_path);
     core::Result<std::vector<std::uint8_t>> read(std::uint16_t file_id);
+
+    // Just the head of a file. Sniffing a format needs a few dozen bytes, and a
+    // dock that classified two thousand entries by reading them whole would
+    // spend a game's worth of I/O to draw its icons.
+    core::Result<std::vector<std::uint8_t>> read_prefix(std::string_view rom_path, std::size_t maximum);
 
     // Decompressed, whatever the ROM stores. An overlay the ROM keeps raw comes
     // back unchanged, because BLZ marks its own absence.

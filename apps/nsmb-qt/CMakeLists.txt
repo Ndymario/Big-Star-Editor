@@ -59,7 +59,8 @@ if(BSE_BUILD_TESTS)
     target_compile_features(nsmb-fake-ncpatcher PRIVATE cxx_std_20)
     add_dependencies(nsmb-qt-tests nsmb-fake-ncpatcher)
 
-    target_include_directories(nsmb-qt-tests PRIVATE src)
+    # The synthetic ROM builder lives with the tests that first needed it.
+    target_include_directories(nsmb-qt-tests PRIVATE src ${PROJECT_SOURCE_DIR}/libs/nsmb-project/tests)
     target_link_libraries(nsmb-qt-tests PRIVATE Qt6::Widgets Qt6::Test nsmb-project nsmb-patching)
     target_compile_features(nsmb-qt-tests PRIVATE cxx_std_20)
     target_compile_definitions(nsmb-qt-tests PRIVATE BSE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"

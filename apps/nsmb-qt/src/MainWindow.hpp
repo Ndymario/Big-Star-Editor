@@ -18,6 +18,7 @@
 #include "FileEditors.hpp"
 #include "LevelPropertiesWidget.hpp"
 #include "LevelDataWidget.hpp"
+#include "nsmb/project/effective_filesystem.hpp"
 #include "nsmb/project/module_data.hpp"
 #include "nsmb/project/lua_actors.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
@@ -69,7 +70,7 @@ private:
     bool offerNcpatcherMigration(const std::filesystem::path& legacyConfig);
     void openDiagnosticLocation(const QString& file, int line, int column);
     void onPatcherFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
-    void buildRom();
+    void extractRom();
     void showLevelTreeMenu(const QPoint& position);
     // Brings the Filesystem tab forward with `romPath` selected.
     void showInFilesystem(const QString& romPath);
@@ -126,13 +127,14 @@ private:
     void reloadFilesystemView();
     void reloadActorDefinitions();
     [[nodiscard]] std::vector<nsmb::project::ModuleVariantMapping> activeModuleMappings() const;
-    [[nodiscard]] nsmb::core::Result<std::string> romPathForProjectFile(const std::filesystem::path& projectRelative) const;
-    // Where a project-relative file actually lives once the active variant's
-    // module layers have had their say, falling back to the extracted tree.
-    [[nodiscard]] std::filesystem::path effectiveFile(const std::filesystem::path& projectRelative) const;
+    // Re-opens the project's ROM and re-points everything that reads through
+    // it. Called on project load and after every applied build.
+    void reloadRom();
     [[nodiscard]] std::string documentKey(const QString& course_path, const QString& bgdat_path) const;
     void setActiveVariant(const QString& variant);
-    [[nodiscard]] nsmb::core::Result<std::filesystem::path> moduleSaveTarget(const std::filesystem::path& projectRelative) const;
+    // Where in a module's tree an edit to this ROM address goes. The one
+    // direction no build document answers.
+    [[nodiscard]] nsmb::core::Result<std::filesystem::path> moduleSaveTarget(const std::string& romPath) const;
     [[nodiscard]] QModelIndex findLevelIndex(const QString& course_path, const QString& bgdat_path) const;
     nsmb::core::Result<nsmb::project::EditableLevel*> levelSession(const QString& course_path, const QString& bgdat_path);
     void undo();
@@ -159,6 +161,14 @@ private:
     // worked out. The editor resolves no module trees of its own.
     std::optional<nsmb::patching::FileManifest> filePlan_;
     nsmb::project::FilesystemView filesystemView_;
+
+    // What the editor sees when it reads a ROM address: the module's copy when
+    // a build has not caught up with an edit, the ROM otherwise.
+    nsmb::project::EffectiveFilesystem effectiveFiles_;
+
+    // One file rather than a tree of thousands: a build replaces the ROM whole,
+    // and nothing inside it changes on its own.
+    QFileSystemWatcher* romWatcher_{};
     ProjectTreeModel* projectModel_{};
     QTreeView* levelTree_{};
     QTabWidget* tabs_{};
