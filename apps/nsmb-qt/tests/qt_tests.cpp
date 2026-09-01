@@ -1219,6 +1219,118 @@ private slots:
         QCOMPARE(level.course().paths[0].nodes[0].y, -38);
     }
 
+    void unsignedEntitiesSnapBackWhenDraggedPastTheOrigin() {
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 1, 1, 1, 1}));
+        QVERIFY(level.add_sprite({326, 2, 3, {}}));
+        LevelPreviewWidget canvas;
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+
+        // Within bounds the drag lands where it was dropped.
+        canvas.selections_ = {{2, 0, -1}};
+        canvas.commitMove({-16, -16});
+        QCOMPARE(level.course().sprites[0].x, 1);
+        QCOMPARE(level.course().sprites[0].y, 2);
+
+        // Past the origin nothing moves at all -- not even the object sharing
+        // the selection, because the drag is a single gesture.
+        canvas.selections_ = {{1, 0, -1}, {2, 0, -1}};
+        canvas.commitMove({-64, -64});
+        QCOMPARE(level.course().sprites[0].x, 1);
+        QCOMPARE(level.course().sprites[0].y, 2);
+        QCOMPARE(level.objects()[0].x, 1);
+        QCOMPARE(level.objects()[0].y, 1);
+
+        // An object on its own is still free to go out there.
+        canvas.selections_ = {{1, 0, -1}};
+        canvas.commitMove({-64, -64});
+        QCOMPARE(level.objects()[0].x, -3);
+        QCOMPARE(level.objects()[0].y, -3);
+
+        // Creating an unsigned entity out of bounds is refused for the same
+        // reason; an object placed there is clamped to the origin as before.
+        for (const int kind : {2, 3, 4, 7}) {
+            canvas.setCreateKind(kind);
+            canvas.placeEntity({-80, 32});
+        }
+        QCOMPARE(level.course().sprites.size(), 1U);
+        QCOMPARE(level.course().entrances.size(), 0U);
+        QCOMPARE(level.course().zones.size(), 0U);
+        QCOMPARE(level.course().views.size(), 0U);
+        canvas.setCreateKind(1);
+        canvas.placeEntity({-80, 32});
+        QCOMPARE(level.objects().size(), 2U);
+    }
+
+    void entrancesZonesAndViewsHoldTheSameBound() {
+        auto level = make_level();
+        nsmb::formats::NsmbLevelEntrance entrance;
+        entrance.x = 32;
+        entrance.y = 48;
+        QVERIFY(level.add_entrance(entrance));
+        QVERIFY(level.add_zone({64, 80, 256, 192, 0}));
+        nsmb::formats::NsmbLevelView view{};
+        view.x = 96;
+        view.y = 112;
+        view.width = 256;
+        view.height = 192;
+        QVERIFY(level.add_view(view));
+        LevelPreviewWidget canvas;
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+
+        for (const int kind : {3, 4, 7}) {
+            canvas.selections_ = {{kind, 0, -1}};
+            canvas.commitMove({-1024, -1024});
+        }
+        QCOMPARE(level.course().entrances[0].x, 32);
+        QCOMPARE(level.course().entrances[0].y, 48);
+        QCOMPARE(level.course().zones[0].x, 64);
+        QCOMPARE(level.course().zones[0].y, 80);
+        QCOMPARE(level.course().views[0].x, 96);
+        QCOMPARE(level.course().views[0].y, 112);
+
+        // A near edge dragged past the origin used to pin the origin at zero
+        // while the far edge kept going, inflating the rectangle. Now nothing
+        // moves and the size is untouched.
+        canvas.selections_ = {{4, 0, -1}};
+        canvas.commitResize({-1024, -1024, 0, 0});
+        QCOMPARE(level.course().zones[0].x, 64);
+        QCOMPARE(level.course().zones[0].width, 256);
+        QCOMPARE(level.course().zones[0].height, 192);
+
+        // A resize that stays in bounds still lands.
+        canvas.commitResize({-64, -80, 0, 0});
+        QCOMPARE(level.course().zones[0].x, 0);
+        QCOMPARE(level.course().zones[0].y, 0);
+        QCOMPARE(level.course().zones[0].width, 320);
+        QCOMPARE(level.course().zones[0].height, 272);
+    }
+
+    void outOfBoundsQuadrantIsTinted() {
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 4, 4, 4, 4}));
+        LevelPreviewWidget canvas;
+        canvas.resize(480, 360);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+
+        QImage image(canvas.size(), QImage::Format_ARGB32);
+        image.fill(Qt::transparent);
+        canvas.render(&image);
+
+        // Sampled either side of the origin, away from the grid lines and the
+        // object itself, so only the tint separates the two.
+        const auto transform = canvas.sceneTransform();
+        const auto outside = QColor(image.pixel(transform.map(QPointF(-40, -40)).toPoint()));
+        const auto inside = QColor(image.pixel(transform.map(QPointF(40, 150)).toPoint()));
+        // The tint is translucent red over the map surface, so it shows as a
+        // red cast -- the channels either side of it cannot be compared raw.
+        QVERIFY(outside.green() < inside.green());
+        QVERIFY(outside.red() - outside.green() > inside.red() - inside.green());
+    }
+
     void autosaveSnapshotIsWrittenAndClearedWhenClean() {
         QTemporaryDir directory; QVERIFY(directory.isValid()); const auto project=make_project(directory.path().toStdString());
         MainWindow window; window.setProject(project);

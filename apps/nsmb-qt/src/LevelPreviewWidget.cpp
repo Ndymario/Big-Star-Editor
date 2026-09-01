@@ -400,6 +400,13 @@ std::vector<EntityRect> entityRects(const LevelPreviewWidget::Scene& scene,
 // Only rectangular entities can be resized: tile objects, zones and views.
 bool resizableKind(int kind) { return kind == 1 || kind == 4 || kind == 7; }
 
+// Actors, entrances, zones and views all store their position unsigned, so
+// none of them can sit above or left of the origin. Objects and path nodes are
+// signed and are free to go out there.
+bool unsignedKind(int kind) noexcept {
+    return kind == 2 || kind == 3 || kind == 4 || kind == 7;
+}
+
 // Paths and progress paths are the only kinds selected down to a node.
 bool pathKind(int kind) { return kind == 5 || kind == 6; }
 
@@ -511,6 +518,34 @@ void drawMap(QPainter& painter,
     }
     for (double y = y_start; y <= bounds.bottom(); y += grid) {
         painter.drawLine(QPointF(bounds.left(), y), QPointF(bounds.right(), y));
+    }
+
+    // Level coordinates start at the origin, so everything above or to the left
+    // of it is off the map. The strip is tinted and its edge drawn so the limit
+    // is visible while something is being dragged towards it, rather than only
+    // once the drop has been refused. It goes under the entities: anything that
+    // did end up out there has to stay readable.
+    bool region_known = false;
+    const auto visible = transform.inverted(&region_known).mapRect(target);
+    const auto region = region_known ? bounds.united(visible) : bounds;
+    if (region.left() < 0.0 || region.top() < 0.0) {
+        const auto edge = QColor(198, 74, 74);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(withAlpha(edge, colors.dark ? 44 : 34));
+        if (region.left() < 0.0) {
+            painter.drawRect(QRectF(QPointF(region.left(), region.top()), QPointF(0.0, region.bottom())));
+        }
+        if (region.top() < 0.0) {
+            painter.drawRect(QRectF(QPointF(std::max(region.left(), 0.0), region.top()),
+                                    QPointF(region.right(), 0.0)));
+        }
+        painter.setPen(QPen(withAlpha(edge, 165), 0));
+        if (region.left() < 0.0 && region.bottom() > 0.0) {
+            painter.drawLine(QPointF(0.0, std::max(region.top(), 0.0)), QPointF(0.0, region.bottom()));
+        }
+        if (region.top() < 0.0 && region.right() > 0.0) {
+            painter.drawLine(QPointF(std::max(region.left(), 0.0), 0.0), QPointF(region.right(), 0.0));
+        }
     }
 
     painter.setRenderHint(QPainter::Antialiasing, true);
@@ -1379,6 +1414,9 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
         placement.setX(std::round(placement.x() / grid) * grid);
         placement.setY(std::round(placement.y() / grid) * grid);
     }
+    // Out of bounds is out of bounds for something newly created too: dropping
+    // it at the origin instead would put it somewhere nobody clicked.
+    if (unsignedKind(create_kind_) && (placement.x() < 0.0 || placement.y() < 0.0)) return;
     const auto pixel_x = std::clamp(qRound(placement.x()), 0, 65535);
     const auto pixel_y = std::clamp(qRound(placement.y()), 0, 65535);
     nsmb::core::Result<std::size_t> result =
@@ -1442,8 +1480,58 @@ void LevelPreviewWidget::placeEntity(const QPointF& point) {
     update();
 }
 
+// Whether the drag would push any selected unsigned entity past the origin.
+bool LevelPreviewWidget::movesEntityOutOfBounds(const QPointF& delta) const {
+    const auto& course = scene_->level->course();
+    // Actors are placed in tiles, everything else in pixels.
+    const auto beyond = [](int origin, double moved, double scale) {
+        return origin + qRound(moved / scale) < 0;
+    };
+    for (const auto& selection : selections_) {
+        const auto index = static_cast<std::size_t>(selection.item);
+        const auto outside = [&](const auto& entities, double scale) {
+            return index < entities.size() && (beyond(entities[index].x, delta.x(), scale) ||
+                                               beyond(entities[index].y, delta.y(), scale));
+        };
+        switch (selection.kind) {
+        case 2: if (outside(course.sprites, 16.0)) return true; break;
+        case 3: if (outside(course.entrances, 1.0)) return true; break;
+        case 4: if (outside(course.zones, 1.0)) return true; break;
+        case 7: if (outside(course.views, 1.0)) return true; break;
+        default: break;
+        }
+    }
+    return false;
+}
+
+// Whether the resize would drag the origin of an unsigned entity past the
+// origin of the map. Left unchecked the clamp pins the near edge at zero while
+// the far edge keeps travelling, so the rectangle grows out of the drag.
+bool LevelPreviewWidget::resizeLeavesBounds(const ResizeEdges& edges) const {
+    if (selections_.size() != 1U) return false;
+    const auto selection = selections_.front();
+    if (!unsignedKind(selection.kind)) return false;
+    const auto index = static_cast<std::size_t>(selection.item);
+    const auto& course = scene_->level->course();
+    const auto outside = [&](const auto& entities) {
+        return index < entities.size() && (entities[index].x + qRound(edges.left) < 0 ||
+                                           entities[index].y + qRound(edges.top) < 0);
+    };
+    if (selection.kind == 4) return outside(course.zones);
+    if (selection.kind == 7) return outside(course.views);
+    return false;
+}
+
 void LevelPreviewWidget::commitMove(const QPointF& delta) {
     if (!scene_ || !scene_->level || (qFuzzyIsNull(delta.x()) && qFuzzyIsNull(delta.y()))) return;
+    // An entity dragged off the top or left edge has nowhere to land if its
+    // coordinates are unsigned, and clamping it to the origin silently piles
+    // the selection up in the corner. The drag is one gesture, so the whole of
+    // it is dropped and everything snaps back to where it was picked up.
+    if (movesEntityOutOfBounds(delta)) {
+        update();
+        return;
+    }
     auto clamp16 = [](int value) { return static_cast<std::uint16_t>(std::clamp(value, 0, 65535)); };
     auto clampSigned16 = [](int value) { return static_cast<std::int16_t>(std::clamp(value, -32768, 32767)); };
     nsmb::project::LevelEntityUpdates edits;
@@ -1517,6 +1605,12 @@ void LevelPreviewWidget::commitMove(const QPointF& delta) {
 
 void LevelPreviewWidget::commitResize(const ResizeEdges& edges) {
     if (!scene_ || !scene_->level || selections_.size() != 1U) return;
+    // Same rule as a move: a near edge that cannot reach where it was dragged
+    // snaps the whole rectangle back rather than deforming it.
+    if (resizeLeavesBounds(edges)) {
+        update();
+        return;
+    }
     const auto selection = selections_.front();
     const auto index = static_cast<std::size_t>(selection.item);
 

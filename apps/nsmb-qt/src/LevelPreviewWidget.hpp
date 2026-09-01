@@ -153,6 +153,12 @@ private:
     [[nodiscard]] ResizeEdges resizeEdges(const QPointF& delta) const;
     void publishSelection();
     void placeEntity(const QPointF& scene_point);
+    // Whether the drag would push any selected entity above or left of the
+    // origin, where unsigned coordinates cannot follow. Actors, entrances,
+    // zones and views are unsigned; objects and path nodes are not.
+    [[nodiscard]] bool movesEntityOutOfBounds(const QPointF& delta) const;
+    // The same question for the near edges of a resize.
+    [[nodiscard]] bool resizeLeavesBounds(const ResizeEdges& edges) const;
     void commitMove(const QPointF& delta);
     void commitResize(const ResizeEdges& edges);
     void deleteSelection();
