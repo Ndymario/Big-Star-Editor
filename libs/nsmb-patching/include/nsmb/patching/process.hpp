@@ -1,7 +1,9 @@
 #pragma once
 
+#include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -23,6 +25,45 @@ namespace nsmb::patching {
 // On POSIX that is execvp, which never sees a shell. On Windows the arguments
 // are joined using the exact quoting rule the C runtime parses back, so the
 // child reconstructs the vector that was sent.
+// A handle on a running child, so a long build can be stopped.
+//
+// NCPatcher documents SIGINT (POSIX) or CTRL_BREAK_EVENT (Windows) to the
+// process group as its cancellation signal, and answers with exit code 11 after
+// writing its result document. That is a request, not a kill: the tool unwinds
+// on its own terms, and an interrupted build is safe to run again because
+// NCPatcher re-patches the pristine binaries it kept rather than its own
+// half-written output.
+//
+// Because a child is put in its own process group, the signal reaches the
+// compiler processes it spawned as well -- otherwise those keep running and the
+// build only appears to have stopped.
+//
+// One token drives one run. `request()` is safe to call from any thread, and
+// safe to call before the child exists (it fires as soon as it does), after it
+// has exited (it does nothing), and more than once.
+class ProcessCancel {
+public:
+    ProcessCancel() = default;
+    ProcessCancel(const ProcessCancel&) = delete;
+    ProcessCancel& operator=(const ProcessCancel&) = delete;
+
+    void request();
+    [[nodiscard]] bool requested() const;
+
+    // Forgets any earlier request, so one token can drive the next run.
+    void reset();
+
+    // Used by run_process. `id` is the child's pid on POSIX and its process id
+    // on Windows.
+    void attach(std::intptr_t id);
+    void detach();
+
+private:
+    mutable std::mutex mutex_;
+    bool requested_{false};
+    std::intptr_t id_{0};
+};
+
 struct ProcessRequest {
     std::filesystem::path executable;
     std::vector<std::string> arguments;
@@ -34,6 +75,9 @@ struct ProcessRequest {
     // Extra environment entries for the child, as NAME=VALUE. The parent's
     // environment is inherited and these are layered on top.
     std::vector<std::string> environment;
+
+    // Optional. Outlives the call when set.
+    ProcessCancel* cancel{};
 };
 
 struct ProcessResult {

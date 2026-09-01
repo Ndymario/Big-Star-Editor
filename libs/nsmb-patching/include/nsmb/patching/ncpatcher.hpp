@@ -46,6 +46,7 @@ enum class NCPatcherStage {
     Patching = 8,
     RomIo = 9,
     Hook = 10,
+    Cancelled = 11,
     Unknown = -1,
 };
 
@@ -138,6 +139,12 @@ struct BuildVariant {
     std::vector<std::string> defines;
     std::vector<std::pair<std::string, std::filesystem::path>> files;
     std::filesystem::path banner;
+
+    // Which layer of a layered module tree this variant selects, per module.
+    // A module absent from the map uses the variant's own name as its layer.
+    // NCPatcher resolves with this; the editor only needs it to write an edit
+    // back into the layer the next build will read.
+    std::vector<std::pair<std::string, std::string>> module_variants;
 };
 
 struct ProjectConfig {
@@ -226,6 +233,29 @@ struct ModuleGraph {
 
 enum class FileAction { Unchanged, Modified, Created };
 
+// One member of a Nitro archive the run edited. Present only for members it
+// wrote: a container entry can carry no more provenance than all its members
+// agree on, which for members from three modules is none, so without this the
+// per-member truth is lost and an editor has to re-derive it.
+struct RomArchiveMember {
+    // The member's position in its container, which is how the game addresses
+    // it. Never an id: a member index is not a NitroFS file id, and treating
+    // the two alike replaces the wrong file.
+    std::int64_t index{};
+    std::string path; // inside the archive, as its own name table spells it
+    std::int64_t size{};
+
+    // Only ever Unchanged or Modified. The archive codec is replace-only,
+    // because inserting a member renumbers every member after it.
+    FileAction action{FileAction::Modified};
+
+    std::string source;
+    std::string module;
+    std::string component;
+    std::string from_variant;
+    bool source_missing{false};
+};
+
 struct RomFileEntry {
     // The FAT index exactly as the ROM stores it. NSMB subtracts its overlay
     // count at run time; that is a property of the game, and neither NCPatcher
@@ -241,6 +271,14 @@ struct RomFileEntry {
     std::string component;
     std::string from_variant;
 
+    // Planning only: the source was not on disk to be measured, because a hook
+    // generates it. The destination, the id and the provenance still hold; the
+    // size does not.
+    bool source_missing{false};
+
+    // Only for an archive this run edited, and only the members it edited.
+    std::vector<RomArchiveMember> members;
+
     [[nodiscard]] bool has_provenance() const { return !module.empty() || !source.empty(); }
 };
 
@@ -248,6 +286,12 @@ struct FileManifest {
     // The variant this build produced. Empty when the run had no variant, which
     // includes `rom files --json` reading a ROM off disk.
     std::string variant;
+
+    // True only for a document `files plan` wrote. Every id under z_new/ in one
+    // is a prediction a build confirms; everything else is read from the ROM as
+    // it stands. A consumer must never present a planned id as a real one.
+    bool planned{false};
+
     std::vector<RomFileEntry> files;
 
     [[nodiscard]] const RomFileEntry* find(std::string_view rom_path) const;
@@ -282,6 +326,10 @@ struct BuildRequest {
     std::filesystem::path output_override;
 
     bool verbose{false};
+
+    // Optional. Set it and a caller can stop the build; NCPatcher answers with
+    // exit code 11 and a result document saying what it had finished.
+    ProcessCancel* cancel{};
 };
 
 class NCPatcherClient {
@@ -303,6 +351,13 @@ public:
     // points at a ROM or an extracted directory other than the project's.
     core::Result<FileManifest> rom_files(const std::filesystem::path& project_dir,
                                          const std::filesystem::path& rom_override = {});
+
+    // Asks what a build would place, without building. The answer is the same
+    // document a build writes, with `planned` set and prospective ids for the
+    // files it would append. This is what lets the editor stop reimplementing
+    // module resolution: NCPatcher resolves, the editor reads the result.
+    core::Result<FileManifest> plan_files(const std::filesystem::path& project_dir,
+                                          std::string_view variant = {});
 
     // Reads a manifest a build already wrote (`files-dump`). This is the one
     // with provenance, and the one the filesystem view needs.

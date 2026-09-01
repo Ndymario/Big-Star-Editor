@@ -143,6 +143,7 @@ NCPatcherStage stage_from_exit_code(int exit_code) {
     case 8: return NCPatcherStage::Patching;
     case 9: return NCPatcherStage::RomIo;
     case 10: return NCPatcherStage::Hook;
+    case 11: return NCPatcherStage::Cancelled;
     default: return NCPatcherStage::Unknown;
     }
 }
@@ -160,6 +161,7 @@ std::string_view describe_stage(NCPatcherStage stage) {
     case NCPatcherStage::Patching: return "patching the binaries failed";
     case NCPatcherStage::RomIo: return "the ROM could not be read or written";
     case NCPatcherStage::Hook: return "a build hook failed";
+    case NCPatcherStage::Cancelled: return "the build was cancelled";
     case NCPatcherStage::Unknown: break;
     }
     return "NCPatcher failed for an unrecognised reason";
@@ -265,6 +267,9 @@ Result<ProjectConfig> parse_project_config(std::string_view json) {
             variant.files.emplace_back(path, source.as_string());
         }
         variant.banner = node["banner"].as_string();
+        for (const auto& [module, layer] : node["module-variants"].members()) {
+            variant.module_variants.emplace_back(module, layer.as_string());
+        }
         config.variants.push_back(std::move(variant));
     }
     return config;
@@ -333,6 +338,7 @@ Result<FileManifest> parse_file_manifest(std::string_view json) {
 
     FileManifest manifest;
     manifest.variant = root["variant"].as_string();
+    manifest.planned = root["planned"].as_bool();
 
     const JsonValue& files = root["files"];
     manifest.files.reserve(files.size());
@@ -346,6 +352,24 @@ Result<FileManifest> parse_file_manifest(std::string_view json) {
         entry.module = node["module"].as_string();
         entry.component = node["component"].as_string();
         entry.from_variant = node["from-variant"].as_string();
+        entry.source_missing = node["source-missing"].as_bool();
+
+        // Only an edited archive carries these, and only for the members the
+        // run wrote. Everything else inside a container is read from the ROM.
+        for (const auto& member_node : node["members"].elements()) {
+            RomArchiveMember member;
+            member.index = member_node["index"].as_int64();
+            member.path = member_node["path"].as_string();
+            member.size = member_node["size"].as_int64();
+            member.action = file_action_from(member_node["action"].as_string());
+            member.source = member_node["source"].as_string();
+            member.module = member_node["module"].as_string();
+            member.component = member_node["component"].as_string();
+            member.from_variant = member_node["from-variant"].as_string();
+            member.source_missing = member_node["source-missing"].as_bool();
+            entry.members.push_back(std::move(member));
+        }
+
         manifest.files.push_back(std::move(entry));
     }
 
@@ -478,6 +502,40 @@ Result<FileManifest> NCPatcherClient::rom_files(const std::filesystem::path& pro
     return parse_file_manifest(run.value().stdout_text);
 }
 
+Result<FileManifest> NCPatcherClient::plan_files(const std::filesystem::path& project_dir,
+                                                 std::string_view variant) {
+    std::vector<std::string> arguments{"-C", project_dir.string()};
+    if (!variant.empty()) {
+        arguments.push_back("--variant");
+        arguments.emplace_back(variant);
+    }
+    arguments.insert(arguments.end(), {"files", "plan", "--json"});
+
+    auto run = capture(project_dir, std::move(arguments));
+    if (!run) {
+        return run.error();
+    }
+    if (run.value().exit_code != 0) {
+        const auto stage = stage_from_exit_code(run.value().exit_code);
+        return make_error(ErrorCode::ExternalToolFailed,
+                          std::string(describe_stage(stage)) + ":\n" + run.value().stderr_text);
+    }
+
+    auto manifest = parse_file_manifest(run.value().stdout_text);
+    if (!manifest) {
+        return manifest.error();
+    }
+    // A plan that does not say it is one would have its prospective z_new/ ids
+    // read as ids the ROM actually holds, which is the one way this document
+    // can mislead. An NCPatcher that answers `files plan` at all sets it.
+    if (!manifest.value().planned) {
+        return make_error(ErrorCode::ParseError,
+                          "NCPatcher answered `files plan` with a document that is not marked "
+                          "planned");
+    }
+    return manifest;
+}
+
 Result<FileManifest> NCPatcherClient::read_file_manifest(const std::filesystem::path& json_file) {
     auto text = core::read_file(json_file);
     if (!text) {
@@ -534,6 +592,7 @@ Result<RunSummary> NCPatcherClient::build(const BuildRequest& request,
     process.executable = executable_;
     process.arguments = std::move(arguments);
     process.working_directory = request.project_dir;
+    process.cancel = request.cancel;
 
     logger_->info("running " + describe_command(process));
 

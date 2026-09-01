@@ -1,13 +1,21 @@
 #include "nsmb/patching/ncpatcher.hpp"
 #include "nsmb/patching/process.hpp"
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -147,6 +155,50 @@ void test_environment_overrides_reach_the_child() {
     assert(out_lines[0] == "from-the-request");
 }
 
+void test_a_run_can_be_cancelled() {
+    // The one thing that stops a frontend offering a Cancel button is having
+    // nothing documented to send. NCPatcher answers a signal to the process
+    // group by unwinding and exiting 11, which is what makes an interrupted
+    // build safe to run again -- so the editor has to be able to send one.
+    ProcessRequest request;
+    request.executable = self_path;
+    request.arguments = {"--wait-for-cancel"};
+
+    nsmb::patching::ProcessCancel cancel;
+    request.cancel = &cancel;
+
+    std::atomic<bool> ready{false};
+    std::thread canceller([&] {
+        while (!ready.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        cancel.request();
+    });
+
+    const auto result = run_process(
+        request, [&](std::string_view line) { if (line == "ready") ready.store(true); }, {});
+    canceller.join();
+
+    assert(result);
+    assert(cancel.requested());
+    // 11 is the tool's own answer. A run killed outright would report a signal
+    // instead, which is the failure this is here to rule out: the child has to
+    // get the chance to finish what it was doing.
+    assert(!result.value().terminated_by_signal);
+    assert(result.value().exit_code == 11);
+
+    // The same token drives the next run, and a request meant for the run that
+    // just ended must not reach it.
+    cancel.reset();
+    assert(!cancel.requested());
+
+    // A cancel with nothing running is not an error: a click that lands just
+    // after a build ended has to do nothing rather than fail.
+    nsmb::patching::ProcessCancel idle;
+    idle.request();
+    assert(idle.requested());
+}
+
 void test_missing_executable_is_reported() {
     ProcessRequest request;
     request.executable = "big-star-no-such-tool-anywhere";
@@ -190,7 +242,7 @@ void test_parse_project_config() {
         "en": { "defines": ["GAME_LANGUAGE_EN"], "files": {} },
         "fr": { "defines": ["GAME_LANGUAGE_FR"], "banner": "/p/assets/fr-banner.bin", "files": {
           "data/base.bin": "assets/fr.bin", "data/fr.bin": "assets/only-fr.bin"
-        } },
+        }, "module-variants": { "message": "french", "glue": "base" } },
         "de": { "defines": ["GAME_LANGUAGE_GE"], "files": {} },
         "pt": { "defines": ["GAME_LANGUAGE_PT"], "files": {} }
       }
@@ -216,6 +268,16 @@ void test_parse_project_config() {
     assert(config.value().variants[1].files.size() == 2);
     assert(config.value().variants[1].files[0].second == std::filesystem::path("assets/fr.bin"));
     assert(config.value().variants[1].banner == std::filesystem::path("/p/assets/fr-banner.bin"));
+
+    // Which layer of a layered module tree a variant selects. The editor used
+    // to read this out of ncpatcher.yaml itself, which meant parsing YAML it
+    // has no business parsing and disagreeing with NCPatcher when it got it
+    // wrong. It is in the dump now, so there is one answer.
+    assert(config.value().variants[1].module_variants.size() == 2);
+    assert(config.value().variants[1].module_variants[0].first == "message");
+    assert(config.value().variants[1].module_variants[0].second == "french");
+    assert(config.value().variants[1].module_variants[1].first == "glue");
+    assert(config.value().variants[0].module_variants.empty());
     assert(config.value().has_variant("pt"));
     assert(!config.value().has_variant("ru"));
 
@@ -330,6 +392,64 @@ void test_parse_file_manifest() {
     // ROM holds, and an id read from it would name the wrong file.
     assert(!nsmb::patching::parse_file_manifest(
         R"({"schema":"ncpatcher.files/1","count":9,"files":[]})"));
+
+    // A build's manifest says nothing about planning, so every id in it is one
+    // the ROM holds.
+    assert(!manifest.value().planned);
+}
+
+void test_parse_planned_manifest() {
+    using nsmb::patching::FileAction;
+    const auto plan = nsmb::patching::parse_file_manifest(R"({
+      "schema": "ncpatcher.files/1",
+      "variant": "fr",
+      "planned": true,
+      "count": 3,
+      "files": [
+        { "id": 812, "path": "ARCHIVE/menu_title.narc", "size": 40960, "action": "modified",
+          "members": [
+            { "index": 14, "path": "menu/title/USA/vs.bmg", "size": 2031, "action": "modified",
+              "source": "modules/message/nitrofs/fr/ARCHIVE/menu_title_narc/menu/title/USA/vs.bmg",
+              "module": "message", "component": "Vanilla", "from-variant": "fr" },
+            { "index": 31, "path": "menu/title/USA/opt.bmg", "size": 512, "action": "modified",
+              "source": "modules/hud/nitrofs/ARCHIVE/menu_title_narc/menu/title/USA/opt.bmg",
+              "module": "hud" }
+          ] },
+        { "id": 1957, "path": "z_new/reserved", "size": 0, "action": "created" },
+        { "id": 1958, "path": "z_new/generated.bin", "size": 0, "action": "created",
+          "source": "build/generated/generated.bin", "module": "glue",
+          "source-missing": true }
+      ] })");
+    assert(plan);
+    assert(plan.value().planned);
+
+    // A container's own entry can carry no more provenance than its members
+    // agree on, which for two modules is none. The members are where the truth
+    // is, and the reason the editor no longer has to re-derive it.
+    const auto* archive = plan.value().find("ARCHIVE/menu_title.narc");
+    assert(archive != nullptr);
+    assert(archive->module.empty());
+    assert(archive->members.size() == 2);
+    assert(archive->members[0].index == 14);
+    assert(archive->members[0].path == "menu/title/USA/vs.bmg");
+    assert(archive->members[0].module == "message");
+    assert(archive->members[0].from_variant == "fr");
+    assert(archive->members[0].action == FileAction::Modified);
+    assert(archive->members[1].index == 31);
+    assert(archive->members[1].module == "hud");
+    assert(archive->members[1].from_variant.empty());
+
+    // A hook generates this one, so a plan knows where it goes and which id it
+    // takes but cannot measure it. Refusing to plan would make the command
+    // useless on a project that has never been built, which is exactly where
+    // the editor asks.
+    const auto* generated = plan.value().find("z_new/generated.bin");
+    assert(generated != nullptr);
+    assert(generated->source_missing);
+    assert(generated->module == "glue");
+
+    const auto* reserved = plan.value().find("z_new/reserved");
+    assert(reserved != nullptr && !reserved->source_missing && reserved->members.empty());
 }
 
 void test_parse_run_summary() {
@@ -418,6 +538,7 @@ void test_exit_code_stages() {
     assert(stage_from_exit_code(8) == NCPatcherStage::Patching);
     assert(stage_from_exit_code(9) == NCPatcherStage::RomIo);
     assert(stage_from_exit_code(10) == NCPatcherStage::Hook);
+    assert(stage_from_exit_code(11) == NCPatcherStage::Cancelled);
     assert(stage_from_exit_code(42) == NCPatcherStage::Unknown);
     assert(!describe_stage(NCPatcherStage::Hook).empty());
 }
@@ -510,6 +631,25 @@ int run_child_fixture(int argc, char** argv) {
         return 0;
     }
 
+    // Stands in for NCPatcher's own cancellation handling: acknowledge the
+    // signal, unwind, and report code 11 rather than dying where it stands.
+    if (mode == "--wait-for-cancel") {
+#ifdef _WIN32
+        ::SetConsoleCtrlHandler([](DWORD type) -> BOOL {
+            if (type != CTRL_BREAK_EVENT && type != CTRL_C_EVENT) return FALSE;
+            std::_Exit(11);
+        }, TRUE);
+#else
+        std::signal(SIGINT, [](int) { std::_Exit(11); });
+#endif
+        std::fputs("ready\n", stdout);
+        std::fflush(stdout);
+        for (int i = 0; i < 200; ++i) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        return 0;
+    }
+
     if (mode == "--print-env") {
         const char* value = argc > 2 ? std::getenv(argv[2]) : nullptr;
         std::fputs(value ? value : "<unset>", stdout);
@@ -535,12 +675,14 @@ int main(int argc, char** argv) {
     test_arguments_are_not_shell_interpreted();
     test_working_directory_is_child_only();
     test_environment_overrides_reach_the_child();
+    test_a_run_can_be_cancelled();
     test_missing_executable_is_reported();
     test_missing_working_directory_is_reported();
 
     test_parse_project_config();
     test_parse_module_graph();
     test_parse_file_manifest();
+    test_parse_planned_manifest();
     test_parse_run_summary();
     test_unknown_schemas_are_refused();
     test_exit_code_stages();

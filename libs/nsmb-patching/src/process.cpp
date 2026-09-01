@@ -21,6 +21,55 @@ namespace nsmb::patching {
 
 namespace {
 
+// Asks one running child, and everything it spawned, to stop. The signal is
+// the one NCPatcher documents; anything stronger would leave a half-written
+// ROM behind instead of a tool that unwound and reported.
+void signal_group(std::intptr_t id) {
+#ifdef _WIN32
+    // The child was started with its own process group, which is what makes a
+    // console control event addressable at all. CTRL_BREAK rather than CTRL_C:
+    // a new process group ignores CTRL_C by design.
+    ::GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, static_cast<DWORD>(id));
+#else
+    // Negative pid means the group, so the compiler processes the build spawned
+    // are interrupted too rather than left running under a stopped parent.
+    ::kill(-static_cast<pid_t>(id), SIGINT);
+#endif
+}
+
+} // namespace
+
+void ProcessCancel::request() {
+    std::lock_guard lock(mutex_);
+    requested_ = true;
+    if (id_ != 0) signal_group(id_);
+}
+
+bool ProcessCancel::requested() const {
+    std::lock_guard lock(mutex_);
+    return requested_;
+}
+
+void ProcessCancel::reset() {
+    std::lock_guard lock(mutex_);
+    requested_ = false;
+}
+
+void ProcessCancel::attach(std::intptr_t id) {
+    std::lock_guard lock(mutex_);
+    id_ = id;
+    // A cancel that arrived while the child was still being started is not
+    // lost: it fires the moment there is something to send it to.
+    if (requested_ && id_ != 0) signal_group(id_);
+}
+
+void ProcessCancel::detach() {
+    std::lock_guard lock(mutex_);
+    id_ = 0;
+}
+
+namespace {
+
 // Splits a byte stream into lines and hands each to the callback. Holds the
 // tail of a partial line between reads, and flushes it at end of stream so a
 // tool whose last line lacks a terminator is not silently dropped.
@@ -276,12 +325,16 @@ core::Result<ProcessResult> run_process(const ProcessRequest& request,
     PROCESS_INFORMATION process{};
     const BOOL started = ::CreateProcessW(
         nullptr, command_line.data(), nullptr, nullptr, TRUE,
-        CREATE_UNICODE_ENVIRONMENT,
+        // Its own group, so a console control event can be addressed to the
+        // build and everything it spawned without reaching the editor.
+        CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_PROCESS_GROUP,
         custom_environment ? static_cast<LPVOID>(environment_block.data()) : nullptr,
         working_directory.empty() ? nullptr : working_directory.c_str(), &startup, &process);
     if (!started) {
         return last_error("could not start " + request.executable.string());
     }
+
+    if (request.cancel) request.cancel->attach(static_cast<std::intptr_t>(process.dwProcessId));
 
     // The parent's copies of the write ends must go before reading, or the
     // pipes never report end of stream.
@@ -297,6 +350,8 @@ core::Result<ProcessResult> run_process(const ProcessRequest& request,
     ::WaitForSingleObject(process.hProcess, INFINITE);
     out_thread.join();
     err_thread.join();
+
+    if (request.cancel) request.cancel->detach();
 
     DWORD exit_code = 0;
     ::GetExitCodeProcess(process.hProcess, &exit_code);
@@ -414,6 +469,9 @@ core::Result<ProcessResult> run_process(const ProcessRequest& request,
         }
         ::close(out_pipe[1]);
         ::close(err_pipe[1]);
+        // Its own process group, so cancelling reaches the compilers the build
+        // spawns rather than only the tool that spawned them.
+        ::setpgid(0, 0);
         // The directory change happens here, in the child, so the editor's own
         // working directory is untouched and safe to use from other threads.
         if (!working_directory.empty() && ::chdir(working_directory.c_str()) != 0) {
@@ -430,6 +488,11 @@ core::Result<ProcessResult> run_process(const ProcessRequest& request,
         }
         ::_exit(127);
     }
+
+    // Set on both sides of the fork, because either may run first and a signal
+    // sent before the group exists would go to the editor's own group.
+    ::setpgid(pid, pid);
+    if (request.cancel) request.cancel->attach(static_cast<std::intptr_t>(pid));
 
     ::close(out_pipe[1]);
     ::close(err_pipe[1]);
@@ -452,6 +515,7 @@ core::Result<ProcessResult> run_process(const ProcessRequest& request,
     err_thread.join();
     ::close(out_pipe[0]);
     ::close(err_pipe[0]);
+    if (request.cancel) request.cancel->detach();
 
     if (WIFSIGNALED(status)) {
         return ProcessResult{128 + WTERMSIG(status), true};

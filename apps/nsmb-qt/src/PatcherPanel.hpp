@@ -8,6 +8,8 @@
 #include <memory>
 #include <thread>
 
+#include "nsmb/patching/process.hpp"
+
 class QComboBox;
 class QLabel;
 class QProgressBar;
@@ -40,6 +42,12 @@ public:
                const QString& variant,
                bool verbose);
 
+    // Asks the running build to stop. NCPatcher unwinds and exits 11, and the
+    // apply that would have followed does not happen, so the project is left as
+    // it was. Doing nothing when no build is running is deliberate: a cancel
+    // that arrives just after a run ended is not an error.
+    void cancel() { cancel_.request(); }
+
 signals:
     void progressed(const QString& phase, qint64 current, qint64 total, const QString& item);
     void diagnosed(int level,
@@ -63,6 +71,7 @@ private:
     void join();
 
     std::thread worker_;
+    nsmb::patching::ProcessCancel cancel_;
     bool running_{false};
 };
 
@@ -99,6 +108,9 @@ public:
     // has no project.
     bool startBuild(bool verbose);
 
+    // Stops the running build. False when there was nothing to stop.
+    bool cancelBuild();
+
 signals:
     void buildFinished(bool ok, int exitCode, const QString& stage, int errors, int warnings);
     void treeApplied(const QString& backupDir, const QString& builtRom);
@@ -124,6 +136,7 @@ private:
     QProgressBar* progress_{};
     QPlainTextEdit* log_{};
     QTreeWidget* diagnostics_{};
+    QPushButton* cancelButton_{};
     PatcherRunner* runner_{};
 
 };

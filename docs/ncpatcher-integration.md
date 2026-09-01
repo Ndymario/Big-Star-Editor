@@ -25,11 +25,13 @@ line by line.
 `NCPatcherClient` uses these NCPatcher 2.x commands:
 
 - `version`, `config path`, and `config validate` for preflight checks.
-- `config dump --json` for project paths, toolchain, and build variants. The
-  reader also accepts resolved project/per-variant banner inputs when a newer
-  NCPatcher exposes them.
+- `config dump --json` for project paths, toolchain, build variants, the
+  project and per-variant banner inputs, and each variant's `module-variants`
+  layer selection.
 - `modules dump` for enabled modules, components, and NitroFS layering.
 - `rom files --json` for the file table and build provenance.
+- `files plan [--variant NAME] --json` for what a build would place, without
+  building.
 - `build [--variant NAME] --message-format json --result <path>` for builds.
 - `migrate [--write]` for legacy projects.
 
@@ -39,9 +41,9 @@ The client accepts `ncpatcher.config/1`, `ncpatcher.modules/1`,
 members preserve declaration order because variant order is user-visible.
 
 Structured build events expose progress, artifacts, diagnostics (including
-source locations), and the final result. Exit codes 0 through 10 are mapped to
+source locations), and the final result. Exit codes 0 through 11 are mapped to
 named stages so configuration, module resolution, toolchain, compile, link,
-patch, ROM I/O, and hook failures remain distinguishable.
+patch, ROM I/O, hook failures and cancellation remain distinguishable.
 
 ## Transactional apply
 
@@ -66,11 +68,22 @@ changed. An empty configured list is distinct from a failed query.
 
 - Only one variant can be applied at a time because the editor has one live
   extracted tree.
-- Cancellation remains disabled until NCPatcher documents a graceful
-  process-tree cancellation signal and exit code.
 - Big Star does not provide a graphical YAML editor.
-- Pending module files cannot show a prospective file ID until NCPatcher offers
-  a build-free file-manifest planning command.
+
+## Cancelling a build
+
+The Build Output dock's **Cancel** sends NCPatcher's documented cancellation
+signal -- `SIGINT` on POSIX, `CTRL_BREAK_EVENT` on Windows -- to the build's
+process group, so the compilers it spawned stop too rather than being left
+running under a stopped parent. The child is started in its own group for
+exactly that reason, and the editor's own process is never in the blast radius.
+
+It is a request, not a kill. NCPatcher unwinds, writes its result document, and
+exits 11, which the client maps to a `Cancelled` stage and the panel reports as
+*Cancelled* rather than as a failure. The apply that would have followed does
+not run, so the project is left as it was, and the next build starts from the
+same place this one did -- NCPatcher re-patches the pristine binaries it kept,
+never its own half-written output.
 
 ## Banner
 

@@ -34,6 +34,11 @@ struct PatchApplyRequest {
 
     std::filesystem::path ncpatcher_executable{"ncpatcher"};
     bool verbose{false};
+
+    // Optional. Passed straight to the build; the apply itself is not
+    // interruptible, and does not need to be -- it moves files that are
+    // already written.
+    patching::ProcessCancel* cancel{};
 };
 
 enum class PatchApplyOutcome {

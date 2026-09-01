@@ -7,6 +7,7 @@
 #include <QLabel>
 #include <QPlainTextEdit>
 #include <QProgressBar>
+#include <QPushButton>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QTreeWidget>
@@ -50,6 +51,9 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
         return;
     }
     join();
+    // A token outlives one run, so a cancel meant for the build that just ended
+    // must not stop the next one before it starts.
+    cancel_.reset();
     running_ = true;
 
     nsmb::patching::BuildRequest request;
@@ -60,7 +64,8 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
     const std::filesystem::path tool = executable.empty() ? std::filesystem::path("ncpatcher")
                                                           : executable;
 
-    worker_ = std::thread([this, request, extractedDir, tool]() {
+    worker_ = std::thread([this, request, extractedDir, tool]() mutable {
+        request.cancel = &cancel_;
         nsmb::core::CallbackLogger logger(
             [this](nsmb::core::LogLevel, std::string_view message) {
                 emit logged(QString::fromUtf8(message.data(), static_cast<int>(message.size())));
@@ -120,6 +125,7 @@ void PatcherRunner::start(const std::filesystem::path& projectDir,
         apply.variant = request.variant;
         apply.ncpatcher_executable = tool;
         apply.verbose = request.verbose;
+        apply.cancel = &cancel_;
 
         nsmb::nds::NitroRomService extraction;
         auto applied = nsmb::project::apply_patch_transactionally(apply, extraction, observer);
@@ -170,6 +176,14 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
     progress_->setTextVisible(true);
     progress_->setFixedWidth(220);
     header->addWidget(progress_);
+
+    cancelButton_ = new QPushButton("Cancel", this);
+    cancelButton_->setObjectName("CancelBuild");
+    cancelButton_->setToolTip("Ask NCPatcher to stop. The project is left as it was, and the next "
+                        "build starts from the same place this one did.");
+    cancelButton_->setVisible(false);
+    connect(cancelButton_, &QPushButton::clicked, this, [this] { cancelBuild(); });
+    header->addWidget(cancelButton_);
     layout->addLayout(header);
 
     diagnostics_ = new QTreeWidget(this);
@@ -215,6 +229,16 @@ PatcherPanel::PatcherPanel(QWidget* parent) : QWidget(parent) {
             [this](bool ok, int exitCode, const QString& stage, int errors, int warnings) {
                 progress_->setRange(0, 100);
                 progress_->setValue(ok ? 100 : 0);
+                cancelButton_->setVisible(false);
+                cancelButton_->setEnabled(true);
+                if (exitCode == static_cast<int>(nsmb::patching::NCPatcherStage::Cancelled)) {
+                    // Not a failure: it did what it was asked to do, and said
+                    // so. Reporting "Failed: the build was cancelled" would
+                    // read like something went wrong.
+                    status_->setText("Cancelled");
+                    emit buildFinished(ok, exitCode, stage, errors, warnings);
+                    return;
+                }
                 if (ok) {
                     status_->setText(warnings > 0
                                          ? QString("Succeeded with %1 warning(s)").arg(warnings)
@@ -263,7 +287,18 @@ bool PatcherPanel::startBuild(bool verbose) {
     clearOutput();
     status_->setText("Starting NCPatcher...");
     progress_->setRange(0, 0);
+    cancelButton_->setEnabled(true);
+    cancelButton_->setVisible(true);
     runner_->start(projectDir_, extractedDir_, executable_, selectedVariant(), verbose);
+    return true;
+}
+
+bool PatcherPanel::cancelBuild() {
+    if (!runner_->running()) return false;
+    cancelButton_->setEnabled(false);
+    status_->setText("Cancelling...");
+    appendLog("Asked NCPatcher to stop.");
+    runner_->cancel();
     return true;
 }
 

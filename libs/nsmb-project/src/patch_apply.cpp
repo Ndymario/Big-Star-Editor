@@ -99,6 +99,7 @@ Result<PatchApplyResult> apply_patch_transactionally(const PatchApplyRequest& re
     build.variant = request.variant;
     build.output_override = result.built_rom;
     build.verbose = request.verbose;
+    build.cancel = request.cancel;
 
     patching::NCPatcherClient client(request.ncpatcher_executable);
     auto built = client.build(build, observer);
