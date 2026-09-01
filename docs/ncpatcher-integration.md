@@ -1,8 +1,8 @@
 # NCPatcher 2.x integration
 
 Big Star drives NCPatcher as an external process through its versioned CLI and
-JSON documents. It does not embed NCPatcher, parse `ncpatcher.yaml`, invoke a
-shell, or change the editor process's working directory.
+JSON documents. It does not embed NCPatcher, parse `ncpatcher.yaml`, resolve module trees
+itself, invoke a shell, or change the editor process's working directory.
 
 ## Project contract
 
@@ -44,6 +44,42 @@ Structured build events expose progress, artifacts, diagnostics (including
 source locations), and the final result. Exit codes 0 through 11 are mapped to
 named stages so configuration, module resolution, toolchain, compile, link,
 patch, ROM I/O, hook failures and cancellation remain distinguishable.
+
+## Resolution happens once, in NCPatcher
+
+The editor does not work out which module supplies which ROM destination. It
+asks. `files plan` answers with the same `ncpatcher.files/1` document a build
+writes -- every id, path, size, action and provenance -- with `planned: true`
+and prospective ids for the files a build would append. The Filesystem dock is
+then a join of three things it does not derive: that plan, the last build's
+`files-dump` manifest, and the bytes each source currently holds. `Pending`
+means those disagree.
+
+This replaces roughly 120 lines that re-implemented layering, module order,
+`into:` prefixes, the archive-folder convention, component glob subtraction and
+brace expansion. Two implementations of precedence rules cannot be kept in step
+by testing either one alone, and the editor's copy was the one that could
+silently disagree with the ROM the user shipped.
+
+Three consequences worth stating:
+
+- A plan reads the same sources a build does, so a destination whose source a
+  `pre-build` hook has not generated yet is still planned -- id, path and
+  provenance -- and its entry carries `source-missing`. Its size is the one
+  thing genuinely unknown, so the dock reports the last build for it rather
+  than a Pending mark nothing can clear.
+- An archive the build edits carries a `members` array: index, path, and the
+  module, component and variant behind each member. A container entry can carry
+  no more provenance than its members agree on, which for members from three
+  modules is none.
+- Without NCPatcher there is no plan, and the dock reports the last build
+  rather than guessing past it.
+
+`module_file_target` stays in the editor because it answers the write-side
+question no build document does: where in a module's tree a new edit goes. It
+reads `into:` from the module dump, and spells an archive address `a/b.narc!c/d`
+as the folder `a/b_narc/c/d` -- for whatever extension a game gives its
+archives, `.carc` included.
 
 ## Transactional apply
 
@@ -87,11 +123,12 @@ never its own half-written output.
 
 ## Banner
 
-The config reader accepts optional `rom-banner` and per-variant `banner` paths.
-NCPatcher 2.0 does not yet include those values in `config dump --json`, so the
-editor asks the user to choose the source named by `rom.banner` when they are
-absent. Banner data is not a NitroFS file and is therefore never routed into a
-module tree or guessed by parsing YAML.
+`config dump --json` reports `rom-banner` and each variant's `banner`, so the
+editor writes an edited banner to the file the project configured and never asks
+the user which one that is. A project that configures no banner is told so
+rather than offered a file picker: a banner written somewhere no build reads is
+worse than one not written at all. Banner data is not a NitroFS file and is
+therefore never routed into a module tree.
 
 The Fireflower and NSMBe-compatible wrapper build actions were removed in M15.
 NCPatcher is the only build path.

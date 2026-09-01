@@ -50,6 +50,7 @@
 #include <QtTest>
 
 #include <fstream>
+#include <sstream>
 
 namespace {
 
@@ -417,9 +418,16 @@ private slots:
         const auto root = std::filesystem::path(directory.path().toStdString());
         std::ofstream(root / "ncpatcher.yaml")
             << "version: 2\nvariants:\n  en:\n    defines: EN\n  fr:\n    defines: FR\n";
+        // Which variants a project has is NCPatcher's answer, not something the
+        // editor reads out of the YAML itself.
+        std::filesystem::create_directories(root / "fake-ncpatcher");
+        std::ofstream(root / "fake-ncpatcher/config-dump.json")
+            << "{\"schema\":\"ncpatcher.config/1\",\"version\":2,\"variants\":{"
+               "\"en\":{\"defines\":[\"EN\"]},\"fr\":{\"defines\":[\"FR\"]}}}";
         const auto project = make_project(root);
 
         MainWindow window;
+        window.patcherPanel_->setExecutable(BSE_FAKE_NCPATCHER);
         window.setProject(project);
 
         // Exactly one selector, and it carries the bare variant name in the data
@@ -1441,21 +1449,95 @@ private slots:
             << "\",\"nitrofs\":{\"dir\":\"" << nitrofs.generic_string()
             << "\",\"layered\":true,\"base-variant\":\"en\"},\"components\":[]}]}";
 
+        // The module already owns this level, and its copy is what the last
+        // build put in the ROM. Editing it is what has to show up as Pending.
         const auto extractedCourse = root / "extracted-rom/root/course/A01_1.bin";
+        const auto extractedBgdat = root / "extracted-rom/root/course/A01_1_bgdat.bin";
+        const auto moduleCourse = nitrofs / "en/course/A01_1.bin";
+        const auto moduleBgdat = nitrofs / "en/course/A01_1_bgdat.bin";
+        std::filesystem::create_directories(moduleCourse.parent_path());
+        std::filesystem::copy_file(extractedCourse, moduleCourse);
+        std::filesystem::copy_file(extractedBgdat, moduleBgdat);
+
+        const auto entries = [&] {
+            std::ostringstream out;
+            const auto entry = [&](int id, const char* path, const std::filesystem::path& source) {
+                out << (id == 200 ? "" : ",") << "{\"id\":" << id << ",\"path\":\"" << path
+                    << "\",\"size\":" << std::filesystem::file_size(source)
+                    << ",\"action\":\"modified\",\"source\":\""
+                    << std::filesystem::relative(source, root).generic_string()
+                    << "\",\"module\":\"levels\",\"from-variant\":\"en\"}";
+            };
+            entry(200, "course/A01_1.bin", moduleCourse);
+            entry(201, "course/A01_1_bgdat.bin", moduleBgdat);
+            return out.str();
+        }();
+        std::ofstream(root / "build/generated/files.json")
+            << "{\"schema\":\"ncpatcher.files/1\",\"variant\":\"en\",\"count\":2,\"files\":["
+            << entries << "]}";
+        std::filesystem::create_directories(root / "fake-ncpatcher");
+        std::ofstream(root / "fake-ncpatcher/files-plan.json")
+            << "{\"schema\":\"ncpatcher.files/1\",\"variant\":\"en\",\"planned\":true,\"count\":2,\"files\":["
+            << entries << "]}";
+        std::ofstream(root / "fake-ncpatcher/config-dump.json")
+            << "{\"schema\":\"ncpatcher.config/1\",\"version\":2,\"variants\":{\"en\":{\"defines\":[]}}}";
+
         const auto before = nsmb::core::read_file(extractedCourse).value();
         MainWindow window;
+        window.patcherPanel_->setExecutable(BSE_FAKE_NCPATCHER);
         window.setProject(project);
+
+        // Nothing edited yet: the plan and the last build agree, and the bytes
+        // behind them are the bytes the ROM holds.
+        QVERIFY(window.filesystemView_.find("course/A01_1_bgdat.bin"));
+        QCOMPARE(window.filesystemView_.find("course/A01_1_bgdat.bin")->status,
+                 nsmb::project::FilesystemStatus::Replaced);
+
         auto session = window.levelSession("extracted-rom/root/course/A01_1.bin", "extracted-rom/root/course/A01_1_bgdat.bin");
         QVERIFY(session);
         QVERIFY(session.value()->add_object({7, 0, 1, 2, 1, 1}));
         QVERIFY(window.saveEditedLevels());
-        const auto moduleCourse = nitrofs / "en/course/A01_1.bin";
-        const auto moduleBgdat = nitrofs / "en/course/A01_1_bgdat.bin";
         QVERIFY(std::filesystem::is_regular_file(moduleCourse));
         QVERIFY(std::filesystem::is_regular_file(moduleBgdat));
         QCOMPARE(nsmb::core::read_file(extractedCourse).value(), before);
-        QVERIFY(window.filesystemView_.find("course/A01_1.bin"));
-        QCOMPARE(window.filesystemView_.find("course/A01_1.bin")->status, nsmb::project::FilesystemStatus::Pending);
+
+        // An object lives in the bgdat, so that is the file whose bytes moved.
+        // The edit went into the module tree, so what a build would place no
+        // longer matches what the ROM holds -- and only for that file. Marking
+        // the whole level pending would be telling the user less than is known.
+        QCOMPARE(window.filesystemView_.find("course/A01_1_bgdat.bin")->status,
+                 nsmb::project::FilesystemStatus::Pending);
+        QCOMPARE(window.filesystemView_.find("course/A01_1.bin")->status,
+                 nsmb::project::FilesystemStatus::Replaced);
+    }
+
+    void withoutAPlanTheDockReportsTheLastBuild() {
+        // NCPatcher resolves the module trees; the editor does not. When it
+        // cannot be asked -- not installed, or a project it refuses -- the
+        // honest answer is the last build's own record, not a guess made from
+        // the module directories.
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto root = std::filesystem::path(directory.path().toStdString());
+        auto project = make_project(root);
+        std::filesystem::create_directories(root / "build/generated");
+        std::ofstream(root / "ncpatcher.yaml") << "version: 2\n";
+        std::ofstream(root / "build/generated/files.json")
+            << "{\"schema\":\"ncpatcher.files/1\",\"variant\":\"en\",\"count\":1,\"files\":["
+               "{\"id\":200,\"path\":\"course/A01_1.bin\",\"size\":4,\"action\":\"modified\","
+               "\"source\":\"modules/levels/nitrofs/en/course/A01_1.bin\",\"module\":\"levels\"}]}";
+
+        MainWindow window;
+        // Staged nothing, so every query exits 3 the way NCPatcher does when it
+        // cannot read the project.
+        window.patcherPanel_->setExecutable(BSE_FAKE_NCPATCHER);
+        window.setProject(project);
+
+        const auto* entry = window.filesystemView_.find("course/A01_1.bin");
+        QVERIFY(entry);
+        QCOMPARE(entry->status, nsmb::project::FilesystemStatus::Orphaned);
+        QCOMPARE(entry->id, std::optional<std::int64_t>(200));
+        QVERIFY(!entry->id_is_planned);
     }
 
     void filesystemTreeFollowsFileIdOrder() {

@@ -53,10 +53,17 @@ if(BSE_BUILD_TESTS)
       src/PatcherPanel.cpp src/PatcherPanel.hpp
       src/ProjectTreeModel.cpp src/ProjectTreeModel.hpp
     )
+    # Stands in for NCPatcher. A separate program rather than a script, so the
+    # tests do not depend on which shell the host has.
+    add_executable(nsmb-fake-ncpatcher tests/fake_ncpatcher.cpp)
+    target_compile_features(nsmb-fake-ncpatcher PRIVATE cxx_std_20)
+    add_dependencies(nsmb-qt-tests nsmb-fake-ncpatcher)
+
     target_include_directories(nsmb-qt-tests PRIVATE src)
     target_link_libraries(nsmb-qt-tests PRIVATE Qt6::Widgets Qt6::Test nsmb-project nsmb-patching)
     target_compile_features(nsmb-qt-tests PRIVATE cxx_std_20)
-    target_compile_definitions(nsmb-qt-tests PRIVATE BSE_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    target_compile_definitions(nsmb-qt-tests PRIVATE BSE_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+      BSE_FAKE_NCPATCHER="$<TARGET_FILE:nsmb-fake-ncpatcher>")
     add_test(NAME nsmb-qt-tests COMMAND nsmb-qt-tests)
     set_tests_properties(nsmb-qt-tests PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
   endif()

@@ -1422,11 +1422,14 @@ void MainWindow::editRomBanner() {
         target = variant != patcherConfig_->variants.end() && !variant->banner.empty()
             ? variant->banner : patcherConfig_->rom_banner;
         if (target.empty()) {
-            const auto selected = QFileDialog::getOpenFileName(this,
-                "Select the banner source configured by rom.banner",
-                QString::fromStdString(currentProject_.directory().string()), "DS banners (*.bin);;All files (*)");
-            if (selected.isEmpty()) return;
-            target = selected.toStdString();
+            // `config dump` reports both the project banner and the variant's
+            // override, so an empty answer means the project configures no
+            // banner at all. Asking the user to point at a file would invent a
+            // source no build reads; the fix belongs in ncpatcher.yaml.
+            QMessageBox::information(this, "ROM Banner",
+                "This project configures no rom.banner, so there is nowhere for an edited "
+                "banner to go. Add one to ncpatcher.yaml and the editor will write to it.");
+            return;
         }
         if (target.is_relative()) target = currentProject_.directory() / target;
     } else {
@@ -1565,8 +1568,8 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     moduleGraph_ = {};
     patcherConfig_.reset();
     fileManifest_.reset();
+    filePlan_.reset();
     filesystemView_ = {};
-    projectVariants_.clear();
     activeModule_.clear();
     activeVariant_.clear();
     moduleData_={};
@@ -1596,8 +1599,16 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
 }
 
 std::vector<nsmb::project::ModuleVariantMapping> MainWindow::activeModuleMappings() const {
-    const auto found = std::ranges::find(projectVariants_, activeVariant_.toStdString(), &nsmb::project::ProjectVariantLayers::name);
-    return found == projectVariants_.end() ? std::vector<nsmb::project::ModuleVariantMapping>{} : found->mappings;
+    // Straight out of `config dump`. The editor used to read these out of
+    // ncpatcher.yaml with a hand-written YAML scanner, which is exactly the
+    // kind of second opinion that can disagree with the build.
+    if (!patcherConfig_) return {};
+    const auto found = std::ranges::find(patcherConfig_->variants, activeVariant_.toStdString(), &nsmb::patching::BuildVariant::name);
+    if (found == patcherConfig_->variants.end()) return {};
+    std::vector<nsmb::project::ModuleVariantMapping> mappings;
+    mappings.reserve(found->module_variants.size());
+    for (const auto& [module, layer] : found->module_variants) mappings.push_back({module, layer});
+    return mappings;
 }
 
 void MainWindow::setActiveVariant(const QString& variant) {
@@ -1642,7 +1653,7 @@ void MainWindow::reloadFilesystemView() {
     if (!filesystemPanel_) return;
     if (moduleWatcher_ && !moduleWatcher_->directories().empty()) moduleWatcher_->removePaths(moduleWatcher_->directories());
     if (currentProject_.directory().empty() || !currentProject_.rom()) {
-        moduleGraph_ = {}; fileManifest_.reset(); filesystemView_ = {};
+        moduleGraph_ = {}; fileManifest_.reset(); filePlan_.reset(); filesystemView_ = {};
         actorDefinitions_ = {}; spriteDefinitions_ = {};
         filesystemPanel_->setData({}, {}, {}, {}, {}, {});
         return;
@@ -1696,17 +1707,8 @@ void MainWindow::reloadFilesystemView() {
         else log("Filesystem manifest: " + QString::fromStdString(parsed.error().message));
     }
 
-    projectVariants_.clear();
-    const auto configFile = currentProject_.directory() / "ncpatcher.yaml";
-    if (std::filesystem::is_regular_file(configFile, ec)) {
-        auto text = readTextFile(configFile);
-        auto parsed = text ? nsmb::project::parse_project_variant_layers(text.value())
-                           : nsmb::core::Result<std::vector<nsmb::project::ProjectVariantLayers>>(text.error());
-        if (parsed) projectVariants_ = std::move(parsed.value()); else log("Filesystem variants: " + QString::fromStdString(parsed.error().message));
-    }
     QStringList variants;
     if (patcherConfig_) for (const auto& variant : patcherConfig_->variants) variants.push_back(QString::fromStdString(variant.name));
-    else for (const auto& variant : projectVariants_) variants.push_back(QString::fromStdString(variant.name));
     if (activeVariant_.isEmpty()) {
         activeVariant_ = !ncpatcherVariant_.isEmpty() ? ncpatcherVariant_
             : fileManifest_ && !fileManifest_->variant.empty() ? QString::fromStdString(fileManifest_->variant)
@@ -1732,21 +1734,26 @@ void MainWindow::reloadFilesystemView() {
         variantSelector_->setCurrentIndex(std::max(0, index));
     }
 
+    // Asked for once the variant is settled, because a plan is per variant.
+    // This is the whole of what the view used to work out for itself: module
+    // order, layering, `into:`, component subtraction, the archive-folder
+    // convention. NCPatcher decides all of it, so the dock and the build can
+    // no longer disagree.
+    filePlan_.reset();
+    if (!executable.isEmpty()) {
+        nsmb::patching::NCPatcherClient client(executable.toStdString());
+        auto planned = client.plan_files(currentProject_.directory(), activeVariant_.toStdString());
+        if (planned) filePlan_ = std::move(planned.value());
+        else log("Filesystem plan: " + QString::fromStdString(planned.error().message));
+    }
+
     nsmb::project::FilesystemViewRequest request;
     request.extracted_rom = extractedProjectPath(currentProject_);
     request.project_dir = currentProject_.directory();
     request.modules = moduleGraph_;
+    request.plan = filePlan_;
     request.manifest = fileManifest_;
     request.variant = activeVariant_.toStdString();
-    request.module_variants = activeModuleMappings();
-    request.has_current_config = patcherConfig_.has_value();
-    if (patcherConfig_) {
-        std::map<std::string, std::filesystem::path> explicitFiles;
-        for (const auto& [path, source] : patcherConfig_->files) explicitFiles[path] = source;
-        const auto selected = std::ranges::find(patcherConfig_->variants, request.variant, &nsmb::patching::BuildVariant::name);
-        if (selected != patcherConfig_->variants.end()) for (const auto& [path, source] : selected->files) explicitFiles[path] = source;
-        for (const auto& [path, source] : explicitFiles) request.explicit_files.push_back({path, source, {}, {}, {}});
-    }
     auto built = nsmb::project::build_filesystem_view(std::move(request));
     if (!built) { log("Filesystem view: " + QString::fromStdString(built.error().message)); filesystemView_ = {}; }
     else filesystemView_ = std::move(built.value());

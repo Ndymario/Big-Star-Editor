@@ -206,7 +206,9 @@ EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry) {
     return EntryIcon::File;
 }
 
-// A file has no ID until a build assigns one, so pending insertions trail their siblings.
+// A plan predicts the ID a new file would take, so a pending insertion sorts where it
+// will land rather than at the end. Without one -- no NCPatcher to ask -- there is no ID
+// to sort by and the file trails its siblings.
 constexpr auto unassigned_id = std::numeric_limits<qint64>::max();
 
 struct TreeRow {
@@ -372,11 +374,17 @@ void FilesystemDock::rebuildTree() {
             parent = directories[directoryPath]; parentPath = directoryPath;
         }
         const auto statusName = entry.status == nsmb::project::FilesystemStatus::Pending
-            ? (entry.id ? QString("⏳ Pending rebuild") : QString("⏳ Pending insertion"))
+            ? (entry.id && !entry.id_is_planned ? QString("⏳ Pending rebuild") : QString("⏳ Pending insertion"))
             : entry.status == nsmb::project::FilesystemStatus::Orphaned ? QString("Orphaned — reverting")
             : QString::fromUtf8(nsmb::project::filesystem_status_name(entry.status).data(), static_cast<qsizetype>(nsmb::project::filesystem_status_name(entry.status).size()));
+        // A planned id is what the next build would assign, not an address the
+        // game can use yet, and the two must never read alike.
+        const auto fileId = !entry.id ? QString("—")
+            : entry.id_is_planned ? QString::number(*entry.id) + "?"
+            : QString::number(*entry.id);
         auto* item = new QTreeWidgetItem(parent, {parts.back(), statusName,
-            provenance(entry), QString::fromStdString(entry.variant), entry.id ? QString::number(*entry.id) : QString("—"), QString::number(entry.size)});
+            provenance(entry), QString::fromStdString(entry.variant), fileId, QString::number(entry.size)});
+        if (entry.id_is_planned) item->setToolTip(FileIdColumn, "The ID the next build would assign. Nothing holds it yet.");
         item->setData(0, path_role, path);
         item->setIcon(0, entry_icon(classify_entry(entry), icons));
         if (entry.status == nsmb::project::FilesystemStatus::Pending) item->setForeground(1, bse::theme::warning(palette()));
@@ -413,7 +421,9 @@ void FilesystemDock::updateDetails() {
     const auto* entry = selectedEntry();
     if (!entry) { details_->setText("No file selected."); return; }
     QStringList fields{QString::fromStdString(entry->path)};
-    fields << "File ID: " + (entry->id ? QString::number(*entry->id) : QString("unassigned"));
+    fields << "File ID: " + (!entry->id ? QString("unassigned")
+        : entry->id_is_planned ? QString::number(*entry->id) + " (planned — assigned by the next build)"
+        : QString::number(*entry->id));
     fields << "Size: " + QLocale().toString(static_cast<qlonglong>(entry->size)) + " bytes";
     if (selectedEditor_ != bse::editors::Kind::None) fields << "Opens in: " + bse::editors::editorName(selectedEditor_);
     if (const auto from = provenance(*entry); !from.isEmpty()) fields << "From: " + from;

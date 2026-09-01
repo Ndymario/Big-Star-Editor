@@ -154,8 +154,11 @@ private:
     nsmb::patching::ModuleGraph moduleGraph_;
     std::optional<nsmb::patching::ProjectConfig> patcherConfig_;
     std::optional<nsmb::patching::FileManifest> fileManifest_;
+
+    // `ncpatcher files plan`: what a build would place, asked for rather than
+    // worked out. The editor resolves no module trees of its own.
+    std::optional<nsmb::patching::FileManifest> filePlan_;
     nsmb::project::FilesystemView filesystemView_;
-    std::vector<nsmb::project::ProjectVariantLayers> projectVariants_;
     ProjectTreeModel* projectModel_{};
     QTreeView* levelTree_{};
     QTabWidget* tabs_{};
