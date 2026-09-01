@@ -164,6 +164,14 @@ std::size_t normalized_header_region_size(const RomHeader& header, std::size_t r
     return std::max<std::size_t>(size, ds_cartridge_header_size);
 }
 
+void consider_next_region(std::uint32_t candidate, std::uint32_t banner_offset, std::size_t rom_size, std::size_t& next) {
+    if (candidate > banner_offset && static_cast<std::size_t>(candidate) <= rom_size) {
+        next = std::min(next, static_cast<std::size_t>(candidate));
+    }
+}
+
+} // namespace
+
 std::size_t banner_size_from_version(std::span<const std::uint8_t> banner_data) {
     if (banner_data.size() < 2) {
         return 0;
@@ -186,30 +194,31 @@ std::size_t banner_size_from_version(std::span<const std::uint8_t> banner_data) 
     }
 }
 
-void consider_next_region(std::uint32_t candidate, std::uint32_t banner_offset, std::size_t rom_size, std::size_t& next) {
-    if (candidate > banner_offset && static_cast<std::size_t>(candidate) <= rom_size) {
-        next = std::min(next, static_cast<std::size_t>(candidate));
+// Where the region after the banner starts -- the banner's own header does not
+// say how long it is, so the only bound the ROM gives is whatever comes next.
+std::size_t banner_region_limit(const RomHeader& header, std::span<const FatEntry> fat, std::size_t rom_size) {
+    auto next = rom_size;
+    consider_next_region(header.arm9.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.arm7.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.fnt.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.fat.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.arm9_overlay_table.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.arm7_overlay_table.rom_offset, header.banner_rom_offset, rom_size, next);
+    consider_next_region(header.total_used_rom_size, header.banner_rom_offset, rom_size, next);
+    for (const auto& entry : fat) {
+        consider_next_region(entry.start_address, header.banner_rom_offset, rom_size, next);
     }
+    return next;
 }
+
+namespace {
 
 std::size_t infer_banner_size(std::span<const std::uint8_t> rom, const RomHeader& header, const std::vector<FatEntry>& fat) {
     if (header.banner_rom_offset == 0 || static_cast<std::size_t>(header.banner_rom_offset) >= rom.size()) {
         return 0;
     }
 
-    auto next = rom.size();
-    consider_next_region(header.arm9.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.arm7.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.fnt.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.fat.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.arm9_overlay_table.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.arm7_overlay_table.rom_offset, header.banner_rom_offset, rom.size(), next);
-    consider_next_region(header.total_used_rom_size, header.banner_rom_offset, rom.size(), next);
-    for (const auto& entry : fat) {
-        consider_next_region(entry.start_address, header.banner_rom_offset, rom.size(), next);
-    }
-
-    const auto available = next - static_cast<std::size_t>(header.banner_rom_offset);
+    const auto available = banner_region_limit(header, fat, rom.size()) - static_cast<std::size_t>(header.banner_rom_offset);
     const auto banner_data = std::span<const std::uint8_t>(rom.data() + header.banner_rom_offset, rom.size() - header.banner_rom_offset);
     const auto implied = banner_size_from_version(banner_data);
     if (implied != 0 && implied <= available) {

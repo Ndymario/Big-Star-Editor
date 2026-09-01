@@ -9,6 +9,7 @@ add_library(nsmb-project
   src/module_data.cpp
   src/patch_apply.cpp
   src/project.cpp
+  src/rom_reader.cpp
   src/sprite_definitions.cpp
 )
 find_package(Lua 5.4 REQUIRED)
@@ -34,6 +35,9 @@ if(BSE_BUILD_TESTS)
   add_executable(nsmb-level-exchange-tests tests/level_exchange_tests.cpp)
   target_link_libraries(nsmb-level-exchange-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-level-exchange-tests COMMAND nsmb-level-exchange-tests)
+  add_executable(nsmb-rom-reader-tests tests/rom_reader_tests.cpp)
+  target_link_libraries(nsmb-rom-reader-tests PRIVATE nsmb-project)
+  add_test(NAME nsmb-rom-reader-tests COMMAND nsmb-rom-reader-tests)
   add_executable(nsmb-filesystem-view-tests tests/filesystem_view_tests.cpp)
   target_link_libraries(nsmb-filesystem-view-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-filesystem-view-tests COMMAND nsmb-filesystem-view-tests)

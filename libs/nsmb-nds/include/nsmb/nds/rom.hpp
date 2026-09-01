@@ -121,6 +121,13 @@ public:
 };
 
 [[nodiscard]] std::string overlay_file_name(std::uint32_t overlay_id);
+
+// How long the banner at `header.banner_rom_offset` is, from its own version
+// word, and where the next region after it starts. A banner declares no length,
+// so a reader that only has the header and the FAT needs both: the version says
+// what the format implies, and the limit says how much room there actually is.
+[[nodiscard]] std::size_t banner_size_from_version(std::span<const std::uint8_t> banner_data);
+[[nodiscard]] std::size_t banner_region_limit(const RomHeader& header, std::span<const FatEntry> fat, std::size_t rom_size);
 [[nodiscard]] std::uint16_t crc16(std::span<const std::uint8_t> data, std::uint16_t initial = 0xFFFF);
 
 core::Result<RomHeader> parse_rom_header(std::span<const std::uint8_t> data);
