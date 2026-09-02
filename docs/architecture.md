@@ -9,9 +9,9 @@ The frontend lives under `apps/`. Qt-specific models and widgets are allowed onl
 ## Module boundaries
 
 - `nsmb-core`: common infrastructure: `Result<T>`, `Error`, `ByteBuffer`, little-endian reader/writer, atomic file I/O, logging, and undo/redo command interfaces.
-- `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, extracted ROM roots, file-tree nodes, and extraction/build services.
+- `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, and banner sizing.
 - `nsmb-formats`: defensive NSMB level parsing/serialization plus portable Nitro compression, editable tile/palette/screen-map/Map16/object-layout codecs, TEX0, quantisation, and tileset bundles.
-- `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, editable level sessions, compound command history, regional ROM resource resolution, and decoded graphics assembly.
+- `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, editable level sessions, compound command history, regional ROM resource resolution, and decoded graphics assembly. It also holds `RomReader`, which reads a `.nds` in place, and `EffectiveFilesystem`, which answers a read as the module source a build would use when one exists and the ROM otherwise. Those need both `nsmb-nds` and `nsmb-formats` -- a NARC's name table is an FNT, so `nsmb-formats` already depends on `nsmb-nds` -- and putting them a layer lower would close the loop.
 - `nsmb-patching`: no-shell external process boundary for NCPatcher.
 
 ## Error policy
@@ -20,15 +20,15 @@ Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementa
 
 ## Current vertical slice
 
-M0-M4 provides CMake configuration, backend libraries, a CLI, an optional Qt editor, YAML project manifest round-trip, file-tree scanning, NDS header parsing, built-in ROM extraction/build, level and graphics parsing, entity editing, safe persistence, and unit tests. The Qt UI adapts backend-owned editing sessions and command histories; closing a view does not discard its edited session.
+M0-M4 provides CMake configuration, backend libraries, a CLI, an optional Qt editor, YAML project manifest round-trip, NDS header parsing, in-place ROM reading, level and graphics parsing, entity editing, safe persistence, and unit tests. The Qt UI adapts backend-owned editing sessions and command histories; closing a view does not discard its edited session.
 
 The Qt workspace uses a reusable read-only Preview tab and one unique editable document per open level. Documents can move between the tab well and separate windows. Docks, open documents, detached-window geometry, zoom, and pan are restored per project with `QSettings`; the backend project and level sessions remain the source of truth.
 
 Editable canvases provide native Qt tools for selection, panning, placement, paths, marquee selection, snapping, movement, supported resizing, and deletion. A gesture or same-kind multi-edit is submitted as one compound backend command so Undo/Redo follows user intent. Parsed level views remain visible but read-only until their serializer is implemented.
 
-ROM graphics are resolved from the active extracted tree through `fnt.bin` and validated region-specific Overlay 0 tables. Portable backend codecs assemble and edit terrain, tileset objects, backgrounds, and foregrounds; Qt supplies only PNG I/O and widget presentation. Sandboxed per-actor Lua files own actor metadata and select verified sprite sheets, palettes, or model textures by filename through the active module-aware filesystem view; unknown layouts retain labeled fallbacks. Extracted artwork is never embedded in the application.
+ROM graphics are resolved from the built ROM's own name table and validated region-specific Overlay 0 tables, read through `EffectiveFilesystem` so a pending module edit is what the canvas draws. Portable backend codecs assemble and edit terrain, tileset objects, backgrounds, and foregrounds; Qt supplies only PNG I/O and widget presentation. Sandboxed per-actor Lua files own actor metadata and select verified sprite sheets, palettes, or model textures by filename through the active module-aware filesystem view; unknown layouts retain labeled fallbacks. Extracted artwork is never embedded in the application.
 
-Course/BGDat saves preserve untouched block bytes, rebuild the structures the editor owns, validate the serialized result by parsing it again, back up both original files, and atomically replace each target. Manifest and ROM writes use the same failure-safe replacement policy. ROM builds consume the manifest's configured extracted tree through `NitroRomService` and refuse output paths inside that input tree.
+Course/BGDat saves preserve untouched block bytes, rebuild the structures the editor owns, validate the serialized result by parsing it again, back up both original files, and atomically replace each target. Manifest writes use the same failure-safe replacement policy. Backups are kept per kind and swept to the ten most recent, so an area that only ever grew is bounded. Building a ROM is NCPatcher's job alone; the editor validates what it produced and moves it into place.
 
 ## Async frontend design
 
@@ -63,4 +63,4 @@ recovery contract would duplicate that workflow while weakening its safety.
 
 ## Project files
 
-Projects are opened by directory, so the project manifest does not serialize an absolute project root. `big-star-project.yaml` stores only project-relative paths such as `extracted-rom/root/...`, which keeps projects portable across machines and avoids leaking user filesystem paths. See `docs/project-format.md`.
+Projects are opened by directory, so the project manifest does not serialize an absolute project root. `big-star-project.yaml` stores only project-relative paths such as `big-star-build.nds`, which keeps projects portable across machines and avoids leaking user filesystem paths. See `docs/project-format.md`.

@@ -175,3 +175,38 @@
   variant selector, palette pairing, NCBR layout, explicit raw widths, the
   merged editor and file document tabs; see `docs/m15-manual-checklist.md` for
   ROM-backed validation.
+
+## M16: one resolver, one ROM, archives you can open
+
+- Stopped re-deriving NCPatcher's module resolution. `files plan` answers what a
+  build would place -- ids, sizes, actions and provenance, with `planned: true`
+  and prospective ids for `z_new/` additions -- so roughly 120 lines of
+  layering, module order, `into:`, the archive-folder convention, component glob
+  subtraction and brace expansion are gone. Two implementations of precedence
+  rules cannot be kept in step by testing either one alone.
+- Read variant layers from `config dump --json` instead of hand-parsing
+  `ncpatcher.yaml`, which the integration document had always claimed the editor
+  never did.
+- Retired the extracted tree. `RomReader` opens the built `.nds` in place and
+  `EffectiveFilesystem` answers a read as the module source when a build would
+  use one and the ROM otherwise -- so a pending edit is visible before the build
+  that applies it, without a derived tree that existed only to be corrected
+  afterwards. Manifest version 3 replaces `rom.extracted_path` with
+  `rom.rom_path`; a version 2 manifest still opens.
+- Applied a build by moving one file. No extraction, no backup, no swap: a
+  project built a hundred times is the size of one built once, and two
+  consecutive builds of the coop project produce byte-identical ROMs.
+- Deleted the editor's own ROM builder and the CLI's `build-rom`. Repacking a
+  derived tree was never a legitimate way to produce a ROM. **File > Extract
+  ROM...** delegates to `ncpatcher rom extract`, so there is one extractor and
+  one layout.
+- Made archives expand like folders. The view emits a row per member with its
+  own status and provenance and compares each against the container's copy at
+  that index, so an archive with one stale member now says which member. The
+  dock splits an address on `!` before `/` and lists the container's remaining
+  members when somebody opens it, not for every archive in the game on project
+  open. Compressed containers (`.carc`) are read through their wrapper.
+- Offered Cancel on a running build, mapping NCPatcher's exit code 11 to a
+  `Cancelled` stage rather than a failure.
+- Bounded `.big-star-backups/`: the ten most recent of each kind, swept on
+  project open and whenever a write adds one.

@@ -6,28 +6,30 @@ The manifest intentionally avoids absolute paths. Paths are stored relative to t
 
 ```yaml
 format: big-star-editor-project
-version: 2
+version: 3
 name: "Example Project"
 rom:
-  extracted_path: "extracted-rom"
+  rom_path: "big-star-build.nds"
   game_title: "NEW MARIO"
   game_code: "A2DE"
 ```
 
 The backend owns a deliberately small YAML subset without a third-party YAML dependency. `format`, a supported `version`, and a nonempty `name` are required. Quoted strings support `\\`, `\"`, `\n`, `\r`, and `\t` escapes.
 
-`rom.extracted_path` must remain inside the project directory. Absolute paths, parent traversal, Windows drive prefixes, and backslashes are rejected. Manifest writes use an adjacent temporary file followed by atomic replacement, so a failed write does not leave a partially written manifest.
+`rom.rom_path` must remain inside the project directory. Absolute paths, parent traversal, Windows drive prefixes, and backslashes are rejected. Manifest writes use an adjacent temporary file followed by atomic replacement, so a failed write does not leave a partially written manifest.
 
-## The file index is not serialized
+It names the ROM the editor reads: `big-star-build.nds`, which is what a successful build writes, falling back to the imported `rom.nds` before a project has ever been built. Both are files in the project directory, not directories.
 
-The extracted ROM is derived output that NCPatcher rewrites on every build, so the manifest does not describe its contents. Opening a project walks `rom.extracted_path` and builds the index in memory; a project whose ROM has not been extracted yet still opens, with an empty index, until the next import or build.
+## The ROM is not unpacked
 
-Version 1 stored that walk as a `files:` list of `path`/`size` pairs — for a full NSMB tree, roughly 4,000 lines that had to be rewritten on every build and carried no file IDs. File IDs come from NCPatcher's `files-dump` manifest (`RomFileEntry.id`), which is also the only source of provenance, and is what the Filesystem dock shows. Version 2 drops the list. A version 1 manifest still opens — its `files:` block is ignored rather than parsed — and is rewritten as version 2 on the next save.
+The editor reads the `.nds` where it lies. Nothing walks it into a directory of loose files first: opening a project opens the ROM, and a file's bytes are read from it on demand, through the FAT for an ordinary file and through the container for an archive member. What the editor shows is that read, overridden by a module source whenever the plan says a build would put one there — so an edit is visible before the build that applies it.
+
+Version 1 stored a walk of an unpacked tree as a `files:` list of `path`/`size` pairs — for a full NSMB tree, roughly 4,000 lines that had to be rewritten on every build and carried no file IDs. File IDs come from NCPatcher's `files-dump` manifest (`RomFileEntry.id`), which is also the only source of provenance, and is what the Filesystem dock shows. Version 2 dropped the list. Version 3 drops the unpacked tree itself: `rom.extracted_path` becomes `rom.rom_path`. A version 1 or 2 manifest still opens — its `files:` block and its `extracted_path` are validated and then ignored — and is rewritten as version 3 on the next save.
 
 ## Module edit targets
 
-The extracted ROM is a derived build result. Editor writes therefore go to an enabled module's `nitrofs` tree, never directly into `rom.extracted_path`. The active module and project variant are workspace choices; an existing module-supplied file keeps its supplying module while using the active variant layer, and an otherwise vanilla file uses the active module.
+The ROM is a build result. Editor writes therefore go to an enabled module's `nitrofs` tree, never into the ROM itself. The active module and project variant are workspace choices; an existing module-supplied file keeps its supplying module while using the active variant layer, and an otherwise vanilla file uses the active module. A member of a Nitro archive is addressed as `a/b.narc!c/d` and written to `<module>/nitrofs/<layer>/b_narc/c/d`, which the next build sweeps back into the container.
 
-Until NCPatcher rebuilds the ROM, these writes appear as **Pending** and new files have no ID. A successful transactional build replaces and reindexes the extracted tree, then reloads the generated module and file documents.
+Until NCPatcher rebuilds the ROM, these writes appear as **Pending**, with the file ID the next build would assign shown as a prediction. A successful build replaces `big-star-build.nds` and reloads the generated module and file documents.
 
 The Filesystem dock resolves project-level and selected-variant `files:` entries from NCPatcher's current config before module-tree offers. If NCPatcher is unavailable, it falls back to explicit-file provenance from the last manifest and does not invent prospective file IDs.

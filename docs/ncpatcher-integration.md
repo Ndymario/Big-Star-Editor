@@ -8,8 +8,11 @@ itself, invoke a shell, or change the editor process's working directory.
 
 The Big Star project directory is also the NCPatcher project directory. It
 contains `ncpatcher.yaml` (or `.yml`), the pristine input ROM, and `modules/`.
-The editor renders `extracted-rom/`, which is a derived view of the most recent
-successful build and is never an input to NCPatcher.
+The editor reads the built `.nds` where it lies -- `big-star-build.nds`, or the
+imported `rom.nds` before a first build. Nothing is unpacked. An extracted
+directory is an explicit export produced by **File > Extract ROM...**, which
+delegates to `ncpatcher rom extract` so there is one extractor and one layout,
+and it is never an input the editor reads back.
 
 Legacy `ncpatcher.json` projects are not built directly. The Qt frontend offers
 `ncpatcher migrate --write`; migration is explicit and leaves the old JSON file
@@ -30,6 +33,8 @@ line by line.
   layer selection.
 - `modules dump` for enabled modules, components, and NitroFS layering.
 - `rom files --json` for the file table and build provenance.
+- `rom extract` for **File > Extract ROM...**, so the tree Big Star exports is
+  one NCPatcher reads.
 - `files plan [--variant NAME] --json` for what a build would place, without
   building.
 - `build [--variant NAME] --message-format json --result <path>` for builds.
@@ -71,7 +76,11 @@ Three consequences worth stating:
 - An archive the build edits carries a `members` array: index, path, and the
   module, component and variant behind each member. A container entry can carry
   no more provenance than its members agree on, which for members from three
-  modules is none.
+  modules is none -- so the members are where the answer is. The Filesystem dock
+  emits a row per member and judges each against the container's copy at that
+  index, which is how an archive with one stale member says *which*. Members a
+  build would not write are not in the document at all; the dock lists those
+  from the container itself, when somebody opens it.
 - Without NCPatcher there is no plan, and the dock reports the last build
   rather than guessing past it.
 
@@ -81,20 +90,21 @@ reads `into:` from the module dump, and spells an archive address `a/b.narc!c/d`
 as the folder `a/b_narc/c/d` -- for whatever extension a game gives its
 archives, `.carc` included.
 
-## Transactional apply
+## Applying a build
 
 The Qt editor applies a successful build as one transaction:
 
 1. Build a ROM into the project's staging area, optionally for one selected
    variant.
-2. Validate the staged ROM and extract it into a staged directory.
-3. Move the current `extracted-rom/` into the backup area.
-4. Move the staged extraction into place.
-5. Clear open documents and cached level sessions, then reindex the project.
+2. Validate the staged ROM's header.
+3. Move it to `big-star-build.nds` and re-point the reader at it.
+4. Clear open documents and cached level sessions, then reindex the project.
 
-A failed build or rejected ROM leaves the live extracted tree untouched. The
-successful staged ROM is retained for launching in an emulator, and the Build
-Output dock logs both it and the backup path.
+A failed build or a rejected ROM leaves the project untouched, and the staging
+area is removed either way. Losing the previous build is not a loss: NCPatcher
+rebuilds it from the pristine binaries it keeps, which is what makes rebuilding
+idempotent, so nothing is moved aside first. One file arrives; a project built a
+hundred times is the size of one built once.
 
 The variant list is loaded only when its selector is opened. A remembered
 variant that is absent from a later query is kept visibly rather than silently
@@ -102,8 +112,8 @@ changed. An empty configured list is distinct from a failed query.
 
 ## Deliberate limits
 
-- Only one variant can be applied at a time because the editor has one live
-  extracted tree.
+- Only one variant can be applied at a time, because a project holds one built
+  ROM.
 - Big Star does not provide a graphical YAML editor.
 
 ## Cancelling a build
