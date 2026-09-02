@@ -143,10 +143,12 @@ int main(){
     // re-deriving them, and reported one row per member.
     assert(find("ARCHIVE/menu.narc")->status==FilesystemStatus::Replaced);
     assert(find("ARCHIVE/menu.narc!member.bin")->status==FilesystemStatus::Replaced);
-    // A container is addressed by its file id and a member by its position, and
-    // a row never carries both -- confusing the two replaces the wrong file.
+    // A container is addressed by its file id in the ROM's table and a member by
+    // its file id in the container's own, and a row never carries both -- the
+    // two are the same concept in different tables, so a row that carried both
+    // would not say which one to read.
     assert(find("ARCHIVE/menu.narc")->id==8&&!find("ARCHIVE/menu.narc")->inside_archive());
-    assert(find("ARCHIVE/menu.narc!member.bin")->member_index==0);
+    assert(find("ARCHIVE/menu.narc!member.bin")->member_id==0);
     assert(!find("ARCHIVE/menu.narc!member.bin")->id);
     // The wrapper is not the point: a compressed container's members are read
     // through it and reported the same way.
@@ -157,11 +159,11 @@ int main(){
     // stays that way, even though the container it lives in is Pending.
     assert(find("ARCHIVE/other.narc")->status==FilesystemStatus::Pending);
     const auto* stale_member=find("ARCHIVE/other.narc!member.bin");
-    assert(stale_member->status==FilesystemStatus::Pending&&stale_member->member_index==0);
+    assert(stale_member->status==FilesystemStatus::Pending&&stale_member->member_id==0);
     assert(stale_member->module=="second"&&stale_member->component=="Assets"&&stale_member->variant=="fr");
     assert(stale_member->source==second.nitrofs->dir/"fr/ARCHIVE/other_narc/member.bin");
     assert(find("ARCHIVE/other.narc!sibling.bin")->status==FilesystemStatus::Replaced);
-    assert(find("ARCHIVE/other.narc!sibling.bin")->member_index==1);
+    assert(find("ARCHIVE/other.narc!sibling.bin")->member_id==1);
     assert(view.value().has_pending());
 
     // The property the deleted resolution code could never have: when the plan

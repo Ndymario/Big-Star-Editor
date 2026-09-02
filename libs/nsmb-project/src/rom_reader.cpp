@@ -184,22 +184,24 @@ core::Result<std::vector<ArchiveMember>> RomReader::list_archive(std::string_vie
 
     auto names = nds::parse_fnt(narc.name_table);
     if (!names) return names.error();
-    // An index the name table does not name keeps its row, empty, so that a
-    // member's position in this list stays its index.
+    // A member the name table does not name keeps its row, empty, so that a
+    // member's position in this list stays its id.
     std::vector<ArchiveMember> members(narc.files.size());
-    for (std::size_t i = 0; i < narc.files.size(); ++i)
+    for (std::size_t i = 0; i < narc.files.size(); ++i) {
+        members[i].id = static_cast<std::uint16_t>(i);
         members[i].size = static_cast<std::uint32_t>(narc.files[i].size());
+    }
     for (const auto& name : names.value())
         if (name.id < members.size()) members[name.id].path = name.path.generic_string();
     return members;
 }
 
-core::Result<std::vector<std::uint8_t>> RomReader::read_member(std::string_view rom_path, std::size_t index) {
+core::Result<std::vector<std::uint8_t>> RomReader::read_member(std::string_view rom_path, std::size_t member_id) {
     auto opened = archive(rom_path);
     if (!opened) return opened.error();
-    if (index >= opened.value()->files.size())
-        return make_error(ErrorCode::NotFound, std::string(rom_path) + " has no member " + std::to_string(index));
-    return opened.value()->files[index];
+    if (member_id >= opened.value()->files.size())
+        return make_error(ErrorCode::NotFound, std::string(rom_path) + " has no member " + std::to_string(member_id));
+    return opened.value()->files[member_id];
 }
 
 core::Result<std::vector<std::uint8_t>> RomReader::read_member(std::string_view rom_path, std::string_view member) {

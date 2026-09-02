@@ -29,9 +29,15 @@ namespace nsmb::project {
 //
 // Reads are not const: the stream position and the caches both move. One reader
 // belongs to one thread.
-// One member of a Nitro archive, as the container itself describes it. There is
-// no id here on purpose: a member is addressed by where it sits.
+// One member of a Nitro archive, as the container itself describes it.
 struct ArchiveMember {
+    // The file id the archive's own name table gives it, which is also its
+    // position in this list: a NARC carries the ROM's File Name Table structure
+    // and numbers its members the same way, so a member has a file id for the
+    // same reason a loose file does. The table it belongs to is the archive's,
+    // not the ROM's, which is why this is never read without the container.
+    std::uint16_t id{};
+
     std::string path; // as the archive's own name table spells it
     std::uint32_t size{};
 };
@@ -78,13 +84,13 @@ public:
     core::Result<std::vector<std::uint8_t>> read_arm9();
     core::Result<std::vector<std::uint8_t>> read_banner();
 
-    // Members in index order, from the archive's own name table. A member the
-    // name table does not name keeps its row with an empty path rather than
-    // being skipped, so a member's position in this list is its index -- which
-    // is how the game addresses it and how a build reports it.
+    // Members in id order, from the archive's own name table. A member the name
+    // table does not name keeps its row with an empty path rather than being
+    // skipped, so a member's position in this list is its id -- which is how
+    // the game loads it and how a build reports it.
     core::Result<std::vector<ArchiveMember>> list_archive(std::string_view rom_path);
     core::Result<std::vector<std::uint8_t>> read_member(std::string_view rom_path, std::string_view member);
-    core::Result<std::vector<std::uint8_t>> read_member(std::string_view rom_path, std::size_t index);
+    core::Result<std::vector<std::uint8_t>> read_member(std::string_view rom_path, std::size_t member_id);
 
 private:
     RomReader() = default;

@@ -358,7 +358,7 @@ Result<FileManifest> parse_file_manifest(std::string_view json) {
         // run wrote. Everything else inside a container is read from the ROM.
         for (const auto& member_node : node["members"].elements()) {
             RomArchiveMember member;
-            member.index = member_node["index"].as_int64();
+            member.id = member_node["id"].as_int64();
             member.path = member_node["path"].as_string();
             member.size = member_node["size"].as_int64();
             member.action = file_action_from(member_node["action"].as_string());

@@ -73,14 +73,19 @@ Three consequences worth stating:
   provenance -- and its entry carries `source-missing`. Its size is the one
   thing genuinely unknown, so the dock reports the last build for it rather
   than a Pending mark nothing can clear.
-- An archive the build edits carries a `members` array: index, path, and the
-  module, component and variant behind each member. A container entry can carry
-  no more provenance than its members agree on, which for members from three
-  modules is none -- so the members are where the answer is. The Filesystem dock
-  emits a row per member and judges each against the container's copy at that
-  index, which is how an archive with one stale member says *which*. Members a
-  build would not write are not in the document at all; the dock lists those
-  from the container itself, when somebody opens it.
+- An archive the build edits carries a `members` array: id, path, and the
+  module, component and variant behind each member. A member's `id` is a file id
+  in the container's own name table -- a `.narc` carries the ROM's File Name
+  Table structure and numbers its members the same way, which is how game code
+  loads one, and how ndspy and NSMB Editor both read a NARC. It is read together
+  with the container's path and means nothing without it, exactly as the
+  enclosing entry's `id` means nothing inside the archive. A container entry can
+  carry no more provenance than its members agree on, which for members from
+  three modules is none -- so the members are where the answer is. The
+  Filesystem dock emits a row per member and judges each against the container's
+  copy at that id, which is how an archive with one stale member says *which*.
+  Members a build would not write are not in the document at all; the dock lists
+  those, with the ids the container gives them, when somebody opens it.
 - Without NCPatcher there is no plan, and the dock reports the last build
   rather than guessing past it.
 

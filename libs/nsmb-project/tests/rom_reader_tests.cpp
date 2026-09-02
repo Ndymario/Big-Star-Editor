@@ -67,10 +67,16 @@ int main() {
     assert(!reader.is_archive("z_new/fresh.bin"));
     const auto listed = reader.list_archive("plain.narc");
     assert(listed && listed.value().size() == 2);
-    // Position is the address, and the size comes from the container rather
-    // than from a second read of every member.
-    assert(listed.value()[0].path == "vs.bmg" && listed.value()[0].size == vs_bmg.size());
-    assert(listed.value()[1].path == "menu/hd.bin" && listed.value()[1].size == hd_bin.size());
+    // Every member carries the file id its container's name table gave it --
+    // which is what game code loads it by -- and the size comes from the
+    // container rather than from a second read of every member.
+    assert(listed.value()[0].id == 0 && listed.value()[0].path == "vs.bmg" && listed.value()[0].size == vs_bmg.size());
+    assert(listed.value()[1].id == 1 && listed.value()[1].path == "menu/hd.bin" && listed.value()[1].size == hd_bin.size());
+    // An id is a position in this list, so reading a member by the id the
+    // listing reported reaches the member the listing named.
+    assert(reader.read_member("plain.narc", std::size_t{listed.value()[1].id}).value() == hd_bin);
+    // A compressed container numbers its members no differently.
+    assert(reader.list_archive("packed.carc").value()[0].id == 0);
     assert(reader.list_archive("packed.carc").value()[0].path == "kart.bin");
     assert(reader.read_member("plain.narc", "vs.bmg").value() == vs_bmg);
     assert(reader.read_member("plain.narc", std::size_t{1}).value() == hd_bin);

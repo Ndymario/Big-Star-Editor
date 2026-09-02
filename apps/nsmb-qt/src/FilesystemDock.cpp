@@ -243,6 +243,14 @@ Segments split_address(const QString& path) {
     return split;
 }
 
+// A member's ID belongs to its container's name table, not the ROM's, so the
+// tooltip names the table it is read in: the same number on a row outside the
+// archive is a different file entirely.
+QString member_id_tip(const QString& address) {
+    return "Its file ID inside " + address.section('!', 0, 0)
+        + ", from that archive's own name table — not a NitroFS ID.";
+}
+
 struct TreeRow {
     QStringList parts;
     QList<qint64> order;  // per segment: the lowest file ID at or beneath that prefix
@@ -417,14 +425,21 @@ void FilesystemDock::rebuildTree() {
             ? (entry.id && !entry.id_is_planned ? QString("⏳ Pending rebuild") : QString("⏳ Pending insertion"))
             : entry.status == nsmb::project::FilesystemStatus::Orphaned ? QString("Orphaned — reverting")
             : QString::fromUtf8(nsmb::project::filesystem_status_name(entry.status).data(), static_cast<qsizetype>(nsmb::project::filesystem_status_name(entry.status).size()));
-        // A planned id is what the next build would assign, not an address the
+        // A member's ID comes from its container's own name table rather than
+        // the ROM's, so it is a file ID in a different table -- the way ndspy
+        // and NSMB Editor both read a NARC -- and the row is nested under that
+        // container, which is what says which table to read it in.
+        //
+        // A planned ID is what the next build would assign, not an address the
         // game can use yet, and the two must never read alike.
-        const auto fileId = !entry.id ? QString("—")
+        const auto fileId = entry.inside_archive() ? QString::number(*entry.member_id)
+            : !entry.id ? QString("—")
             : entry.id_is_planned ? QString::number(*entry.id) + "?"
             : QString::number(*entry.id);
         auto* item = new QTreeWidgetItem(parent, {parts.back(), statusName,
             provenance(entry), QString::fromStdString(entry.variant), fileId, QString::number(entry.size)});
         if (entry.id_is_planned) item->setToolTip(FileIdColumn, "The ID the next build would assign. Nothing holds it yet.");
+        if (entry.inside_archive()) item->setToolTip(FileIdColumn, member_id_tip(QString::fromStdString(entry.path)));
         item->setData(0, path_role, path);
         const auto icon = classify_entry(entry, files_);
         item->setIcon(0, entry_icon(icon, icons));
@@ -481,20 +496,19 @@ void FilesystemDock::listArchive(QTreeWidgetItem* item) {
     seed(seed, item, container);
 
     std::map<EntryIcon, QIcon> icons;
-    std::map<QString, qint64> indices;
+    std::map<QString, qint64> ids;
     const auto depth = container.split('/').size();
-    for (std::size_t index = 0; index < listed.value().size(); ++index) {
-        const auto& member = listed.value()[index];
-        // An index the container does not name has no address to open it by,
+    for (const auto& member : listed.value()) {
+        // A member the container does not name has no address to open it by,
         // and inventing one would name a member the next build cannot find.
         if (member.path.empty()) continue;
         const auto key = container + "!" + QString::fromStdString(member.path);
-        indices.emplace(key, static_cast<qint64>(index));
+        ids.emplace(key, static_cast<qint64>(member.id));
         if (present.contains(key)) continue;
 
         nsmb::project::FilesystemEntry vanilla;
         vanilla.path = key.toStdString();
-        vanilla.member_index = static_cast<std::int64_t>(index);
+        vanilla.member_id = static_cast<std::int64_t>(member.id);
         vanilla.size = member.size;
         view_.entries.push_back(std::move(vanilla));
         const auto& entry = view_.entries.back();
@@ -513,20 +527,21 @@ void FilesystemDock::listArchive(QTreeWidgetItem* item) {
         auto* leaf = new QTreeWidgetItem(parent, {address.names.back(),
             QString::fromUtf8(nsmb::project::filesystem_status_name(entry.status).data(),
                               static_cast<qsizetype>(nsmb::project::filesystem_status_name(entry.status).size())),
-            {}, {}, QString("—"), QString::number(entry.size)});
+            {}, {}, QString::number(member.id), QString::number(entry.size)});
+        leaf->setToolTip(FileIdColumn, member_id_tip(key));
         leaf->setData(0, path_role, key);
         leaf->setIcon(0, entry_icon(classify_entry(entry, files_), icons));
     }
 
-    // Members sort by index the way the tree above sorts by file ID, so a
-    // folder inside an archive takes the lowest index it holds and the order
-    // is the container's own rather than alphabetical.
+    // Members sort by their ID the way the tree above sorts by file ID, so a
+    // folder inside an archive takes the lowest ID it holds and the order is
+    // the container's own rather than alphabetical.
     std::map<const QTreeWidgetItem*, qint64> order;
     const auto rank = [&](auto&& self, QTreeWidgetItem* node) -> qint64 {
         qint64 lowest = unassigned_id;
         if (!node->childCount()) {
-            const auto found = indices.find(node->data(0, path_role).toString());
-            if (found != indices.end()) lowest = found->second;
+            const auto found = ids.find(node->data(0, path_role).toString());
+            if (found != ids.end()) lowest = found->second;
         }
         for (int i = 0; i < node->childCount(); ++i) lowest = std::min(lowest, self(self, node->child(i)));
         return order[node] = lowest;
@@ -566,7 +581,10 @@ void FilesystemDock::updateDetails() {
     const auto* entry = selectedEntry();
     if (!entry) { details_->setText("No file selected."); return; }
     QStringList fields{QString::fromStdString(entry->path)};
-    fields << "File ID: " + (!entry->id ? QString("unassigned")
+    fields << "File ID: " + (entry->inside_archive()
+            ? QString::number(*entry->member_id) + " (inside "
+                + QString::fromStdString(entry->path).section('!', 0, 0) + ")"
+        : !entry->id ? QString("unassigned")
         : entry->id_is_planned ? QString::number(*entry->id) + " (planned — assigned by the next build)"
         : QString::number(*entry->id));
     fields << "Size: " + QLocale().toString(static_cast<qlonglong>(entry->size)) + " bytes";

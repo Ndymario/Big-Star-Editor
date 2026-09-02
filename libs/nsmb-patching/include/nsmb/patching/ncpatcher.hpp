@@ -238,10 +238,13 @@ enum class FileAction { Unchanged, Modified, Created };
 // agree on, which for members from three modules is none, so without this the
 // per-member truth is lost and an editor has to re-derive it.
 struct RomArchiveMember {
-    // The member's position in its container, which is how the game addresses
-    // it. Never an id: a member index is not a NitroFS file id, and treating
-    // the two alike replaces the wrong file.
-    std::int64_t index{};
+    // The member's file id, assigned by the container's own name table exactly
+    // as the ROM's FNT assigns one to a loose file, and how the game loads it.
+    // A different table, not a different concept: this id addresses a member of
+    // this archive and the `id` on the enclosing RomFileEntry addresses a file
+    // of the ROM, so the two are read together and neither means anything in
+    // the other's table.
+    std::int64_t id{};
     std::string path; // inside the archive, as its own name table spells it
     std::int64_t size{};
 

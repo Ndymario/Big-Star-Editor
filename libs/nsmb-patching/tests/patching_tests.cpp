@@ -408,10 +408,10 @@ void test_parse_planned_manifest() {
       "files": [
         { "id": 812, "path": "ARCHIVE/menu_title.narc", "size": 40960, "action": "modified",
           "members": [
-            { "index": 14, "path": "menu/title/USA/vs.bmg", "size": 2031, "action": "modified",
+            { "id": 14, "path": "menu/title/USA/vs.bmg", "size": 2031, "action": "modified",
               "source": "modules/message/nitrofs/fr/ARCHIVE/menu_title_narc/menu/title/USA/vs.bmg",
               "module": "message", "component": "Vanilla", "from-variant": "fr" },
-            { "index": 31, "path": "menu/title/USA/opt.bmg", "size": 512, "action": "modified",
+            { "id": 31, "path": "menu/title/USA/opt.bmg", "size": 512, "action": "modified",
               "source": "modules/hud/nitrofs/ARCHIVE/menu_title_narc/menu/title/USA/opt.bmg",
               "module": "hud" }
           ] },
@@ -430,12 +430,12 @@ void test_parse_planned_manifest() {
     assert(archive != nullptr);
     assert(archive->module.empty());
     assert(archive->members.size() == 2);
-    assert(archive->members[0].index == 14);
+    assert(archive->members[0].id == 14);
     assert(archive->members[0].path == "menu/title/USA/vs.bmg");
     assert(archive->members[0].module == "message");
     assert(archive->members[0].from_variant == "fr");
     assert(archive->members[0].action == FileAction::Modified);
-    assert(archive->members[1].index == 31);
+    assert(archive->members[1].id == 31);
     assert(archive->members[1].module == "hud");
     assert(archive->members[1].from_variant.empty());
 

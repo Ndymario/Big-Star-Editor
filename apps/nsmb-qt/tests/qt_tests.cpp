@@ -1633,7 +1633,7 @@ private slots:
         // the plan knows, so it is on the row before anything is expanded.
         nsmb::project::FilesystemEntry planned;
         planned.path = "ARCHIVE/menu.narc!menu/hd.bin";
-        planned.member_index = 2;
+        planned.member_id = 2;
         planned.status = nsmb::project::FilesystemStatus::Pending;
         planned.module = "message";
         planned.source = std::filesystem::path(files.path().toStdString()) / "modules/message/hd.bin";
@@ -1661,9 +1661,10 @@ private slots:
         QCOMPARE(childNames(container), QStringList({"menu"}));
         QCOMPARE(childNames(container->child(0)), QStringList({"hd.bin"}));
 
-        // Opening it fills in the rest, ordered by member index the way the
-        // tree above is ordered by file ID -- so vs.bmg leads and hd.bin, which
-        // the plan put there first, falls in behind its sibling.
+        // Opening it fills in the rest, ordered by the ID the container gives
+        // each member the way the tree above is ordered by NitroFS file ID --
+        // so vs.bmg leads and hd.bin, which the plan put there first, falls in
+        // behind its sibling.
         container->setExpanded(true);
         QCOMPARE(childNames(container), QStringList({"vs.bmg", "menu"}));
         QCOMPARE(childNames(container->child(1)), QStringList({"title.bin", "hd.bin"}));
@@ -1672,6 +1673,18 @@ private slots:
         container->setExpanded(false);
         container->setExpanded(true);
         QCOMPARE(childNames(container), QStringList({"vs.bmg", "menu"}));
+
+        // A member has a file ID like any other file -- assigned by the
+        // container's own name table, which is what game code loads it by --
+        // so the column shows it rather than a dash. The one the plan named
+        // carries the same ID the container gives it, and the tooltip says
+        // which table to read it in.
+        QCOMPARE(find("ARCHIVE/menu.narc!vs.bmg")->text(4), QString("0"));
+        QCOMPARE(find("ARCHIVE/menu.narc!menu/title.bin")->text(4), QString("1"));
+        QCOMPARE(find("ARCHIVE/menu.narc!menu/hd.bin")->text(4), QString("2"));
+        QVERIFY(find("ARCHIVE/menu.narc!vs.bmg")->toolTip(4).contains("ARCHIVE/menu.narc"));
+        // The container keeps the ROM's numbering, which is a different table.
+        QVERIFY(container->text(4) != QString("0"));
 
         auto* open = dock.findChild<QPushButton*>("OpenFile");
         auto* details = dock.findChild<QLabel*>("FilesystemDetails");
@@ -1684,6 +1697,10 @@ private slots:
         tree->setCurrentItem(find("ARCHIVE/menu.narc!vs.bmg"));
         QVERIFY(open->isEnabled());
         QVERIFY(details->text().contains("Opens in: Messages"));
+        // The footer names the table the ID belongs to, since the same number
+        // outside the archive is a different file.
+        QVERIFY2(details->text().contains("File ID: 0 (inside ARCHIVE/menu.narc)"),
+                 qPrintable(details->text()));
 
         // Replace and Extract work on a member; Remove does not, because the
         // archive codec replaces in place and dropping a member would renumber

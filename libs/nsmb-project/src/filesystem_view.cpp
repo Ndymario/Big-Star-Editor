@@ -30,15 +30,16 @@ bool source_matches_rom(const std::filesystem::path& source,RomReader& rom,std::
 
 std::filesystem::path source_path(const std::filesystem::path& project_dir,std::string_view source){auto path=std::filesystem::path(source);return path.is_absolute()?path:project_dir/path;}
 
-// Does the container the ROM holds already carry this member? Addressed by
-// index, which is how the game addresses a member and how the plan reports one;
-// a member path is a label, not an address.
+// Does the container the ROM holds already carry this member? Addressed by the
+// file id the archive's own name table gives it, which is how the game loads a
+// member and how the plan reports one; a member path is a label, not an
+// address.
 bool member_matches_rom(RomReader& rom,std::string_view container,const std::filesystem::path& project_dir,const patching::RomArchiveMember& member){
     // A hook writes this one, so there is nothing on disk to compare and
     // nothing the user can do about it either way.
     if(member.source_missing)return true;
-    if(member.index<0)return false;
-    auto stored=rom.read_member(container,std::size_t(member.index));if(!stored)return false;
+    if(member.id<0)return false;
+    auto stored=rom.read_member(container,std::size_t(member.id));if(!stored)return false;
     auto expected=core::read_file(source_path(project_dir,member.source));
     return expected&&stored.value()==expected.value();
 }
@@ -47,8 +48,8 @@ bool same_member(const patching::RomArchiveMember& built,const patching::RomArch
     return built.path==planned.path&&built.module==planned.module&&built.component==planned.component&&built.from_variant==planned.from_variant;
 }
 
-const patching::RomArchiveMember* member_at(const std::vector<patching::RomArchiveMember>& members,std::int64_t index){
-    const auto found=std::ranges::find(members,index,&patching::RomArchiveMember::index);return found==members.end()?nullptr:&*found;
+const patching::RomArchiveMember* member_at(const std::vector<patching::RomArchiveMember>& members,std::int64_t id){
+    const auto found=std::ranges::find(members,id,&patching::RomArchiveMember::id);return found==members.end()?nullptr:&*found;
 }
 
 // The set of members a run wrote is part of what it did. A build that replaced
@@ -56,7 +57,7 @@ const patching::RomArchiveMember* member_at(const std::vector<patching::RomArchi
 // match byte for byte -- so this is asked of the container, not of a member,
 // which is why one stale member never drags its siblings down with it.
 bool same_members(const std::vector<patching::RomArchiveMember>& built,const std::vector<patching::RomArchiveMember>& planned){
-    return std::ranges::equal(built,planned,[](const auto& a,const auto& b){return a.index==b.index&&same_member(a,b);});
+    return std::ranges::equal(built,planned,[](const auto& a,const auto& b){return a.id==b.id&&same_member(a,b);});
 }
 
 } // namespace
@@ -136,18 +137,18 @@ core::Result<FilesystemView> build_filesystem_view(FilesystemViewRequest request
         if(agrees)agrees=manifest->module==plan->module&&manifest->component==plan->component&&manifest->from_variant==plan->from_variant;
 
         // An archive is not a file with one answer. Each member the plan would
-        // write is judged against the ROM's copy at that index on its own, so
+        // write is judged against the ROM's copy at that id on its own, so
         // the view can say which member is stale instead of only that one is.
         // The container then reports what its members add up to, plus the one
         // thing no member can see: whether the set itself has changed.
         std::vector<FilesystemEntry> member_rows;
         for(const auto& member:plan->members){
             FilesystemEntry row;
-            row.path=path+"!"+member.path;row.member_index=member.index;
+            row.path=path+"!"+member.path;row.member_id=member.id;
             row.module=member.module;row.component=member.component;row.variant=member.from_variant;
             if(!member.source.empty())row.source=source_path(request.project_dir,member.source);
             if(!member.source_missing)row.size=std::uintmax_t(member.size);
-            const auto* built=manifest?member_at(manifest->members,member.index):nullptr;
+            const auto* built=manifest?member_at(manifest->members,member.id):nullptr;
             const bool written=built&&same_member(*built,member)&&request.rom&&member_matches_rom(*request.rom,path,request.project_dir,member);
             row.status=written?FilesystemStatus::Replaced:FilesystemStatus::Pending;
             if(!written)agrees=false;

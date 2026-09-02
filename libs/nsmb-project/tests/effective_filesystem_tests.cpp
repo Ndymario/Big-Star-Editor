@@ -82,7 +82,7 @@ int main() {
 
     auto archive = entry("plain.narc", {});
     nsmb::patching::RomArchiveMember member;
-    member.index = 0;
+    member.id = 0;
     member.path = "vs.bmg";
     member.source = "modules/message/nitrofs/plain_narc/vs.bmg";
     member.module = "message";

@@ -28,7 +28,7 @@ Version 1 stored a walk of an unpacked tree as a `files:` list of `path`/`size` 
 
 ## Module edit targets
 
-The ROM is a build result. Editor writes therefore go to an enabled module's `nitrofs` tree, never into the ROM itself. The active module and project variant are workspace choices; an existing module-supplied file keeps its supplying module while using the active variant layer, and an otherwise vanilla file uses the active module. A member of a Nitro archive is addressed as `a/b.narc!c/d` and written to `<module>/nitrofs/<layer>/b_narc/c/d`, which the next build sweeps back into the container.
+The ROM is a build result. Editor writes therefore go to an enabled module's `nitrofs` tree, never into the ROM itself. The active module and project variant are workspace choices; an existing module-supplied file keeps its supplying module while using the active variant layer, and an otherwise vanilla file uses the active module. A member of a Nitro archive is addressed as `a/b.narc!c/d` and written to `<module>/nitrofs/<layer>/b_narc/c/d`, which the next build sweeps back into the container. The Filesystem dock shows a member's file ID beside a loose file's: an archive carries the ROM's name-table structure and numbers its members the same way, so the number is a file ID in the container's table rather than the ROM's, and the footer names which container it belongs to.
 
 Until NCPatcher rebuilds the ROM, these writes appear as **Pending**, with the file ID the next build would assign shown as a prediction. A successful build replaces `big-star-build.nds` and reloads the generated module and file documents.
 

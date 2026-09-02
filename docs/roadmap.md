@@ -202,10 +202,17 @@
   one layout.
 - Made archives expand like folders. The view emits a row per member with its
   own status and provenance and compares each against the container's copy at
-  that index, so an archive with one stale member now says which member. The
-  dock splits an address on `!` before `/` and lists the container's remaining
+  that id, so an archive with one stale member now says which member. The dock
+  splits an address on `!` before `/` and lists the container's remaining
   members when somebody opens it, not for every archive in the game on project
   open. Compressed containers (`.carc`) are read through their wrapper.
+- Exposed the file IDs of NARC/CARC members. A `.narc` carries the ROM's File
+  Name Table structure and numbers its members the same way, so a member has a
+  file ID for the same reason a loose file does -- it is game code's address for
+  it, and both ndspy and NSMB Editor read a NARC exactly this way. The dock had
+  been printing a dash. Now the ID column and the footer show it, the footer and
+  a tooltip name the container whose table it belongs to, and NCPatcher's
+  manifest spells the field `id` rather than denying a member has one.
 - Offered Cancel on a running build, mapping NCPatcher's exit code 11 to a
   `Cancelled` stage rather than a failure.
 - Bounded `.big-star-backups/`: the ten most recent of each kind, swept on
