@@ -224,6 +224,38 @@ void test_successful_build_replaces_the_rom() {
     fs::remove_all(project);
 }
 
+// Backups are never rewritten, only added, so the only thing that bounds them
+// is somebody removing the old ones. Two kinds share the area, and a busy
+// afternoon of one must not sweep away the other.
+void test_backups_are_pruned_per_kind() {
+    const auto project = fs::temp_directory_path() / "big-star-backup-pruning";
+    fs::remove_all(project);
+    const auto root = nsmb::project::patch_backup_root(project);
+    // Names sort lexically, and a fixed-width timestamp makes that chronological.
+    for (int minute = 0; minute < 12; ++minute) {
+        const auto stamp = "20260901-1200" + std::string(minute < 10 ? "0" : "") + std::to_string(minute) + "-000-4242";
+        fs::create_directories(root / ("levels-" + stamp));
+        { std::ofstream(root / ("levels-" + stamp) / "course.bin") << "L"; }
+    }
+    for (int minute = 0; minute < 3; ++minute)
+        fs::create_directories(root / ("import-20260901-11000" + std::to_string(minute) + "-000-4242"));
+
+    assert(nsmb::project::prune_patch_backups(project, 10) == 2);
+    // The two oldest level saves went; every import stayed, because its own
+    // kind never reached the limit.
+    assert(!fs::exists(root / "levels-20260901-120000-000-4242"));
+    assert(!fs::exists(root / "levels-20260901-120001-000-4242"));
+    assert(fs::exists(root / "levels-20260901-120002-000-4242/course.bin"));
+    assert(fs::exists(root / "levels-20260901-120011-000-4242"));
+    assert(fs::exists(root / "import-20260901-110000-000-4242"));
+
+    // Sweeping again has nothing left to do, and a project with no backup area
+    // at all is not an error to sweep.
+    assert(nsmb::project::prune_patch_backups(project, 10) == 0);
+    assert(nsmb::project::prune_patch_backups(fs::temp_directory_path() / "big-star-no-such-project", 10) == 0);
+    fs::remove_all(project);
+}
+
 void test_legacy_and_missing_projects_are_refused() {
     const auto legacy = fs::temp_directory_path() / "big-star-apply-legacy";
     fs::remove_all(legacy);
@@ -289,6 +321,7 @@ void run_all() {
     test_unparseable_output_is_rejected();
     test_successful_build_replaces_the_rom();
     test_legacy_and_missing_projects_are_refused();
+    test_backups_are_pruned_per_kind();
 }
 
 } // namespace apply_test

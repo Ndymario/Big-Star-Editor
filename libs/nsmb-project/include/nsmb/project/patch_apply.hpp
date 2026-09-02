@@ -78,4 +78,19 @@ std::filesystem::path patch_backup_root(const std::filesystem::path& project_dir
 // The ROM a successful apply writes.
 std::filesystem::path built_rom_path(const std::filesystem::path& project_dir);
 
+// How many backups of each kind a sweep leaves behind.
+inline constexpr std::size_t default_backups_kept = 10;
+
+// Deletes all but the `keep` most recent backups of each kind, and answers how
+// many it removed. A backup is named for what made it and then for when, and a
+// timestamp that sorts lexically sorts chronologically, so the newest few of a
+// kind are simply the largest names beginning with it.
+//
+// Per kind rather than overall: one afternoon of level saves must not sweep
+// away the morning's patch import, which is the backup somebody would actually
+// go looking for. Failing to remove one is not an error -- what is left behind
+// is disk use, not a broken project -- so the count is the whole report.
+std::size_t prune_patch_backups(const std::filesystem::path& project_dir,
+                                std::size_t keep = default_backups_kept);
+
 } // namespace nsmb::project

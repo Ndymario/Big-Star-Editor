@@ -2,7 +2,11 @@
 
 #include "nsmb/project/manifest.hpp"
 
+#include <algorithm>
+#include <functional>
+#include <map>
 #include <system_error>
+#include <vector>
 
 #include "nsmb/core/file_io.hpp"
 
@@ -53,6 +57,31 @@ std::filesystem::path patch_backup_root(const std::filesystem::path& project_dir
 
 std::filesystem::path built_rom_path(const std::filesystem::path& project_dir) {
     return project_dir / built_rom_file_name;
+}
+
+std::size_t prune_patch_backups(const std::filesystem::path& project_dir, std::size_t keep) {
+    const auto root = patch_backup_root(project_dir);
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) return 0;
+
+    std::map<std::string, std::vector<std::filesystem::path>> kinds;
+    for (std::filesystem::directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec)) continue;
+        const auto name = it->path().filename().string();
+        kinds[name.substr(0, name.find('-'))].push_back(it->path());
+    }
+
+    std::size_t removed = 0;
+    for (auto& [kind, entries] : kinds) {
+        if (entries.size() <= keep) continue;
+        std::ranges::sort(entries, std::greater{});
+        for (auto entry = entries.begin() + static_cast<std::ptrdiff_t>(keep); entry != entries.end(); ++entry) {
+            std::error_code remove_error;
+            const auto count = std::filesystem::remove_all(*entry, remove_error);
+            if (!remove_error && count != static_cast<std::uintmax_t>(-1)) ++removed;
+        }
+    }
+    return removed;
 }
 
 Result<PatchApplyResult> apply_patch_transactionally(const PatchApplyRequest& request,

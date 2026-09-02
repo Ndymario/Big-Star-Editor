@@ -8,6 +8,7 @@
 #include "FileEditors.hpp"
 #include "UiResourceEditorDialog.hpp"
 #include "nsmb/patching/ncpatcher.hpp"
+#include "nsmb/project/patch_apply.hpp"
 #include "nsmb/project/manifest.hpp"
 #include "nsmb/project/graphics_resources.hpp"
 #include "nsmb/project/level_exchange.hpp"
@@ -108,6 +109,27 @@ public:
     }
     ~WaitCursor() { QApplication::restoreOverrideCursor(); }
 };
+
+// A new backup directory: what made it, then when, then which process. The
+// kind leads because that is what a sweep groups on; milliseconds are there
+// because two level saves in one second are ordinary, and the process id
+// because two editors open on one project are not unheard of.
+std::filesystem::path newBackupDirectory(const std::filesystem::path& project_dir, const QString& kind) {
+    return nsmb::project::patch_backup_root(project_dir) /
+           (kind + "-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz") + "-" +
+            QString::number(QApplication::applicationPid()))
+               .toStdString();
+}
+
+// Backups accumulate for as long as somebody keeps working, and nothing ever
+// asked them to leave. Swept whenever one is added and once when a project
+// opens, so a project that has been edited for a year is the size of one that
+// was edited last week.
+void sweepBackups(const std::filesystem::path& project_dir) {
+    if (project_dir.empty()) return;
+    nsmb::project::prune_patch_backups(
+        project_dir, static_cast<std::size_t>(std::clamp(QSettings().value("BackupsKept", 10).toInt(), 1, 100)));
+}
 
 QString manifestPathText(const nsmb::project::Project& project) {
     if (project.directory().empty()) {
@@ -756,6 +778,7 @@ bool MainWindow::openProjectPath(const std::filesystem::path& directory) {
     }
 
     setProject(loaded.value());
+    sweepBackups(directory);
     log("Opened project: " + QString::fromStdString(manifest_path.string()));
     return true;
 }
@@ -854,9 +877,7 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
 
     std::vector<PendingFile> files;
     std::vector<PendingLevel> levels;
-    const auto backup_root = currentProject_.directory() / ".big-star-backups" /
-                             (QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz-") + QString::number(QApplication::applicationPid()))
-                                 .toStdString();
+    const auto backup_root = newBackupDirectory(currentProject_.directory(), "levels");
 
     for (const auto& [key, level] : levelSessions_) {
         if (!level->dirty()) {
@@ -934,7 +955,8 @@ nsmb::core::Result<void> MainWindow::saveEditedLevels() {
         level.level->mark_clean();
     }
     writeRecoverySnapshots();
-    log("Saved level edits to the active module tree. Run NCPatcher to apply them to the extracted ROM.");
+    sweepBackups(currentProject_.directory());
+    log("Saved level edits to the active module tree. Run NCPatcher to build them into the ROM.");
     reloadFilesystemView();
     return {};
 }
@@ -1163,11 +1185,12 @@ void MainWindow::exportPatch() {
 
 void MainWindow::importPatch() {
     if(currentProject_.directory().empty())return;const auto path=QFileDialog::getOpenFileName(this,"Import Patch",{},"Big Star patches (*.nsmbpatch)");if(path.isEmpty())return;auto bytes=nsmb::core::read_file(path.toStdString());if(!bytes){QMessageBox::warning(this,"Import Patch",QString::fromStdString(bytes.error().message));return;}auto patch=nsmb::project::decode_nsmbpatch(bytes.value());if(!patch){QMessageBox::warning(this,"Import Patch",QString::fromStdString(patch.error().message));return;}
-    struct Write{std::filesystem::path target,backup;const nsmb::project::NsmbPatchEntry* entry{};bool existed{};};std::vector<Write> writes;bool id_warning=false;const auto backup_root=currentProject_.directory()/".big-star-backups"/("patch-import-"+QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz").toStdString());
+    struct Write{std::filesystem::path target,backup;const nsmb::project::NsmbPatchEntry* entry{};bool existed{};};std::vector<Write> writes;bool id_warning=false;const auto backup_root=newBackupDirectory(currentProject_.directory(),"import");
     for(const auto& entry:patch.value()){const auto* current=filesystemView_.find(entry.path);if(current&&current->id&&entry.expected_file_id>=0&&*current->id!=entry.expected_file_id)id_warning=true;const auto module_name=current&&!current->module.empty()?current->module:activeModule_.toStdString();const auto* module=moduleGraph_.find(module_name);if(!module){QMessageBox::warning(this,"Import Patch","Choose an active module in the Filesystem dock first.");return;}auto target=nsmb::project::module_file_target(*module,activeVariant_.toStdString(),entry.path,activeModuleMappings());if(!target){QMessageBox::warning(this,"Import Patch",QString::fromStdString(target.error().message));return;}writes.push_back({target.value(),backup_root/std::filesystem::path(entry.path),&entry});}
     if(id_warning&&QMessageBox::warning(this,"Import Patch","One or more file IDs differ from the patch's source ROM. Apply by path anyway?",QMessageBox::Yes|QMessageBox::No,QMessageBox::No)!=QMessageBox::Yes)return;
     std::error_code ec;for(auto& write:writes){std::filesystem::create_directories(write.target.parent_path(),ec);if(ec){QMessageBox::warning(this,"Import Patch","Could not create a module directory.");return;}write.existed=std::filesystem::is_regular_file(write.target,ec);if(write.existed){std::filesystem::create_directories(write.backup.parent_path(),ec);std::filesystem::copy_file(write.target,write.backup,std::filesystem::copy_options::overwrite_existing,ec);if(ec){QMessageBox::warning(this,"Import Patch","Could not back up an existing module file.");return;}}}
     std::size_t written=0;for(;written<writes.size();++written){auto result=nsmb::core::write_file_atomically(writes[written].target,writes[written].entry->contents);if(!result){for(std::size_t i=0;i<written;++i){if(writes[i].existed)std::filesystem::copy_file(writes[i].backup,writes[i].target,std::filesystem::copy_options::overwrite_existing,ec);else std::filesystem::remove(writes[i].target,ec);}QMessageBox::warning(this,"Import Patch",QString::fromStdString(result.error().message));return;}}
+    sweepBackups(currentProject_.directory());
     reloadFilesystemView();log(QString("Imported %1 patch file(s) transactionally.").arg(patch.value().size()));
 }
 
@@ -2644,6 +2667,14 @@ void MainWindow::editPreferences() {
     autosave->setToolTip("How often unsaved level edits are written to a recovery snapshot.");
     form->addRow("Recovery snapshots", autosave);
 
+    auto* backups = new QSpinBox(&dialog);
+    backups->setObjectName("PreferenceBackupsKept");
+    backups->setRange(1, 100);
+    backups->setValue(QSettings().value("BackupsKept", 10).toInt());
+    backups->setToolTip("How many level-save and patch-import backups are kept, of each kind. "
+                        "Older ones are removed when a project opens and whenever one is added.");
+    form->addRow("Backups kept", backups);
+
     layout->addLayout(form);
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dialog);
     layout->addWidget(buttons);
@@ -2654,6 +2685,7 @@ void MainWindow::editPreferences() {
     QSettings settings;
     settings.setValue("Language", language->currentData().toString());
     settings.setValue("AutosaveMinutes", autosave->value());
+    settings.setValue("BackupsKept", backups->value());
     // The snapshot interval is the one preference that can take effect now.
     if (autosaveTimer_) autosaveTimer_->setInterval(autosave->value() * 60000);
 }
