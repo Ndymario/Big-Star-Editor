@@ -29,6 +29,13 @@ namespace nsmb::project {
 //
 // Reads are not const: the stream position and the caches both move. One reader
 // belongs to one thread.
+// One member of a Nitro archive, as the container itself describes it. There is
+// no id here on purpose: a member is addressed by where it sits.
+struct ArchiveMember {
+    std::string path; // as the archive's own name table spells it
+    std::uint32_t size{};
+};
+
 class RomReader {
 public:
     static core::Result<RomReader> open(std::filesystem::path rom);
@@ -71,11 +78,11 @@ public:
     core::Result<std::vector<std::uint8_t>> read_arm9();
     core::Result<std::vector<std::uint8_t>> read_banner();
 
-    // Member names in index order, from the archive's own name table. A member
-    // the name table does not name is an empty string rather than a missing
-    // row, so a member's position in this list is its index -- which is how the
-    // game addresses it and how a build reports it.
-    core::Result<std::vector<std::string>> list_archive(std::string_view rom_path);
+    // Members in index order, from the archive's own name table. A member the
+    // name table does not name keeps its row with an empty path rather than
+    // being skipped, so a member's position in this list is its index -- which
+    // is how the game addresses it and how a build reports it.
+    core::Result<std::vector<ArchiveMember>> list_archive(std::string_view rom_path);
     core::Result<std::vector<std::uint8_t>> read_member(std::string_view rom_path, std::string_view member);
     core::Result<std::vector<std::uint8_t>> read_member(std::string_view rom_path, std::size_t index);
 

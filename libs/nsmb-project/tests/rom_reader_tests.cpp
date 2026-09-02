@@ -65,8 +65,13 @@ int main() {
     assert(reader.is_archive("plain.narc"));
     assert(reader.is_archive("packed.carc"));
     assert(!reader.is_archive("z_new/fresh.bin"));
-    assert(reader.list_archive("plain.narc").value() == std::vector<std::string>({"vs.bmg", "menu/hd.bin"}));
-    assert(reader.list_archive("packed.carc").value() == std::vector<std::string>({"kart.bin"}));
+    const auto listed = reader.list_archive("plain.narc");
+    assert(listed && listed.value().size() == 2);
+    // Position is the address, and the size comes from the container rather
+    // than from a second read of every member.
+    assert(listed.value()[0].path == "vs.bmg" && listed.value()[0].size == vs_bmg.size());
+    assert(listed.value()[1].path == "menu/hd.bin" && listed.value()[1].size == hd_bin.size());
+    assert(reader.list_archive("packed.carc").value()[0].path == "kart.bin");
     assert(reader.read_member("plain.narc", "vs.bmg").value() == vs_bmg);
     assert(reader.read_member("plain.narc", std::size_t{1}).value() == hd_bin);
     assert(reader.read_member("packed.carc", "kart.bin").value() == kart);

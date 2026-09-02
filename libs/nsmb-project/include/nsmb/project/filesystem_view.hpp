@@ -33,11 +33,18 @@ struct FilesystemEntry {
     // the ROM does not hold yet can carry one.
     bool id_is_planned{false};
 
+    // The member's position inside its container, set only on a row whose path
+    // carries a `!`. Never an id, and never both: the game addresses a member
+    // by where it sits, and a NitroFS id addresses the container as a whole.
+    std::optional<std::int64_t> member_index;
+
     std::uintmax_t size{};
 
     // The module file supplying this entry, empty when the ROM does. There is
     // no second path any more: what the ROM holds is read from the ROM.
     std::filesystem::path source;
+
+    [[nodiscard]] bool inside_archive() const noexcept { return member_index.has_value(); }
 };
 
 struct FilesystemView {

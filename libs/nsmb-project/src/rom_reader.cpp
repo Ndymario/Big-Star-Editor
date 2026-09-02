@@ -177,7 +177,7 @@ core::Result<const formats::NarcArchive*> RomReader::archive(std::string_view ro
 
 bool RomReader::is_archive(std::string_view rom_path) { return archive(rom_path).has_value(); }
 
-core::Result<std::vector<std::string>> RomReader::list_archive(std::string_view rom_path) {
+core::Result<std::vector<ArchiveMember>> RomReader::list_archive(std::string_view rom_path) {
     auto opened = archive(rom_path);
     if (!opened) return opened.error();
     const auto& narc = *opened.value();
@@ -186,9 +186,11 @@ core::Result<std::vector<std::string>> RomReader::list_archive(std::string_view 
     if (!names) return names.error();
     // An index the name table does not name keeps its row, empty, so that a
     // member's position in this list stays its index.
-    std::vector<std::string> members(narc.files.size());
+    std::vector<ArchiveMember> members(narc.files.size());
+    for (std::size_t i = 0; i < narc.files.size(); ++i)
+        members[i].size = static_cast<std::uint32_t>(narc.files[i].size());
     for (const auto& name : names.value())
-        if (name.id < members.size()) members[name.id] = name.path.generic_string();
+        if (name.id < members.size()) members[name.id].path = name.path.generic_string();
     return members;
 }
 

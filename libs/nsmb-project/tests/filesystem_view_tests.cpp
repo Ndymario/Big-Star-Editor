@@ -23,6 +23,12 @@ nsmb::patching::ModuleInfo module(std::string key,const std::filesystem::path& r
 std::vector<std::uint8_t> one_member_narc(std::string_view contents){
     return synthetic::make_narc({{"member.bin",text(contents)}});
 }
+
+// Two members, so a stale one can be told from an untouched sibling rather
+// than the pair of them being reported as one verdict.
+std::vector<std::uint8_t> two_member_narc(std::string_view first){
+    return synthetic::make_narc({{"member.bin",text(first)},{"sibling.bin",text("SIB")}});
+}
 }
 
 int main(){
@@ -36,7 +42,7 @@ int main(){
             {"vanilla.bin",text("V")},{"shared.bin",text("FR")},{"moved.bin",text("SAME")},
             {"explicit.bin",text("EXPLICIT")},{"generated.bin",text("BUILT")},{"stale.bin",text(stale)},
             {"gone.bin",text("LEFTOVER")},{"z_new/reserved",{}},{"z_new/add.bin",text("ADD")},
-            {"ARCHIVE/menu.narc",one_member_narc("M")},{"ARCHIVE/other.narc",one_member_narc(other)},
+            {"ARCHIVE/menu.narc",one_member_narc("M")},{"ARCHIVE/other.narc",two_member_narc(other)},
             // A compressed container is an ordinary archive under an LZ10
             // wrapper, and has to be compared through it rather than written
             // off as unreadable.
@@ -59,6 +65,7 @@ int main(){
     write(second.nitrofs->dir/"fr/ARCHIVE/menu_narc/member.bin","M");
     write(second.nitrofs->dir/"fr/ARCHIVE/menu_carc/member.bin","C");
     write(second.nitrofs->dir/"fr/ARCHIVE/other_narc/member.bin","NEW");
+    write(second.nitrofs->dir/"fr/ARCHIVE/other_narc/sibling.bin","SIB");
     auto prefixed=module("prefixed",root/"modules/prefixed/nitrofs",true,"common","assets");
     write(prefixed.nitrofs->dir/"french/picture.bin","PIC");
     write(root/"project-assets/explicit.bin","EXPLICIT");
@@ -80,8 +87,9 @@ int main(){
             {{0,"member.bin",1,FileAction::Modified,"modules/second/nitrofs/fr/ARCHIVE/menu_narc/member.bin","second","Assets","fr"}}},
         {9,"ARCHIVE/menu.carc",48,FileAction::Modified,{},{},{},{},false,
             {{0,"member.bin",1,FileAction::Modified,"modules/second/nitrofs/fr/ARCHIVE/menu_carc/member.bin","second","Assets","fr"}}},
-        {10,"ARCHIVE/other.narc",64,FileAction::Modified,{},{},{},{},false,
-            {{0,"member.bin",3,FileAction::Modified,"modules/second/nitrofs/fr/ARCHIVE/other_narc/member.bin","second","Assets","fr"}}},
+        {10,"ARCHIVE/other.narc",96,FileAction::Modified,{},{},{},{},false,
+            {{0,"member.bin",3,FileAction::Modified,"modules/second/nitrofs/fr/ARCHIVE/other_narc/member.bin","second","Assets","fr"},
+             {1,"sibling.bin",3,FileAction::Modified,"modules/second/nitrofs/fr/ARCHIVE/other_narc/sibling.bin","second","Assets","fr"}}},
         {11,"z_new/reserved",0,FileAction::Created},
         {12,"z_new/add.bin",3,FileAction::Created,"modules/second/nitrofs/fr/z_new/add.bin","second","Assets","fr"},
     };
@@ -131,11 +139,29 @@ int main(){
     // Every other id is read from the ROM, so none of them is a prediction.
     assert(!find("z_new/add.bin")->id_is_planned&&!find("shared.bin")->id_is_planned);
 
-    // Archives, still collapsed into their container here, compared through
-    // the members the plan names rather than by re-deriving them.
+    // Archives, compared through the members the plan names rather than by
+    // re-deriving them, and reported one row per member.
     assert(find("ARCHIVE/menu.narc")->status==FilesystemStatus::Replaced);
+    assert(find("ARCHIVE/menu.narc!member.bin")->status==FilesystemStatus::Replaced);
+    // A container is addressed by its file id and a member by its position, and
+    // a row never carries both -- confusing the two replaces the wrong file.
+    assert(find("ARCHIVE/menu.narc")->id==8&&!find("ARCHIVE/menu.narc")->inside_archive());
+    assert(find("ARCHIVE/menu.narc!member.bin")->member_index==0);
+    assert(!find("ARCHIVE/menu.narc!member.bin")->id);
+    // The wrapper is not the point: a compressed container's members are read
+    // through it and reported the same way.
     assert(find("ARCHIVE/menu.carc")->status==FilesystemStatus::Replaced);
+    assert(find("ARCHIVE/menu.carc!member.bin")->status==FilesystemStatus::Replaced);
+    // One stale member is now named, and says which module it came from --
+    // which is the whole point of not collapsing. Its sibling is untouched and
+    // stays that way, even though the container it lives in is Pending.
     assert(find("ARCHIVE/other.narc")->status==FilesystemStatus::Pending);
+    const auto* stale_member=find("ARCHIVE/other.narc!member.bin");
+    assert(stale_member->status==FilesystemStatus::Pending&&stale_member->member_index==0);
+    assert(stale_member->module=="second"&&stale_member->component=="Assets"&&stale_member->variant=="fr");
+    assert(stale_member->source==second.nitrofs->dir/"fr/ARCHIVE/other_narc/member.bin");
+    assert(find("ARCHIVE/other.narc!sibling.bin")->status==FilesystemStatus::Replaced);
+    assert(find("ARCHIVE/other.narc!sibling.bin")->member_index==1);
     assert(view.value().has_pending());
 
     // The property the deleted resolution code could never have: when the plan

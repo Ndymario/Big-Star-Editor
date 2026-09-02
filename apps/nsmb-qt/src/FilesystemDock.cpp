@@ -36,10 +36,15 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace {
 constexpr auto path_role = Qt::UserRole;
+// Set on a container row whose members have not been listed from the ROM yet.
+// Expanding one clears it, which is what keeps a game's hundreds of archives
+// from being parsed to open a project.
+constexpr auto unlisted_archive_role = Qt::UserRole + 1;
 
 // Path and Status are the list; everything else about a file lives in the footer, and is only
 // promoted to a column when the user asks for it through the header menu.
@@ -213,6 +218,31 @@ EntryIcon classify_entry(const nsmb::project::FilesystemEntry& entry, nsmb::proj
 // to sort by and the file trails its siblings.
 constexpr auto unassigned_id = std::numeric_limits<qint64>::max();
 
+// A ROM address as tree segments. `a/b.narc!c/d` becomes a, b.narc, c, d: the
+// container is a node like any other and its members hang beneath it, so the
+// `!` shows up only in the keys, which is what keeps a member row's key equal
+// to the address the view knows it by.
+struct Segments {
+    QStringList names;
+    QStringList keys;  // the address of everything up to and including that name
+};
+
+Segments split_address(const QString& path) {
+    const auto bang = path.indexOf('!');
+    Segments split; QString key;
+    for (const auto& part : (bang < 0 ? path : path.left(bang)).split('/')) {
+        if (!key.isEmpty()) key += '/';
+        key += part; split.names << part; split.keys << key;
+    }
+    if (bang < 0) return split;
+    bool first = true;
+    for (const auto& part : path.mid(bang + 1).split('/')) {
+        key += first ? '!' : '/'; first = false;
+        key += part; split.names << part; split.keys << key;
+    }
+    return split;
+}
+
 struct TreeRow {
     QStringList parts;
     QList<qint64> order;  // per segment: the lowest file ID at or beneath that prefix
@@ -300,15 +330,19 @@ FilesystemDock::FilesystemDock(QWidget* parent) : QWidget(parent) {
     connect(hex_, &QPushButton::clicked, this, &FilesystemDock::hexEditFile);
     // Double-clicking a file opens it in whichever editor understands it, the way NSMB Editor does.
     connect(tree_, &QTreeWidget::itemDoubleClicked, this, [this](QTreeWidgetItem* item, int) {
-        if (item->childCount()) return;  // a directory row only expands
+        if (item->data(0, path_role).toString().isEmpty()) return;  // a directory row only expands
         openFile();
     });
+    connect(tree_, &QTreeWidget::itemExpanded, this, &FilesystemDock::listArchive);
     connect(tree_, &QTreeWidget::itemSelectionChanged, this, [this] {
         const auto* entry = selectedEntry(); replace_->setEnabled(entry); extract_->setEnabled(entry); hex_->setEnabled(entry);
         selectedEditor_ = editorFor(entry);
         updateDetails();
         open_->setEnabled(selectedEditor_ != bse::editors::Kind::None);
-        remove_->setEnabled(entry && !entry->source.empty() && !entry->module.empty());
+        // A member cannot be removed: the archive codec replaces in place,
+        // because dropping a member renumbers every member after it and the
+        // game addresses them by number.
+        remove_->setEnabled(entry && !entry->source.empty() && !entry->module.empty() && !entry->inside_archive());
     });
 }
 
@@ -342,39 +376,42 @@ void FilesystemDock::rebuildTree() {
     root->setIcon(0, entry_icon(EntryIcon::Folder, icons));
     std::map<QString, QTreeWidgetItem*> directories{{{}, root}};
     std::vector<TreeRow> rows; rows.reserve(view_.entries.size());
-    for (const auto& entry : view_.entries) rows.push_back({QString::fromStdString(entry.path).split('/'), {}, &entry});
+    std::vector<Segments> addresses; addresses.reserve(view_.entries.size());
+    for (const auto& entry : view_.entries) {
+        addresses.push_back(split_address(QString::fromStdString(entry.path)));
+        rows.push_back({addresses.back().names, {}, &entry});
+    }
 
     std::map<QString, qint64> lowestId;
-    for (const auto& row : rows) {
-        if (!row.entry->id) continue;
-        const auto id = static_cast<qint64>(*row.entry->id); QString prefix;
-        for (const auto& part : row.parts) {
-            if (!prefix.isEmpty()) prefix += '/';
-            prefix += part;
-            const auto slot = lowestId.try_emplace(prefix, id).first;
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        if (!rows[i].entry->id) continue;
+        const auto id = static_cast<qint64>(*rows[i].entry->id);
+        for (const auto& key : addresses[i].keys) {
+            const auto slot = lowestId.try_emplace(key, id).first;
             slot->second = std::min(slot->second, id);
         }
     }
-    for (auto& row : rows) {
-        QString prefix; row.order.reserve(row.parts.size());
-        for (const auto& part : row.parts) {
-            if (!prefix.isEmpty()) prefix += '/';
-            prefix += part;
-            const auto found = lowestId.find(prefix);
-            row.order.push_back(found == lowestId.end() ? unassigned_id : found->second);
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+        rows[i].order.reserve(addresses[i].keys.size());
+        for (const auto& key : addresses[i].keys) {
+            const auto found = lowestId.find(key);
+            rows[i].order.push_back(found == lowestId.end() ? unassigned_id : found->second);
         }
     }
+    // A container sorts above its own members: they share every segment it has
+    // and then it runs out of them first.
     std::ranges::sort(rows, path_precedes);
 
     for (const auto& [parts, order, entryPointer] : rows) {
-        const auto& entry = *entryPointer; const auto path = parts.join('/'); QString parentPath; auto* parent = root;
+        const auto& entry = *entryPointer; const auto address = split_address(QString::fromStdString(entry.path));
+        const auto& path = address.keys.back(); auto* parent = root;
         for (int i = 0; i + 1 < parts.size(); ++i) {
-            const auto directoryPath = parentPath.isEmpty() ? parts[i] : parentPath + "/" + parts[i];
+            const auto& directoryPath = address.keys[i];
             if (!directories.contains(directoryPath)) {
                 directories[directoryPath] = new QTreeWidgetItem(parent, {parts[i]});
                 directories[directoryPath]->setIcon(0, entry_icon(EntryIcon::Folder, icons));
             }
-            parent = directories[directoryPath]; parentPath = directoryPath;
+            parent = directories[directoryPath];
         }
         const auto statusName = entry.status == nsmb::project::FilesystemStatus::Pending
             ? (entry.id && !entry.id_is_planned ? QString("⏳ Pending rebuild") : QString("⏳ Pending insertion"))
@@ -389,7 +426,16 @@ void FilesystemDock::rebuildTree() {
             provenance(entry), QString::fromStdString(entry.variant), fileId, QString::number(entry.size)});
         if (entry.id_is_planned) item->setToolTip(FileIdColumn, "The ID the next build would assign. Nothing holds it yet.");
         item->setData(0, path_role, path);
-        item->setIcon(0, entry_icon(classify_entry(entry, files_), icons));
+        const auto icon = classify_entry(entry, files_);
+        item->setIcon(0, entry_icon(icon, icons));
+        // A container is a file and a folder at once: it keeps its own row, and
+        // whatever the plan says about its members hangs beneath it. The rest
+        // of them are listed when somebody opens it.
+        if (icon == EntryIcon::Archive && !entry.inside_archive()) {
+            directories.emplace(path, item);
+            item->setData(0, unlisted_archive_role, true);
+            item->setChildIndicatorPolicy(QTreeWidgetItem::ShowIndicator);
+        }
         if (entry.status == nsmb::project::FilesystemStatus::Pending) item->setForeground(1, bse::theme::warning(palette()));
         if (entry.status == nsmb::project::FilesystemStatus::Orphaned) item->setForeground(1, bse::theme::danger(palette()));
     }
@@ -400,6 +446,102 @@ void FilesystemDock::rebuildTree() {
     const bool hasTarget = targetModule(); add_->setEnabled(hasTarget); replace_->setEnabled(false); remove_->setEnabled(false); extract_->setEnabled(false); open_->setEnabled(false); hex_->setEnabled(false);
     selectedEditor_ = bse::editors::Kind::None;
     updateDetails();
+}
+
+// Everything an archive holds that the plan had no reason to mention. The plan
+// carries provenance, which is the one thing that cannot be derived; the member
+// list is the container's own, so it is read from the container -- once, when
+// somebody opens it, rather than for every archive in the game on project open.
+void FilesystemDock::listArchive(QTreeWidgetItem* item) {
+    if (!item || !item->data(0, unlisted_archive_role).toBool()) return;
+    item->setData(0, unlisted_archive_role, {});
+    const auto container = item->data(0, path_role).toString();
+    if (container.isEmpty() || !files_ || !files_->rom()) return;
+    auto listed = files_->rom()->list_archive(container.toStdString());
+    if (!listed) {
+        // Not an archive after all, or not a readable one. The row goes back to
+        // being an ordinary file rather than an expander that opens onto nothing.
+        item->setChildIndicatorPolicy(QTreeWidgetItem::DontShowIndicatorWhenChildless);
+        return;
+    }
+
+    // What the plan already put here. Those rows carry provenance this listing
+    // does not have, so they stay exactly as they are.
+    std::map<QString, QTreeWidgetItem*> directories{{container, item}};
+    std::set<QString> present;
+    const auto seed = [&](auto&& self, QTreeWidgetItem* node, const QString& key) -> void {
+        for (int i = 0; i < node->childCount(); ++i) {
+            auto* child = node->child(i);
+            const auto childKey = key + (key == container ? '!' : '/') + child->text(0);
+            if (child->childCount()) directories.emplace(childKey, child);
+            else present.insert(child->data(0, path_role).toString());
+            self(self, child, childKey);
+        }
+    };
+    seed(seed, item, container);
+
+    std::map<EntryIcon, QIcon> icons;
+    std::map<QString, qint64> indices;
+    const auto depth = container.split('/').size();
+    for (std::size_t index = 0; index < listed.value().size(); ++index) {
+        const auto& member = listed.value()[index];
+        // An index the container does not name has no address to open it by,
+        // and inventing one would name a member the next build cannot find.
+        if (member.path.empty()) continue;
+        const auto key = container + "!" + QString::fromStdString(member.path);
+        indices.emplace(key, static_cast<qint64>(index));
+        if (present.contains(key)) continue;
+
+        nsmb::project::FilesystemEntry vanilla;
+        vanilla.path = key.toStdString();
+        vanilla.member_index = static_cast<std::int64_t>(index);
+        vanilla.size = member.size;
+        view_.entries.push_back(std::move(vanilla));
+        const auto& entry = view_.entries.back();
+
+        const auto address = split_address(key);
+        auto* parent = item;
+        for (qsizetype i = depth; i + 1 < address.names.size(); ++i) {
+            auto found = directories.find(address.keys[i]);
+            if (found == directories.end()) {
+                auto* node = new QTreeWidgetItem(parent, {address.names[i]});
+                node->setIcon(0, entry_icon(EntryIcon::Folder, icons));
+                found = directories.emplace(address.keys[i], node).first;
+            }
+            parent = found->second;
+        }
+        auto* leaf = new QTreeWidgetItem(parent, {address.names.back(),
+            QString::fromUtf8(nsmb::project::filesystem_status_name(entry.status).data(),
+                              static_cast<qsizetype>(nsmb::project::filesystem_status_name(entry.status).size())),
+            {}, {}, QString("—"), QString::number(entry.size)});
+        leaf->setData(0, path_role, key);
+        leaf->setIcon(0, entry_icon(classify_entry(entry, files_), icons));
+    }
+
+    // Members sort by index the way the tree above sorts by file ID, so a
+    // folder inside an archive takes the lowest index it holds and the order
+    // is the container's own rather than alphabetical.
+    std::map<const QTreeWidgetItem*, qint64> order;
+    const auto rank = [&](auto&& self, QTreeWidgetItem* node) -> qint64 {
+        qint64 lowest = unassigned_id;
+        if (!node->childCount()) {
+            const auto found = indices.find(node->data(0, path_role).toString());
+            if (found != indices.end()) lowest = found->second;
+        }
+        for (int i = 0; i < node->childCount(); ++i) lowest = std::min(lowest, self(self, node->child(i)));
+        return order[node] = lowest;
+    };
+    rank(rank, item);
+    const auto reorder = [&](auto&& self, QTreeWidgetItem* node) -> void {
+        auto children = node->takeChildren();
+        std::stable_sort(children.begin(), children.end(), [&](const auto* left, const auto* right) {
+            if (order[left] != order[right]) return order[left] < order[right];
+            return compare_names(left->text(0), right->text(0)) < 0;
+        });
+        node->addChildren(children);
+        for (auto* child : children) self(self, child);
+    };
+    reorder(reorder, item);
 }
 
 void FilesystemDock::showColumnMenu(const QPoint& position) {
@@ -463,6 +605,10 @@ void FilesystemDock::changeEvent(QEvent* event) {
     default:
         break;
     }
+}
+
+const nsmb::project::FilesystemEntry* FilesystemDock::entryFor(const QString& romPath) const {
+    return view_.find(romPath.toStdString());
 }
 
 const nsmb::project::FilesystemEntry* FilesystemDock::selectedEntry() const {
@@ -542,11 +688,18 @@ bse::editors::Kind FilesystemDock::editorFor(const nsmb::project::FilesystemEntr
 }
 
 bse::editors::Companions FilesystemDock::companionsFor(const QString& romPath) const {
-    const auto directory = romPath.section('/', 0, -2);
+    // What sits beside this file. Inside a container that means the other
+    // members of the same folder of that container, not the container's own
+    // neighbours, which is why the address is split rather than the string.
+    const auto folder_of = [](const QString& path) {
+        const auto address = split_address(path);
+        return address.keys.size() < 2 ? QString{} : address.keys[address.keys.size() - 2];
+    };
+    const auto directory = folder_of(romPath);
     bse::editors::Companions companions;
     for (const auto& candidate : view_.entries) {
         const auto path = QString::fromStdString(candidate.path);
-        if (path == romPath || path.section('/', 0, -2) != directory) continue;
+        if (path == romPath || folder_of(path) != directory) continue;
         companions.paths << path;
     }
     companions.paths.sort();

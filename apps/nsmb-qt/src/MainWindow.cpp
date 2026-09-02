@@ -550,7 +550,7 @@ void MainWindow::createDocks() {
         reloadFilesystemView();
     });
     connect(filesystemPanel_, &FilesystemDock::openInEditorRequested, this, [this](const QString& romPath) {
-        const auto* entry = filesystemView_.find(romPath.toStdString());
+        const auto* entry = filesystemPanel_->entryFor(romPath);
         if (!entry) return;
         auto data = effectiveFiles_.read(romPath.toStdString());
         if (!data) { log("Open file: " + QString::fromStdString(data.error().message)); return; }
@@ -562,7 +562,7 @@ void MainWindow::createDocks() {
                          });
     });
     connect(filesystemPanel_, &FilesystemDock::hexEditRequested, this, [this](const QString& romPath) {
-        if (!filesystemView_.find(romPath.toStdString())) return;
+        if (!filesystemPanel_->entryFor(romPath)) return;
         auto data = effectiveFiles_.read(romPath.toStdString());
         if (!data) { log("Hex edit: " + QString::fromStdString(data.error().message)); return; }
         const auto key = activeVariant_ + "\nhex\n" + romPath;

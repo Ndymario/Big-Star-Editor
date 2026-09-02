@@ -3,6 +3,7 @@
 #include "nsmb/core/file_io.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 
@@ -29,28 +30,33 @@ bool source_matches_rom(const std::filesystem::path& source,RomReader& rom,std::
 
 std::filesystem::path source_path(const std::filesystem::path& project_dir,std::string_view source){auto path=std::filesystem::path(source);return path.is_absolute()?path:project_dir/path;}
 
-// Does the container the ROM holds already carry the members the plan would
-// write into it? Addressed by index, which is how the game addresses a member
-// and how the plan reports one; a member path is a label, not an address.
-bool archive_members_match(RomReader& rom,std::string_view container,const std::filesystem::path& project_dir,const std::vector<patching::RomArchiveMember>& members){
-    for(const auto& member:members){
-        // A hook writes this one, so there is nothing on disk to compare and
-        // nothing the user can do about it either way.
-        if(member.source_missing)continue;
-        if(member.index<0)return false;
-        auto stored=rom.read_member(container,std::size_t(member.index));if(!stored)return false;
-        auto expected=core::read_file(source_path(project_dir,member.source));
-        if(!expected||stored.value()!=expected.value())return false;
-    }
-    return true;
+// Does the container the ROM holds already carry this member? Addressed by
+// index, which is how the game addresses a member and how the plan reports one;
+// a member path is a label, not an address.
+bool member_matches_rom(RomReader& rom,std::string_view container,const std::filesystem::path& project_dir,const patching::RomArchiveMember& member){
+    // A hook writes this one, so there is nothing on disk to compare and
+    // nothing the user can do about it either way.
+    if(member.source_missing)return true;
+    if(member.index<0)return false;
+    auto stored=rom.read_member(container,std::size_t(member.index));if(!stored)return false;
+    auto expected=core::read_file(source_path(project_dir,member.source));
+    return expected&&stored.value()==expected.value();
+}
+
+bool same_member(const patching::RomArchiveMember& built,const patching::RomArchiveMember& planned){
+    return built.path==planned.path&&built.module==planned.module&&built.component==planned.component&&built.from_variant==planned.from_variant;
+}
+
+const patching::RomArchiveMember* member_at(const std::vector<patching::RomArchiveMember>& members,std::int64_t index){
+    const auto found=std::ranges::find(members,index,&patching::RomArchiveMember::index);return found==members.end()?nullptr:&*found;
 }
 
 // The set of members a run wrote is part of what it did. A build that replaced
 // three members and a plan that would replace two disagree even if those two
-// match byte for byte.
+// match byte for byte -- so this is asked of the container, not of a member,
+// which is why one stale member never drags its siblings down with it.
 bool same_members(const std::vector<patching::RomArchiveMember>& built,const std::vector<patching::RomArchiveMember>& planned){
-    return std::ranges::equal(built,planned,[](const auto& a,const auto& b){
-        return a.index==b.index&&a.path==b.path&&a.module==b.module&&a.component==b.component&&a.from_variant==b.from_variant;});
+    return std::ranges::equal(built,planned,[](const auto& a,const auto& b){return a.index==b.index&&same_member(a,b);});
 }
 
 } // namespace
@@ -128,16 +134,35 @@ core::Result<FilesystemView> build_filesystem_view(FilesystemViewRequest request
 
         bool agrees=manifest!=nullptr&&request.rom!=nullptr;
         if(agrees)agrees=manifest->module==plan->module&&manifest->component==plan->component&&manifest->from_variant==plan->from_variant;
-        if(agrees&&!plan->members.empty())
-            agrees=same_members(manifest->members,plan->members)&&archive_members_match(*request.rom,path,request.project_dir,plan->members);
+
+        // An archive is not a file with one answer. Each member the plan would
+        // write is judged against the ROM's copy at that index on its own, so
+        // the view can say which member is stale instead of only that one is.
+        // The container then reports what its members add up to, plus the one
+        // thing no member can see: whether the set itself has changed.
+        std::vector<FilesystemEntry> member_rows;
+        for(const auto& member:plan->members){
+            FilesystemEntry row;
+            row.path=path+"!"+member.path;row.member_index=member.index;
+            row.module=member.module;row.component=member.component;row.variant=member.from_variant;
+            if(!member.source.empty())row.source=source_path(request.project_dir,member.source);
+            if(!member.source_missing)row.size=std::uintmax_t(member.size);
+            const auto* built=manifest?member_at(manifest->members,member.index):nullptr;
+            const bool written=built&&same_member(*built,member)&&request.rom&&member_matches_rom(*request.rom,path,request.project_dir,member);
+            row.status=written?FilesystemStatus::Replaced:FilesystemStatus::Pending;
+            if(!written)agrees=false;
+            member_rows.push_back(std::move(row));
+        }
+        if(agrees&&!plan->members.empty())agrees=same_members(manifest->members,plan->members);
         // A source a pre-build hook writes is not on disk to be compared, so
         // there is no honest way to call it stale. Reporting the last build is
         // better than a Pending mark nothing the user does can clear.
-        else if(agrees&&!entry.source.empty()&&!plan->source_missing)agrees=source_matches_rom(entry.source,*request.rom,path);
+        else if(agrees&&plan->members.empty()&&!entry.source.empty()&&!plan->source_missing)agrees=source_matches_rom(entry.source,*request.rom,path);
 
         entry.status=!agrees?FilesystemStatus::Pending
             :(path.starts_with("z_new/")||manifest->action==patching::FileAction::Created?FilesystemStatus::Added:FilesystemStatus::Replaced);
         view.entries.push_back(std::move(entry));
+        view.entries.insert(view.entries.end(),std::make_move_iterator(member_rows.begin()),std::make_move_iterator(member_rows.end()));
     }
 
     for(const auto& module:request.modules.modules)if(module.enabled&&module.nitrofs){view.watched_directories.push_back(module.nitrofs->dir);std::error_code walk_error;for(std::filesystem::recursive_directory_iterator it(module.nitrofs->dir,std::filesystem::directory_options::skip_permission_denied,walk_error),end;!walk_error&&it!=end;it.increment(walk_error))if(it->is_directory())view.watched_directories.push_back(it->path());}

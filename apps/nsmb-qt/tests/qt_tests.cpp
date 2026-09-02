@@ -1619,6 +1619,81 @@ private slots:
         QCOMPARE(childNames(root->child(3)), QStringList({"w1_castle.nsbmd", "w2_castle.nsbmd", "w10_castle.nsbmd"}));
     }
 
+    void archivesExpandLikeFoldersAndListTheirMembersOnDemand() {
+        QTemporaryDir files;
+        QVERIFY(files.isValid());
+        // A container with a member at its root and two in a folder, so the
+        // member address nests exactly the way a ROM path does.
+        const auto narc = synthetic::make_narc({{"vs.bmg", sampleBmg()},
+                                                {"menu/title.bin", std::vector<std::uint8_t>(8, 1)},
+                                                {"menu/hd.bin", std::vector<std::uint8_t>(4, 2)}});
+        nsmb::project::FilesystemView view;
+        auto effective = romFixture(files.path(), view, {{"ARCHIVE/menu.narc", narc}});
+        // The one member a build would write. Its provenance is the thing only
+        // the plan knows, so it is on the row before anything is expanded.
+        nsmb::project::FilesystemEntry planned;
+        planned.path = "ARCHIVE/menu.narc!menu/hd.bin";
+        planned.member_index = 2;
+        planned.status = nsmb::project::FilesystemStatus::Pending;
+        planned.module = "message";
+        planned.source = std::filesystem::path(files.path().toStdString()) / "modules/message/hd.bin";
+        view.entries.push_back(std::move(planned));
+
+        FilesystemDock dock;
+        dock.setData({}, &effective, {}, std::move(view), {}, {}, {});
+        auto* tree = dock.findChild<QTreeWidget*>("FilesystemTree");
+        QVERIFY(tree);
+        const auto find = [&](const QString& romPath) -> QTreeWidgetItem* {
+            for (QTreeWidgetItemIterator it(tree); *it; ++it)
+                if ((*it)->data(0, Qt::UserRole).toString() == romPath) return *it;
+            return nullptr;
+        };
+        const auto childNames = [](const QTreeWidgetItem* parent) {
+            QStringList names;
+            for (int i = 0; i < parent->childCount(); ++i) names << parent->child(i)->text(0);
+            return names;
+        };
+
+        // The container is a row of its own, under ARCHIVE, and it holds only
+        // what the plan named: nothing has read the archive yet.
+        auto* container = find("ARCHIVE/menu.narc");
+        QVERIFY(container);
+        QCOMPARE(childNames(container), QStringList({"menu"}));
+        QCOMPARE(childNames(container->child(0)), QStringList({"hd.bin"}));
+
+        // Opening it fills in the rest, ordered by member index the way the
+        // tree above is ordered by file ID -- so vs.bmg leads and hd.bin, which
+        // the plan put there first, falls in behind its sibling.
+        container->setExpanded(true);
+        QCOMPARE(childNames(container), QStringList({"vs.bmg", "menu"}));
+        QCOMPARE(childNames(container->child(1)), QStringList({"title.bin", "hd.bin"}));
+        QVERIFY(find("ARCHIVE/menu.narc!vs.bmg"));
+        // Expanding again must not list them twice.
+        container->setExpanded(false);
+        container->setExpanded(true);
+        QCOMPARE(childNames(container), QStringList({"vs.bmg", "menu"}));
+
+        auto* open = dock.findChild<QPushButton*>("OpenFile");
+        auto* details = dock.findChild<QLabel*>("FilesystemDetails");
+        QPushButton* remove = nullptr;
+        for (auto* button : dock.findChildren<QPushButton*>()) if (button->text() == "Remove") remove = button;
+        QVERIFY(open && details && remove);
+
+        // A member reaches the editors on its own bytes, read through the
+        // container -- which is what the dock could never do before.
+        tree->setCurrentItem(find("ARCHIVE/menu.narc!vs.bmg"));
+        QVERIFY(open->isEnabled());
+        QVERIFY(details->text().contains("Opens in: Messages"));
+
+        // Replace and Extract work on a member; Remove does not, because the
+        // archive codec replaces in place and dropping a member would renumber
+        // every member after it.
+        tree->setCurrentItem(find("ARCHIVE/menu.narc!menu/hd.bin"));
+        QVERIFY(!remove->isEnabled());
+        for (auto* button : dock.findChildren<QPushButton*>())
+            if (button->text() == "Replace" || button->text() == "Extract") QVERIFY(button->isEnabled());
+    }
+
     void filesystemListShowsPathAndStatusWithOptionalColumns() {
         // The list itself is Path + Status; the rest of what is known about a file belongs in
         // the footer, and only becomes a column when the header menu is asked for it.

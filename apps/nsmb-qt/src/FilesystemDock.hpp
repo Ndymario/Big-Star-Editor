@@ -13,6 +13,7 @@ class QMenu;
 class QPoint;
 class QPushButton;
 class QTreeWidget;
+class QTreeWidgetItem;
 
 // NSMB keeps its ROM user metadata in NitroFS file 131; that one file needs the metadata
 // reader rather than the uiStudio one, so the ID travels with the dispatch call.
@@ -42,6 +43,10 @@ public:
     // Selects and scrolls to a ROM path, expanding whatever holds it. False
     // when this variant's tree has no such file.
     bool revealPath(const QString& romPath);
+    // What the dock knows about a ROM address, including the archive members it
+    // has listed since the view was handed to it -- so a caller asking about a
+    // member gets an answer rather than the view's silence.
+    [[nodiscard]] const nsmb::project::FilesystemEntry* entryFor(const QString& romPath) const;
     // Writes an editor's result back through the active module target.
     nsmb::core::Result<void> saveEditedFile(const QString& romPath, std::span<const std::uint8_t> bytes);
 
@@ -61,6 +66,10 @@ protected:
 private:
     void applyThemeColors();
     void rebuildTree();
+    // Fills in an archive's remaining members the first time it is opened. A
+    // plan names only the members a build would write; the rest are the
+    // container's own business, and a game has hundreds of containers.
+    void listArchive(QTreeWidgetItem* item);
     void showColumnMenu(const QPoint& position);
     void saveColumnState();
     void restoreColumnState();
