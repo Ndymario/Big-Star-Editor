@@ -99,9 +99,20 @@ using ActorResourceResolver = std::function<core::Result<ActorResource>(ActorRes
 // which case loadImage reports every still as unavailable.
 using ActorImageDecoder = std::function<core::Result<formats::RgbaImage>(std::span<const std::uint8_t>)>;
 
+// Turns the readable name a module's `stageobjects.json` gives a stage object --
+// `coop.CoopFlagActor.Default` -- into the hash and class id the level format
+// stores. A module actor names itself rather than repeating a hash that changes
+// whenever the object is renamed.
+struct StageObjectIdentity {
+    std::uint32_t hash{};
+    std::uint32_t object_id{};
+};
+using StageObjectNameResolver = std::function<std::optional<StageObjectIdentity>(std::string_view)>;
+
 core::Result<LuaActorCatalog> load_lua_actor_layers(std::span<const LuaActorLayer> layers,
                                                     const ActorResourceResolver& resolve,
-                                                    const ActorImageDecoder& decode_image = {});
+                                                    const ActorImageDecoder& decode_image = {},
+                                                    const StageObjectNameResolver& stage_object = {});
 [[nodiscard]] bool has_lua_renderer(const LuaActorDefinition& actor);
 // `custom_rendered` receives what render() returned: false means the script drew
 // something but still wants the stock numbered marker, the way NSMBe's

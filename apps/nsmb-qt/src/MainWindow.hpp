@@ -21,6 +21,7 @@
 #include "nsmb/project/effective_filesystem.hpp"
 #include "nsmb/project/module_data.hpp"
 #include "nsmb/project/lua_actors.hpp"
+#include "nsmb/project/lua_tiles.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
 #include "nsmb/project/filesystem_view.hpp"
 #include "LevelPreviewWidget.hpp"
@@ -153,6 +154,7 @@ private:
     nsmb::project::ModuleDataCatalog moduleData_;
     nsmb::project::SpriteDefinitionCatalog spriteDefinitions_;
     nsmb::project::LuaActorCatalog actorDefinitions_;
+    std::shared_ptr<const nsmb::project::TileOverlayCatalog> tileOverlays_;
     nsmb::patching::ModuleGraph moduleGraph_;
     std::optional<nsmb::patching::ProjectConfig> patcherConfig_;
     std::optional<nsmb::patching::FileManifest> fileManifest_;

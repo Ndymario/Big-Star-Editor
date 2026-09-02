@@ -252,6 +252,29 @@ int main() {
     assert(unpacked_screen && unpacked_screen.value()[0].tile == 7 && unpacked_screen.value()[0].palette == 2);
     assert(unpacked_screen.value()[0].horizontal_flip && unpacked_screen.value()[1].vertical_flip);
 
+    // An entry naming a tile or palette below the resource's offsets belongs to
+    // graphics another tileset supplies. It has to survive decode as the
+    // negative index it is, so that re-encoding reproduces the original bytes
+    // and rendering can leave it clear instead of drawing tile zero.
+    const std::array<std::uint8_t, 4> below_offset{0x05, 0x00, 0x00, 0x00};
+    auto below = decode_screen_map(below_offset, 192, 2);
+    assert(below && below.value()[0].tile == 5 - 192 && below.value()[0].palette == -2);
+    assert(below.value()[1].tile == -192 && below.value()[1].palette == -2);
+    auto below_again = encode_screen_map(below.value(), 192, 2);
+    assert(below_again && below_again.value() == std::vector<std::uint8_t>(below_offset.begin(), below_offset.end()));
+
+    IndexedTile8Bpp solid;
+    solid.pixels.fill(1);
+    const std::array clear_check{Bgr555Color{0,0,0,true}, Bgr555Color{255,255,255,false}};
+    auto below_render = render_screen_map(below.value(), 2, std::span{&solid, 1}, clear_check);
+    assert(below_render && below_render.value().pixels[3] == 0 && below_render.value().pixels[8 * 4 + 3] == 0);
+
+    // A tileset palette file is several 256-colour palettes end to end, and
+    // colour 0 of each is the transparent one, not only the very first.
+    std::vector<Bgr555Color> blocks(512, Bgr555Color{1, 2, 3, false});
+    mark_palette_blocks_transparent(blocks);
+    assert(blocks[0].transparent && blocks[256].transparent && !blocks[1].transparent && !blocks[255].transparent);
+
     ObjectLayout layout;
     layout.rows = {{{1, 0}, {2, 1}}, {{3, 2}}};
     std::array<std::uint8_t, 4> index_template{0, 0, 9, 8};

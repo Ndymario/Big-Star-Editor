@@ -3,8 +3,8 @@
 local gfx = {}
 
 local function init(ctx)
-    gfx.body = ctx.loadTexture("sanbo_body.nsbmd")
-    gfx.head = ctx.loadTexture("sanbo_head.nsbmd")
+    gfx.body = ctx.loadTexture("enemy/sanbo_body.nsbmd")
+    gfx.head = ctx.loadTexture("enemy/sanbo_head.nsbmd")
 end
 
 -- The stack grows upward from the actor's tile, so the box is as tall as the

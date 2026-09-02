@@ -1278,7 +1278,7 @@ void MainWindow::openTilesetEditor() {
     nsmb::formats::TilemapResourceData source_background,source_foreground;
     auto background=load_map(resources.value().background,source_background),foreground=load_map(resources.value().foreground,source_foreground);
     if(!background||!foreground){QMessageBox::warning(this,"Tilesets and Backgrounds",QString::fromStdString(!background?background.error().message:foreground.error().message));return;}
-    TilesetEditorDialog dialog(std::move(tilesets),std::move(background.value()),std::move(foreground.value()),currentLevel_->tileset_references(),this);
+    TilesetEditorDialog dialog(std::move(tilesets),std::move(background.value()),std::move(foreground.value()),currentLevel_->tileset_references(),tileOverlays_,this);
     if(dialog.exec()!=QDialog::Accepted)return;
     std::array<nsmb::formats::TilesetResourceData,3> encoded_tilesets;
     for(std::size_t slot=0;slot<encoded_tilesets.size();++slot){auto value=dialog.tilesetData(slot);if(!value){QMessageBox::warning(this,"Save tileset",QString::fromStdString(value.error().message));return;}encoded_tilesets[slot]=std::move(value.value());}
@@ -1822,27 +1822,60 @@ void MainWindow::reloadFilesystemView() {
 }
 
 void MainWindow::reloadActorDefinitions() {
-    std::vector<nsmb::project::LuaActorLayer> layers;
-    layers.push_back({"project", currentProject_.directory() / "actors"});
+    // A module's Big Star contribution lives under `bigstar/`, one directory per
+    // kind. The bare `actors/` beside it is the older spelling and is still read,
+    // after it, so a project that predates `bigstar/` keeps working. There is no
+    // layer in the user's config directory: an edit that lives there never
+    // reaches anybody else on the project.
+    std::vector<std::filesystem::path> roots{currentProject_.directory()};
+    std::vector<std::string> names{"project"};
     for (const auto& module : moduleGraph_.modules)
-        if (module.enabled && !module.dir.empty()) layers.push_back({"module " + module.key, module.dir / "actors"});
-    layers.push_back({"local", std::filesystem::path(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation).toStdString()) / "actors"});
+        if (module.enabled && !module.dir.empty()) { roots.push_back(module.dir); names.push_back("module " + module.key); }
+
+    std::vector<nsmb::project::LuaActorLayer> layers;
+    std::vector<nsmb::project::LuaTileLayer> tileLayers;
+    for (std::size_t i = 0; i < roots.size(); ++i) {
+        layers.push_back({names[i], roots[i] / "bigstar" / "actors"});
+        layers.push_back({names[i] + " (legacy)", roots[i] / "actors"});
+        tileLayers.push_back({names[i], roots[i] / "bigstar" / "tiles"});
+    }
     layers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "actors"});
-    auto definitions = nsmb::project::load_lua_actor_layers(layers, [this](auto, std::string_view name) -> nsmb::core::Result<nsmb::project::ActorResource> {
-        const std::filesystem::path requested(name);
-        if (requested.empty() || requested.filename() != requested)
-            return nsmb::core::make_error(nsmb::core::ErrorCode::InvalidArgument, "actor resources must be read by file name");
-        const auto found = std::ranges::find_if(filesystemView_.entries, [&](const auto& entry) {
-            return std::filesystem::path(entry.path).filename() == requested;
-        });
-        if (found == filesystemView_.entries.end())
-            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "actor resource file is missing: " + std::string(name));
+    tileLayers.push_back({"shipped", std::filesystem::path(BSE_SOURCE_DIR) / "data" / "tiles"});
+
+    // Scripts name a ROM file by its full path under the filesystem root --
+    // `polygon_unit/I_dokan.nsbtx` -- because two directories hold files of the
+    // same name and a bare name cannot say which is meant.
+    auto resolve = [this](auto, std::string_view name) -> nsmb::core::Result<nsmb::project::ActorResource> {
+        const auto* found = filesystemView_.find(name);
+        if (!found)
+            return nsmb::core::make_error(nsmb::core::ErrorCode::NotFound, "resource file is missing: " + std::string(name));
         // Read through the same object the canvas reads through, which is what
         // finally makes an actor's artwork follow a pending module edit.
         auto data = effectiveFiles_.read(found->path);
         if (!data) return data.error();
         return nsmb::project::ActorResource{found->path, found->source, std::move(data.value())};
-    }, [](std::span<const std::uint8_t> bytes) -> nsmb::core::Result<nsmb::formats::RgbaImage> {
+    };
+
+    // A module actor spells its identity as the name its own build generates --
+    // `coop.CoopFlagActor.Default` -- rather than repeating a hash that moves
+    // whenever the object is renamed.
+    auto stageObject = [this](std::string_view name) -> std::optional<nsmb::project::StageObjectIdentity> {
+        const auto found = std::ranges::find(moduleData_.stage_objects, name, &nsmb::project::StageObjectDeclaration::name);
+        if (found == moduleData_.stage_objects.end()) return std::nullopt;
+        return nsmb::project::StageObjectIdentity{found->hash, found->object_id};
+    };
+
+    auto overlays = nsmb::project::load_lua_tile_layers(tileLayers, resolve);
+    if (!overlays) {
+        log("Tile scripts: " + QString::fromStdString(overlays.error().message));
+        tileOverlays_.reset();
+    } else {
+        for (const auto& script : overlays.value().scripts)
+            for (const auto& problem : script.errors) log("Tile scripts: " + QString::fromStdString(problem));
+        tileOverlays_ = std::make_shared<const nsmb::project::TileOverlayCatalog>(std::move(overlays.value()));
+    }
+
+    auto definitions = nsmb::project::load_lua_actor_layers(layers, resolve, [](std::span<const std::uint8_t> bytes) -> nsmb::core::Result<nsmb::formats::RgbaImage> {
         // nsmb-project carries no image codec, so the Qt layer supplies one for
         // the stills that ship beside actor scripts.
         QImage decoded;
@@ -1858,7 +1891,7 @@ void MainWindow::reloadActorDefinitions() {
             std::copy_n(decoded.constScanLine(static_cast<int>(y)), image.width * 4U,
                         image.pixels.begin() + static_cast<std::ptrdiff_t>(y * image.width * 4U));
         return image;
-    });
+    }, stageObject);
     if (!definitions) {
         log("Lua actors: " + QString::fromStdString(definitions.error().message));
         actorDefinitions_ = {}; spriteDefinitions_ = {};
@@ -1867,8 +1900,12 @@ void MainWindow::reloadActorDefinitions() {
         spriteDefinitions_ = actorDefinitions_.sprite_definitions();
     }
     levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
-    if (preview_) preview_->setActorDefinitions(actorDefinitions_);
-    for (auto& [key, document] : documents_) { (void)key; document.view->setActorDefinitions(actorDefinitions_); }
+    if (preview_) { preview_->setActorDefinitions(actorDefinitions_); preview_->setTileOverlays(tileOverlays_); }
+    for (auto& [key, document] : documents_) {
+        (void)key;
+        document.view->setActorDefinitions(actorDefinitions_);
+        document.view->setTileOverlays(tileOverlays_);
+    }
 }
 
 nsmb::core::Result<std::filesystem::path> MainWindow::moduleSaveTarget(const std::string& romPath) const {
@@ -2319,6 +2356,10 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
     }
     view->setCustomActors(moduleData_);
     view->setActorDefinitions(actorDefinitions_);
+    // Before the graphicsMatch below, because the tileset decode reads it: a
+    // level opened after the catalog loaded gets it here rather than from the
+    // reload that only walks the documents already open.
+    view->setTileOverlays(tileOverlays_);
     const auto references = view->level()->tileset_references();
     if (view->graphicsMatch(references)) return;
     auto resources = nsmb::project::resolve_level_graphics(effectiveFiles_, references);

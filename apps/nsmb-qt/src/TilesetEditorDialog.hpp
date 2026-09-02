@@ -7,6 +7,7 @@
 
 #include "nsmb/formats/tileset.hpp"
 #include "nsmb/project/editable_level.hpp"
+#include "nsmb/project/lua_tiles.hpp"
 
 class TilesetEditorDialog final : public QDialog {
 public:
@@ -14,6 +15,7 @@ public:
                         nsmb::formats::EditableTilemap background,
                         nsmb::formats::EditableTilemap foreground,
                         nsmb::project::LevelTilesetReferences references,
+                        std::shared_ptr<const nsmb::project::TileOverlayCatalog> overlays,
                         QWidget* parent = nullptr);
     ~TilesetEditorDialog() override;
 

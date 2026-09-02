@@ -7,6 +7,7 @@
 #include "nsmb/nds/rom.hpp"
 #include "nsmb/formats/g2d.hpp"
 #include "nsmb/formats/tex0.hpp"
+#include "nsmb/formats/tileset.hpp"
 
 namespace nsmb::project {
 
@@ -197,27 +198,54 @@ core::Result<LevelGraphicsResources> resolve_level_graphics(EffectiveFilesystem&
     return result;
 }
 
-core::Result<DecodedTileset> load_tileset_graphics(const TilesetResourceFiles& files) {
-    auto graphics = unwrap_resource(files.graphics.data);
-    auto palette_data = unwrap_resource(files.palette.data);
-    if (!graphics) return graphics.error();
-    if (!palette_data) return palette_data.error();
-    auto tiles = formats::decode_8bpp_tiles(graphics.value());
-    auto palette = formats::decode_bgr555_palette(palette_data.value());
-    auto map16 = formats::decode_map16(files.map16.data, files.tile_offset, files.palette_offset);
-    auto objects = formats::decode_object_layouts(files.objects.data, files.object_index.data, files.tile_page_offset);
-    if (!tiles) return tiles.error();
-    if (!palette) return palette.error();
-    if (!map16) return map16.error();
-    if (!objects) return objects.error();
-    if (palette.value().size() > 256) palette.value()[256].transparent = true;
-    DecodedTileset result;
-    result.objects = std::move(objects.value());
-    result.map16_tiles.reserve(map16.value().size());
-    for (const auto& tile : map16.value()) {
-        auto image = formats::render_screen_map(tile.tiles, 2, tiles.value(), palette.value());
-        if (!image) return image.error();
-        result.map16_tiles.push_back(std::move(image.value()));
+namespace {
+
+core::Result<formats::EditableTileset> parse_resource_tileset(const TilesetResourceFiles& files) {
+    formats::TilesetResourceData resources{files.graphics.data, files.palette.data, files.map16.data,
+                                           files.objects.data, files.object_index.data, files.behaviors.data};
+    auto parsed = formats::parse_tileset(resources, files.tile_offset, files.palette_offset, files.tile_page_offset);
+    if (!parsed) return parsed.error();
+    formats::mark_palette_blocks_transparent(parsed.value().palette);
+    return parsed;
+}
+
+} // namespace
+
+LevelTilesets load_level_tilesets(const std::array<TilesetResourceFiles, 3>& files,
+                                  std::uint16_t tileset_id,
+                                  const TileOverlayCatalog* overlays) {
+    LevelTilesets result;
+    std::array<formats::EditableTileset, 3> parsed;
+    std::array<bool, 3> decoded{};
+    for (std::size_t slot = 0; slot < files.size(); ++slot) {
+        auto value = parse_resource_tileset(files[slot]);
+        if (!value) { result.errors[slot] = value.error().message; continue; }
+        parsed[slot] = std::move(value.value());
+        decoded[slot] = true;
+    }
+    // Compose from whatever decoded. A slot that failed contributes nothing, so
+    // blocks that needed it stay clear instead of taking the whole level down.
+    std::vector<formats::EditableTileset> present;
+    for (std::size_t slot = 0; slot < parsed.size(); ++slot) if (decoded[slot]) present.push_back(parsed[slot]);
+    const auto memory = formats::compose_tileset_memory(present);
+    for (std::size_t slot = 0; slot < parsed.size(); ++slot) {
+        if (!decoded[slot]) continue;
+        auto& target = result.tilesets[slot];
+        target.objects = std::move(parsed[slot].objects);
+        target.map16_tiles.reserve(parsed[slot].map16.size());
+        for (const auto& block : parsed[slot].map16) {
+            auto absolute = block;
+            for (auto& quadrant : absolute.tiles) {
+                quadrant.tile += parsed[slot].tile_offset;
+                quadrant.palette = static_cast<std::int16_t>(quadrant.palette + parsed[slot].palette_offset);
+            }
+            auto image = formats::render_screen_map(absolute.tiles, 2, memory.graphics, memory.palette);
+            if (!image) { result.errors[slot] = image.error().message; target = {}; break; }
+            target.map16_tiles.push_back(std::move(image.value()));
+        }
+        if (!overlays || target.map16_tiles.empty()) continue;
+        overlay_map16_images(target.map16_tiles, tileset_id,
+                             static_cast<std::uint16_t>(parsed[slot].tile_page_offset * 256U), *overlays);
     }
     return result;
 }

@@ -6,6 +6,8 @@ add_library(nsmb-project
   src/level_catalog.cpp
   src/level_exchange.cpp
   src/lua_actors.cpp
+  src/lua_sandbox.cpp
+  src/lua_tiles.cpp
   src/manifest.cpp
   src/module_data.cpp
   src/patch_apply.cpp
@@ -33,6 +35,10 @@ if(BSE_BUILD_TESTS)
   target_link_libraries(nsmb-lua-actors-tests PRIVATE nsmb-project)
   target_compile_definitions(nsmb-lua-actors-tests PRIVATE BSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   add_test(NAME nsmb-lua-actors-tests COMMAND nsmb-lua-actors-tests)
+  add_executable(nsmb-lua-tiles-tests tests/lua_tiles_tests.cpp)
+  target_link_libraries(nsmb-lua-tiles-tests PRIVATE nsmb-project)
+  target_compile_definitions(nsmb-lua-tiles-tests PRIVATE BSE_TEST_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+  add_test(NAME nsmb-lua-tiles-tests COMMAND nsmb-lua-tiles-tests)
   add_executable(nsmb-level-exchange-tests tests/level_exchange_tests.cpp)
   target_link_libraries(nsmb-level-exchange-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-level-exchange-tests COMMAND nsmb-level-exchange-tests)

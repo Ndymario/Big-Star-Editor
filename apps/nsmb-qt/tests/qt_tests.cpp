@@ -21,6 +21,7 @@
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
 #include <QClipboard>
 #include <QDockWidget>
@@ -611,7 +612,15 @@ private slots:
         nsmb::formats::TilemapResourceData map_files{graphics,palette,{0,0}};
         auto tilemap = nsmb::formats::parse_tilemap(map_files, 1);
         QVERIFY(tilemap);
-        TilesetEditorDialog dialog(std::move(tilesets), tilemap.value(), tilemap.value(), {1,2,3,4});
+        // A catalog that claims block 0, so the 3D toggle has something to do and
+        // the round trips below prove the substitution never reaches the file.
+        auto overlays = std::make_shared<nsmb::project::TileOverlayCatalog>();
+        nsmb::project::TileOverlayScript script;
+        script.name = "test.block-zero";
+        nsmb::formats::RgbaImage texture{16, 16, std::vector<std::uint8_t>(16 * 16 * 4, 0x7f)};
+        script.blocks[0] = nsmb::project::TileOverlay{std::make_shared<const nsmb::formats::RgbaImage>(std::move(texture)), std::nullopt, true};
+        overlays->scripts.push_back(std::move(script));
+        TilesetEditorDialog dialog(std::move(tilesets), tilemap.value(), tilemap.value(), {1,2,3,4}, overlays);
         dialog.show();
         QTest::qWait(10);
         auto* tabs = dialog.findChild<QTabWidget*>("TilesetTabs");
@@ -625,6 +634,15 @@ private slots:
         QVERIFY(unchanged);
         QCOMPARE(unchanged.value().graphics, files.graphics);
         QCOMPARE(unchanged.value().objects, files.objects);
+        auto* threeD = dialog.findChild<QCheckBox*>("Map16ThreeD");
+        QVERIFY(threeD);
+        QVERIFY(threeD->isChecked());
+        threeD->setChecked(false);
+        threeD->setChecked(true);
+        // Drawing a block as the game draws it must not edit the block.
+        const auto overlaid = dialog.tilesetData(1);
+        QVERIFY(overlaid);
+        QCOMPARE(overlaid.value().map16, files.map16);
         auto* map16Index = dialog.findChild<QSpinBox*>("Map16TileIndex");
         auto* objectTable = dialog.findChild<QTableWidget*>("TilesetObjectTable");
         auto* behaviorRaw = dialog.findChild<QLineEdit*>("BehaviorRaw");

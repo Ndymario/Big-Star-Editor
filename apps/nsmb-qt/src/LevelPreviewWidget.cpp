@@ -1702,19 +1702,20 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
     rebuildSpriteDefinitions();
     rebuildActorThumbnails();
     QPointer<LevelPreviewWidget> weak(this);
-    QThreadPool::globalInstance()->start([weak, generation, resources = std::move(resources)]() mutable {
+    QThreadPool::globalInstance()->start([weak, generation, references, overlays = tile_overlays_,
+                                          resources = std::move(resources)]() mutable {
         std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3> tilesets;
         QImage background;
         QImage foreground;
         std::unordered_map<std::uint16_t, QString> actor_labels;
         std::unordered_map<std::uint32_t, QString> custom_actor_labels;
         QStringList warnings;
-        for (std::size_t slot = 0; slot < resources.tilesets.size(); ++slot) {
-            auto decoded = nsmb::project::load_tileset_graphics(resources.tilesets[slot]);
-            if (decoded) {
-                tilesets[slot] = std::make_shared<nsmb::project::DecodedTileset>(std::move(decoded.value()));
+        auto decoded = nsmb::project::load_level_tilesets(resources.tilesets, references.tileset_id, overlays.get());
+        for (std::size_t slot = 0; slot < decoded.tilesets.size(); ++slot) {
+            if (decoded.errors[slot].empty()) {
+                tilesets[slot] = std::make_shared<nsmb::project::DecodedTileset>(std::move(decoded.tilesets[slot]));
             } else {
-                warnings.push_back(QString("Tileset slot %1: %2").arg(slot).arg(QString::fromStdString(decoded.error().message)));
+                warnings.push_back(QString("Tileset slot %1: %2").arg(slot).arg(QString::fromStdString(decoded.errors[slot])));
             }
         }
         auto convert = [](const nsmb::core::Result<nsmb::formats::RgbaImage>& result, QImage& target, QString name, QStringList& errors) {
@@ -1766,6 +1767,15 @@ void LevelPreviewWidget::setCustomActors(const nsmb::project::ModuleDataCatalog&
     for (const auto& actor : catalog.stage_objects)
         custom_actor_labels_.emplace(actor.hash, QString::fromStdString(actor.name));
     update();
+}
+
+void LevelPreviewWidget::setTileOverlays(std::shared_ptr<const nsmb::project::TileOverlayCatalog> overlays) {
+    // Compared by identity, not contents: a reload mints a new catalog and has
+    // to redecode, while handing the same one back -- which every graphics
+    // refresh does -- must not throw the decode away and ask for it again.
+    if (tile_overlays_ == overlays) return;
+    tile_overlays_ = std::move(overlays);
+    invalidateGraphics();
 }
 
 void LevelPreviewWidget::setActorDefinitions(const nsmb::project::LuaActorCatalog& catalog) {

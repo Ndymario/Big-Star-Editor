@@ -274,6 +274,11 @@ core::Result<std::vector<Bgr555Color>> decode_bgr555_palette(std::span<const std
     return colors;
 }
 
+void mark_palette_blocks_transparent(std::span<Bgr555Color> palette, std::size_t block) {
+    if (!block) return;
+    for (std::size_t offset = 0; offset < palette.size(); offset += block) palette[offset].transparent = true;
+}
+
 core::Result<std::vector<std::uint8_t>> encode_bgr555_palette(std::span<const Bgr555Color> colors) {
     if (colors.size() > std::numeric_limits<std::size_t>::max() / 2U) return core::make_error(core::ErrorCode::OutOfBounds, "palette is too large");
     std::vector<std::uint8_t> output(colors.size() * 2U);
@@ -557,10 +562,8 @@ core::Result<std::vector<ScreenMapEntry>> decode_screen_map(std::span<const std:
     for (std::size_t offset = 0; offset < data.size(); offset += 2U) {
         auto packed = reader.u16(offset);
         if (!packed) return packed.error();
-        const auto raw_tile = static_cast<int>(packed.value() & 0x03FFU) - tile_offset;
-        const auto raw_palette = static_cast<int>((packed.value() >> 12U) & 0x0FU) - palette_offset;
-        entries.push_back({static_cast<std::uint16_t>(std::max(0, raw_tile)),
-                           static_cast<std::uint8_t>(std::max(0, raw_palette)),
+        entries.push_back({static_cast<std::int32_t>(packed.value() & 0x03FFU) - tile_offset,
+                           static_cast<std::int16_t>(static_cast<int>((packed.value() >> 12U) & 0x0FU) - palette_offset),
                            (packed.value() & 0x0400U) != 0,
                            (packed.value() & 0x0800U) != 0});
     }
@@ -587,11 +590,11 @@ core::Result<std::vector<std::uint8_t>> encode_screen_map(std::span<const Screen
                                                           std::uint8_t palette_offset) {
     std::vector<std::uint8_t> output(entries.size() * 2U);
     for (std::size_t i = 0; i < entries.size(); ++i) {
-        const auto tile = static_cast<unsigned>(entries[i].tile) + tile_offset;
-        const auto palette = static_cast<unsigned>(entries[i].palette) + palette_offset;
-        if (tile > 0x3ffU || palette > 15U) return core::make_error(core::ErrorCode::InvalidArgument, "screen-map tile or palette index is not representable");
-        const auto packed = static_cast<std::uint16_t>(tile | (entries[i].horizontal_flip ? 0x400U : 0U) |
-                                                       (entries[i].vertical_flip ? 0x800U : 0U) | (palette << 12U));
+        const auto tile = entries[i].tile + tile_offset;
+        const auto palette = entries[i].palette + palette_offset;
+        if (tile < 0 || tile > 0x3ff || palette < 0 || palette > 15) return core::make_error(core::ErrorCode::InvalidArgument, "screen-map tile or palette index is not representable");
+        const auto packed = static_cast<std::uint16_t>(static_cast<unsigned>(tile) | (entries[i].horizontal_flip ? 0x400U : 0U) |
+                                                       (entries[i].vertical_flip ? 0x800U : 0U) | (static_cast<unsigned>(palette) << 12U));
         output[i * 2U] = static_cast<std::uint8_t>(packed);
         output[i * 2U + 1U] = static_cast<std::uint8_t>(packed >> 8U);
     }
@@ -618,7 +621,10 @@ core::Result<RgbaImage> render_screen_map(std::span<const ScreenMapEntry> map,
     image.pixels.assign(image.width * image.height * 4U, 0);
     for (std::size_t entry_index = 0; entry_index < map.size(); ++entry_index) {
         const auto& entry = map[entry_index];
-        if (entry.tile >= tiles.size()) continue;
+        // An entry below the resource's offsets, or past the tiles it carries,
+        // names graphics this resource does not hold. Leave it clear rather
+        // than drawing whatever tile happens to sit at that index.
+        if (entry.tile < 0 || entry.palette < 0 || static_cast<std::size_t>(entry.tile) >= tiles.size()) continue;
         for (std::size_t y = 0; y < 8; ++y) {
             for (std::size_t x = 0; x < 8; ++x) {
                 const auto source_x = entry.horizontal_flip ? 7U - x : x;

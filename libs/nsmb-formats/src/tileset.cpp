@@ -60,8 +60,8 @@ core::Result<RgbaImage> render_tiles(std::span<const IndexedTile8Bpp> tiles,
                                      std::size_t width_tiles) {
     if (!width_tiles) return core::make_error(core::ErrorCode::InvalidArgument, "tile sheet width must be nonzero");
     std::vector<ScreenMapEntry> screen(tiles.size());
-    for (std::size_t i = 0; i < screen.size(); ++i) { if (i > 0x3ffU) return core::make_error(core::ErrorCode::OutOfBounds, "tile sheet exceeds the DS tile index range"); screen[i].tile = static_cast<std::uint16_t>(i); }
-    while (screen.size() % width_tiles) screen.push_back({});
+    for (std::size_t i = 0; i < screen.size(); ++i) { if (i > 0x3ffU) return core::make_error(core::ErrorCode::OutOfBounds, "tile sheet exceeds the DS tile index range"); screen[i].tile = static_cast<std::int32_t>(i); }
+    while (screen.size() % width_tiles) screen.push_back({-1, 0, false, false});
     return render_screen_map(screen, width_tiles, tiles, palette);
 }
 
@@ -88,7 +88,7 @@ core::Result<void> import_indexed(std::vector<IndexedTile8Bpp>& tiles,
             const auto found = std::find(tiles.begin(), tiles.end(), tile);
             const auto index = found == tiles.end() ? tiles.size() : static_cast<std::size_t>(found - tiles.begin());
             if (found == tiles.end()) tiles.push_back(tile);
-            screen->push_back({static_cast<std::uint16_t>(index), 0, false, false});
+            screen->push_back({static_cast<std::int32_t>(index), 0, false, false});
         } else tiles.push_back(tile);
     }
     return {};
@@ -106,6 +106,7 @@ core::Result<EditableTileset> parse_tileset(const TilesetResourceData& resources
     if (!objects) return objects.error(); if (!index) return index.error(); if (!behaviors) return behaviors.error();
     auto decoded_graphics = decode_8bpp_tiles(graphics.value().decoded);
     auto decoded_palette = decode_bgr555_palette(palette.value().decoded);
+    if (decoded_palette) mark_palette_blocks_transparent(decoded_palette.value());
     auto decoded_map16 = decode_map16(map16.value().decoded, tile_offset, palette_offset);
     auto decoded_objects = decode_object_layouts(objects.value().decoded, index.value().decoded, tile_page_offset);
     if (!decoded_graphics) return decoded_graphics.error(); if (!decoded_palette) return decoded_palette.error();
@@ -213,15 +214,60 @@ core::Result<RgbaImage> render_tileset_graphics(const EditableTileset& tileset, 
     return render_tiles(tileset.graphics, tileset.palette, width_tiles);
 }
 
-core::Result<RgbaImage> render_map16_sheet(const EditableTileset& tileset, std::size_t width_tiles) {
+namespace {
+
+// Both sheets arrange the same way; they differ only in which space the entries
+// are read against, and so in how much has to be added back to each index.
+core::Result<RgbaImage> map16_sheet(const EditableTileset& tileset,
+                                    std::size_t width_tiles,
+                                    std::span<const IndexedTile8Bpp> graphics,
+                                    std::span<const Bgr555Color> palette,
+                                    bool absolute) {
     if (!width_tiles) return core::make_error(core::ErrorCode::InvalidArgument, "Map16 sheet width must be nonzero");
     const auto map16_rows = (tileset.map16.size() + width_tiles - 1U) / width_tiles;
-    std::vector<ScreenMapEntry> arranged(map16_rows * width_tiles * 4U);
+    // Padding past the last Map16 tile is nothing, not tile zero.
+    std::vector<ScreenMapEntry> arranged(map16_rows * width_tiles * 4U, {-1, 0, false, false});
     for (std::size_t i = 0; i < tileset.map16.size(); ++i) for (std::size_t q = 0; q < 4U; ++q) {
         const auto x = (i % width_tiles) * 2U + q % 2U, y = (i / width_tiles) * 2U + q / 2U;
-        arranged[y * width_tiles * 2U + x] = tileset.map16[i].tiles[q];
+        auto entry = tileset.map16[i].tiles[q];
+        if (absolute) {
+            entry.tile += tileset.tile_offset;
+            entry.palette = static_cast<std::int16_t>(entry.palette + tileset.palette_offset);
+        }
+        arranged[y * width_tiles * 2U + x] = entry;
     }
-    return render_screen_map(arranged, width_tiles * 2U, tileset.graphics, tileset.palette);
+    return render_screen_map(arranged, width_tiles * 2U, graphics, palette);
+}
+
+} // namespace
+
+core::Result<RgbaImage> render_map16_sheet(const EditableTileset& tileset, std::size_t width_tiles) {
+    return map16_sheet(tileset, width_tiles, tileset.graphics, tileset.palette, false);
+}
+
+ComposedTilesetMemory compose_tileset_memory(std::span<const EditableTileset> tilesets) {
+    ComposedTilesetMemory memory;
+    for (const auto& tileset : tilesets) {
+        memory.graphics.resize(std::max(memory.graphics.size(), tileset.tile_offset + tileset.graphics.size()));
+        memory.palette.resize(std::max(memory.palette.size(), std::size_t{tileset.palette_offset} * 256U + tileset.palette.size()),
+                              // A palette block no tileset fills is clear, not black: the game
+                              // never draws through one, and a level's tilesets rarely fill all
+                              // the blocks their offsets reserve.
+                              Bgr555Color{0, 0, 0, true});
+    }
+    for (const auto& tileset : tilesets) {
+        std::copy(tileset.graphics.begin(), tileset.graphics.end(),
+                  memory.graphics.begin() + static_cast<std::ptrdiff_t>(tileset.tile_offset));
+        std::copy(tileset.palette.begin(), tileset.palette.end(),
+                  memory.palette.begin() + static_cast<std::ptrdiff_t>(std::size_t{tileset.palette_offset} * 256U));
+    }
+    return memory;
+}
+
+core::Result<RgbaImage> render_composed_map16_sheet(const EditableTileset& tileset,
+                                                    const ComposedTilesetMemory& memory,
+                                                    std::size_t width_tiles) {
+    return map16_sheet(tileset, width_tiles, memory.graphics, memory.palette, true);
 }
 
 core::Result<void> import_tileset_graphics(EditableTileset& tileset, const RgbaImage& image) {

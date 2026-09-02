@@ -92,6 +92,24 @@ core::Result<RgbaImage> render_tilemap(const EditableTilemap& tilemap);
 core::Result<void> import_tilemap_image(EditableTilemap& tilemap, const RgbaImage& image);
 core::Result<RgbaImage> render_tileset_graphics(const EditableTileset& tileset, std::size_t width_tiles = 32);
 core::Result<RgbaImage> render_map16_sheet(const EditableTileset& tileset, std::size_t width_tiles = 16);
+
+// The character and palette memory a level actually has, with every tileset laid
+// out at its own offsets in one space -- what `loadJyotyuAndSubNohara` and
+// `loadCharacterGraphics` build in VRAM. A Map16 entry naming a tile below its
+// own tileset's offsets is drawable against this, because the tileset that
+// supplies that tile is present too. See `docs/tileset-memory.md`.
+struct ComposedTilesetMemory {
+    std::vector<IndexedTile8Bpp> graphics;  // indexed by absolute tile number
+    std::vector<Bgr555Color> palette;       // indexed by absolute colour index
+};
+
+ComposedTilesetMemory compose_tileset_memory(std::span<const EditableTileset> tilesets);
+
+// The same sheet as `render_map16_sheet`, drawn against the composed space, so
+// entries this tileset cannot resolve alone come out as the tiles the game shows.
+core::Result<RgbaImage> render_composed_map16_sheet(const EditableTileset& tileset,
+                                                    const ComposedTilesetMemory& memory,
+                                                    std::size_t width_tiles = 16);
 core::Result<void> import_tileset_graphics(EditableTileset& tileset, const RgbaImage& image);
 
 TileBehaviorParts decode_tile_behavior(std::uint32_t value);

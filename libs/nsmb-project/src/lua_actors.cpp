@@ -17,15 +17,14 @@ extern "C" {
 #include <lualib.h>
 }
 
+#include "lua_sandbox.hpp"
 #include "nsmb/core/file_io.hpp"
 #include "nsmb/formats/g2d.hpp"
 #include "nsmb/formats/tex0.hpp"
 
 namespace nsmb::project {
 
-struct LuaMemory {
-    std::size_t used{};
-};
+using LuaMemory = lua_sandbox::Memory;
 
 struct LuaPalette {
     std::vector<formats::Bgr555Color> colors;
@@ -156,9 +155,7 @@ struct LuaActorProgram {
 
 namespace {
 
-constexpr std::size_t max_script_bytes = 1024U * 1024U;
-constexpr std::size_t max_lua_bytes = 8U * 1024U * 1024U;
-constexpr std::size_t max_instructions = 200000U;
+using namespace lua_sandbox;
 // Enough for a screen-wide run of 16px tiles. Past it a draw is dropped
 // rather than raised, so an actor given nonsense settings still draws the
 // part that fits instead of vanishing.
@@ -166,21 +163,6 @@ constexpr std::size_t max_draw_commands = 4096U;
 // Sized past the sprite count a course reaches, so a level's steady state fits
 // and only a drag -- which mints a key per mouse position -- can fill it.
 constexpr std::size_t max_call_cache_entries = 1024U;
-
-void* allocate(void* opaque, void* pointer, std::size_t old_size, std::size_t new_size) {
-    auto& memory = *static_cast<LuaMemory*>(opaque);
-    if (!pointer) old_size = 0;
-    if (!new_size) {
-        std::free(pointer);
-        memory.used -= std::min(memory.used, old_size);
-        return nullptr;
-    }
-    if (new_size > old_size && new_size - old_size > max_lua_bytes - std::min(memory.used, max_lua_bytes)) return nullptr;
-    auto* replacement = std::realloc(pointer, new_size);
-    if (!replacement) return nullptr;
-    memory.used = memory.used - std::min(memory.used, old_size) + new_size;
-    return replacement;
-}
 
 LuaContext& context(lua_State* state) {
     return **static_cast<LuaContext**>(lua_getextraspace(state));
@@ -724,22 +706,6 @@ int actor_field_call(lua_State* state) {
     return actor_field_index(state);
 }
 
-// Actors format numbers into labels and resource names, so the pure parts of the
-// standard library are available. Anything that reaches the filesystem, the
-// process, or the loader stays out.
-void expose_safe_library(lua_State* state) {
-    for (const auto& [name, opener] : std::initializer_list<std::pair<const char*, lua_CFunction>>{
-             {LUA_GNAME, luaopen_base}, {LUA_STRLIBNAME, luaopen_string},
-             {LUA_MATHLIBNAME, luaopen_math}, {LUA_TABLIBNAME, luaopen_table}}) {
-        luaL_requiref(state, name, opener, 1);
-        lua_pop(state, 1);
-    }
-    for (const auto* name : {"dofile", "loadfile", "load", "require", "collectgarbage", "print", "loadstring"}) {
-        lua_pushnil(state);
-        lua_setglobal(state, name);
-    }
-}
-
 // Two things come up in nearly every actor: an image that has to be drawn with a
 // transform decided somewhere other than the draw call, and a destination given
 // as the top-left of the *drawn* result rather than as a rectangle to rotate in
@@ -858,64 +824,6 @@ core::Result<lua_Integer> bounds_number(lua_State* state,
     return value;
 }
 
-core::Result<lua_Integer> integer_field(lua_State* state,
-                                        int table,
-                                        const char* key,
-                                        lua_Integer minimum,
-                                        lua_Integer maximum,
-                                        std::string_view actor,
-                                        bool required = true,
-                                        lua_Integer fallback = 0) {
-    lua_getfield(state, table, key);
-    const bool missing = lua_isnil(state, -1);
-    if (missing && !required) { lua_pop(state, 1); return fallback; }
-    if (!lua_isinteger(state, -1)) {
-        lua_pop(state, 1);
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
-    }
-    const auto value = lua_tointeger(state, -1);
-    lua_pop(state, 1);
-    if (value < minimum || value > maximum)
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
-    return value;
-}
-
-core::Result<std::string> string_field(lua_State* state,
-                                       int table,
-                                       const char* key,
-                                       std::string_view actor,
-                                       bool required = true) {
-    lua_getfield(state, table, key);
-    if (lua_isnil(state, -1) && !required) { lua_pop(state, 1); return std::string{}; }
-    if (lua_type(state, -1) != LUA_TSTRING) {
-        lua_pop(state, 1);
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
-    }
-    std::size_t size{};
-    const auto* value = lua_tolstring(state, -1, &size);
-    std::string result(value, size);
-    lua_pop(state, 1);
-    if (required && result.empty())
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an empty " + key);
-    return result;
-}
-
-core::Result<bool> boolean_field(lua_State* state,
-                                 int table,
-                                 const char* key,
-                                 std::string_view actor,
-                                 bool fallback = false) {
-    lua_getfield(state, table, key);
-    if (lua_isnil(state, -1)) { lua_pop(state, 1); return fallback; }
-    if (!lua_isboolean(state, -1)) {
-        lua_pop(state, 1);
-        return core::make_error(core::ErrorCode::ParseError, std::string(actor) + " has an invalid " + key);
-    }
-    const bool value = lua_toboolean(state, -1);
-    lua_pop(state, 1);
-    return value;
-}
-
 std::uint64_t field_mask(const SpriteFieldDefinition& field) {
     return (std::uint64_t{1} << field.bit_width) - 1U;
 }
@@ -985,6 +893,7 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
                                             const std::filesystem::path& layer,
                                             const ActorResourceResolver& resolve,
                                             const ActorImageDecoder& decode_image,
+                                            const StageObjectNameResolver& stage_object,
                                             LuaAssetCache& cache) {
     auto bytes = core::read_file(path);
     if (!bytes) return bytes.error();
@@ -1032,8 +941,24 @@ core::Result<LuaActorDefinition> load_actor(const std::filesystem::path& path,
         actor.hash = static_cast<std::uint32_t>(lua_tointeger(state, -1));
     }
     lua_pop(state, 1);
+    auto stage_object_name = string_field(state, table, "stageObject", path.filename().string(), false);
+    if (!stage_object_name) return stage_object_name.error();
+    if (!stage_object_name.value().empty()) {
+        if (actor.object_id || actor.hash)
+            return core::make_error(core::ErrorCode::ParseError, "actor must define exactly one of objectId, hash or stageObject");
+        if (!stage_object)
+            return core::make_error(core::ErrorCode::NotFound,
+                                    "stageObject " + stage_object_name.value() + " needs a built stage-object catalog");
+        const auto identity = stage_object(stage_object_name.value());
+        if (!identity)
+            return core::make_error(core::ErrorCode::NotFound,
+                                    "no stage object is named " + stage_object_name.value());
+        // Exactly what writing `hash = 0x...` by hand would have done, which is
+        // the point: the name is the stable spelling of the same identity.
+        actor.hash = identity->hash;
+    }
     if (actor.object_id.has_value() == actor.hash.has_value())
-        return core::make_error(core::ErrorCode::ParseError, "actor must define exactly one of objectId or hash");
+        return core::make_error(core::ErrorCode::ParseError, "actor must define exactly one of objectId, hash or stageObject");
     auto name = string_field(state, table, "name", path.filename().string()); if (!name) return name.error(); actor.sprite.name = std::move(name.value());
     actor.sprite.object_id = actor.object_id.value_or(0);
     actor.sprite.hash = actor.hash;
@@ -1228,7 +1153,8 @@ SpriteDefinitionCatalog LuaActorCatalog::sprite_definitions() const {
 
 core::Result<LuaActorCatalog> load_lua_actor_layers(std::span<const LuaActorLayer> layers,
                                                     const ActorResourceResolver& resolve,
-                                                    const ActorImageDecoder& decode_image) {
+                                                    const ActorImageDecoder& decode_image,
+                                                    const StageObjectNameResolver& stage_object) {
     LuaActorCatalog result;
     LuaAssetCache cache;
     std::unordered_set<std::uint32_t> object_ids, hashes;
@@ -1246,7 +1172,7 @@ core::Result<LuaActorCatalog> load_lua_actor_layers(std::span<const LuaActorLaye
         if (ec) return core::make_error(core::ErrorCode::IoError, "could not read actor layer " + layer.name);
         std::ranges::sort(scripts);
         for (const auto& script : scripts) {
-            auto actor = load_actor(script, layer.directory, resolve, decode_image, cache);
+            auto actor = load_actor(script, layer.directory, resolve, decode_image, stage_object, cache);
             if (!actor) return core::make_error(actor.error().code, layer.name + " / " + script.filename().string() + ": " + actor.error().message);
             const bool claimed = actor.value().object_id ? !object_ids.insert(*actor.value().object_id).second
                                                          : !hashes.insert(*actor.value().hash).second;

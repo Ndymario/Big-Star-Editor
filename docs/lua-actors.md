@@ -4,14 +4,28 @@ Every actor is one executable `.lua` file. It declares its metadata and settings
 fields as data, and implements its drawing as functions. Big Star loads actor
 directories in this order, with the first definition for an ID winning:
 
-1. `<project>/actors`
-2. `actors` in each enabled module, in module order
-3. `<Big Star config>/actors`
-4. the shipped `data/actors` directory
+1. `<project>/bigstar/actors`, then `<project>/actors`
+2. `bigstar/actors` then `actors` in each enabled module, in module order
+3. the shipped `data/actors` directory
 
-Vanilla actors use their runtime class ID as `objectId`. Module actors use the
-stable hash written to `build/generated/stageobjects.json` as `hash`. Exactly one
-is required, so enabled modules use the same API as the vanilla catalog.
+`bigstar/` is a module's whole contribution to the editor, one directory per
+kind -- `actors` here, `tiles` in [Lua tiles](lua-tiles.md). The bare `actors/`
+beside it is the older spelling and is still read, after it. There is no layer
+in the user's config directory: an edit that lives there never reaches anybody
+else on the project.
+
+An actor names itself in exactly one of three ways:
+
+| Key | For |
+| --- | --- |
+| `objectId` | a vanilla actor, by its runtime class ID |
+| `stageObject` | a module actor, by the name its build writes to `build/generated/stageobjects.json` -- `"coop.CoopFlagActor.Default"` |
+| `hash` | the same module actor, by the hash that name resolves to |
+
+`stageObject` is the one to write. It resolves to exactly what `hash` would
+have, and it survives the object being renamed, which the hash does not. It
+needs a built stage-object catalog; without one the actor reports that and the
+rest of the catalog loads.
 
 ## The shape of an actor
 
@@ -123,8 +137,8 @@ graphics really are 2D tiles load from the ROM instead:
 
 ```lua
 local function init(ctx)
-    local palette = ctx.loadPalette("I_enemy_ncl.bin", { colors = 16, bank = 2, transparent = true })
-    sheet = ctx.loadBitmap("I_enemy_ncg.bin", {
+    local palette = ctx.loadPalette("obj/I_enemy_ncl.bin", { colors = 16, bank = 2, transparent = true })
+    sheet = ctx.loadBitmap("obj/I_enemy_ncg.bin", {
         bpp = 4,
         palette = palette,   -- required; bound once, not per draw
         width = 256,
@@ -133,6 +147,12 @@ local function init(ctx)
     })
 end
 ```
+
+ROM resources are named by their full path from the filesystem root --
+`enemy/sanbo_body.nsbmd`, not `sanbo_body.nsbmd` -- because two directories hold
+files of the same name and a bare name cannot say which is meant. `loadImage` is
+the exception: a still ships beside the script, so its path stays relative to
+the script's own layer directory.
 
 `loadBitmap` accepts raw tiled 4bpp/8bpp data and NCGR containers; raw data needs
 a pixel width divisible by 8, and NCGR dimensions are used when present.

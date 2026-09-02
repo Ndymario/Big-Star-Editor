@@ -37,6 +37,38 @@ int main() {
     assert(untouched.value().objects == resources.objects);
     assert(untouched.value().object_index == resources.object_index);
 
+    // Most of a tileset's Map16 names jyotyu tiles, which sit below its own
+    // offsets. Opening a tileset and saving it without an edit has to give the
+    // file back unchanged, whatever those entries point at.
+    TilesetResourceData offset_resources = resources;
+    offset_resources.map16 = {0x05, 0x00, 0x00, 0x00, 0xc5, 0x20, 0x00, 0x0c};
+    auto offset_parsed = parse_tileset(offset_resources, 192, 2, 1);
+    assert(offset_parsed);
+    assert(offset_parsed.value().map16[0].tiles[0].tile == 5 - 192);
+    assert(offset_parsed.value().map16[0].tiles[2].palette == 0 && offset_parsed.value().map16[0].tiles[2].tile == 5);
+    assert(offset_parsed.value().map16[0].tiles[3].horizontal_flip && offset_parsed.value().map16[0].tiles[3].vertical_flip);
+    auto offset_written = write_tileset(offset_parsed.value());
+    assert(offset_written && offset_written.value().map16 == offset_resources.map16);
+
+    // Composed against the tileset that supplies tile 5, the below-offset entry
+    // draws; alone, it cannot. jyotyu sits at offset 0 and carries the tile.
+    IndexedTile8Bpp jyotyu_tile;
+    jyotyu_tile.pixels.fill(1);
+    EditableTileset jyotyu;
+    jyotyu.graphics.assign(6, jyotyu_tile);
+    jyotyu.palette = {Bgr555Color{0,0,0,true}, Bgr555Color{255,255,255,false}};
+    const std::array composed_from{jyotyu, offset_parsed.value()};
+    const auto memory = compose_tileset_memory(composed_from);
+    assert(memory.graphics.size() == 193 && memory.palette.size() == 2 * 256 + 2);
+    assert(memory.palette[2 * 256].transparent);       // the tileset's own block, at its offset
+    assert(!memory.palette[1].transparent && memory.graphics[5].pixels[0] == 1);
+
+    auto alone = render_map16_sheet(offset_parsed.value(), 1);
+    auto together = render_composed_map16_sheet(offset_parsed.value(), memory, 1);
+    assert(alone && together);
+    assert(alone.value().pixels[3] == 0);              // entry 0 names tile 5-192: not ours
+    assert(together.value().pixels[3] == 255);         // ...which is jyotyu's tile 5
+
     parsed.value().map16[0].tiles[0] = {0,0,true,true};
     parsed.value().objects[0].rows[0][0] = {1,0};
     parsed.value().behaviors[0] = 0x89abcdefU;

@@ -68,6 +68,9 @@ public:
     void setGraphicsResources(nsmb::project::LevelGraphicsResources resources, nsmb::project::LevelTilesetReferences references);
     void setCustomActors(const nsmb::project::ModuleDataCatalog& catalog);
     void setActorDefinitions(const nsmb::project::LuaActorCatalog& catalog);
+    // Shared rather than copied because the tileset decode runs off the GUI
+    // thread and the catalog owns the decoded textures.
+    void setTileOverlays(std::shared_ptr<const nsmb::project::TileOverlayCatalog> overlays);
     void setSpriteDefinitions(const nsmb::project::SpriteDefinitionCatalog& catalog);
     void clearGraphics();
     void invalidateGraphics();
@@ -196,6 +199,7 @@ private:
     int placement_sprite_type_{};
     std::optional<std::uint32_t> placement_sprite_hash_;
     std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3> tilesets_;
+    std::shared_ptr<const nsmb::project::TileOverlayCatalog> tile_overlays_;
     QImage background_;
     QImage foreground_;
     std::unordered_map<std::uint64_t, QImage> object_images_;
