@@ -1172,6 +1172,92 @@ private slots:
         QCOMPARE(hit->kind, 2);
     }
 
+    void spriteSettingsSurviveTheFieldsThatReadThem() {
+        // The declared fields are a reading of the sprite's data value, not a
+        // replacement for it: the raw box stays, it reads back what a field
+        // wrote, and nothing but a field the user turned rewrites it.
+        auto level = make_level();
+        nsmb::formats::NsmbLevelSprite sprite;
+        sprite.id = 7; sprite.x = 10; sprite.y = 10; sprite.settings = 0x12345678U; sprite.events = {0xab, 0xcd};
+        QVERIFY(level.add_sprite(sprite));
+        nsmb::project::SpriteDefinition definition;
+        definition.object_id = 42;
+        definition.name = "Synthetic actor";
+        definition.fields.push_back({"speed", "Speed", 4, 3, {}});
+        nsmb::project::SpriteDefinitionCatalog catalog{{definition}};
+
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+        auto* raw = properties.findChild<QLineEdit*>("SpriteDataField");
+        QVERIFY(raw);
+        // Event 1, Event 2, then the settings word from its high byte down.
+        QCOMPARE(raw->text(), QString("AB CD 12 34 56 78"));
+
+        // A field edit lands in the raw value, and only in the bits it owns.
+        properties.fields_[5].value->setValue(2);
+        QCOMPARE(level.course().sprites[0].settings, 0x12345628U);
+        QCOMPARE(raw->text(), QString("AB CD 12 34 56 28"));
+
+        // Changing the object ID keeps the settings: the sprite is now read by
+        // an actor that declares nothing, and the value is still there to read.
+        properties.fields_[0].value->setValue(9);
+        QCOMPARE(level.course().sprites[0].id, 9);
+        QCOMPARE(level.course().sprites[0].settings, 0x12345628U);
+        QCOMPARE(raw->text(), QString("AB CD 12 34 56 28"));
+        QVERIFY(properties.fields_[5].container->isHidden());
+
+        // And typing a value writes the whole of it back, events included.
+        properties.fields_[0].value->setValue(7);
+        raw->setText("00 11 22 33 44 55");
+        emit raw->textEdited(raw->text());
+        QCOMPARE(level.course().sprites[0].events, (std::array<std::uint8_t, 2>{0x00, 0x11}));
+        QCOMPARE(level.course().sprites[0].settings, 0x22334455U);
+        QCOMPARE(properties.fields_[3].value->value(), 0);
+        QCOMPARE(properties.fields_[4].value->value(), 0x11);
+        QCOMPARE(properties.fields_[5].value->value(), 5);
+    }
+
+    void actorNotesReadUnderTheFieldTheyBelongTo() {
+        // A note nobody hovers is a note nobody reads: what the actor says about
+        // itself opens under the object ID that picked it, and what it says
+        // about a field opens under that field.
+        auto level = make_level();
+        nsmb::formats::NsmbLevelSprite sprite;
+        sprite.id = 7; sprite.x = 10; sprite.y = 10;
+        QVERIFY(level.add_sprite(sprite));
+        nsmb::project::SpriteDefinition definition;
+        definition.object_id = 42;
+        definition.name = "Synthetic actor";
+        definition.notes = "Spawned by Chain Chomp/Log.";
+        definition.fields.push_back({"speed", "Speed", 4, 3, {{1, "Slow"}, {2, "Fast"}},
+                                     "8 is used by ones thrown out of the Monty Tank."});
+        nsmb::project::SpriteDefinitionCatalog catalog{{definition}};
+
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+        QCOMPARE(properties.fields_[0].label->text(), QString("Object ID"));
+        QCOMPARE(properties.fields_[0].note->text(), QString("Spawned by Chain Chomp/Log."));
+        QVERIFY(!properties.fields_[0].note->isHidden());
+        QCOMPARE(properties.fields_[5].note->text(), QString("8 is used by ones thrown out of the Monty Tank."));
+        // The value table is a lookup rather than prose, so it stays a tooltip.
+        QVERIFY(properties.fields_[5].value->toolTip().contains("1 = Slow"));
+
+        // An open note stays open. Reaching the end of the reveal releases the
+        // height, so a refresh that replayed it would clamp the note shut again.
+        properties.fields_[5].note->setMaximumHeight(QWIDGETSIZE_MAX);
+        properties.refresh();
+        QCOMPARE(properties.fields_[5].note->maximumHeight(), QWIDGETSIZE_MAX);
+
+        // And a row that stops carrying a note closes it.
+        properties.select(LevelPropertiesWidget::Kind::Entrance, 0);
+        QVERIFY(properties.fields_[0].note->text().isEmpty());
+        QVERIFY(properties.fields_[0].note->isHidden());
+    }
+
     void canvasChromeFollowsThePalette() {
         auto level = make_level();
         LevelPreviewWidget canvas;

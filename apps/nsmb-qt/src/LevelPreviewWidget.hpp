@@ -75,6 +75,10 @@ public:
     void clearGraphics();
     void invalidateGraphics();
     [[nodiscard]] bool graphicsMatch(nsmb::project::LevelTilesetReferences references) const noexcept;
+    // Which actor class each sprite type spawns, read from the ROM the level's
+    // graphics resolved against. The properties panel needs the same mapping to
+    // find the definition whose fields it shows.
+    [[nodiscard]] const std::unordered_map<std::uint16_t, std::uint32_t>& actorObjectIds() const noexcept { return actor_object_ids_; }
     [[nodiscard]] nsmb::project::EditableLevel* level() const noexcept;
 
     struct PaletteEntry {

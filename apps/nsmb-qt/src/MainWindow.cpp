@@ -1631,7 +1631,7 @@ void MainWindow::setProject(const nsmb::project::Project& project) {
     auto module_data=nsmb::project::load_module_data_catalog(currentProject_.directory(),generated);
     if(module_data){moduleData_=std::move(module_data.value());if(moduleData_.stage_object_id_base!=326)log(QString("Stage-object catalog base %1 disagrees with Big Star's vanilla count 326.").arg(moduleData_.stage_object_id_base));}
     else log("Module data: "+QString::fromStdString(module_data.error().message));
-    levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
+    updateSpriteDefinitions();
     levelData_->setLevel(nullptr, &moduleData_);
     levelProperties_->setObjectBankOverlays(std::nullopt);
     reloadRom();
@@ -1899,13 +1899,31 @@ void MainWindow::reloadActorDefinitions() {
         actorDefinitions_ = std::move(definitions.value());
         spriteDefinitions_ = actorDefinitions_.sprite_definitions();
     }
-    levelProperties_->setSpriteDefinitions(spriteDefinitions_, {});
+    updateSpriteDefinitions();
     if (preview_) { preview_->setActorDefinitions(actorDefinitions_); preview_->setTileOverlays(tileOverlays_); }
     for (auto& [key, document] : documents_) {
         (void)key;
         document.view->setActorDefinitions(actorDefinitions_);
         document.view->setTileOverlays(tileOverlays_);
     }
+}
+
+void MainWindow::updateSpriteDefinitions() {
+    // Which actor class a sprite type spawns is read out of the ROM when a
+    // level resolves its graphics, and the canvas that resolved it keeps it.
+    // Reading it back from there is what makes the panel show an actor's
+    // declared fields for the level it is on, whichever order the level, the
+    // graphics and the actor catalog arrived in.
+    const std::unordered_map<std::uint16_t, std::uint32_t>* actor_object_ids = nullptr;
+    if (currentLevel_) {
+        for (const auto& [key, document] : documents_) {
+            (void)key;
+            if (document.view->level() == currentLevel_) { actor_object_ids = &document.view->actorObjectIds(); break; }
+        }
+    }
+    levelProperties_->setSpriteDefinitions(spriteDefinitions_,
+                                           actor_object_ids ? *actor_object_ids
+                                                            : std::unordered_map<std::uint16_t, std::uint32_t>{});
 }
 
 nsmb::core::Result<std::filesystem::path> MainWindow::moduleSaveTarget(const std::string& romPath) const {
@@ -2137,6 +2155,7 @@ void MainWindow::activateCurrentDocument() {
             currentLevel_ = found->second.get();
         }
         levelProperties_->setLevel(currentLevel_);
+        updateSpriteDefinitions();
         levelData_->setLevel(currentLevel_, &moduleData_);
         propertiesLabel_->setText("Level: " + document.name + "\nWorld: " + document.world + "\nCourse: " + document.course_path +
                                   "\nBGDat: " + document.bgdat_path);
@@ -2384,9 +2403,6 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
         for (const auto& path : definition.render_resources)
             if (!path.empty()) resources.value().watched_files.push_back(path);
     }
-    std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids;
-    for (const auto& actor : resources.value().actors) actor_object_ids.emplace(actor.type, actor.object_id);
-    if (view->level() == currentLevel_) levelProperties_->setSpriteDefinitions(spriteDefinitions_, std::move(actor_object_ids));
     QStringList watch;
     QStringList add;
     for (const auto& path : resources.value().watched_files) {
@@ -2397,6 +2413,7 @@ void MainWindow::configureGraphics(LevelPreviewWidget* view) {
     graphicsFiles_.insert_or_assign(view, watch);
     if (!add.empty()) graphicsWatcher_->addPaths(add);
     view->setGraphicsResources(std::move(resources.value()), references);
+    updateSpriteDefinitions();
 }
 
 void MainWindow::refreshGraphics() {

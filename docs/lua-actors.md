@@ -118,6 +118,21 @@ Field offsets address the complete 48-bit NSMBe data value. Bits 0-31 are
 `signed`, and `checkboxValue` reproduce NSMBe's numeric, signed, and checkbox
 behavior. A field may be up to 31 bits wide.
 
+A declared field never becomes the only way to edit a sprite. The panel's
+**Settings** section keeps the raw NSMBe data value -- `Event 1`, `Event 2`, then
+the settings word from its high byte down -- in a hex box beneath the fields, and
+the two follow each other. Only the field the user turns is written back, so
+changing the object ID re-reads the same value through a different actor instead
+of rewriting it through the last one.
+
+## Notes
+
+A field's `notes` are read where the field is edited: the properties panel slides
+them open under the field itself. The actor's own `notes` open the same way under
+the sprite's **Object ID**, so selecting the object ID that names the actor is
+what brings up what the actor documents about itself. `choices` stay on the
+field's tooltip, being a value table rather than prose.
+
 ## Resources
 
 `ctx` exposes four loaders, and each returns an opaque handle. A handle whose

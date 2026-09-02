@@ -2,6 +2,7 @@
 
 #include <QList>
 #include <QPointF>
+#include <QString>
 #include <QWidget>
 
 #include <array>
@@ -15,10 +16,14 @@
 #include "nsmb/project/sprite_definitions.hpp"
 
 class QComboBox;
+class QGraphicsOpacityEffect;
+class QGroupBox;
+class QLineEdit;
 class QTabBar;
 class QLabel;
 class QPushButton;
 class QSpinBox;
+class QVariantAnimation;
 class QtEditorTests;
 
 class LevelPropertiesWidget final : public QWidget {
@@ -55,6 +60,13 @@ private:
         QWidget* container{};
         QLabel* label{};
         QSpinBox* value{};
+        // What the actor says about this field, revealed under the value it
+        // belongs to instead of hiding in a tooltip nobody hovers.
+        QLabel* note{};
+        QGraphicsOpacityEffect* note_fade{};
+        QVariantAnimation* note_reveal{};
+        QString note_text;
+        int note_height{};
         bool mixed{};
         int unset_value{};
     };
@@ -62,7 +74,14 @@ private:
     [[nodiscard]] Kind kind() const;
     [[nodiscard]] std::size_t itemCount() const;
     [[nodiscard]] std::vector<std::size_t> selectedIndices() const;
-    void applyFields();
+    // `changed_row` is the row the user turned: for a sprite it is the only
+    // declared field written back, so the rest of the settings word survives
+    // untouched.
+    void applyFields(std::size_t changed_row);
+    // Writes the raw NSMBe data value the settings box holds to the selection.
+    void applySpriteData();
+    // Slides a note open under its field, or closes the one that is there.
+    void setFieldNote(FieldRow& row, const QString& text);
     void addEntity();
     void deleteEntity();
     void addNode();
@@ -78,6 +97,8 @@ private:
     QPushButton* deleteButton_{};
     QPushButton* addNodeButton_{};
     QPushButton* deleteNodeButton_{};
+    QGroupBox* settingsGroup_{};
+    QLineEdit* settingsBox_{};
     std::array<FieldRow, 37> fields_{};
     bool refreshing_{};
     std::vector<std::size_t> selected_items_;

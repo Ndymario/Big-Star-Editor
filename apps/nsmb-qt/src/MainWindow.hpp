@@ -127,6 +127,13 @@ private:
     void refreshPalette();
     void reloadFilesystemView();
     void reloadActorDefinitions();
+    // Hands the properties panel the catalog together with the sprite-type map
+    // of the level it is showing, so a sprite resolves to the actor that
+    // declares its fields.
+    void updateSpriteDefinitions();
+    // Hands the properties panel the catalog together with the sprite-type map
+    // of the level it is showing, so a sprite resolves to the actor that
+    // declares its fields.
     [[nodiscard]] std::vector<nsmb::project::ModuleVariantMapping> activeModuleMappings() const;
     // Re-opens the project's ROM and re-points everything that reads through
     // it. Called on project load and after every applied build.

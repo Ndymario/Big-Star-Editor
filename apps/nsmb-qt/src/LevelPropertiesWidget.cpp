@@ -1,16 +1,20 @@
 #include "LevelPropertiesWidget.hpp"
 
 #include <QComboBox>
+#include <QFontDatabase>
 #include <QFrame>
+#include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTabBar>
+#include <QVariantAnimation>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -34,6 +38,9 @@ int firstUnusedNumber(const auto& values, int start, auto number) {
     return start;
 }
 
+// Object ID, X, Y and the two event bytes come before an actor's own fields.
+constexpr std::size_t sprite_field_row = 5;
+
 std::uint64_t spriteData(const nsmb::formats::NsmbLevelSprite& sprite) {
     return sprite.settings | (static_cast<std::uint64_t>(sprite.events[1]) << 32U) |
            (static_cast<std::uint64_t>(sprite.events[0]) << 40U);
@@ -43,6 +50,22 @@ void setSpriteData(nsmb::formats::NsmbLevelSprite& sprite, std::uint64_t data) {
     sprite.settings = static_cast<std::uint32_t>(data);
     sprite.events[1] = static_cast<std::uint8_t>(data >> 32U);
     sprite.events[0] = static_cast<std::uint8_t>(data >> 40U);
+}
+
+// The six bytes NSMBe shows and its stageobjsettings nybbles address: Event 1,
+// Event 2, then the settings word from its high byte down.
+QString formatSpriteData(std::uint64_t data) {
+    auto text = QString("%1").arg(data & 0xffffffffffffULL, 12, 16, QChar('0')).toUpper();
+    for (int position = 10; position > 0; position -= 2) text.insert(position, ' ');
+    return text;
+}
+
+std::optional<std::uint64_t> parseSpriteData(QString text) {
+    text.remove(' ');
+    if (text.size() != 12) return std::nullopt;
+    bool parsed = false;
+    const auto data = text.toULongLong(&parsed, 16);
+    return parsed ? std::optional<std::uint64_t>(data) : std::nullopt;
 }
 
 } // namespace
@@ -104,18 +127,81 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
         field.value->setRange(-32768, 65535);
         field.value->setAccelerated(true);
         field.value->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        field.note = new QLabel(field.container);
+        field.note->setObjectName(QString("PropertyNote%1").arg(index));
+        field.note->setWordWrap(true);
+        field.note->setTextFormat(Qt::PlainText);
+        field.note->setForegroundRole(QPalette::PlaceholderText);
+        auto noteFont = field.note->font();
+        noteFont.setPointSizeF(noteFont.pointSizeF() * 0.9);
+        field.note->setFont(noteFont);
+        // A wrapped note only knows its height once it knows its width, and the
+        // grid only asks when both the note and the widget it sits in say they
+        // have an answer. Without that the row is laid out one line tall and
+        // the note spills over its neighbours.
+        auto notePolicy = field.note->sizePolicy();
+        notePolicy.setVerticalPolicy(QSizePolicy::Minimum);
+        notePolicy.setHeightForWidth(true);
+        field.note->setSizePolicy(notePolicy);
+        auto containerPolicy = field.container->sizePolicy();
+        containerPolicy.setHeightForWidth(true);
+        field.container->setSizePolicy(containerPolicy);
+        field.note->setMaximumHeight(0);
+        field.note->hide();
+        field.note_fade = new QGraphicsOpacityEffect(field.note);
+        field.note_fade->setOpacity(0.0);
+        field.note->setGraphicsEffect(field.note_fade);
+        field.note_reveal = new QVariantAnimation(this);
+        field.note_reveal->setDuration(180);
+        field.note_reveal->setEasingCurve(QEasingCurve::OutCubic);
+        field.note_reveal->setStartValue(0.0);
+        field.note_reveal->setEndValue(1.0);
+        connect(field.note_reveal, &QVariantAnimation::valueChanged, this, [row = &field](const QVariant& value) {
+            const auto progress = value.toDouble();
+            row->note->setMaximumHeight(qRound(progress * row->note_height));
+            row->note_fade->setOpacity(progress);
+        });
+        // Released at the end so a later resize can rewrap the note: an
+        // animated height that stays put clips whatever the new width wraps to.
+        connect(field.note_reveal, &QVariantAnimation::finished, this,
+                [row = &field] { row->note->setMaximumHeight(QWIDGETSIZE_MAX); });
         fieldLayout->addWidget(field.label);
         fieldLayout->addWidget(field.value);
+        fieldLayout->addWidget(field.note);
+        // Keeps a field at the top of its grid row when the field beside it
+        // opened a note and made the row tall.
+        fieldLayout->addStretch();
         fieldsLayout->addWidget(field.container, static_cast<int>(index / 2), static_cast<int>(index % 2));
-        connect(field.value, &QSpinBox::valueChanged, this, [this, current = &field] {
+        connect(field.value, &QSpinBox::valueChanged, this, [this, current = &field, index] {
             if (!refreshing_) current->mixed = false;
-            applyFields();
+            applyFields(index);
         });
     }
     fieldsLayout->setColumnStretch(0, 1);
     fieldsLayout->setColumnStretch(1, 1);
+    // Below the fields, because it is what they are a reading of: an actor that
+    // declares nothing still has its whole data value here, and one that
+    // declares everything still shows what its fields add up to.
+    settingsGroup_ = new QGroupBox("Settings", content);
+    auto* settingsLayout = new QVBoxLayout(settingsGroup_);
+    settingsLayout->setSpacing(4);
+    settingsBox_ = new QLineEdit(settingsGroup_);
+    settingsBox_->setObjectName("SpriteDataField");
+    settingsBox_->setInputMask(">HH HH HH HH HH HH");
+    settingsBox_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    settingsBox_->setToolTip("Event 1, Event 2, then the settings word from its high byte down.");
+    auto* settingsCaption = new QLabel("Event 1, Event 2, settings", settingsGroup_);
+    settingsCaption->setForegroundRole(QPalette::PlaceholderText);
+    auto captionFont = settingsCaption->font();
+    captionFont.setPointSizeF(captionFont.pointSizeF() * 0.9);
+    settingsCaption->setFont(captionFont);
+    settingsLayout->addWidget(settingsBox_);
+    settingsLayout->addWidget(settingsCaption);
+    connect(settingsBox_, &QLineEdit::textEdited, this, [this] { applySpriteData(); });
+
     contentLayout->addWidget(selectionGroup);
     contentLayout->addWidget(propertiesGroup);
+    contentLayout->addWidget(settingsGroup_);
 
     auto* entityButtons = new QHBoxLayout;
     addButton_ = new QPushButton("Add", this);
@@ -240,8 +326,13 @@ void LevelPropertiesWidget::refresh() {
     deleteButton_->setEnabled(level_ && count != 0);
 
     std::size_t row = 0;
-    auto field = [&](const char* name, std::optional<int> value, int minimum = 0, int maximum = 65535) {
-        auto& current = fields_[row++];
+    // Filled as the rows are laid out and applied in one pass at the end, so a
+    // note that is already open stays open instead of replaying its reveal on
+    // every refresh -- and one whose row went away closes.
+    std::array<QString, std::tuple_size_v<decltype(fields_)>> notes;
+    auto field = [&](const char* name, std::optional<int> value, int minimum = 0, int maximum = 65535, QString note = {}) {
+        const auto index = row++;
+        auto& current = fields_[index];
         current.label->setText(name);
         current.mixed = !value.has_value();
         current.unset_value = minimum - 1;
@@ -249,6 +340,7 @@ void LevelPropertiesWidget::refresh() {
         current.value->setSpecialValueText("—");
         current.value->setValue(value.value_or(current.unset_value));
         current.container->show();
+        notes[index] = std::move(note);
     };
 
     auto common = [&](auto getter) -> std::optional<int> {
@@ -288,37 +380,36 @@ void LevelPropertiesWidget::refresh() {
             break;
         }
         case Kind::Sprite: {
-            field("Object ID", common([&](auto i) { return course.sprites[i].id; }));
-            field("X (tiles)", common([&](auto i) { return course.sprites[i].x; }));
-            field("Y (tiles)", common([&](auto i) { return course.sprites[i].y; }));
-            field("Event 1", common([&](auto i) { return course.sprites[i].events[0]; }), 0, 255);
-            field("Event 2", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
+            // Resolved before the rows are laid out: what the actor says about
+            // itself belongs under the object ID that selected it.
             const nsmb::project::SpriteDefinition* definition = nullptr;
             if (!multi) {
                 if (const auto hash = level_->sprite_hash(index)) definition = sprite_definitions_.by_hash(*hash);
                 else if (const auto object = actor_object_ids_.find(course.sprites[index].id); object != actor_object_ids_.end())
                     definition = sprite_definitions_.by_object_id(object->second);
             }
+            field("Object ID", common([&](auto i) { return course.sprites[i].id; }), 0, 65535,
+                  definition ? QString::fromStdString(definition->notes) : QString());
+            field("X (tiles)", common([&](auto i) { return course.sprites[i].x; }));
+            field("Y (tiles)", common([&](auto i) { return course.sprites[i].y; }));
+            field("Event 1", common([&](auto i) { return course.sprites[i].events[0]; }), 0, 255);
+            field("Event 2", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
             if (definition && !definition->fields.empty()) {
                 for (const auto& named : definition->fields) {
                     if (row >= fields_.size()) break;
                     field(named.label.c_str(), nsmb::project::read_sprite_field(spriteData(course.sprites[index]), named),
-                          nsmb::project::sprite_field_min(named), nsmb::project::sprite_field_max(named));
+                          nsmb::project::sprite_field_min(named), nsmb::project::sprite_field_max(named),
+                          QString::fromStdString(named.notes));
                     visible_sprite_fields_.push_back(&named);
-                    QStringList tooltip;
-                    if (!named.notes.empty()) tooltip.push_back(QString::fromStdString(named.notes));
-                    if (!named.choices.empty()) {
-                        QStringList choices;
-                        for (const auto& choice : named.choices)
-                            choices.push_back(QString("%1 = %2").arg(choice.value).arg(QString::fromStdString(choice.label)));
-                        tooltip.push_back(choices.join("\n"));
-                    }
-                    fields_[row - 1].label->setToolTip(tooltip.join("\n\n"));
-                    fields_[row - 1].value->setToolTip(tooltip.join("\n\n"));
+                    // The note itself now reads under the field. The tooltip is
+                    // where the value table stays: it is a lookup, not prose.
+                    if (named.choices.empty()) continue;
+                    QStringList choices;
+                    for (const auto& choice : named.choices)
+                        choices.push_back(QString("%1 = %2").arg(choice.value).arg(QString::fromStdString(choice.label)));
+                    fields_[row - 1].label->setToolTip(choices.join("\n"));
+                    fields_[row - 1].value->setToolTip(choices.join("\n"));
                 }
-            } else {
-                field("Settings low", common([&](auto i) { return course.sprites[i].settings & 0xffff; }));
-                field("Settings high", common([&](auto i) { return course.sprites[i].settings >> 16; }));
             }
             break;
         }
@@ -383,8 +474,83 @@ void LevelPropertiesWidget::refresh() {
         deleteNodeButton_->setEnabled(false);
     }
 
+    for (std::size_t index = 0; index < fields_.size(); ++index) setFieldNote(fields_[index], notes[index]);
+
+    // The raw value is the sprite; the declared fields are only a reading of
+    // it. So it is shown whether or not an actor was resolved, and it is the
+    // panel's own edit that moves it -- a refresh only reports it.
+    settingsGroup_->setVisible(kind() == Kind::Sprite);
+    if (kind() == Kind::Sprite) {
+        settingsBox_->setEnabled(level_ != nullptr && count != 0);
+        QString text;
+        if (level_ && !indices.empty()) {
+            const auto& sprites = level_->course().sprites;
+            const auto data = spriteData(sprites[indices.front()]);
+            if (std::ranges::all_of(indices, [&](auto i) { return spriteData(sprites[i]) == data; })) text = formatSpriteData(data);
+        }
+        if (!text.isEmpty()) {
+            if (settingsBox_->text() != text) {
+                // Typing here is what changed the level in the first place, so
+                // the cursor stays where the user left it.
+                const auto cursor = settingsBox_->cursorPosition();
+                settingsBox_->setText(text);
+                settingsBox_->setCursorPosition(cursor);
+            }
+        } else if (settingsBox_->hasAcceptableInput()) {
+            settingsBox_->clear();
+        }
+    }
+
     refreshing_ = false;
     if (!multi) emit selectionChanged(static_cast<int>(kind()), itemBox_->value(), nodeBox_->value());
+}
+
+void LevelPropertiesWidget::applySpriteData() {
+    if (refreshing_ || !level_ || kind() != Kind::Sprite || itemCount() == 0) return;
+    // A half-typed value is not a value: the box keeps it until it is whole.
+    const auto data = parseSpriteData(settingsBox_->text());
+    if (!data) return;
+    const auto indices = selectedIndices();
+    if (indices.empty()) return;
+    if (indices.size() == 1U) {
+        auto sprite = level_->course().sprites[indices.front()];
+        setSpriteData(sprite, *data);
+        emitChange(level_->update_sprite(indices.front(), sprite));
+        return;
+    }
+    nsmb::project::LevelEntityUpdates edits;
+    for (const auto selected : indices) {
+        auto sprite = level_->course().sprites[selected];
+        setSpriteData(sprite, *data);
+        edits.sprites.push_back({selected, sprite});
+    }
+    emitChange(level_->update_entities(std::move(edits), "Edit selection"));
+}
+
+void LevelPropertiesWidget::setFieldNote(FieldRow& row, const QString& text) {
+    if (row.note_text == text) return;
+    row.note_text = text;
+    row.note_reveal->stop();
+    if (text.isEmpty()) {
+        // Nothing to read on the way out, so the row closes at once rather than
+        // holding the rest of the panel down for the length of an animation.
+        row.note->clear();
+        row.note->hide();
+        row.note->setMaximumHeight(0);
+        row.note_fade->setOpacity(0.0);
+        return;
+    }
+    row.note->setText(text);
+    row.note->setMaximumHeight(QWIDGETSIZE_MAX);
+    row.note->show();
+    // heightForWidth is what the wrapped note really needs; sizeHint is the
+    // fallback for a panel that has not been laid out yet.
+    const auto width = row.note->width() > 0 ? row.note->width() : row.container->width();
+    row.note_height = width > 0 ? row.note->heightForWidth(width) : 0;
+    if (row.note_height <= 0) row.note_height = row.note->sizeHint().height();
+    row.note->setMaximumHeight(0);
+    row.note_fade->setOpacity(0.0);
+    row.note_reveal->start();
 }
 
 void LevelPropertiesWidget::previewInteraction(const QPointF& delta, int resize_handle) {
@@ -480,7 +646,7 @@ void LevelPropertiesWidget::previewInteraction(const QPointF& delta, int resize_
     }
 }
 
-void LevelPropertiesWidget::applyFields() {
+void LevelPropertiesWidget::applyFields(std::size_t changed_row) {
     if (refreshing_ || !level_ || itemCount() == 0) {
         return;
     }
@@ -513,7 +679,8 @@ void LevelPropertiesWidget::applyFields() {
                 sprite.y = static_cast<std::uint16_t>(changed(2, sprite.y));
                 sprite.events[0]=static_cast<std::uint8_t>(changed(3,sprite.events[0]));
                 sprite.events[1]=static_cast<std::uint8_t>(changed(4,sprite.events[1]));
-                sprite.settings=static_cast<std::uint32_t>(changed(5,sprite.settings&0xffff)) | (static_cast<std::uint32_t>(changed(6,sprite.settings>>16))<<16);
+                // No declared fields are shown for a multi-selection, and the
+                // settings word is edited whole in its own box.
                 edits.sprites.push_back({selected, sprite});
             }
             break;
@@ -575,13 +742,12 @@ void LevelPropertiesWidget::applyFields() {
         sprite.x = static_cast<std::uint16_t>(value(1));
         sprite.y = static_cast<std::uint16_t>(value(2));
         sprite.events={static_cast<std::uint8_t>(value(3)),static_cast<std::uint8_t>(value(4))};
-        if (visible_sprite_fields_.empty()) {
-            sprite.settings=static_cast<std::uint32_t>(value(5))|(static_cast<std::uint32_t>(value(6))<<16);
-        } else {
-            auto data = spriteData(sprite);
-            for (std::size_t field = 0; field < visible_sprite_fields_.size(); ++field)
-                data = nsmb::project::write_sprite_field(data, *visible_sprite_fields_[field], value(field + 5));
-            setSpriteData(sprite, data);
+        // Only the field that was turned. Writing every visible one back would
+        // commit whatever a spin box had to clamp to show, and would carry the
+        // previous actor's fields into the settings when the object ID changes.
+        if (changed_row >= sprite_field_row && changed_row - sprite_field_row < visible_sprite_fields_.size()) {
+            const auto& named = *visible_sprite_fields_[changed_row - sprite_field_row];
+            setSpriteData(sprite, nsmb::project::write_sprite_field(spriteData(sprite), named, value(changed_row)));
         }
         result = level_->update_sprite(index, sprite);
         break;
