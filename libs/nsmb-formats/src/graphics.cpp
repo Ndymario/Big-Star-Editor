@@ -687,7 +687,7 @@ core::Result<std::vector<ObjectLayout>> decode_object_layouts(std::span<const st
             }
             const auto low = definitions[cursor++];
             const auto high = definitions[cursor++];
-            std::int32_t tile = low == 0 && high == 0 ? -1 : static_cast<std::int32_t>(low) +
+            std::int32_t tile = low == 0 && high == 0 ? object_layout_empty_tile : static_cast<std::int32_t>(low) +
                                                                     ((static_cast<std::int32_t>(high) - tile_page_offset) << 8);
             if ((control & 0x40U) != 0) tile += 768;
             layout.rows.back().push_back({tile, control});
@@ -791,7 +791,7 @@ core::Result<std::vector<std::int32_t>> render_object_layout(const ObjectLayout&
     if (width == 0 || height == 0 || object.rows.empty()) {
         return core::make_error(core::ErrorCode::InvalidArgument, "object layout dimensions and rows must be nonzero");
     }
-    std::vector<std::int32_t> output(width * height, -1);
+    std::vector<std::int32_t> output(width * height, object_layout_unwritten);
     if (object.slope) {
         const auto& row = object.rows.front();
         if (row.empty()) return output;

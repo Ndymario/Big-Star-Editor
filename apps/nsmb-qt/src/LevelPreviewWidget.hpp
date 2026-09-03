@@ -17,11 +17,27 @@
 #include "nsmb/formats/level.hpp"
 #include "nsmb/project/editable_level.hpp"
 #include "nsmb/project/graphics_resources.hpp"
+#include "nsmb/project/level_tilemap.hpp"
 #include "nsmb/project/lua_actors.hpp"
 #include "nsmb/project/project.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
 
 class QtEditorTests;
+
+// The level's tile array, and one image per chunk of it. The canvas draws these
+// rather than one image per object: a cell holds a single Map16 block, so an
+// object in front hides what is behind it instead of letting it show through
+// its transparent pixels, which is what the game does and what stacking
+// per-object images cannot express.
+struct LevelTileLayer {
+    // Everything the array was built from, hashed. A paint that changes none of
+    // it keeps the array and the images already drawn from it.
+    std::uint64_t key{};
+    bool built{};
+    nsmb::project::LevelTilemap map;
+    // One per chunk, drawn the first time that chunk comes into view.
+    std::vector<QImage> images;
+};
 
 class LevelPreviewWidget final : public QWidget {
     Q_OBJECT
@@ -170,6 +186,9 @@ private:
     void commitResize(const ResizeEdges& edges);
     void deleteSelection();
     void rebuildSpriteDefinitions();
+    // Rasterise the objects into the tile array again if anything they are
+    // drawn from has moved since the last paint.
+    void ensureTileLayer();
     void rebuildActorThumbnails();
 
     std::optional<Scene> scene_;
@@ -206,7 +225,7 @@ private:
     std::shared_ptr<const nsmb::project::TileOverlayCatalog> tile_overlays_;
     QImage background_;
     QImage foreground_;
-    std::unordered_map<std::uint64_t, QImage> object_images_;
+    LevelTileLayer tile_layer_;
     std::unordered_map<std::uint16_t, QImage> actor_images_;
     std::unordered_map<std::uint32_t, QImage> custom_actor_images_;
     std::unordered_map<std::uint16_t, QString> actor_labels_;

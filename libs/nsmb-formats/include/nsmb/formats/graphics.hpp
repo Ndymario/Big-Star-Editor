@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -65,8 +66,17 @@ struct EncodedObjectLayouts {
     std::vector<std::uint8_t> index;
 };
 
+// A definition whose two tile bytes are both zero names Map16 block 0, which
+// every tileset leaves blank. It is still a block: the game writes it into the
+// level's tile array like any other, so it hides whatever was already there.
+inline constexpr std::int32_t object_layout_empty_tile = -1;
+
+// A cell no part of the layout reaches -- the empty half of a slope. Nothing is
+// written there, so whatever was already in the tile array stays.
+inline constexpr std::int32_t object_layout_unwritten = std::numeric_limits<std::int32_t>::min();
+
 struct ObjectLayoutTile {
-    std::int32_t tile{-1};
+    std::int32_t tile{object_layout_empty_tile};
     std::uint8_t control{};
     bool operator==(const ObjectLayoutTile&) const = default;
 };
@@ -145,6 +155,9 @@ core::Result<std::vector<ObjectLayout>> decode_object_layouts(std::span<const st
 core::Result<EncodedObjectLayouts> encode_object_layouts(std::span<const ObjectLayout> objects,
                                                           std::uint8_t tile_page_offset = 0,
                                                           std::span<const std::uint8_t> index_template = {});
+// The block each cell of an object at this size holds. A cell the layout does
+// not reach comes back as `object_layout_unwritten`, which is not the same as a
+// cell it fills with `object_layout_empty_tile`.
 core::Result<std::vector<std::int32_t>> render_object_layout(const ObjectLayout& object,
                                                              std::size_t width,
                                                              std::size_t height);

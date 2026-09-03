@@ -5,6 +5,7 @@ add_library(nsmb-project
   src/graphics_resources.cpp
   src/level_catalog.cpp
   src/level_exchange.cpp
+  src/level_tilemap.cpp
   src/lua_actors.cpp
   src/lua_sandbox.cpp
   src/lua_tiles.cpp
@@ -42,6 +43,9 @@ if(BSE_BUILD_TESTS)
   add_executable(nsmb-level-exchange-tests tests/level_exchange_tests.cpp)
   target_link_libraries(nsmb-level-exchange-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-level-exchange-tests COMMAND nsmb-level-exchange-tests)
+  add_executable(nsmb-level-tilemap-tests tests/level_tilemap_tests.cpp)
+  target_link_libraries(nsmb-level-tilemap-tests PRIVATE nsmb-project)
+  add_test(NAME nsmb-level-tilemap-tests COMMAND nsmb-level-tilemap-tests)
   add_executable(nsmb-rom-reader-tests tests/rom_reader_tests.cpp)
   target_link_libraries(nsmb-rom-reader-tests PRIVATE nsmb-project)
   add_test(NAME nsmb-rom-reader-tests COMMAND nsmb-rom-reader-tests)

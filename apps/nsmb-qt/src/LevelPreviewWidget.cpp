@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <utility>
 
@@ -442,6 +443,67 @@ Qt::CursorShape handleCursor(LevelPreviewWidget::Handle handle) {
     return Qt::ArrowCursor;
 }
 
+// Both kinds of object that draw nothing preview as the same empty square, so
+// the picker draws them a glyph instead of nothing at all. Which is which is
+// `level_object_effect`'s to say -- it reads the game's rules, not the picker.
+QImage objectGlyphImage(nsmb::project::LevelObjectEffect kind) {
+    QImage image(64, 64, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    if (kind == nsmb::project::LevelObjectEffect::Erases) {
+        // A pencil eraser, tilted, rubbing edge down.
+        painter.translate(32, 34);
+        painter.rotate(-32.0);
+        painter.setPen(QPen(QColor(58, 44, 44), 3));
+        painter.setBrush(QColor(226, 122, 130));
+        painter.drawRoundedRect(QRectF(-20, -22, 40, 44), 6, 6);
+        painter.setBrush(QColor(244, 226, 226));
+        painter.drawRoundedRect(QRectF(-20, 4, 40, 18), 6, 6);
+    } else {
+        // Nothing is written here, so nothing is drawn: an empty outline.
+        painter.setPen(QPen(QColor(150, 150, 155), 3, Qt::DashLine));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawRect(QRectF(10, 10, 44, 44));
+    }
+    painter.end();
+    return image;
+}
+
+// The 256x256 image one chunk of the tile array draws as, made the first time
+// that chunk is asked for and kept until the array is rebuilt. Cells are copied
+// in, not composited: each one already holds the single block that won it.
+const QImage& chunkImage(LevelTileLayer& layer,
+                         std::size_t index,
+                         const std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3>& tilesets) {
+    if (layer.images.size() != layer.map.chunks.size()) layer.images.assign(layer.map.chunks.size(), QImage{});
+    auto& image = layer.images[index];
+    if (!image.isNull()) return image;
+    constexpr auto cells = nsmb::project::level_chunk_cells;
+    QImage drawn(static_cast<int>(cells * 16U), static_cast<int>(cells * 16U), QImage::Format_RGBA8888);
+    drawn.fill(Qt::transparent);
+    const auto& chunk = layer.map.chunks[index];
+    for (std::size_t y = 0; y < cells; ++y) {
+        for (std::size_t x = 0; x < cells; ++x) {
+            const auto& cell = chunk.cell(x, y);
+            if (!cell.draws() || cell.slot >= tilesets.size() || !tilesets[cell.slot]) continue;
+            const auto& blocks = tilesets[cell.slot]->map16_tiles;
+            if (static_cast<std::size_t>(cell.block) >= blocks.size()) continue;
+            const auto& block = blocks[static_cast<std::size_t>(cell.block)];
+            if (block.width != 16U || block.height != 16U || block.pixels.size() < 16U * 16U * 4U) continue;
+            for (int row = 0; row < 16; ++row) {
+                std::memcpy(drawn.scanLine(static_cast<int>(y) * 16 + row) + static_cast<int>(x) * 16 * 4,
+                            block.pixels.data() + static_cast<std::size_t>(row) * 16U * 4U,
+                            16U * 4U);
+            }
+        }
+    }
+    // Blitted many times over a level, so it is converted once to the format
+    // the painter draws without converting.
+    image = drawn.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+    return image;
+}
+
 void drawMap(QPainter& painter,
              const QRectF& target,
              const LevelPreviewWidget::Scene& scene,
@@ -452,7 +514,7 @@ void drawMap(QPainter& painter,
              const std::array<std::shared_ptr<nsmb::project::DecodedTileset>, 3>& tilesets,
              const QImage& background,
              const QImage& foreground,
-             std::unordered_map<std::uint64_t, QImage>& object_images,
+             LevelTileLayer& layer,
              const std::unordered_map<std::uint16_t, QImage>& actor_images,
              const std::unordered_map<std::uint32_t, QImage>& custom_actor_images,
              const std::unordered_map<std::uint16_t, QString>& actor_labels,
@@ -592,38 +654,35 @@ void drawMap(QPainter& painter,
             outline(rect, 7, static_cast<int>(i), viewColor, QColor(35, 88, 145));
         }
     };
+    // The tile art is the array, not the objects: one pass over the chunks the
+    // objects were rasterised into. Whichever object won a cell has already won
+    // it, so there is nothing left here to stack.
+    const auto chunk_side = static_cast<double>(nsmb::project::level_chunk_cells * 16U);
+    for (std::size_t chunk = 0; chunk < layer.map.chunks.size(); ++chunk) {
+        const QRectF rect(layer.map.chunks[chunk].x * chunk_side,
+                          layer.map.chunks[chunk].y * chunk_side,
+                          chunk_side,
+                          chunk_side);
+        if (region_known && !rect.intersects(visible)) continue;
+        const auto& image = chunkImage(layer, chunk, tilesets);
+        if (!image.isNull()) drawArt(rect, image);
+    }
     for (std::size_t i = 0; i < scene.level->objects().size(); ++i) {
         const auto& object = scene.level->objects()[i];
         auto rect = objectRect(object);
         preview(rect, 1, static_cast<int>(i));
         painter.setPen(QPen(colors.outline, 0));
-        bool rendered = false;
-        if (object.tileset_slot < tilesets.size() && tilesets[object.tileset_slot]) {
-            const auto image_key = (static_cast<std::uint64_t>(object.tileset_slot) << 56U) |
-                                   (static_cast<std::uint64_t>(object.object_id) << 32U) |
-                                   (static_cast<std::uint64_t>(object.width) << 16U) | object.height;
-            auto image = object_images.find(image_key);
-            if (image == object_images.end()) {
-                auto decoded = nsmb::project::render_tileset_object(*tilesets[object.tileset_slot],
-                                                                    object.object_id,
-                                                                    std::max<std::size_t>(1, object.width),
-                                                                    std::max<std::size_t>(1, object.height));
-                if (decoded) {
-                    const auto& value = decoded.value();
-                    QImage converted(value.pixels.data(),
-                                     static_cast<int>(value.width),
-                                     static_cast<int>(value.height),
-                                     static_cast<int>(value.width * 4U),
-                                     QImage::Format_RGBA8888);
-                    image = object_images.emplace(image_key, converted.copy()).first;
-                }
-            }
-            if (image != object_images.end()) {
-                drawArt(rect, image->second);
-                rendered = true;
-            }
-        }
-        if (!rendered) {
+        // An object whose tileset never decoded, or whose definition the
+        // tileset does not have or cannot lay out, put no cells in the array. It
+        // shows as a plain rectangle rather than as nothing at all.
+        const auto* tileset =
+            object.tileset_slot < tilesets.size() ? tilesets[object.tileset_slot].get() : nullptr;
+        const auto* layout = tileset && object.object_id < tileset->objects.size()
+                                 ? &tileset->objects[object.object_id]
+                                 : nullptr;
+        const auto layable = layout && std::any_of(layout->rows.begin(), layout->rows.end(),
+                                                   [](const auto& row) { return !row.empty(); });
+        if (!layable) {
             painter.setBrush(objectColor(object.tileset_slot));
             painter.drawRoundedRect(rect, 2.0 / scale, 2.0 / scale);
         }
@@ -839,6 +898,7 @@ void LevelPreviewWidget::showLevel(const QString& level_name,
 }
 
 void LevelPreviewWidget::paintEvent(QPaintEvent*) {
+    ensureTileLayer();
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
     const auto colors = canvasColors(palette());
@@ -862,7 +922,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 tilesets_,
                 background_,
                 foreground_,
-                object_images_,
+                tile_layer_,
                 actor_images_,
                 custom_actor_images_,
                 actor_labels_,
@@ -889,7 +949,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
             const QRectF mini(outer.right() - 190.0, outer.bottom() - 130.0, 180.0, 120.0);
             // The minimap is the whole level in a thumbnail, whatever the canvas zoom is.
             const auto mini_zoom = fitZoomFor(mini, sceneBounds(*scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_));
-            drawMap(painter, mini, *scene_, {}, {}, mini_zoom, {}, tilesets_, background_, foreground_, object_images_,
+            drawMap(painter, mini, *scene_, {}, {}, mini_zoom, {}, tilesets_, background_, foreground_, tile_layer_,
                     actor_images_, custom_actor_images_, actor_labels_, custom_actor_labels_, sprite_definitions_,
                     actor_definition_catalog_, actor_object_ids_, false, {}, colors);
             bool invertible = false; const auto visible = mapTransform(outer, *scene_, sprite_definitions_, actor_definition_catalog_, actor_object_ids_, zoom_, pan_).inverted(&invertible).mapRect(outer);
@@ -939,7 +999,7 @@ void LevelPreviewWidget::paintEvent(QPaintEvent*) {
                 tilesets_,
                 background_,
                 foreground_,
-                object_images_,
+                tile_layer_,
                 actor_images_,
                 custom_actor_images_,
                 actor_labels_,
@@ -1753,7 +1813,7 @@ void LevelPreviewWidget::setGraphicsResources(nsmb::project::LevelGraphicsResour
                 if (!foreground.isNull()) weak->foreground_ = std::move(foreground);
                 weak->actor_labels_ = std::move(actor_labels);
                 for (auto& [hash, label] : custom_actor_labels) weak->custom_actor_labels_.insert_or_assign(hash, std::move(label));
-                if (tileset_changed) weak->object_images_.clear();
+                if (tileset_changed) weak->tile_layer_ = {};
                 weak->update();
                 if (!warnings.isEmpty()) emit weak->graphicsWarning(warnings);
                 emit weak->graphicsLoaded();
@@ -1823,6 +1883,57 @@ void LevelPreviewWidget::setSpriteDefinitions(const nsmb::project::SpriteDefinit
     update();
 }
 
+void LevelPreviewWidget::ensureTileLayer() {
+    // Everything the array is rasterised from, hashed: the objects, the drag or
+    // resize being previewed over them, and which tilesets are decoded. A paint
+    // that changes none of it draws what is already here.
+    std::uint64_t key = 1469598103934665603ULL;
+    const auto mix = [&key](std::uint64_t value) {
+        for (int byte = 0; byte < 8; ++byte) {
+            key ^= (value >> (byte * 8)) & 0xffU;
+            key *= 1099511628211ULL;
+        }
+    };
+    mix(graphics_generation_);
+    for (const auto& tileset : tilesets_) mix(reinterpret_cast<std::uintptr_t>(tileset.get()));
+
+    std::vector<nsmb::formats::NsmbLevelObject> objects;
+    if (scene_ && scene_->level) {
+        const bool resizing = resize_handle_ != Handle::None;
+        const auto delta = (dragging_ || resizing) ? drag_delta_ : QPointF{};
+        const auto edges = resizeEdges(drag_delta_);
+        objects = scene_->level->objects();
+        for (std::size_t i = 0; i < objects.size(); ++i) {
+            auto& object = objects[i];
+            if (selected(selections_, 1, static_cast<int>(i))) {
+                // The same preview the outlines are drawn with, rounded back to
+                // whole cells, which is all the array can hold.
+                auto rect = objectRect(object);
+                if (resizing) rect.adjust(edges.left, edges.top, edges.right, edges.bottom);
+                else rect.translate(delta);
+                object.x = static_cast<std::int16_t>(std::lround(rect.left() / 16.0));
+                object.y = static_cast<std::int16_t>(std::lround(rect.top() / 16.0));
+                object.width = static_cast<std::uint16_t>(std::max<long>(1, std::lround(rect.width() / 16.0)));
+                object.height = static_cast<std::uint16_t>(std::max<long>(1, std::lround(rect.height() / 16.0)));
+            }
+            mix(object.object_id);
+            mix(object.tileset_slot);
+            mix(static_cast<std::uint16_t>(object.x));
+            mix(static_cast<std::uint16_t>(object.y));
+            mix(object.width);
+            mix(object.height);
+        }
+    }
+    if (tile_layer_.built && tile_layer_.key == key) return;
+
+    const std::array<const nsmb::project::DecodedTileset*, 3> tilesets{
+        tilesets_[0].get(), tilesets_[1].get(), tilesets_[2].get()};
+    tile_layer_.map = nsmb::project::rasterize_level_objects(objects, tilesets);
+    tile_layer_.images.assign(tile_layer_.map.chunks.size(), QImage{});
+    tile_layer_.key = key;
+    tile_layer_.built = true;
+}
+
 void LevelPreviewWidget::rebuildSpriteDefinitions() {
     sprite_definitions_.clear();
     for (const auto& [type, object_id] : actor_object_ids_)
@@ -1837,7 +1948,7 @@ void LevelPreviewWidget::clearGraphics() {
     tilesets_ = {};
     background_ = {};
     foreground_ = {};
-    object_images_.clear();
+    tile_layer_ = {};
     actor_images_.clear();
     custom_actor_images_.clear();
     actor_labels_.clear();
@@ -1909,13 +2020,29 @@ std::vector<LevelPreviewWidget::PaletteEntry> LevelPreviewWidget::paletteEntries
                                QImage::Format_RGBA8888)
                             .copy();
             }
+            // An object that draws nothing is not a broken preview, and the
+            // two kinds of nothing are not the same thing: the eraser clears
+            // the cells it covers, and a block the game never writes leaves
+            // them holding whatever was already there.
+            const auto glyph = nsmb::project::level_object_effect(layout, static_cast<std::uint8_t>(slot));
+            auto label = QString("Object %1:%2").arg(slot).arg(object);
+            auto tooltip = QString("Object %1 of tileset slot %2 - %3x%4 tiles")
+                               .arg(object).arg(slot).arg(natural_width).arg(natural_height);
+            if (glyph != nsmb::project::LevelObjectEffect::Draws) {
+                image = objectGlyphImage(glyph);
+                const auto suffix = glyph == nsmb::project::LevelObjectEffect::Erases ? QString(" - eraser")
+                                                                 : QString(" - draws nothing");
+                label += suffix;
+                tooltip += glyph == nsmb::project::LevelObjectEffect::Erases
+                               ? QString("\nWrites the empty block, so it clears the cells it covers.")
+                               : QString("\nNames a block the game never writes, so it leaves the cells alone.");
+            }
             entries.push_back({1,
                                static_cast<int>(object),
                                static_cast<int>(slot),
-                               QString("Object %1:%2").arg(slot).arg(object),
+                               std::move(label),
                                QString("Tileset %1").arg(slot),
-                               QString("Object %1 of tileset slot %2 - %3x%4 tiles")
-                                   .arg(object).arg(slot).arg(natural_width).arg(natural_height),
+                               std::move(tooltip),
                                std::move(image)});
         }
     }

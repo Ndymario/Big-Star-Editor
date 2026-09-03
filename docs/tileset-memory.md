@@ -180,3 +180,58 @@ opaque.
 
 `header->tileset[1]`, which `onCreate` stores in `field14_0x476`, is not part of
 this partition and has not been chased.
+
+## The level's tile array
+
+A level is not a stack of objects. `InitBGDat @ 020b3924` walks the object list
+once, and every object is rasterised into a single array of Map16 blocks -- one
+block per 16x16 cell, in chunks of 16x16 cells allocated on demand
+(`processX_allocChunk @ 020b597c`). `renderTileRow` above reads that array and
+nothing else, so a cell shows exactly one block: the one the last object to
+write it left there.
+
+Nothing composites. A block in front does not let the block behind show through
+its transparent pixels -- there is no block behind any more, and what shows
+through is the background layer. Drawing one image per object, which is what
+this editor and NSMB Editor both did, gets every overlap wrong in the same
+direction: it keeps what the game threw away.
+
+Two details decide which cells an object claims, both in
+`processX_InsertIntoChunk @ 020b54f4`:
+
+```c
+if ((SP->map16_index != 0) && (SP->map16_index < 7)) return;
+...
+pLevelChunks[SP->chunk_id][SP->pos_xy_chunk] = SP->map16_index;
+```
+
+**Block 0 is written like any other.** A definition whose two tile bytes are
+both zero names block 0, which every tileset leaves blank, and writing it clears
+the cell. That is what jyotyu object 0 -- one cell of block 0 -- is for: it is
+the eraser, and laying it over something is how a level puts a hole in what an
+earlier object drew.
+
+**Blocks 1 to 6 are never written.** They return above before the array is
+touched, so an object naming one leaves the cell, and whatever is already in it,
+alone. Jyotyu objects 1 through 6 are exactly one cell of blocks 1 through 6, so
+they do nothing at all -- the six of them are inert. Their Map16 is blank in
+every retail tileset, so the distinction is invisible until something is behind
+them.
+
+Counted over the 184 levels of the retail US ROM: 230,426 cells written, 11,286
+of them written more than once. 3,264 of those overlaps put a block with
+transparent pixels over another block, and 426 put the empty block over one --
+3,690 cells that per-object stacking drew with something the game does not show.
+The ice caves are the visible case: `J07_1` erases 200 cells of the stone wall
+its ice blocks sit in front of.
+
+`rasterize_level_objects` in `nsmb-project` reproduces all of the above, and the
+canvas draws its chunks rather than one image per object.
+
+Those seven objects also need saying in the object picker, because all seven
+preview as the same empty square. `level_object_effect` reads an object's
+definition and says which of the three things it does -- draw, erase, or
+nothing -- and the picker draws the two that show nothing a glyph instead: a
+rubber for the eraser, an empty dashed cell for the six that are inert. It is
+read off the definition rather than off the object number, so a tileset that
+puts its eraser elsewhere, or a module that adds one, still gets it right.

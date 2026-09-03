@@ -867,6 +867,72 @@ private slots:
         QVERIFY(!window.findChild<QWidget*>("ObjectPicker1"));
     }
 
+    void objectsThatDrawNothingSayWhichNothingTheyAre() {
+        // Every tileset opens with objects that put no art on screen, and they
+        // all previewed as the same empty button. They are not the same thing:
+        // object 0 writes the empty block and clears the cells it covers, while
+        // the ones naming blocks 1 to 6 are never written at all and leave what
+        // is under them standing.
+        auto tileset = std::make_shared<nsmb::project::DecodedTileset>();
+        nsmb::formats::RgbaImage tile{16, 16, {}};
+        tile.pixels.assign(16 * 16 * 4, 0xff);
+        tileset->map16_tiles.assign(8, tile);
+        nsmb::formats::ObjectLayout eraser;
+        eraser.rows = {{{nsmb::formats::object_layout_empty_tile, 0}}};
+        nsmb::formats::ObjectLayout inert;
+        inert.rows = {{{1, 0}}};
+        nsmb::formats::ObjectLayout ordinary;
+        ordinary.rows = {{{7, 0}}};
+        tileset->objects = {eraser, inert, ordinary};
+
+        LevelPreviewWidget scratch;
+        scratch.tilesets_[0] = tileset;
+        const auto entries = scratch.paletteEntries();
+        QCOMPARE(entries.size(), 3U);
+        QVERIFY(entries[0].label.contains("eraser"));
+        QVERIFY(entries[0].tooltip.contains("clears"));
+        QVERIFY(entries[1].label.contains("draws nothing"));
+        QVERIFY(entries[1].tooltip.contains("leaves the cells alone"));
+        // Two glyphs, not one, and neither is the empty preview they had.
+        QVERIFY(!entries[0].image.isNull() && !entries[1].image.isNull());
+        QVERIFY(entries[0].image != entries[1].image);
+        // An object that does draw keeps its own preview.
+        QVERIFY(!entries[2].label.contains("eraser") && !entries[2].label.contains("nothing"));
+    }
+
+    void thePickerNamesTheObjectsThatDrawNothing() {
+        // Jyotyu objects 0 to 6 all preview as an empty square: 0 writes the
+        // empty block and 1 to 6 name blocks the game never writes. Left as
+        // previews they are seven identical blanks, one of which is the eraser
+        // every level is built with.
+        auto tileset = std::make_shared<nsmb::project::DecodedTileset>();
+        nsmb::formats::RgbaImage tile{16, 16, {}};
+        tile.pixels.assign(16 * 16 * 4, 0);
+        tileset->map16_tiles.assign(8, tile);
+        nsmb::formats::ObjectLayout eraser;
+        eraser.rows.push_back({{nsmb::formats::object_layout_empty_tile, 0}});
+        nsmb::formats::ObjectLayout inert;
+        inert.rows.push_back({{1, 0}});
+        nsmb::formats::ObjectLayout ordinary;
+        ordinary.rows.push_back({{7, 0}});
+        tileset->objects = {eraser, inert, ordinary};
+
+        LevelPreviewWidget scratch;
+        scratch.tilesets_[0] = tileset;
+        const auto entries = scratch.paletteEntries();
+        QCOMPARE(entries.size(), 3U);
+        QVERIFY(entries[0].label.contains("eraser"));
+        QVERIFY(entries[0].tooltip.contains("clears the cells it covers"));
+        QVERIFY(entries[1].label.contains("draws nothing"));
+        QVERIFY(entries[1].tooltip.contains("leaves the cells alone"));
+        QCOMPARE(entries[2].label, QString("Object 0:2"));
+        // The two that do nothing are told apart by their glyph, so neither is
+        // the blank the block itself would have drawn.
+        QVERIFY(!entries[0].image.isNull());
+        QVERIFY(!entries[1].image.isNull());
+        QVERIFY(entries[0].image != entries[1].image);
+    }
+
     void customPalettePlacementCarriesHash() {
         auto level = make_level();
         LevelPreviewWidget canvas;
@@ -1454,6 +1520,51 @@ private slots:
         // red cast -- the channels either side of it cannot be compared raw.
         QVERIFY(outside.green() < inside.green());
         QVERIFY(outside.red() - outside.green() > inside.red() - inside.green());
+    }
+
+    void anObjectInFrontCullsTheOneBehind() {
+        // A level is one array of blocks, not a stack of objects: `InitBGDat`
+        // rasterises every object into it and a cell keeps whichever object
+        // wrote it last. Drawing an image per object let the block behind show
+        // through the transparent pixels of the one in front, and left the
+        // empty object -- the eraser every tileset has -- drawing nothing.
+        auto tileset = std::make_shared<nsmb::project::DecodedTileset>();
+        nsmb::formats::RgbaImage blank{16, 16, {}};
+        blank.pixels.assign(16 * 16 * 4, 0);
+        nsmb::formats::RgbaImage red{16, 16, {}};
+        red.pixels.assign(16 * 16 * 4, 0);
+        for (std::size_t i = 0; i < 16 * 16; ++i) { red.pixels[i * 4] = 230; red.pixels[i * 4 + 3] = 255; }
+        // Block 7, because the game never writes blocks 1 through 6.
+        tileset->map16_tiles.assign(7, blank);
+        tileset->map16_tiles.push_back(red);
+        nsmb::formats::ObjectLayout solid;
+        solid.rows.push_back({{7, 0}});
+        nsmb::formats::ObjectLayout eraser;
+        eraser.rows.push_back({{nsmb::formats::object_layout_empty_tile, 0}});
+        tileset->objects = {solid, eraser};
+
+        auto level = make_level();
+        QVERIFY(level.add_object({0, 0, 4, 4, 4, 4}));
+        QVERIFY(level.add_object({1, 0, 5, 5, 2, 2}));
+        LevelPreviewWidget canvas;
+        canvas.resize(480, 360);
+        canvas.showLevel("Test", "World 1", "Area 1", "course.bin", "course_bgdat.bin", "T", &level);
+        canvas.setEditable(true);
+        canvas.setZoom(1.0);
+        canvas.tilesets_[0] = tileset;
+
+        QImage image(canvas.size(), QImage::Format_ARGB32);
+        image.fill(Qt::transparent);
+        canvas.render(&image);
+        const auto at = [&](double x, double y) {
+            return QColor(image.pixel(canvas.sceneTransform().map(QPointF(x, y)).toPoint()));
+        };
+        // A cell of the object behind that nothing covers, and one the eraser
+        // was laid over.
+        const auto behind = at(4 * 16 + 8, 4 * 16 + 8);
+        const auto erased = at(5 * 16 + 8, 5 * 16 + 8);
+        QVERIFY(behind.red() > behind.green() + 60);
+        QVERIFY(erased.red() < erased.green() + 30);
     }
 
     void autosaveSnapshotIsWrittenAndClearedWhenClean() {
