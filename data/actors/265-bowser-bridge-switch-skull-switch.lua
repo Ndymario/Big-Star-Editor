@@ -18,7 +18,7 @@ return {
     objectId = 265,
     name = "Bowser bridge switch (skull switch)",
     category = "Event controllers",
-    notes = "Destroys the bridge seen in the Boss area of 1-Castle, 8-First Castle, and 8-Final Castle.\n\nTrigger event: triggers the falling animation of Bowser, Dry Bowser and Giant Bowser.",
+    notes = "Destroys the bridge seen in the Boss area of 1-Castle, 8-First Castle, and 8-Final Castle.\n\nTarget event: triggers the falling animation of Bowser, Dry Bowser and Giant Bowser.",
     fields = {
         {
             key = "destroys_bridge",

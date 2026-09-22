@@ -146,13 +146,31 @@ declares a field over those bits only when no byte row can stand in for it:
 - part of a byte, like `106 Fire Snake`'s `jump` on bits 40-43;
 - reaching across two, like `191`'s `Trigger ID 1` on bits 36-43;
 - naming its values, like `141 Event Controller Zone`'s `Player ID`, which is
-  the whole of bits 40-47 but picks from a Mario/Luigi list.
+  the whole of bits 32-39 but picks from a Mario/Luigi list.
+
+The catalog's inherited offsets had the two bytes the other way round. NSMBe
+numbers a sprite's twelve nybbles from the top of the 48-bit value, and nybbles
+1-2 are the **trigger** byte, not the target; the import read them as the target
+and shifted every event field one byte. The spawner settles it
+-- `spawnEntity_2 @ 0209bf20` takes the sprite record's byte 6 as `targetID` and byte 7
+as `triggerID`, which is what the level format calls `events[0]` and `events[1]`
+-- and three actors agree:
+
+| Actor | The game | NSMBe put it on |
+| --- | --- | --- |
+| `141 Event Controller Zone` | the player selector is `triggerID` | bits 40-47 |
+| `242-247 Switch` | `Switch::updateMain` hides the switch until `triggerID` is set; `Switch::onPress` raises `targetID` | the reverse of both |
+| `151 Red Coin Ring` | raises `targetID` | bits 32-39 |
+
+So a `notes` line naming a row means the row, not the name NSMBe gave the byte:
+`242 Switch`'s "only show while this event ID is activated" is the **Trigger
+event** row even though NSMBe filed it under `Triggering event ID` at bits 40-47.
 
 What an actor does with a byte belongs in its own top-level `notes`, which the
 panel shows on the **ⓘ** beside the actor's name. Those notes name the rows the
-way the panel does, not the way NSMBe did: `103 Spiked Ball` says "Trigger event:
+way the panel does, not the way NSMBe did: `103 Spiked Ball` says "Target event:
 the spiked ball won't spawn while that ID is activated", where the old field was
-called `Destroyer ID 1`.
+called `Destroyer ID 1` and sat on the other byte.
 
 A declared field never becomes the only way to edit a sprite. The panel's
 **Raw Fields** section keeps the settings word, from its high byte down, in a hex

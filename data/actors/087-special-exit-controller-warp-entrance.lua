@@ -23,7 +23,7 @@ return {
     objectId = 87,
     name = "Special exit controller (warp entrance)",
     category = "Event controllers",
-    notes = "AKA:\nReggie! Name = Special Exit Controller\nNSMB2 internal actor name = NextGotoBlock\nThe actor will apparently delete itself after use and it will only re-spawn if you go to another area and back. Could be worked around by using multiple warps. Untested if event activation can undelete the actor.\n\nTarget event: use this ID for the warp to activate with the ID, and then deactivate after being used.",
+    notes = "AKA:\nReggie! Name = Special Exit Controller\nNSMB2 internal actor name = NextGotoBlock\nThe actor will apparently delete itself after use and it will only re-spawn if you go to another area and back. Could be worked around by using multiple warps. Untested if event activation can undelete the actor.\n\nTrigger event: use this ID for the warp to activate with the ID, and then deactivate after being used.",
     fields = {
         {
             key = "warp_mode",

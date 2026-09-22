@@ -25,7 +25,7 @@ return {
     objectId = 67,
     name = "Star Coin",
     category = "Event controllers",
-    notes = "Trigger event: a defunct target ID? Some levels set it to no effect.",
+    notes = "Target event: a defunct target ID? Some levels set it to no effect.",
     fields = {
         {
             key = "non_timed_event",

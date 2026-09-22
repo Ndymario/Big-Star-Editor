@@ -27,9 +27,9 @@ return {
             key = "fireball_immunity",
             label = "Fireball immunity",
             bitOffset = 28,
-            bitWidth = 8,
-            notes = "Unused.",
-            checkboxValue = 17,
+            bitWidth = 4,
+            notes = "Unused. BowserJr::onCreate keeps the whole nibble, and reads nothing beyond bit 31.",
+            checkboxValue = 1,
         },
         {
             key = "battle_mode",

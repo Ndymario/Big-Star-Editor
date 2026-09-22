@@ -30,7 +30,7 @@ return {
     objectId = 260,
     name = "Flying ? Block",
     category = "Event controllers",
-    notes = "Target event: the switch appears while this event is on, but only once it has been emptied out of the block.\nTrigger event: switched on when the switch is pressed.",
+    notes = "Trigger event: the switch appears while this event is on, but only once it has been emptied out of the block.\nTarget event: switched on when the switch is pressed.",
     fields = {
         {
             key = "item",

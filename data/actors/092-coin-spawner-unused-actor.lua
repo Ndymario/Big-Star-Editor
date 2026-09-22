@@ -8,7 +8,7 @@ return {
     objectId = 92,
     name = "Coin Spawner (unused actor)",
     category = "Other",
-    notes = "Todo: maximum amount of coins in air before slowdown + max in air before crash\n\nVideos that show some (0-15) of the different coin speeds can be found here:\nhttps://www.youtube.com/playlist?list=PLKKqYpRH33bLx3dywJ8y43uN1PGdqOckw\ncoin amount was 5\n\nTarget event: coins disappear after a few seconds, with no regard to event status.",
+    notes = "Todo: maximum amount of coins in air before slowdown + max in air before crash\n\nVideos that show some (0-15) of the different coin speeds can be found here:\nhttps://www.youtube.com/playlist?list=PLKKqYpRH33bLx3dywJ8y43uN1PGdqOckw\ncoin amount was 5\n\nTrigger event: coins disappear after a few seconds, with no regard to event status.",
     fields = {
         {
             key = "speed_of_coins",

@@ -8,7 +8,7 @@ return {
     objectId = 247,
     name = "Brick Block containing ! Switch (unused actor)",
     category = "Event controllers",
-    notes = "Target event: if not set, the switch will always show. If set, the switch will only show while this event ID is activated. Slightly buggy if used with multiple use, as the switch will pop back up immediately, which looks a bit strange and also causes Mario to be pushed into the air. No \"real\" glitch.",
+    notes = "Trigger event: if not set, the switch will always show. If set, the switch will only show while this event ID is activated. Slightly buggy if used with multiple use, as the switch will pop back up immediately, which looks a bit strange and also causes Mario to be pushed into the air. No \"real\" glitch.",
     fields = {
         {
             key = "settings",

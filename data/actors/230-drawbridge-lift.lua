@@ -8,7 +8,7 @@ return {
     objectId = 230,
     name = "Drawbridge lift",
     category = "Platforms and ropes",
-    notes = "Trigger event: unused.\nTarget event: enables/disables movement. Unused.",
+    notes = "Target event: unused.\nTrigger event: enables/disables movement. Unused.",
     fields = {
         {
             key = "length_of_side",

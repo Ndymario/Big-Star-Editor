@@ -29,7 +29,7 @@ return {
     objectId = 246,
     name = "! Switch",
     category = "Event controllers",
-    notes = "Trigger event: by default, this switch will turn yellow outlines into uncollectible golden Coins and red outlines into red Coins which act like golden Coins; snake block tiles will be collectible as Coins and the block-shaped outlines will turn into red blocks.",
+    notes = "Target event: by default, this switch will turn yellow outlines into uncollectible golden Coins and red outlines into red Coins which act like golden Coins; snake block tiles will be collectible as Coins and the block-shaped outlines will turn into red blocks.",
     fields = {
         {
             key = "settings",

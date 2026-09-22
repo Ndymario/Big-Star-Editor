@@ -18,7 +18,7 @@ return {
     objectId = 42,
     name = "Balloon Boo",
     category = "Enemies - Ghost House",
-    notes = "As far as I know, only killable with a star, though I guess if it runs out of air it dies.\n\nTrigger event: while it waits to be triggered, the area below Balloon Boo hurts Mario. You can't see anything there, but the game sees it as part of the sprite. Activating the event makes the area go away, and Balloon Boo goes into a weird (unused or just glitchy?) state [in E version].",
+    notes = "As far as I know, only killable with a star, though I guess if it runs out of air it dies.\n\nTarget event: while it waits to be triggered, the area below Balloon Boo hurts Mario. You can't see anything there, but the game sees it as part of the sprite. Activating the event makes the area go away, and Balloon Boo goes into a weird (unused or just glitchy?) state [in E version].",
     fields = {
         {
             key = "stays_in_zone",

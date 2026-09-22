@@ -22,7 +22,7 @@ return {
     objectId = 151,
     name = "Red Coin Ring",
     category = "Event controllers",
-    notes = "A.k.a. “Red Coin Ring”.\nNote: \"obj_e3_ring.nsbmd\" cannot be opened with NSMBe, to fix this problem, see this tutorial:\n\nhttp://nsmbhd.net/thread/3250-fixing-already-opened-files-tutorial/\n\nTrigger event: it can trigger anything, but it's usually used to trigger Red Coins.",
+    notes = "A.k.a. “Red Coin Ring”.\nNote: \"obj_e3_ring.nsbmd\" cannot be opened with NSMBe, to fix this problem, see this tutorial:\n\nhttp://nsmbhd.net/thread/3250-fixing-already-opened-files-tutorial/\n\nTarget event: it can trigger anything, but it's usually used to trigger Red Coins.",
     fields = {
         {
             key = "disable_timer",

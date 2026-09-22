@@ -8,7 +8,7 @@ return {
     objectId = 142,
     name = "Event Controller Sequencer",
     category = "Event controllers",
-    notes = "Target event: the sequencer starts running when this event ID is triggered.\nTrigger event: the sequencer triggers every event from the starter ID up to this one. If 0, it triggers every single event from the starter ID onward. This may need testing, though.",
+    notes = "Trigger event: the sequencer starts running when this event ID is triggered.\nTarget event: the sequencer triggers every event from the starter ID up to this one. If 0, it triggers every single event from the starter ID onward. This may need testing, though.",
     fields = {
         {
             key = "delay",

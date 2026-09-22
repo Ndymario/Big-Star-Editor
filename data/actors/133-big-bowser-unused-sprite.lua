@@ -8,7 +8,7 @@ return {
     objectId = 133,
     name = "Big Bowser (unused sprite)",
     category = "Bosses and cutscenes",
-    notes = "Spawned by Final Bowser controller\nGame crashes after roaring animation if used anywhere other than World 8 Final Castle Area 3. Seems to be a carbon copy of the one seen with Bowser Jr. in World 8 Final Castle Area 3.\n\nTarget event: set to 2 when spawned by the Final Bowser controller.",
+    notes = "Spawned by Final Bowser controller\nGame crashes after roaring animation if used anywhere other than World 8 Final Castle Area 3. Seems to be a carbon copy of the one seen with Bowser Jr. in World 8 Final Castle Area 3.\n\nTrigger event: set to 2 when spawned by the Final Bowser controller.",
     fields = {
         {
             key = "unknown_11",

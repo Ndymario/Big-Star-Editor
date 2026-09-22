@@ -18,7 +18,7 @@ return {
     objectId = 185,
     name = "Large Spiked Ball",
     category = "Enemies - Castle",
-    notes = "Trigger event: the spiked ball won't spawn while that ID is activated; 0 disables it.\nTarget event: a second such ID, which has no effect if the trigger event is 0.",
+    notes = "Target event: the spiked ball won't spawn while that ID is activated; 0 disables it.\nTrigger event: a second such ID, which has no effect if the target event is 0.",
     fields = {
         {
             key = "direction",
