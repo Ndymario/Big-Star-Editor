@@ -109,29 +109,57 @@ key the actor does not declare raises an error rather than returning `nil`, so a
 typo surfaces instead of quietly drawing the wrong thing.
 
 `actor.settings` (the raw 32-bit value) and `actor.data[0]` through
-`actor.data[5]` (NSMBe-compatible bytes: `Event 1`, `Event 2`, then settings from
-most to least significant byte) are still there for anything a field cannot
-express.
+`actor.data[5]` (NSMBe-compatible bytes: the target event, the trigger event,
+then settings from most to least significant byte) are still there for anything a
+field cannot express.
 
 Field offsets address the complete 48-bit NSMBe data value. Bits 0-31 are
-`settings`, bits 32-39 are Event 2, and bits 40-47 are Event 1. `valueOffset`,
-`signed`, and `checkboxValue` reproduce NSMBe's numeric, signed, and checkbox
-behavior. A field may be up to 31 bits wide.
+`settings`, bits 32-39 are the trigger event, and bits 40-47 are the target
+event. `valueOffset`, `signed`, and `checkboxValue` reproduce NSMBe's numeric,
+signed, and checkbox behavior. A field may be up to 31 bits wide.
+
+The two event bytes are not settings, and the panel no longer calls them Event 1
+and Event 2. In the game's `StageEntity` they are a named pair:
+
+```c
+struct sDataEventIDs {   // StageEntity+0x33C
+    byte targetID;       // <- StageObject.events[0], bits 40-47
+    byte triggerID;      // <- StageObject.events[1], bits 32-39
+};
+```
+
+`Switch` uses both, in opposite directions: `Switch::updateMain` keeps the switch
+invisible and uncollidable until `triggerID`'s bit is set in the global 64-bit
+`Stage::events`, while `Switch::onPress` calls `setTimedEvent` to raise
+`targetID`. So the target is what an actor **activates** and the trigger is what
+**activates it**, and the panel labels them `Target event` and `Trigger event`.
+Actors may still repurpose a byte -- `Bowser::waitEventState` waits on `targetID`
+because Bowser has nothing to fire -- so treat it as the contract, not a law.
+Names in this catalog are inherited from NSMBe and are looser than that: an actor
+may call both bytes `Trigger ID 1` and `Trigger ID 2`.
 
 A declared field never becomes the only way to edit a sprite. The panel's
-**Settings** section keeps the raw NSMBe data value -- `Event 1`, `Event 2`, then
-the settings word from its high byte down -- in a hex box beneath the fields, and
-the two follow each other. Only the field the user turns is written back, so
+**Raw Fields** section keeps the settings word, from its high byte down, in a hex
+box beneath the fields, and the two follow each other. The event bytes are not in
+it, having rows of their own. Only the field the user turns is written back, so
 changing the object ID re-reads the same value through a different actor instead
-of rewriting it through the last one.
+of rewriting it through the last one. **Display as hex** switches every numeric
+field, and the values on every choice entry, to `0x` notation.
 
 ## Notes
 
-A field's `notes` are read where the field is edited: the properties panel slides
-them open under the field itself. The actor's own `notes` open the same way under
-the sprite's **Object ID**, so selecting the object ID that names the actor is
-what brings up what the actor documents about itself. `choices` stay on the
-field's tooltip, being a value table rather than prose.
+A field's `notes` are read where the field is edited. The properties panel puts a
+small **ⓘ** at the end of any row that has them, and the note it holds belongs to
+that row -- so renaming a `label` carries its documentation along rather than
+leaving it behind in a list somewhere else. The actor's own `notes` are carried
+the same way by the sprite's **Object ID** row, and again by the **ⓘ** beside the
+actor's name at the top of the panel, which also lists every declared field, the
+bits it occupies and the values it names.
+
+`choices` are no longer a tooltip. A field that declares them is picked from
+them, each entry reading `value — label` so the number it writes stays visible
+beside the name. Bits holding a value the actor does not name are shown as
+`N — not listed` rather than snapped to a neighbour, and the note says as much.
 
 ## Resources
 

@@ -36,6 +36,7 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QToolButton>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QListWidget>
@@ -1258,37 +1259,51 @@ private slots:
         properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
         auto* raw = properties.findChild<QLineEdit*>("SpriteDataField");
         QVERIFY(raw);
-        // Event 1, Event 2, then the settings word from its high byte down.
-        QCOMPARE(raw->text(), QString("AB CD 12 34 56 78"));
+        // The settings word from its high byte down. The two event bytes are
+        // not settings -- they name events, and each has its own row.
+        QCOMPARE(raw->text(), QString("12 34 56 78"));
 
         // A field edit lands in the raw value, and only in the bits it owns.
         properties.fields_[5].value->setValue(2);
         QCOMPARE(level.course().sprites[0].settings, 0x12345628U);
-        QCOMPARE(raw->text(), QString("AB CD 12 34 56 28"));
+        QCOMPARE(raw->text(), QString("12 34 56 28"));
 
         // Changing the object ID keeps the settings: the sprite is now read by
         // an actor that declares nothing, and the value is still there to read.
         properties.fields_[0].value->setValue(9);
         QCOMPARE(level.course().sprites[0].id, 9);
         QCOMPARE(level.course().sprites[0].settings, 0x12345628U);
-        QCOMPARE(raw->text(), QString("AB CD 12 34 56 28"));
+        QCOMPARE(raw->text(), QString("12 34 56 28"));
         QVERIFY(properties.fields_[5].container->isHidden());
 
-        // And typing a value writes the whole of it back, events included.
+        // Typing a value writes the settings word, and leaves the event bytes
+        // to the rows that name them.
         properties.fields_[0].value->setValue(7);
-        raw->setText("00 11 22 33 44 55");
+        raw->setText("22 33 44 55");
         emit raw->textEdited(raw->text());
-        QCOMPARE(level.course().sprites[0].events, (std::array<std::uint8_t, 2>{0x00, 0x11}));
+        QCOMPARE(level.course().sprites[0].events, (std::array<std::uint8_t, 2>{0xab, 0xcd}));
         QCOMPARE(level.course().sprites[0].settings, 0x22334455U);
-        QCOMPARE(properties.fields_[3].value->value(), 0);
-        QCOMPARE(properties.fields_[4].value->value(), 0x11);
-        QCOMPARE(properties.fields_[5].value->value(), 5);
+        QCOMPARE(properties.rowValue(3), std::optional<int>(0xab));
+        QCOMPARE(properties.rowValue(4), std::optional<int>(0xcd));
+        QCOMPARE(properties.rowValue(5), std::optional<int>(5));
+
+        // The event rows are named for what the game does with them.
+        QCOMPARE(properties.fields_[3].label->text(), QString("Target event"));
+        QCOMPARE(properties.fields_[4].label->text(), QString("Trigger event"));
+
+        // Hex is a way of reading the same values, not different ones.
+        auto* hex = properties.findChild<QCheckBox*>("HexFields");
+        QVERIFY(hex);
+        hex->click();
+        QCOMPARE(properties.rowValue(4), std::optional<int>(0xcd));
+        QCOMPARE(properties.fields_[4].value->text(), QString("0xCD"));
+        QCOMPARE(level.course().sprites[0].settings, 0x22334455U);
     }
 
-    void actorNotesReadUnderTheFieldTheyBelongTo() {
-        // A note nobody hovers is a note nobody reads: what the actor says about
-        // itself opens under the object ID that picked it, and what it says
-        // about a field opens under that field.
+    void actorNotesStayOnTheFieldTheyBelongTo() {
+        // What the actor says about itself is carried by the object ID that
+        // picked it, and what it says about a field is carried by that field --
+        // so a renamed label takes its documentation with it.
         auto level = make_level();
         nsmb::formats::NsmbLevelSprite sprite;
         sprite.id = 7; sprite.x = 10; sprite.y = 10;
@@ -1296,6 +1311,7 @@ private slots:
         nsmb::project::SpriteDefinition definition;
         definition.object_id = 42;
         definition.name = "Synthetic actor";
+        definition.category = "Enemies";
         definition.notes = "Spawned by Chain Chomp/Log.";
         definition.fields.push_back({"speed", "Speed", 4, 3, {{1, "Slow"}, {2, "Fast"}},
                                      "8 is used by ones thrown out of the Monty Tank."});
@@ -1306,22 +1322,242 @@ private slots:
         properties.setLevel(&level);
         properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
         QCOMPARE(properties.fields_[0].label->text(), QString("Object ID"));
-        QCOMPARE(properties.fields_[0].note->text(), QString("Spawned by Chain Chomp/Log."));
-        QVERIFY(!properties.fields_[0].note->isHidden());
-        QCOMPARE(properties.fields_[5].note->text(), QString("8 is used by ones thrown out of the Monty Tank."));
-        // The value table is a lookup rather than prose, so it stays a tooltip.
-        QVERIFY(properties.fields_[5].value->toolTip().contains("1 = Slow"));
+        QCOMPARE(properties.fields_[0].note_text, QString("Spawned by Chain Chomp/Log."));
+        QVERIFY(!properties.fields_[0].info->isHidden());
+        QVERIFY(properties.fields_[5].note_text.startsWith("8 is used by ones thrown out of the Monty Tank."));
+        QVERIFY(!properties.fields_[5].info->isHidden());
 
-        // An open note stays open. Reaching the end of the reveal releases the
-        // height, so a refresh that replayed it would clamp the note shut again.
-        properties.fields_[5].note->setMaximumHeight(QWIDGETSIZE_MAX);
+        // The panel names the actor it resolved, rather than leaving the reader
+        // to know what object 7 was.
+        QCOMPARE(properties.findChild<QLabel*>("SpriteName")->text(), QString("Synthetic actor"));
+        QVERIFY(properties.findChild<QLabel*>("SpriteCategory")->text().startsWith("Enemies"));
+
+        // A field that names its values is picked from them.
+        QCOMPARE(properties.fields_[5].editor, LevelPropertiesWidget::FieldEditor::Choice);
+        QVERIFY(properties.fields_[5].choice->findText("1 — Slow") >= 0);
+        QVERIFY(properties.fields_[5].choice->findText("2 — Fast") >= 0);
+        // The settings are zero and this actor does not name zero, so the row
+        // says so rather than snapping to a value the sprite does not hold.
+        QCOMPARE(properties.rowValue(5), std::optional<int>(0));
+        QVERIFY(!properties.fields_[5].representable);
+        QVERIFY(properties.fields_[5].note_text.contains("does not name the value 0"));
+
+        // A refresh reports; it does not edit.
         properties.refresh();
-        QCOMPARE(properties.fields_[5].note->maximumHeight(), QWIDGETSIZE_MAX);
+        QCOMPARE(level.course().sprites[0].settings, 0U);
 
-        // And a row that stops carrying a note closes it.
+        // And a row that stops carrying a note puts its button away.
         properties.select(LevelPropertiesWidget::Kind::Entrance, 0);
-        QVERIFY(properties.fields_[0].note->text().isEmpty());
-        QVERIFY(properties.fields_[0].note->isHidden());
+        QVERIFY(properties.fields_[0].note_text.isEmpty());
+        QVERIFY(properties.fields_[0].info->isHidden());
+    }
+
+    // A sprite carrying `settings`, read by an actor declaring `fields`.
+    static nsmb::project::SpriteDefinitionCatalog actorFor(
+        nsmb::project::EditableLevel& level, std::uint32_t settings,
+        std::vector<nsmb::project::SpriteFieldDefinition> fields) {
+        nsmb::formats::NsmbLevelSprite sprite;
+        sprite.id = 7; sprite.x = 10; sprite.y = 10; sprite.settings = settings;
+        [&] { QVERIFY(level.add_sprite(sprite)); }();
+        nsmb::project::SpriteDefinition definition;
+        definition.object_id = 42;
+        definition.name = "Synthetic actor";
+        definition.fields = std::move(fields);
+        return {{definition}};
+    }
+
+    void aChoiceFieldOffersItsLabelsAndWritesTheSparseValue() {
+        // The values an actor names are not consecutive, so the list cannot be
+        // read by position: each entry carries the number it stands for.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 0x000000ffU,
+                                      {{"item", "Item", 8, 5, {{0, "A"}, {5, "B"}, {25, "C"}}}});
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        QCOMPARE(properties.fields_[5].editor, LevelPropertiesWidget::FieldEditor::Choice);
+        QCOMPARE(properties.fields_[5].choice->count(), 3);
+        const auto item = properties.fields_[5].choice->findData(25);
+        QVERIFY(item >= 0);
+        properties.fields_[5].choice->setCurrentIndex(item);
+        emit properties.fields_[5].choice->activated(item);
+
+        // The value it stands for, in the bits it owns, and nowhere else.
+        QCOMPARE(level.course().sprites[0].settings, (25U << 8U) | 0xffU);
+        QCOMPARE(properties.rowValue(5), std::optional<int>(25));
+    }
+
+    void aCheckboxFieldTogglesOnlyTheBitsItOwns() {
+        // A field that is on or off is a checkbox, whatever value turning it on
+        // happens to write -- and it is not always 1.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 0x00000f0fU, {{"on", "On", 4, 4, {}, "", 0, 8}});
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        QCOMPARE(properties.fields_[5].editor, LevelPropertiesWidget::FieldEditor::Boolean);
+        QCOMPARE(properties.fields_[5].toggle->text(), QString("On"));
+        QCOMPARE(properties.fields_[5].toggle->checkState(), Qt::Unchecked);
+        // A checkbox is its own label, so the row does not carry a second one.
+        QVERIFY(properties.fields_[5].label->isHidden());
+
+        properties.fields_[5].toggle->click();
+        QCOMPARE(level.course().sprites[0].settings, 0x00000f8fU);
+        QCOMPARE(properties.rowValue(5), std::optional<int>(1));
+
+        properties.fields_[5].toggle->click();
+        QCOMPARE(level.course().sprites[0].settings, 0x00000f0fU);
+    }
+
+    void aValueOutsideTheChoiceListIsShownRatherThanRewritten() {
+        // The raw settings box can put anything in the bits. A list that does
+        // not name what is there says so, and leaves it alone.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 4U, {{"pick", "Pick", 0, 3, {{0, "A"}, {1, "B"}, {2, "C"}}},
+                                                  {"speed", "Speed", 8, 4, {}}});
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        QVERIFY(!properties.fields_[5].representable);
+        QCOMPARE(properties.fields_[5].choice->currentText(), QString("4 — not listed"));
+        QCOMPARE(properties.rowValue(5), std::optional<int>(4));
+        QCOMPARE(level.course().sprites[0].settings, 4U);
+
+        // Turning the field beside it does not carry the unnamed value away.
+        properties.fields_[6].value->setValue(3);
+        QCOMPARE(level.course().sprites[0].settings, (3U << 8U) | 4U);
+        QCOMPARE(properties.rowValue(5), std::optional<int>(4));
+
+        // And the row only grows one entry for it, however often it is read.
+        properties.refresh();
+        properties.refresh();
+        QCOMPARE(properties.fields_[5].choice->count(), 4);
+    }
+
+    void anUnrepresentableCheckboxReadsAsIndeterminate() {
+        // A four-bit field turned on by 1 can hold 5. A box ranged 0..1 showed
+        // that as "on" and would have written the 5 away.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 5U, {{"flag", "Flag", 0, 4, {}, "", 0, 1}});
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        QCOMPARE(properties.fields_[5].toggle->checkState(), Qt::PartiallyChecked);
+        QVERIFY(!properties.fields_[5].representable);
+        QCOMPARE(properties.rowValue(5), std::optional<int>(5));
+        properties.refresh();
+        QCOMPARE(level.course().sprites[0].settings, 5U);
+
+        // Once the user decides, the field means what a checkbox means, and
+        // undecided is not somewhere they can click back to.
+        properties.fields_[5].toggle->click();
+        QVERIFY(!properties.fields_[5].toggle->isTristate());
+        QCOMPARE(properties.fields_[5].toggle->checkState(), Qt::Checked);
+        QCOMPARE(level.course().sprites[0].settings, 1U);
+        properties.fields_[5].toggle->click();
+        QCOMPARE(properties.fields_[5].toggle->checkState(), Qt::Unchecked);
+        QCOMPARE(level.course().sprites[0].settings, 0U);
+    }
+
+    void aMixedSelectionLeavesEveryEditorUndecided() {
+        auto level = make_level();
+        QVERIFY(level.add_object({1, 0, 1, 1, 1, 1}));
+        QVERIFY(level.add_object({2, 0, 2, 1, 1, 1}));
+        LevelPropertiesWidget properties;
+        properties.setLevel(&level);
+        properties.selectMany(LevelPropertiesWidget::Kind::Object, {0, 1});
+        QCOMPARE(properties.rowValue(0), std::nullopt);
+        QCOMPARE(properties.fields_[0].value->text(), QString("—"));
+        // Width agrees across both, so it is not undecided.
+        QCOMPARE(properties.rowValue(4), std::optional<int>(1));
+
+        // Only numeric rows reach this through the panel today, since an actor's
+        // own fields are not shown for a selection. The contract holds for all
+        // three regardless, so a kind that grows a list later inherits it.
+        nsmb::project::SpriteFieldDefinition choice{"pick", "Pick", 0, 2, {{0, "A"}, {1, "B"}}};
+        nsmb::project::SpriteFieldDefinition flag{"flag", "Flag", 4, 1, {}, "", 0, 1};
+        properties.setRowEditor(6, LevelPropertiesWidget::FieldEditor::Choice, 0, 0, &choice);
+        properties.fields_[6].mixed = true;
+        properties.setRowValue(6, std::nullopt);
+        QCOMPARE(properties.rowValue(6), std::nullopt);
+        QCOMPARE(properties.fields_[6].choice->currentText(), QString("—"));
+
+        properties.setRowEditor(7, LevelPropertiesWidget::FieldEditor::Boolean, 0, 1, &flag);
+        properties.fields_[7].mixed = true;
+        properties.setRowValue(7, std::nullopt);
+        QCOMPARE(properties.fields_[7].toggle->checkState(), Qt::PartiallyChecked);
+        QCOMPARE(properties.rowValue(7), std::nullopt);
+    }
+
+    void theSpritePickerRetypesTheSpriteByName() {
+        // 306 actors is too many to address by number, and the panel already
+        // knows every one of their names.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 0U, {});
+        nsmb::project::SpriteDefinitionCatalog both = catalog;
+        nsmb::project::SpriteDefinition other;
+        other.object_id = 43;
+        other.name = "Another actor";
+        both.definitions.push_back(other);
+
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(both, {{7, 42}, {9, 43}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        auto* picker = properties.findChild<QComboBox*>("SpritePicker");
+        QVERIFY(picker);
+        QCOMPARE(picker->count(), 2);
+        // The list holds the actor's *type*, which is what a sprite carries --
+        // not the object id the catalog is keyed by.
+        QCOMPARE(picker->currentData().toInt(), 7);
+
+        const auto item = picker->findData(9);
+        QVERIFY(item >= 0);
+        picker->setCurrentIndex(item);
+        emit picker->activated(item);
+        QCOMPARE(level.course().sprites[0].id, 9);
+        QCOMPARE(properties.findChild<QLabel*>("SpriteName")->text(), QString("Another actor"));
+
+        // An id no actor claims still reads and edits as a number.
+        properties.fields_[0].value->setValue(512);
+        QCOMPARE(level.course().sprites[0].id, 512);
+        QCOMPARE(picker->currentIndex(), -1);
+        QCOMPARE(properties.findChild<QLabel*>("SpriteName")->text(), QString("Actor 512"));
+    }
+
+    void spriteFieldsStayAtTheirIndexWhateverEditorTheyWear() {
+        // The canvas and the write-back both address rows by number, so which
+        // editor a row wears must not move it.
+        auto level = make_level();
+        const auto catalog = actorFor(level, 0U, {{"flag", "Flag", 0, 1, {}, "", 0, 1},
+                                                  {"pick", "Pick", 4, 2, {{0, "A"}, {1, "B"}}},
+                                                  {"speed", "Speed", 8, 4, {}}});
+        LevelPropertiesWidget properties;
+        properties.setSpriteDefinitions(catalog, {{7, 42}});
+        properties.setLevel(&level);
+        properties.select(LevelPropertiesWidget::Kind::Sprite, 0);
+
+        QCOMPARE(properties.fields_[5].editor, LevelPropertiesWidget::FieldEditor::Boolean);
+        QCOMPARE(properties.fields_[6].editor, LevelPropertiesWidget::FieldEditor::Choice);
+        QCOMPARE(properties.fields_[7].editor, LevelPropertiesWidget::FieldEditor::Number);
+
+        // X and Y are still rows 1 and 2, which is what a canvas drag moves.
+        properties.previewInteraction({16, 32}, 0);
+        QCOMPARE(properties.rowValue(1), std::optional<int>(11));
+        QCOMPARE(properties.rowValue(2), std::optional<int>(12));
+
+        // And each declared row still writes the field it stands for.
+        properties.fields_[7].value->setValue(3);
+        QCOMPARE(level.course().sprites[0].settings, 3U << 8U);
     }
 
     void canvasChromeFollowsThePalette() {

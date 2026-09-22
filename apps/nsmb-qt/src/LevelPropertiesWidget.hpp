@@ -15,15 +15,16 @@
 #include "nsmb/project/graphics_resources.hpp"
 #include "nsmb/project/sprite_definitions.hpp"
 
+class QCheckBox;
 class QComboBox;
-class QGraphicsOpacityEffect;
+class QGridLayout;
 class QGroupBox;
 class QLineEdit;
 class QTabBar;
 class QLabel;
 class QPushButton;
 class QSpinBox;
-class QVariantAnimation;
+class QToolButton;
 class QtEditorTests;
 
 class LevelPropertiesWidget final : public QWidget {
@@ -56,19 +57,33 @@ signals:
     void errorOccurred(const QString& message);
 
 private:
+    // Which editor a row wears. A field that names its values is picked from a
+    // list, one that is on or off is a checkbox, and everything else is typed.
+    enum class FieldEditor { Number, Choice, Boolean };
+    // Whether a row shares its line with the field beside it. Only true peers
+    // pair up -- X with Y, Width with Height -- and only when their labels are
+    // close enough in length that the two editors line up.
+    enum class FieldSpan { Half, Full };
+
     struct FieldRow {
         QWidget* container{};
         QLabel* label{};
         QSpinBox* value{};
-        // What the actor says about this field, revealed under the value it
-        // belongs to instead of hiding in a tooltip nobody hovers.
-        QLabel* note{};
-        QGraphicsOpacityEffect* note_fade{};
-        QVariantAnimation* note_reveal{};
+        QComboBox* choice{};
+        QCheckBox* toggle{};
+        // What the actor says about this field, kept on the row it belongs to
+        // rather than in a list somewhere else that a renamed label can outrun.
+        QToolButton* info{};
         QString note_text;
-        int note_height{};
+        FieldEditor editor{FieldEditor::Number};
+        FieldSpan span{FieldSpan::Full};
         bool mixed{};
         int unset_value{};
+        // What the row stands for when no editor state can express it: a raw
+        // value the actor does not name, or checkbox bits that are neither
+        // zero nor the value that turns the field on.
+        int held_value{};
+        bool representable{true};
     };
 
     [[nodiscard]] Kind kind() const;
@@ -80,8 +95,24 @@ private:
     void applyFields(std::size_t changed_row);
     // Writes the raw NSMBe data value the settings box holds to the selection.
     void applySpriteData();
-    // Slides a note open under its field, or closes the one that is there.
+    // Hands the row its note, or takes away the one it had.
     void setFieldNote(FieldRow& row, const QString& text);
+    // Dresses a row in the editor its field asks for. `named` is null for a
+    // plain number, which is every field outside a sprite's declared ones.
+    void setRowEditor(std::size_t row, FieldEditor editor, int minimum, int maximum,
+                      const nsmb::project::SpriteFieldDefinition* named);
+    // Reports a value to a row without the row reporting it back: every caller
+    // of this is saying what the level holds, not editing it.
+    void setRowValue(std::size_t row, std::optional<int> value);
+    // Nothing, when the row stands for more than one value across a selection.
+    [[nodiscard]] std::optional<int> rowValue(std::size_t row) const;
+    [[nodiscard]] int rowValueOr(std::size_t row, int fallback) const;
+    [[nodiscard]] QString formatFieldValue(int value) const;
+    // Puts the visible rows in the grid, and only when they have moved.
+    void placeFields();
+    void showFieldNote(const FieldRow& row);
+    void showActorInfo();
+    void rebuildSpritePicker();
     void addEntity();
     void deleteEntity();
     void addNode();
@@ -99,11 +130,26 @@ private:
     QPushButton* deleteNodeButton_{};
     QGroupBox* settingsGroup_{};
     QLineEdit* settingsBox_{};
+    QCheckBox* hexBox_{};
+    QWidget* spriteHeader_{};
+    QLabel* spriteName_{};
+    QLabel* spriteCategory_{};
+    QComboBox* spritePicker_{};
+    QToolButton* spriteInfo_{};
+    QGridLayout* fieldsLayout_{};
     std::array<FieldRow, 37> fields_{};
+    // What the grid was last given, so a refresh that changes nothing about the
+    // shape of the panel leaves the panel's geometry -- and the focus in it --
+    // exactly where the user put it.
+    std::vector<std::pair<std::size_t, FieldSpan>> field_layout_;
     bool refreshing_{};
+    bool hex_fields_{};
     std::vector<std::size_t> selected_items_;
     std::optional<nsmb::project::ObjectBankOverlayTable> object_bank_overlays_;
     nsmb::project::SpriteDefinitionCatalog sprite_definitions_;
     std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids_;
     std::vector<const nsmb::project::SpriteFieldDefinition*> visible_sprite_fields_;
+    // The actor the selected sprite resolved to, kept so the info button has
+    // something to describe. Points into `sprite_definitions_`.
+    const nsmb::project::SpriteDefinition* current_definition_{};
 };

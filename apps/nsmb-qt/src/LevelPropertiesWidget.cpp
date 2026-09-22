@@ -1,20 +1,28 @@
 #include "LevelPropertiesWidget.hpp"
 
+#include <QCheckBox>
 #include <QComboBox>
+#include <QCompleter>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFontDatabase>
+#include <QFontMetrics>
 #include <QFrame>
-#include <QGraphicsOpacityEffect>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
+#include <QStyle>
 #include <QTabBar>
-#include <QVariantAnimation>
+#include <QToolButton>
+#include <QToolTip>
+#include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -26,6 +34,60 @@
 #include <utility>
 
 namespace {
+
+// "0x" stays lower, the digits go upper, and either case is accepted back.
+QString hexText(int value) {
+    return value < 0 ? "-0x" + QString::number(-static_cast<qlonglong>(value), 16).toUpper()
+                     : "0x" + QString::number(value, 16).toUpper();
+}
+
+// QSpinBox::setDisplayIntegerBase renders lowercase digits and cannot be told
+// otherwise, so the box does its own reading and writing.
+class FieldSpinBox final : public QSpinBox {
+public:
+    using QSpinBox::QSpinBox;
+
+    void setHex(bool on) {
+        if (hex_ == on) return;
+        hex_ = on;
+        // Re-renders the text through the new base without moving the value.
+        const QSignalBlocker blocker(this);
+        const auto held = value();
+        setValue(minimum());
+        setValue(held);
+    }
+
+protected:
+    QString textFromValue(int value) const override {
+        return hex_ ? hexText(value) : QSpinBox::textFromValue(value);
+    }
+
+    int valueFromText(const QString& text) const override {
+        if (!hex_) return QSpinBox::valueFromText(text);
+        auto digits = text.trimmed();
+        const bool negative = digits.startsWith('-');
+        if (negative) digits.remove(0, 1);
+        if (digits.startsWith("0x", Qt::CaseInsensitive)) digits.remove(0, 2);
+        const auto parsed = digits.toLongLong(nullptr, 16);
+        return static_cast<int>(negative ? -parsed : parsed);
+    }
+
+    QValidator::State validate(QString& input, int& position) const override {
+        if (!hex_) return QSpinBox::validate(input, position);
+        if (input.isEmpty() || input == specialValueText()) return QValidator::Intermediate;
+        static const QRegularExpression whole(R"(^-?(0[xX])?[0-9a-fA-F]+$)");
+        if (whole.match(input).hasMatch()) {
+            const auto held = valueFromText(input);
+            return held >= minimum() && held <= maximum() ? QValidator::Acceptable
+                                                          : QValidator::Intermediate;
+        }
+        static const QRegularExpression partial(R"(^-?(0([xX])?)?$)");
+        return partial.match(input).hasMatch() ? QValidator::Intermediate : QValidator::Invalid;
+    }
+
+private:
+    bool hex_{};
+};
 
 int firstUnusedNumber(const auto& values, int start, auto number) {
     std::set<int> used;
@@ -52,20 +114,21 @@ void setSpriteData(nsmb::formats::NsmbLevelSprite& sprite, std::uint64_t data) {
     sprite.events[0] = static_cast<std::uint8_t>(data >> 40U);
 }
 
-// The six bytes NSMBe shows and its stageobjsettings nybbles address: Event 1,
-// Event 2, then the settings word from its high byte down.
-QString formatSpriteData(std::uint64_t data) {
-    auto text = QString("%1").arg(data & 0xffffffffffffULL, 12, 16, QChar('0')).toUpper();
-    for (int position = 10; position > 0; position -= 2) text.insert(position, ' ');
+// The settings word from its high byte down. The two event bytes are not
+// settings: one names the event this actor raises and the other the event it
+// waits for, and each has its own row above.
+QString formatSettings(std::uint32_t settings) {
+    auto text = QString("%1").arg(settings, 8, 16, QChar('0')).toUpper();
+    for (int position = 6; position > 0; position -= 2) text.insert(position, ' ');
     return text;
 }
 
-std::optional<std::uint64_t> parseSpriteData(QString text) {
+std::optional<std::uint32_t> parseSettings(QString text) {
     text.remove(' ');
-    if (text.size() != 12) return std::nullopt;
+    if (text.size() != 8) return std::nullopt;
     bool parsed = false;
-    const auto data = text.toULongLong(&parsed, 16);
-    return parsed ? std::optional<std::uint64_t>(data) : std::nullopt;
+    const auto settings = text.toUInt(&parsed, 16);
+    return parsed ? std::optional<std::uint32_t>(settings) : std::nullopt;
 }
 
 } // namespace
@@ -91,114 +154,179 @@ LevelPropertiesWidget::LevelPropertiesWidget(QWidget* parent) : QWidget(parent) 
     auto* content = new QWidget(scroll);
     auto* contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(0, 0, 0, 0);
-    contentLayout->setSpacing(8);
+    contentLayout->setSpacing(10);
 
     auto* selectionGroup = new QGroupBox("Selection", content);
     auto* selectionLayout = new QGridLayout(selectionGroup);
+
+    // The same label-left reading the fields below use, so the panel has one
+    // grammar rather than two.
+    selectionLayout->setHorizontalSpacing(12);
+    selectionLayout->setVerticalSpacing(6);
+    selectionLayout->setColumnStretch(1, 1);
 
     itemBox_ = new QSpinBox(this);
     itemBox_->setMinimum(0);
     itemBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     selectionLayout->addWidget(new QLabel("Item", selectionGroup), 0, 0);
-    selectionLayout->addWidget(itemBox_, 1, 0);
+    selectionLayout->addWidget(itemBox_, 0, 1);
 
     nodeLabel_ = new QLabel("Node", this);
     nodeBox_ = new QSpinBox(this);
     nodeBox_->setMinimum(0);
     nodeBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-    selectionLayout->addWidget(nodeLabel_, 0, 1);
+    selectionLayout->addWidget(nodeLabel_, 1, 0);
     selectionLayout->addWidget(nodeBox_, 1, 1);
 
     auto* propertiesGroup = new QGroupBox("Properties", content);
-    auto* fieldsLayout = new QGridLayout(propertiesGroup);
-    fieldsLayout->setHorizontalSpacing(10);
-    fieldsLayout->setVerticalSpacing(7);
+    auto* propertiesLayout = new QVBoxLayout(propertiesGroup);
+    propertiesLayout->setSpacing(8);
+    // The rows live in their own widget: `placeFields` empties and refills this
+    // grid, and anything else in it would be swept out with them.
+    auto* fieldsHost = new QWidget(propertiesGroup);
+    fieldsLayout_ = new QGridLayout(fieldsHost);
+    fieldsLayout_->setContentsMargins(0, 0, 0, 0);
+    fieldsLayout_->setHorizontalSpacing(12);
+    fieldsLayout_->setVerticalSpacing(6);
 
     for (std::size_t index = 0; index < fields_.size(); ++index) {
         auto& field = fields_[index];
-        field.container = new QWidget(propertiesGroup);
-        auto* fieldLayout = new QVBoxLayout(field.container);
+        field.container = new QWidget(fieldsHost);
+        // Label beside the editor, not above it. A label above makes the row's
+        // height a reading of the label's length, and two rows side by side
+        // then put their editors at two different heights.
+        auto* fieldLayout = new QHBoxLayout(field.container);
         fieldLayout->setContentsMargins(0, 0, 0, 0);
-        fieldLayout->setSpacing(2);
+        fieldLayout->setSpacing(8);
+
         field.label = new QLabel(field.container);
-        field.label->setWordWrap(true);
-        field.value = new QSpinBox(field.container);
-        field.value->setObjectName(QString("PropertyField%1").arg(&field - fields_.data()));
+        // A wrapping label in a column that does not stretch is what made the
+        // rows ragged. A long one is cut short here and read in full on hover.
+        field.label->setWordWrap(false);
+        field.label->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+
+        field.value = new FieldSpinBox(field.container);
+        field.value->setObjectName(QString("PropertyField%1").arg(index));
         field.value->setRange(-32768, 65535);
         field.value->setAccelerated(true);
         field.value->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        field.note = new QLabel(field.container);
-        field.note->setObjectName(QString("PropertyNote%1").arg(index));
-        field.note->setWordWrap(true);
-        field.note->setTextFormat(Qt::PlainText);
-        field.note->setForegroundRole(QPalette::PlaceholderText);
-        auto noteFont = field.note->font();
-        noteFont.setPointSizeF(noteFont.pointSizeF() * 0.9);
-        field.note->setFont(noteFont);
-        // A wrapped note only knows its height once it knows its width, and the
-        // grid only asks when both the note and the widget it sits in say they
-        // have an answer. Without that the row is laid out one line tall and
-        // the note spills over its neighbours.
-        auto notePolicy = field.note->sizePolicy();
-        notePolicy.setVerticalPolicy(QSizePolicy::Minimum);
-        notePolicy.setHeightForWidth(true);
-        field.note->setSizePolicy(notePolicy);
-        auto containerPolicy = field.container->sizePolicy();
-        containerPolicy.setHeightForWidth(true);
-        field.container->setSizePolicy(containerPolicy);
-        field.note->setMaximumHeight(0);
-        field.note->hide();
-        field.note_fade = new QGraphicsOpacityEffect(field.note);
-        field.note_fade->setOpacity(0.0);
-        field.note->setGraphicsEffect(field.note_fade);
-        field.note_reveal = new QVariantAnimation(this);
-        field.note_reveal->setDuration(180);
-        field.note_reveal->setEasingCurve(QEasingCurve::OutCubic);
-        field.note_reveal->setStartValue(0.0);
-        field.note_reveal->setEndValue(1.0);
-        connect(field.note_reveal, &QVariantAnimation::valueChanged, this, [row = &field](const QVariant& value) {
-            const auto progress = value.toDouble();
-            row->note->setMaximumHeight(qRound(progress * row->note_height));
-            row->note_fade->setOpacity(progress);
-        });
-        // Released at the end so a later resize can rewrap the note: an
-        // animated height that stays put clips whatever the new width wraps to.
-        connect(field.note_reveal, &QVariantAnimation::finished, this,
-                [row = &field] { row->note->setMaximumHeight(QWIDGETSIZE_MAX); });
+
+        field.choice = new QComboBox(field.container);
+        field.choice->setObjectName(QString("PropertyChoice%1").arg(index));
+        field.choice->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+        // A choice label can run to sixty characters. It elides rather than
+        // forcing the dock wider, and the whole of it stays on the item.
+        field.choice->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+        field.choice->setMinimumContentsLength(12);
+        field.choice->hide();
+
+        field.toggle = new QCheckBox(field.container);
+        field.toggle->setObjectName(QString("PropertyToggle%1").arg(index));
+        field.toggle->hide();
+
+        field.info = new QToolButton(field.container);
+        field.info->setObjectName(QString("PropertyInfo%1").arg(index));
+        field.info->setAutoRaise(true);
+        field.info->setFocusPolicy(Qt::NoFocus);
+        field.info->setIcon(style()->standardIcon(QStyle::SP_MessageBoxInformation));
+        field.info->setIconSize({14, 14});
+        field.info->hide();
+
         fieldLayout->addWidget(field.label);
-        fieldLayout->addWidget(field.value);
-        fieldLayout->addWidget(field.note);
-        // Keeps a field at the top of its grid row when the field beside it
-        // opened a note and made the row tall.
-        fieldLayout->addStretch();
-        fieldsLayout->addWidget(field.container, static_cast<int>(index / 2), static_cast<int>(index % 2));
-        connect(field.value, &QSpinBox::valueChanged, this, [this, current = &field, index] {
+        fieldLayout->addWidget(field.value, 1);
+        fieldLayout->addWidget(field.choice, 1);
+        fieldLayout->addWidget(field.toggle, 1);
+        fieldLayout->addWidget(field.info);
+
+        auto edited = [this, current = &field, index] {
             if (!refreshing_) current->mixed = false;
             applyFields(index);
+        };
+        connect(field.value, &QSpinBox::valueChanged, this, edited);
+        // Both of these fire for the user and never for `setRowValue`, so a
+        // refresh reporting a value cannot be mistaken for an edit of it.
+        connect(field.choice, &QComboBox::activated, this, edited);
+        connect(field.toggle, &QCheckBox::clicked, this, [this, current = &field, edited] {
+            // Undecided is something the data says, not something the user can
+            // assert, so the first click leaves that state for good.
+            current->toggle->setTristate(false);
+            current->representable = true;
+            edited();
         });
+        connect(field.info, &QToolButton::clicked, this, [this, current = &field] { showFieldNote(*current); });
     }
-    fieldsLayout->setColumnStretch(0, 1);
-    fieldsLayout->setColumnStretch(1, 1);
+    fieldsLayout_->setColumnStretch(0, 1);
+    fieldsLayout_->setColumnStretch(1, 1);
+    // Sits with the values it governs rather than in the raw box, which is
+    // hex either way -- and so it is reachable on every kind, not just sprites.
+    hexBox_ = new QCheckBox("Display as hex", propertiesGroup);
+    hexBox_->setObjectName("HexFields");
+    connect(hexBox_, &QCheckBox::clicked, this, [this](bool on) {
+        hex_fields_ = on;
+        refresh();
+    });
+    propertiesLayout->addWidget(fieldsHost);
+    propertiesLayout->addWidget(hexBox_);
     // Below the fields, because it is what they are a reading of: an actor that
     // declares nothing still has its whole data value here, and one that
     // declares everything still shows what its fields add up to.
-    settingsGroup_ = new QGroupBox("Settings", content);
+    settingsGroup_ = new QGroupBox("Raw Fields", content);
     auto* settingsLayout = new QVBoxLayout(settingsGroup_);
     settingsLayout->setSpacing(4);
     settingsBox_ = new QLineEdit(settingsGroup_);
     settingsBox_->setObjectName("SpriteDataField");
-    settingsBox_->setInputMask(">HH HH HH HH HH HH");
+    settingsBox_->setInputMask(">HH HH HH HH");
     settingsBox_->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    settingsBox_->setToolTip("Event 1, Event 2, then the settings word from its high byte down.");
-    auto* settingsCaption = new QLabel("Event 1, Event 2, settings", settingsGroup_);
-    settingsCaption->setForegroundRole(QPalette::PlaceholderText);
-    auto captionFont = settingsCaption->font();
-    captionFont.setPointSizeF(captionFont.pointSizeF() * 0.9);
-    settingsCaption->setFont(captionFont);
+    settingsBox_->setToolTip("The settings word from its high byte down.");
     settingsLayout->addWidget(settingsBox_);
-    settingsLayout->addWidget(settingsCaption);
     connect(settingsBox_, &QLineEdit::textEdited, this, [this] { applySpriteData(); });
 
+    // Above everything a sprite's fields mean anything in terms of: the panel
+    // said "Object ID 42" and left the reader to know what 42 was.
+    spriteHeader_ = new QWidget(content);
+    auto* headerLayout = new QGridLayout(spriteHeader_);
+    headerLayout->setContentsMargins(0, 0, 0, 0);
+    headerLayout->setHorizontalSpacing(8);
+    headerLayout->setVerticalSpacing(2);
+    spriteName_ = new QLabel(spriteHeader_);
+    spriteName_->setObjectName("SpriteName");
+    auto nameFont = spriteName_->font();
+    nameFont.setBold(true);
+    spriteName_->setFont(nameFont);
+    spriteCategory_ = new QLabel(spriteHeader_);
+    spriteCategory_->setObjectName("SpriteCategory");
+    spriteCategory_->setForegroundRole(QPalette::PlaceholderText);
+    auto categoryFont = spriteCategory_->font();
+    categoryFont.setPointSizeF(categoryFont.pointSizeF() * 0.9);
+    spriteCategory_->setFont(categoryFont);
+    spriteInfo_ = new QToolButton(spriteHeader_);
+    spriteInfo_->setObjectName("SpriteInfo");
+    spriteInfo_->setAutoRaise(true);
+    spriteInfo_->setFocusPolicy(Qt::NoFocus);
+    spriteInfo_->setIcon(style()->standardIcon(QStyle::SP_MessageBoxInformation));
+    spriteInfo_->setToolTip("What this actor is, and what each of its fields does");
+    spritePicker_ = new QComboBox(spriteHeader_);
+    spritePicker_->setObjectName("SpritePicker");
+    spritePicker_->setEditable(true);
+    spritePicker_->setInsertPolicy(QComboBox::NoInsert);
+    spritePicker_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    spritePicker_->setMinimumContentsLength(12);
+    headerLayout->addWidget(spriteName_, 0, 0);
+    headerLayout->addWidget(spriteInfo_, 0, 1, 2, 1, Qt::AlignVCenter);
+    headerLayout->addWidget(spriteCategory_, 1, 0);
+    headerLayout->addWidget(spritePicker_, 2, 0, 1, 2);
+    headerLayout->setColumnStretch(0, 1);
+    connect(spriteInfo_, &QToolButton::clicked, this, [this] { showActorInfo(); });
+    // The picker turns the Object ID row, which is what the level is actually
+    // edited through -- so there is one write path, not two.
+    connect(spritePicker_, &QComboBox::activated, this, [this](int item) {
+        const auto type = spritePicker_->itemData(item);
+        if (refreshing_ || !type.isValid()) return;
+        fields_[0].mixed = false;
+        fields_[0].value->setValue(type.toInt());
+    });
+
+    contentLayout->addWidget(spriteHeader_);
     contentLayout->addWidget(selectionGroup);
     contentLayout->addWidget(propertiesGroup);
     contentLayout->addWidget(settingsGroup_);
@@ -251,7 +379,167 @@ void LevelPropertiesWidget::setSpriteDefinitions(const nsmb::project::SpriteDefi
                                                  std::unordered_map<std::uint16_t, std::uint32_t> actor_object_ids) {
     sprite_definitions_ = catalog;
     actor_object_ids_ = std::move(actor_object_ids);
+    current_definition_ = nullptr;
+    rebuildSpritePicker();
     refresh();
+}
+
+// A sprite's Object ID is the actor's *type*, and only the level's own actor
+// table says which definition that type resolves to. So the list is built from
+// that table rather than from the catalog, whose ids are something else.
+void LevelPropertiesWidget::rebuildSpritePicker() {
+    const QSignalBlocker blocker(spritePicker_);
+    spritePicker_->clear();
+    std::vector<std::pair<QString, int>> entries;
+    entries.reserve(actor_object_ids_.size());
+    for (const auto& [type, object_id] : actor_object_ids_) {
+        const auto* definition = sprite_definitions_.by_object_id(object_id);
+        if (!definition || definition->name.empty()) continue;
+        entries.emplace_back(QString::fromStdString(definition->name), static_cast<int>(type));
+    }
+    std::sort(entries.begin(), entries.end());
+    for (const auto& [name, type] : entries) {
+        spritePicker_->addItem(QString("%1 — %2").arg(type).arg(name), type);
+        spritePicker_->setItemData(spritePicker_->count() - 1, name, Qt::ToolTipRole);
+    }
+    auto* completer = new QCompleter(spritePicker_->model(), spritePicker_);
+    completer->setFilterMode(Qt::MatchContains);
+    completer->setCaseSensitivity(Qt::CaseInsensitive);
+    completer->setCompletionMode(QCompleter::PopupCompletion);
+    spritePicker_->setCompleter(completer);
+}
+
+// One reading of a field value, so a choice entry and the box beside it never
+// disagree about which base they are in.
+QString LevelPropertiesWidget::formatFieldValue(int value) const {
+    return hex_fields_ ? hexText(value) : QString::number(value);
+}
+
+void LevelPropertiesWidget::setRowEditor(std::size_t row, FieldEditor editor, int minimum, int maximum,
+                                         const nsmb::project::SpriteFieldDefinition* named) {
+    auto& current = fields_[row];
+    current.editor = editor;
+    current.representable = true;
+    current.held_value = 0;
+    // A hidden container does not mark its children hidden, so a row coming
+    // back has to be told again which editor it wears.
+    current.value->setVisible(editor == FieldEditor::Number);
+    current.choice->setVisible(editor == FieldEditor::Choice);
+    current.toggle->setVisible(editor == FieldEditor::Boolean);
+    // A checkbox is its own label; anything else needs one beside it.
+    current.label->setVisible(editor != FieldEditor::Boolean);
+
+    switch (editor) {
+    case FieldEditor::Number:
+        current.unset_value = minimum - 1;
+        current.value->setRange(current.unset_value, maximum);
+        current.value->setSpecialValueText("—");
+        static_cast<FieldSpinBox*>(current.value)->setHex(hex_fields_);
+        break;
+    case FieldEditor::Choice: {
+        const QSignalBlocker blocker(current.choice);
+        current.choice->clear();
+        if (named) {
+            for (const auto& choice : named->choices) {
+                // The number leads the label: it is what the Settings box holds,
+                // and it is what makes the gaps in a sparse list legible.
+                current.choice->addItem(QString("%1 — %2").arg(formatFieldValue(static_cast<int>(choice.value)),
+                                                               QString::fromStdString(choice.label)),
+                                        static_cast<int>(choice.value));
+                current.choice->setItemData(current.choice->count() - 1,
+                                            QString::fromStdString(choice.label), Qt::ToolTipRole);
+            }
+        }
+        break;
+    }
+    case FieldEditor::Boolean: {
+        const QSignalBlocker blocker(current.toggle);
+        current.toggle->setTristate(false);
+        current.toggle->setText(current.label->text());
+        break;
+    }
+    }
+}
+
+namespace {
+// Marks the two items a choice row grows for itself, so the next value it is
+// given replaces them instead of stacking another one behind.
+constexpr int synthetic_choice_role = Qt::UserRole + 1;
+} // namespace
+
+void LevelPropertiesWidget::setRowValue(std::size_t row, std::optional<int> value) {
+    auto& current = fields_[row];
+    switch (current.editor) {
+    case FieldEditor::Number: {
+        const QSignalBlocker blocker(current.value);
+        current.value->setValue(value.value_or(current.unset_value));
+        break;
+    }
+    case FieldEditor::Choice: {
+        const QSignalBlocker blocker(current.choice);
+        for (int item = current.choice->count() - 1; item >= 0; --item)
+            if (current.choice->itemData(item, synthetic_choice_role).toBool()) current.choice->removeItem(item);
+        if (!value) {
+            current.choice->insertItem(0, "—");
+            current.choice->setItemData(0, true, synthetic_choice_role);
+            current.choice->setCurrentIndex(0);
+            break;
+        }
+        const auto item = current.choice->findData(*value);
+        if (item >= 0) {
+            current.choice->setCurrentIndex(item);
+            break;
+        }
+        // The bits hold something this actor does not name. Saying so is the
+        // honest reading; quietly snapping to a neighbour would not be.
+        current.representable = false;
+        current.held_value = *value;
+        current.choice->addItem(QString("%1 — not listed").arg(formatFieldValue(*value)), *value);
+        current.choice->setItemData(current.choice->count() - 1, true, synthetic_choice_role);
+        current.choice->setCurrentIndex(current.choice->count() - 1);
+        break;
+    }
+    case FieldEditor::Boolean: {
+        const QSignalBlocker blocker(current.toggle);
+        if (!value || (*value != 0 && *value != 1)) {
+            // Either the selection disagrees, or the field is wider than the
+            // value that turns it on and holds something in between.
+            if (value) { current.representable = false; current.held_value = *value; }
+            current.toggle->setTristate(true);
+            current.toggle->setCheckState(Qt::PartiallyChecked);
+            break;
+        }
+        current.toggle->setTristate(false);
+        current.toggle->setCheckState(*value == 1 ? Qt::Checked : Qt::Unchecked);
+        break;
+    }
+    }
+}
+
+std::optional<int> LevelPropertiesWidget::rowValue(std::size_t row) const {
+    const auto& current = fields_[row];
+    switch (current.editor) {
+    case FieldEditor::Number:
+        return current.value->value() == current.unset_value ? std::nullopt
+                                                             : std::optional<int>(current.value->value());
+    case FieldEditor::Choice: {
+        const auto data = current.choice->currentData();
+        return data.isValid() ? std::optional<int>(data.toInt()) : std::nullopt;
+    }
+    case FieldEditor::Boolean:
+        switch (current.toggle->checkState()) {
+        case Qt::Checked: return 1;
+        case Qt::Unchecked: return 0;
+        // Undecided because the selection disagrees is nothing to write;
+        // undecided because the bits say something odd is those bits.
+        default: return current.mixed ? std::nullopt : std::optional<int>(current.held_value);
+        }
+    }
+    return std::nullopt;
+}
+
+int LevelPropertiesWidget::rowValueOr(std::size_t row, int fallback) const {
+    return rowValue(row).value_or(fallback);
 }
 
 std::vector<std::size_t> LevelPropertiesWidget::selectedIndices() const {
@@ -296,10 +584,14 @@ std::size_t LevelPropertiesWidget::itemCount() const {
 void LevelPropertiesWidget::refresh() {
     refreshing_ = true;
     visible_sprite_fields_.clear();
+    current_definition_ = nullptr;
     for (auto& field : fields_) {
         field.container->hide();
         field.label->setToolTip({});
         field.value->setToolTip({});
+        field.choice->setToolTip({});
+        field.toggle->setToolTip({});
+        field.span = FieldSpan::Full;
     }
 
     const auto count = itemCount();
@@ -327,20 +619,55 @@ void LevelPropertiesWidget::refresh() {
 
     std::size_t row = 0;
     // Filled as the rows are laid out and applied in one pass at the end, so a
-    // note that is already open stays open instead of replaying its reveal on
-    // every refresh -- and one whose row went away closes.
+    // row that went away loses the note it was carrying.
     std::array<QString, std::tuple_size_v<decltype(fields_)>> notes;
-    auto field = [&](const char* name, std::optional<int> value, int minimum = 0, int maximum = 65535, QString note = {}) {
+    auto field = [&](const char* name, std::optional<int> value, int minimum = 0, int maximum = 65535,
+                     FieldSpan span = FieldSpan::Full) {
         const auto index = row++;
         auto& current = fields_[index];
         current.label->setText(name);
         current.mixed = !value.has_value();
-        current.unset_value = minimum - 1;
-        current.value->setRange(current.unset_value, maximum);
-        current.value->setSpecialValueText("—");
-        current.value->setValue(value.value_or(current.unset_value));
+        current.span = span;
+        setRowEditor(index, FieldEditor::Number, minimum, maximum, nullptr);
+        setRowValue(index, value);
         current.container->show();
+        return index;
+    };
+    // Two fields share a line only when they are peers and their labels are
+    // close enough in length that the editors beside them still line up.
+    auto pair = [&](const char* first_name, std::optional<int> first_value,
+                    const char* second_name, std::optional<int> second_value,
+                    int minimum = 0, int maximum = 65535) {
+        field(first_name, first_value, minimum, maximum, FieldSpan::Half);
+        field(second_name, second_value, minimum, maximum, FieldSpan::Half);
+    };
+
+    auto declaredField = [&](const nsmb::project::SpriteFieldDefinition& named, std::optional<int> value) {
+        const auto index = row++;
+        auto& current = fields_[index];
+        current.label->setText(QString::fromStdString(named.label));
+        current.mixed = !value.has_value();
+        current.span = FieldSpan::Full;
+        // A field that is on or off is a checkbox; one that names its values is
+        // picked from them; the rest are typed. No actor declares both.
+        if (named.checkbox_value != 0) {
+            setRowEditor(index, FieldEditor::Boolean, 0, 1, &named);
+        } else if (!named.choices.empty()) {
+            setRowEditor(index, FieldEditor::Choice, 0, 0, &named);
+        } else {
+            setRowEditor(index, FieldEditor::Number, nsmb::project::sprite_field_min(named),
+                         nsmb::project::sprite_field_max(named), nullptr);
+        }
+        setRowValue(index, value);
+        current.container->show();
+        auto note = QString::fromStdString(named.notes);
+        if (!current.representable) {
+            if (!note.isEmpty()) note += "\n\n";
+            note += QString("This actor does not name the value %1, which is what these bits hold.")
+                        .arg(current.held_value);
+        }
         notes[index] = std::move(note);
+        visible_sprite_fields_.push_back(&named);
     };
 
     auto common = [&](auto getter) -> std::optional<int> {
@@ -373,51 +700,44 @@ void LevelPropertiesWidget::refresh() {
         case Kind::Object: {
             field("Object ID", common([&](auto i) { return level_->objects()[i].object_id; }), 0, 4095);
             field("Tileset slot", common([&](auto i) { return level_->objects()[i].tileset_slot; }), 0, 15);
-            field("X (tiles)", common([&](auto i) { return level_->objects()[i].x; }), -32768, 32767);
-            field("Y (tiles)", common([&](auto i) { return level_->objects()[i].y; }), -32768, 32767);
-            field("Width", common([&](auto i) { return level_->objects()[i].width; }), 1);
-            field("Height", common([&](auto i) { return level_->objects()[i].height; }), 1);
+            pair("X (tiles)", common([&](auto i) { return level_->objects()[i].x; }),
+                 "Y (tiles)", common([&](auto i) { return level_->objects()[i].y; }), -32768, 32767);
+            pair("Width", common([&](auto i) { return level_->objects()[i].width; }),
+                 "Height", common([&](auto i) { return level_->objects()[i].height; }), 1);
             break;
         }
         case Kind::Sprite: {
-            // Resolved before the rows are laid out: what the actor says about
-            // itself belongs under the object ID that selected it.
-            const nsmb::project::SpriteDefinition* definition = nullptr;
+            // Resolved before the rows are laid out: which actor this is decides
+            // what the rest of the panel has to say.
             if (!multi) {
-                if (const auto hash = level_->sprite_hash(index)) definition = sprite_definitions_.by_hash(*hash);
+                if (const auto hash = level_->sprite_hash(index)) current_definition_ = sprite_definitions_.by_hash(*hash);
                 else if (const auto object = actor_object_ids_.find(course.sprites[index].id); object != actor_object_ids_.end())
-                    definition = sprite_definitions_.by_object_id(object->second);
+                    current_definition_ = sprite_definitions_.by_object_id(object->second);
             }
-            field("Object ID", common([&](auto i) { return course.sprites[i].id; }), 0, 65535,
-                  definition ? QString::fromStdString(definition->notes) : QString());
-            field("X (tiles)", common([&](auto i) { return course.sprites[i].x; }));
-            field("Y (tiles)", common([&](auto i) { return course.sprites[i].y; }));
-            field("Event 1", common([&](auto i) { return course.sprites[i].events[0]; }), 0, 255);
-            field("Event 2", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
-            if (definition && !definition->fields.empty()) {
+            const auto* definition = current_definition_;
+            field("Object ID", common([&](auto i) { return course.sprites[i].id; }), 0, 65535);
+            notes[0] = definition ? QString::fromStdString(definition->notes) : QString();
+            pair("X (tiles)", common([&](auto i) { return course.sprites[i].x; }),
+                 "Y (tiles)", common([&](auto i) { return course.sprites[i].y; }));
+            // Not "Event 1" and "Event 2": one names the event this actor
+            // raises when it fires, the other the event that lets it act.
+            pair("Target event", common([&](auto i) { return course.sprites[i].events[0]; }),
+                 "Trigger event", common([&](auto i) { return course.sprites[i].events[1]; }), 0, 255);
+            notes[3] = "The event this actor activates when it fires.";
+            notes[4] = "The event that has to be active for this actor to act.";
+            if (definition) {
                 for (const auto& named : definition->fields) {
                     if (row >= fields_.size()) break;
-                    field(named.label.c_str(), nsmb::project::read_sprite_field(spriteData(course.sprites[index]), named),
-                          nsmb::project::sprite_field_min(named), nsmb::project::sprite_field_max(named),
-                          QString::fromStdString(named.notes));
-                    visible_sprite_fields_.push_back(&named);
-                    // The note itself now reads under the field. The tooltip is
-                    // where the value table stays: it is a lookup, not prose.
-                    if (named.choices.empty()) continue;
-                    QStringList choices;
-                    for (const auto& choice : named.choices)
-                        choices.push_back(QString("%1 = %2").arg(choice.value).arg(QString::fromStdString(choice.label)));
-                    fields_[row - 1].label->setToolTip(choices.join("\n"));
-                    fields_[row - 1].value->setToolTip(choices.join("\n"));
+                    declaredField(named, nsmb::project::read_sprite_field(spriteData(course.sprites[index]), named));
                 }
             }
             break;
         }
         case Kind::Entrance: {
-            field("X", common([&](auto i) { return course.entrances[i].x; }));
-            field("Y", common([&](auto i) { return course.entrances[i].y; }));
-            field("Camera X", common([&](auto i) { return course.entrances[i].camera_x; }));
-            field("Camera Y", common([&](auto i) { return course.entrances[i].camera_y; }));
+            pair("X", common([&](auto i) { return course.entrances[i].x; }),
+                 "Y", common([&](auto i) { return course.entrances[i].y; }));
+            pair("Camera X", common([&](auto i) { return course.entrances[i].camera_x; }),
+                 "Camera Y", common([&](auto i) { return course.entrances[i].camera_y; }));
             field("ID", common([&](auto i) { return course.entrances[i].id; }), 0, 255);
             field("Target area", common([&](auto i) { return course.entrances[i].target_stage_area; }), 0, 255);
             field("Target stage / pipe path", common([&](auto i) { return course.entrances[i].target_stage_index; }), 0, 255);
@@ -434,16 +754,16 @@ void LevelPropertiesWidget::refresh() {
         }
         case Kind::View: {
             const auto& v=course.views[index];
-            field("X",v.x);field("Y",v.y);field("Width",v.width,1);field("Height",v.height,1);
+            pair("X",v.x,"Y",v.y);pair("Width",v.width,"Height",v.height,1);
             field("ID",v.id,0,255);field("Camera settings",v.camera_settings_id,0,255);field("BGM",v.bgm_id,0,255);
             field("Background",v.background_id,0,255);field("Tileset",v.tileset_id,0,255);field("Foreground",v.foreground_id,0,255);
             field("Light",v.light_type,0,255);field("Progress path",v.progress_path_id,0,255);break;
         }
         case Kind::Zone: {
-            field("X", common([&](auto i) { return course.zones[i].x; }));
-            field("Y", common([&](auto i) { return course.zones[i].y; }));
-            field("Width", common([&](auto i) { return course.zones[i].width; }), 1);
-            field("Height", common([&](auto i) { return course.zones[i].height; }), 1);
+            pair("X", common([&](auto i) { return course.zones[i].x; }),
+                 "Y", common([&](auto i) { return course.zones[i].y; }));
+            pair("Width", common([&](auto i) { return course.zones[i].width; }),
+                 "Height", common([&](auto i) { return course.zones[i].height; }), 1);
             field("ID", common([&](auto i) { return course.zones[i].id; }), 0, 255);
             break;
         }
@@ -459,8 +779,7 @@ void LevelPropertiesWidget::refresh() {
             field("Path ID", path.id);
             if (!path.nodes.empty()) {
                 const auto& node = path.nodes[static_cast<std::size_t>(nodeBox_->value())];
-                field("X", node.x);
-                field("Y", node.y);
+                pair("X", node.x, "Y", node.y);
                 field("Speed (fx32 raw)",node.speed.raw(),-2147483647,2147483647);
                 field("Acceleration (fx32 raw)",node.acceleration.raw(),-2147483647,2147483647);
                 field("Delay",node.delay);field("Flags",node.flags);
@@ -475,6 +794,34 @@ void LevelPropertiesWidget::refresh() {
     }
 
     for (std::size_t index = 0; index < fields_.size(); ++index) setFieldNote(fields_[index], notes[index]);
+    placeFields();
+
+    spriteHeader_->setVisible(kind() == Kind::Sprite);
+    if (kind() == Kind::Sprite) {
+        const auto type = level_ && count != 0 && !indices.empty()
+                              ? std::optional<int>(level_->course().sprites[indices.front()].id)
+                              : std::nullopt;
+        if (current_definition_) {
+            spriteName_->setText(QString::fromStdString(current_definition_->name));
+            spriteName_->setForegroundRole(QPalette::WindowText);
+            spriteCategory_->setText(QString("%1 · actor type %2")
+                                         .arg(QString::fromStdString(current_definition_->category))
+                                         .arg(type ? QString::number(*type) : QString("—")));
+        } else {
+            spriteName_->setText(type ? QString("Actor %1").arg(*type) : QString("No sprite selected"));
+            spriteName_->setForegroundRole(QPalette::PlaceholderText);
+            spriteCategory_->setText(multi ? "Several sprites selected" : "Not in the actor catalog");
+        }
+        spriteName_->setToolTip(spriteName_->text());
+        spriteInfo_->setEnabled(current_definition_ != nullptr);
+        const QSignalBlocker picker_blocker(spritePicker_);
+        // A sprite placed by hash names an actor but has no type to pick, and a
+        // catalog that never arrived has nothing to offer either way.
+        const auto item = type ? spritePicker_->findData(*type) : -1;
+        spritePicker_->setEnabled(spritePicker_->count() != 0 && !multi && type.has_value());
+        spritePicker_->setCurrentIndex(item);
+        if (item < 0) spritePicker_->setEditText(type ? QString("Actor %1").arg(*type) : QString());
+    }
 
     // The raw value is the sprite; the declared fields are only a reading of
     // it. So it is shown whether or not an actor was resolved, and it is the
@@ -485,8 +832,9 @@ void LevelPropertiesWidget::refresh() {
         QString text;
         if (level_ && !indices.empty()) {
             const auto& sprites = level_->course().sprites;
-            const auto data = spriteData(sprites[indices.front()]);
-            if (std::ranges::all_of(indices, [&](auto i) { return spriteData(sprites[i]) == data; })) text = formatSpriteData(data);
+            const auto settings = sprites[indices.front()].settings;
+            if (std::ranges::all_of(indices, [&](auto i) { return sprites[i].settings == settings; }))
+                text = formatSettings(settings);
         }
         if (!text.isEmpty()) {
             if (settingsBox_->text() != text) {
@@ -508,49 +856,156 @@ void LevelPropertiesWidget::refresh() {
 void LevelPropertiesWidget::applySpriteData() {
     if (refreshing_ || !level_ || kind() != Kind::Sprite || itemCount() == 0) return;
     // A half-typed value is not a value: the box keeps it until it is whole.
-    const auto data = parseSpriteData(settingsBox_->text());
-    if (!data) return;
+    const auto settings = parseSettings(settingsBox_->text());
+    if (!settings) return;
     const auto indices = selectedIndices();
     if (indices.empty()) return;
     if (indices.size() == 1U) {
         auto sprite = level_->course().sprites[indices.front()];
-        setSpriteData(sprite, *data);
+        sprite.settings = *settings;
         emitChange(level_->update_sprite(indices.front(), sprite));
         return;
     }
     nsmb::project::LevelEntityUpdates edits;
     for (const auto selected : indices) {
         auto sprite = level_->course().sprites[selected];
-        setSpriteData(sprite, *data);
+        sprite.settings = *settings;
         edits.sprites.push_back({selected, sprite});
     }
     emitChange(level_->update_entities(std::move(edits), "Edit selection"));
 }
 
+// The note belongs to the row, and it says so by sitting on it: a button that
+// is there when there is something to read and gone when there is not. Nothing
+// about it changes the panel's height, so nothing shifts under the reader.
 void LevelPropertiesWidget::setFieldNote(FieldRow& row, const QString& text) {
-    if (row.note_text == text) return;
     row.note_text = text;
-    row.note_reveal->stop();
-    if (text.isEmpty()) {
-        // Nothing to read on the way out, so the row closes at once rather than
-        // holding the rest of the panel down for the length of an animation.
-        row.note->clear();
-        row.note->hide();
-        row.note->setMaximumHeight(0);
-        row.note_fade->setOpacity(0.0);
-        return;
+    row.info->setVisible(!text.isEmpty());
+    row.info->setToolTip(text);
+    row.info->setAccessibleDescription(text);
+}
+
+void LevelPropertiesWidget::showFieldNote(const FieldRow& row) {
+    if (row.note_text.isEmpty()) return;
+    QToolTip::showText(row.info->mapToGlobal(QPoint{0, row.info->height()}), row.note_text, row.info);
+}
+
+// What the actor is, and what all of it does, read off the same declarations the
+// rows above are built from -- so a renamed field is renamed in both at once.
+void LevelPropertiesWidget::showActorInfo() {
+    if (!current_definition_) return;
+    const auto& definition = *current_definition_;
+
+    auto* dialog = new QDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->setWindowTitle(QString::fromStdString(definition.name));
+    dialog->resize(520, 420);
+    auto* layout = new QVBoxLayout(dialog);
+
+    auto* heading = new QLabel(QString("%1 · object %2")
+                                   .arg(QString::fromStdString(definition.category))
+                                   .arg(definition.object_id),
+                               dialog);
+    heading->setForegroundRole(QPalette::PlaceholderText);
+    layout->addWidget(heading);
+
+    auto* about = new QLabel(definition.notes.empty() ? QString("This actor documents nothing about itself.")
+                                                      : QString::fromStdString(definition.notes),
+                             dialog);
+    about->setWordWrap(true);
+    about->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    layout->addWidget(about);
+
+    auto* fields = new QTreeWidget(dialog);
+    fields->setObjectName("ActorInfoFields");
+    fields->setHeaderLabels({"Field", "Bits", "What it does"});
+    fields->setRootIsDecorated(true);
+    for (const auto& named : definition.fields) {
+        const auto bits = named.bit_width == 1
+                              ? QString::number(named.bit_offset)
+                              : QString("%1–%2").arg(named.bit_offset).arg(named.bit_offset + named.bit_width - 1U);
+        auto* item = new QTreeWidgetItem(fields, {QString::fromStdString(named.label), bits,
+                                                  QString::fromStdString(named.notes)});
+        for (const auto& choice : named.choices)
+            new QTreeWidgetItem(item, {QString::number(choice.value), {}, QString::fromStdString(choice.label)});
+        if (named.checkbox_value != 0)
+            new QTreeWidgetItem(item, {QString::number(named.checkbox_value), {}, "On; anything else is off"});
     }
-    row.note->setText(text);
-    row.note->setMaximumHeight(QWIDGETSIZE_MAX);
-    row.note->show();
-    // heightForWidth is what the wrapped note really needs; sizeHint is the
-    // fallback for a panel that has not been laid out yet.
-    const auto width = row.note->width() > 0 ? row.note->width() : row.container->width();
-    row.note_height = width > 0 ? row.note->heightForWidth(width) : 0;
-    if (row.note_height <= 0) row.note_height = row.note->sizeHint().height();
-    row.note->setMaximumHeight(0);
-    row.note_fade->setOpacity(0.0);
-    row.note_reveal->start();
+    fields->expandAll();
+    for (int column = 0; column < 2; ++column) fields->resizeColumnToContents(column);
+    layout->addWidget(fields, 1);
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, dialog);
+    connect(buttons, &QDialogButtonBox::rejected, dialog, &QDialog::reject);
+    layout->addWidget(buttons);
+    dialog->show();
+}
+
+// The grid is only rebuilt when the shape of the panel changed. A refresh runs
+// on every edit, and re-laying it out under a user who is mid-keystroke would
+// take the focus out from under them.
+void LevelPropertiesWidget::placeFields() {
+    std::vector<std::pair<std::size_t, FieldSpan>> wanted;
+    for (std::size_t index = 0; index < fields_.size(); ++index) {
+        auto& current = fields_[index];
+        if (current.container->isHidden()) continue;
+        // A list of values or a note to the side needs the whole width; so does
+        // a label too long to leave room for the editor beside it.
+        auto span = current.span;
+        if (current.editor != FieldEditor::Number || !current.note_text.isEmpty()) span = FieldSpan::Full;
+        wanted.emplace_back(index, span);
+    }
+    // A half that ended up alone beside a full one takes the width it was going
+    // to share, rather than leaving a hole where its partner would have been.
+    for (std::size_t item = 0; item < wanted.size(); ++item) {
+        if (wanted[item].second != FieldSpan::Half) continue;
+        const bool paired = item + 1 < wanted.size() && wanted[item + 1].second == FieldSpan::Half;
+        if (paired) { ++item; continue; }
+        wanted[item].second = FieldSpan::Full;
+    }
+    if (wanted == field_layout_) return;
+    field_layout_ = wanted;
+
+    while (auto* item = fieldsLayout_->takeAt(0)) delete item;
+
+    // Every full-width row's editor starts at one edge. Without this the label
+    // is as wide as its own text, so a long one pushes its editor further right
+    // than its neighbour's and the column reads ragged -- which is most of what
+    // was wrong with the old panel. A label past the cap wraps instead of
+    // dragging the whole column with it.
+    const auto cap = fields_[0].label->fontMetrics().horizontalAdvance(QString(18, 'n'));
+    int label_column = 0;
+    for (const auto& [index, span] : wanted) {
+        if (span != FieldSpan::Full || fields_[index].editor == FieldEditor::Boolean) continue;
+        label_column = std::max(label_column, std::min(fields_[index].label->sizeHint().width(), cap));
+    }
+
+    int grid_row = 0;
+    for (std::size_t item = 0; item < wanted.size(); ++item) {
+        const auto [index, span] = wanted[item];
+        if (span == FieldSpan::Full) {
+            // A row with the panel's whole width has no neighbour to fall out
+            // of step with, so a long label may wrap rather than be cut off.
+            fields_[index].label->setMinimumWidth(label_column);
+            fields_[index].label->setMaximumWidth(std::max(label_column, cap));
+            fields_[index].label->setWordWrap(true);
+            fieldsLayout_->addWidget(fields_[index].container, grid_row++, 0, 1, 2);
+            continue;
+        }
+        const auto [neighbour, _] = wanted[item + 1];
+        // Peers line up when their labels do, so the shorter one is widened to
+        // meet the longer instead of the two editors starting at two places.
+        for (const auto side : {index, neighbour}) fields_[side].label->setWordWrap(false);
+        const auto width = std::max(fields_[index].label->sizeHint().width(),
+                                    fields_[neighbour].label->sizeHint().width());
+        for (const auto side : {index, neighbour}) {
+            fields_[side].label->setMinimumWidth(width);
+            fields_[side].label->setMaximumWidth(QWIDGETSIZE_MAX);
+        }
+        fieldsLayout_->addWidget(fields_[index].container, grid_row, 0);
+        fieldsLayout_->addWidget(fields_[neighbour].container, grid_row++, 1);
+        ++item;
+    }
 }
 
 void LevelPropertiesWidget::previewInteraction(const QPointF& delta, int resize_handle) {
@@ -560,8 +1015,7 @@ void LevelPropertiesWidget::previewInteraction(const QPointF& delta, int resize_
 
     auto show = [&](std::size_t field, int value) {
         if (fields_[field].mixed) return;
-        const QSignalBlocker blocker(fields_[field].value);
-        fields_[field].value->setValue(value);
+        setRowValue(field, value);
     };
     auto clamp16 = [](int value) { return std::clamp(value, 0, 65535); };
     auto clampSigned16 = [](int value) { return std::clamp(value, -32768, 32767); };
@@ -652,11 +1106,12 @@ void LevelPropertiesWidget::applyFields(std::size_t changed_row) {
     }
     const auto indices = selectedIndices();
     const auto index = indices.empty() ? static_cast<std::size_t>(itemBox_->value()) : indices.front();
-    auto value = [&](std::size_t field) { return fields_[field].value->value(); };
+    auto value = [&](std::size_t field) { return rowValueOr(field, 0); };
     nsmb::core::Result<void> result;
 
     if (indices.size() > 1U) {
-        auto changed = [&](std::size_t field, int original) { return fields_[field].mixed ? original : value(field); };
+        // A row that stands for more than one value writes none of them.
+        auto changed = [&](std::size_t field, int original) { return rowValueOr(field, original); };
         nsmb::project::LevelEntityUpdates edits;
         switch (kind()) {
         case Kind::Object:
