@@ -18,22 +18,7 @@ return {
     objectId = 227,
     name = "Floating log",
     category = "Platforms and ropes",
-    fields = {
-        {
-            key = "unknown_4",
-            label = "Unknown 4",
-            bitOffset = 28,
-            bitWidth = 4,
-            notes = "Used as 5 in-game.",
-        },
-        {
-            key = "spin",
-            label = "Spin",
-            bitOffset = 40,
-            bitWidth = 4,
-            notes = "it don't need to get a value",
-        },
-    },
+    notes = "Floating log reads no sprite data: neither the settings word nor either event byte changes what it does. Levels set the fifth nibble to 5 regardless.",
     init = init,
     render = render,
     grabBounds = grabBounds,

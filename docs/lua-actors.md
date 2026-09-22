@@ -140,13 +140,18 @@ Because those two rows are always there, **an actor does not declare a whole
 event byte again**. A field with `bitOffset = 32` or `bitOffset = 40` and
 `bitWidth = 8` and nothing else -- no `choices`, no `checkboxValue`, no
 `valueOffset`, no `signed` -- is the `Target event` or `Trigger event` row under
-a second name, and shows the same number twice in the same panel. The catalog
-declares a field over those bits only when no byte row can stand in for it:
+a second name, and shows the same number twice in the same panel.
 
-- part of a byte, like `106 Fire Snake`'s `jump` on bits 40-43;
-- reaching across two, like `191`'s `Trigger ID 1` on bits 36-43;
-- naming its values, like `141 Event Controller Zone`'s `Player ID`, which is
-  the whole of bits 32-39 but picks from a Mario/Luigi list.
+One field in the catalog still covers an event byte, and it is the only shape
+that earns it: `141 Event Controller Zone`'s `Player ID` is the whole of bits
+32-39, but the controller reads that byte as a player selector rather than an
+event, so the row picks from a Mario/Luigi list a number box cannot offer. Every
+other candidate turned out to describe bits the game never reads -- a nibble of
+an event byte for `039`, `106`, `112`, `173` and `227`, none of which touch
+`eventIDs` at all, and a pair straddling the byte boundary for `191` and `192`,
+which wait on `Stage::actorEventMask` and so see both bytes only whole. They
+were removed rather than kept, because editing one wrote into an event byte
+without telling anybody.
 
 The catalog's inherited offsets had the two bytes the other way round. NSMBe
 numbers a sprite's twelve nybbles from the top of the 48-bit value, and nybbles

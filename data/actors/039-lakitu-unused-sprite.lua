@@ -18,7 +18,7 @@ return {
     objectId = 39,
     name = "Lakitu (unused sprite)",
     category = "Enemies - Overground",
-    notes = "This sprite spawns Lakitu once. Once it's killed, it will not respawn.\nIf you want it to respawn, use sprite Lakitu Spawner (183) instead. \nIf Sprite Set 5:1 (Bullet Bill/Bob-omb) isn't enabled, the game will freeze when lakitu tries to display the Spiny egg model.\n",
+    notes = "This sprite spawns Lakitu once. Once it's killed, it will not respawn.\nIf you want it to respawn, use sprite Lakitu Spawner (183) instead. \nIf Sprite Set 5:1 (Bullet Bill/Bob-omb) isn't enabled, the game will freeze when lakitu tries to display the Spiny egg model.\n\nPlacing two in the same spot makes the game misbehave.",
     fields = {
         {
             key = "unknown_8",
@@ -59,13 +59,6 @@ return {
                 { value = 0, label = "Normal" },
                 { value = 1, label = "Rolling egg" },
             },
-        },
-        {
-            key = "correct_order",
-            label = "Correct order",
-            bitOffset = 40,
-            bitWidth = 4,
-            notes = "if you place 2 in the same place they generate a bug in the game",
         },
     },
     init = init,

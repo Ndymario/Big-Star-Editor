@@ -83,18 +83,6 @@ return {
             notes = "The mushroom will return to its original position once Mario/Luigi gets off it.",
             checkboxValue = 1,
         },
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 36,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 28,
-            bitWidth = 8,
-        },
     },
     init = init,
     render = render,

@@ -18,15 +18,7 @@ return {
     objectId = 112,
     name = "Cheep Chomp",
     category = "Enemies - Water",
-    fields = {
-        {
-            key = "eat",
-            label = "Eat",
-            bitOffset = 40,
-            bitWidth = 4,
-            notes = "Do not shoot fire when it is about to eat you or the game will block, it is one of the game's fails",
-        },
-    },
+    notes = "Cheep Chomp reads no sprite data: neither the settings word nor either event byte changes what it does. Don't shoot fire when it is about to eat you, or the game locks up -- one of the game's own failings.",
     init = init,
     render = render,
     grabBounds = grabBounds,

@@ -18,16 +18,7 @@ return {
     objectId = 106,
     name = "Fire Snake",
     category = "Enemies - Desert",
-    notes = "A snake made of fire that follows you by jumping. It's a very annoying enemy!",
-    fields = {
-        {
-            key = "jump",
-            label = "jump",
-            bitOffset = 40,
-            bitWidth = 4,
-            notes = "do not use on solid walls, game error",
-        },
-    },
+    notes = "A snake made of fire that follows you by jumping. It's a very annoying enemy!\n\nFire Snake reads no sprite data: neither the settings word nor either event byte changes what it does. Do not use it on solid walls; the game errors.",
     init = init,
     render = render,
     grabBounds = grabBounds,
