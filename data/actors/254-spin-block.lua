@@ -21,13 +21,6 @@ return {
     notes = "Random notes:\n- When the player is fully submerged in water, they can only use the spin block when ducking, and even then, it just propels the swimming player upward - not putting them into \"spinning mode\". When the player reaches the surface (if there is one), they stop going up.",
     fields = {
         {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Swiches and controllers",
-        },
-        {
             key = "unknown_8",
             label = "Unknown 8",
             bitOffset = 12,

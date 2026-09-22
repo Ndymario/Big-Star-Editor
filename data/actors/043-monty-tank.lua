@@ -18,14 +18,6 @@ return {
     objectId = 43,
     name = "Monty Tank",
     category = "Bosses and cutscenes",
-    fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

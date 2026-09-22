@@ -11,12 +11,6 @@ return {
     notes = "This sprite works by allowing up to 4 input IDs to be required to activate a single output. All input IDs must be set to a relevant value. Do not leave any as '0' - if you have less than four, you can enter the same ID into several spaces.",
     fields = {
         {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
             key = "trigger_id_2",
             label = "Trigger ID 2",
             bitOffset = 24,
@@ -32,12 +26,6 @@ return {
             key = "trigger_id_4",
             label = "Trigger ID 4",
             bitOffset = 8,
-            bitWidth = 8,
-        },
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
             bitWidth = 8,
         },
         {

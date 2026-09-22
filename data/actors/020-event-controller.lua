@@ -11,18 +11,6 @@ return {
     notes = "Activates events upon loading",
     fields = {
         {
-            key = "target_id_1",
-            label = "Target ID 1",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
-            key = "target_id_2",
-            label = "Target ID 2",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
             key = "duration",
             label = "Duration",
             bitOffset = 24,

@@ -8,22 +8,8 @@ return {
     objectId = 140,
     name = "Event Controller Buffer",
     category = "Event controllers",
-    notes = "Activates multiple events. It's possible to define a delay time. If the delay is set to 0, the event will be activated instantly. If not, it will wait a specific amount of time before activating.\n\nThe purpose of this sprite in World 3-Ghost House seems to be to make the stairs go down a few seconds after the ? Switch timer is up.",
+    notes = "Activates multiple events. It's possible to define a delay time. If the delay is set to 0, the event will be activated instantly. If not, it will wait a specific amount of time before activating.\n\nThe purpose of this sprite in World 3-Ghost House seems to be to make the stairs go down a few seconds after the ? Switch timer is up.\n\nTarget event: the input. When that ID is activated, the trigger event's ID is switched.\nTrigger event: the ID that gets switched, activated or deactivated depending on the mode. Switching is a toggle: deactivating a deactivated event activates it, and activating an already activated event deactivates it.",
     fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "When this event ID is activated, the target event ID will be activated or deactivated (depending on the mode).",
-        },
-        {
-            key = "target_id_1",
-            label = "Target ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "When activated, this event ID will be switched (activated or deactivated), depending on the chosen mode. Note: Deactivating a deactivated event will activate it. Activating an already activated event will deactivate it.",
-        },
         {
             key = "trigger_mode",
             label = "Trigger mode",

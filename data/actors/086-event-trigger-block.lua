@@ -15,14 +15,6 @@ return {
     name = "Event trigger block",
     category = "Event controllers",
     notes = "Can only be activated by jump-from-below or Ground Pound.\nSwitches an event on, then when hit again; off, then when hit again; on....etc",
-    fields = {
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
 }

@@ -20,12 +20,6 @@ return {
     category = "Event controllers",
     fields = {
         {
-            key = "input_id",
-            label = "Input ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
             key = "dest_area",
             label = "Dest. area",
             bitOffset = 8,

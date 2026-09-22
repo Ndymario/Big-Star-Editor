@@ -11,18 +11,6 @@ return {
     notes = "To change what this can spawn, swap tiles around in map16. Can be used to make very intresting things, like a Star Coin select screen.",
     fields = {
         {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
             key = "length",
             label = "Length",
             bitOffset = 4,

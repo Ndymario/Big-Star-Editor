@@ -19,14 +19,6 @@ return {
     name = "Lakithunder",
     category = "Bosses and cutscenes",
     notes = "Swoops down on the player, and tries to strike the player with Lightning as well. Can only be spawned with a Castle Boss Controller.",
-    fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

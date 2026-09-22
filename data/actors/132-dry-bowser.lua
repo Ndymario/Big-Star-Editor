@@ -19,20 +19,6 @@ return {
     name = "Dry Bowser",
     category = "Bosses and cutscenes",
     notes = "Regular Bowser seen in 1-Castle, exept throws bones and is immune to Fireballs.",
-    fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "bridge_id",
-            label = "Bridge ID",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

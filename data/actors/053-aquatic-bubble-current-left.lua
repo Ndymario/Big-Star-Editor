@@ -24,20 +24,6 @@ return {
     objectId = 53,
     name = "Aquatic bubble current (left)",
     category = "Enemies - Water",
-    fields = {
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

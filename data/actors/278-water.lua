@@ -8,22 +8,8 @@ return {
     objectId = 278,
     name = "Water",
     category = "Effects and decorations",
-    notes = "There is no way to make water only appear in a zone; like in NSMBW, but you can emulate this with the unused water tiles (which has its limitations) or by quickly rising the water when you enter an area and lowering it when you exit it (with the event controllers).",
+    notes = "There is no way to make water only appear in a zone; like in NSMBW, but you can emulate this with the unused water tiles (which has its limitations) or by quickly rising the water when you enter an area and lowering it when you exit it (with the event controllers).\n\nTrigger event (ID 1): the water will rise then lower. (This is wrong, Hiccup thinks [E version].)\nTarget event (ID 2): the water will rise, but has to be activated again with a stop command to lower.",
     fields = {
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "On ID 2 the water will rise, but have to be activated again with a stop command to lower.",
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "On ID 1 the water will rise then lower. (This is wrong, Hiccup thinks[E version])",
-        },
         {
             key = "water_lowering_s_delay",
             label = "Water lowering's delay",

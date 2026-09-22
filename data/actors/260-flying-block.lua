@@ -30,6 +30,7 @@ return {
     objectId = 260,
     name = "Flying ? Block",
     category = "Event controllers",
+    notes = "Target event: the switch appears while this event is on, but only once it has been emptied out of the block.\nTrigger event: switched on when the switch is pressed.",
     fields = {
         {
             key = "item",
@@ -97,20 +98,6 @@ return {
             bitOffset = 16,
             bitWidth = 4,
             notes = "Pointing hands only.",
-        },
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Switch appears when on (but only appears after emptying it out of the block).",
-        },
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Switches ID on when switch pressed.",
         },
         {
             key = "clone_settings",

@@ -19,20 +19,6 @@ return {
     name = "Bowser",
     category = "Bosses and cutscenes",
     notes = "- Can start moving without being activated in some circumstances [desmume glitch?]\n- After roaring it allows Mario to move after boss activator makes him stop.",
-    fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "bridge_id",
-            label = "Bridge ID",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

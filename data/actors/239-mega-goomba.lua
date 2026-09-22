@@ -19,14 +19,6 @@ return {
     name = "Mega Goomba",
     category = "Enemies - Overground",
     notes = "This is a boss used in World 4.",
-    fields = {
-        {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-    },
     init = init,
     render = render,
     grabBounds = grabBounds,

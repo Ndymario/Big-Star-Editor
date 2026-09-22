@@ -25,20 +25,8 @@ return {
     objectId = 67,
     name = "Star Coin",
     category = "Event controllers",
+    notes = "Trigger event: a defunct target ID? Some levels set it to no effect.",
     fields = {
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
-            key = "unknown_2_3",
-            label = "Unknown 2-3",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Defunct Target ID? Used in some levels uselessly.",
-        },
         {
             key = "non_timed_event",
             label = "Non-timed event",

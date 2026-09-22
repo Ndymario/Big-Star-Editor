@@ -18,6 +18,7 @@ return {
     objectId = 103,
     name = "Spiked Ball",
     category = "Enemies - Castle",
+    notes = "Trigger event: the spiked ball won't spawn while that ID is activated; 0 disables it.\nTarget event: a second such ID, which has no effect if the trigger event is 0.",
     fields = {
         {
             key = "direction",
@@ -50,20 +51,6 @@ return {
             bitOffset = 12,
             bitWidth = 4,
             checkboxValue = 1,
-        },
-        {
-            key = "destroyer_id_1",
-            label = "Destroyer ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "The spiked ball won't spawn while the ID is activated. 0=disable",
-        },
-        {
-            key = "destroyer_id_2",
-            label = "Destroyer ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "This one will have no effect if Destroyer ID 1 is equal to 0.",
         },
         {
             key = "spiked_ball_id",

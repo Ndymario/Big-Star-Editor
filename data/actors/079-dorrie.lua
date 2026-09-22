@@ -63,7 +63,7 @@ return {
     objectId = 79,
     name = "Dorrie",
     category = "Platforms and ropes",
-    notes = "If end path node is not set, Dorrie will keep going back and forth between last two nodes. Set end as value 1 in unknown 6.\n\nUsing value 256 in unknown 3 will lower Dorrie's head. 512 will raise it again. Set this at each node you want a change or it will continue from last node setting.",
+    notes = "If end path node is not set, Dorrie will keep going back and forth between last two nodes. Set end as value 1 in unknown 6.\n\nUsing value 256 in unknown 3 will lower Dorrie's head. 512 will raise it again. Set this at each node you want a change or it will continue from last node setting.\n\nEither event byte: Dorrie starts facing away from the background and turns to its actual direction when the event is activated. If set to zero, Dorrie won't start until touched by Mario. Unused.",
     fields = {
         {
             key = "path_id",
@@ -98,20 +98,6 @@ return {
                 { value = 2, label = "Towards background" },
                 { value = 3, label = "Away from background" },
             },
-        },
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Starts facing away from background and turns to actual direction when activated. If set to zero, Dorrie won't start until touched by Mario. Unused.",
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Starts facing away from background and turns to actual direction when activated. If set to zero, Dorrie won't start until touched by Mario. Unused.",
         },
     },
     init = init,

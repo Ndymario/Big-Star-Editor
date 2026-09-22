@@ -21,18 +21,6 @@ return {
     notes = "\"Only someone with direct access to the database can proceed this modification : Class ID is actually 144, not 2 !\"\nThis one doesn't shoot out baby bloopers.",
     fields = {
         {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
             key = "avoids_mario",
             label = "Avoids Mario",
             bitOffset = 0,

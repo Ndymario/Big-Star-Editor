@@ -8,7 +8,7 @@ return {
     objectId = 141,
     name = "Event Controller Zone",
     category = "Event controllers",
-    notes = "This event controller can activate a target event ID, if either a player touches a predefined location and/or specified enemies are defated. There are many additional settings for this controller that can tweak its behaviour, for example requiring Mario to have a specific power-up status, or requiring him to be inside a location instead of just touching it. Setting up the controller to deactivate the event ID instead of activating it, will also swap the effect of the controller, requiring Mario to leave a predefined location or to clear a predefined location from all enemies to trigger the event.  Note that unlike NSMBW, only enemy \"life\" status is watched, not their position. The zone is used to select sprites placed in the editor that should be watched.",
+    notes = "This event controller can activate a target event ID, if either a player touches a predefined location and/or specified enemies are defated. There are many additional settings for this controller that can tweak its behaviour, for example requiring Mario to have a specific power-up status, or requiring him to be inside a location instead of just touching it. Setting up the controller to deactivate the event ID instead of activating it, will also swap the effect of the controller, requiring Mario to leave a predefined location or to clear a predefined location from all enemies to trigger the event.  Note that unlike NSMBW, only enemy \"life\" status is watched, not their position. The zone is used to select sprites placed in the editor that should be watched.\n\nTrigger event: the event ID activated once the conditions are met. The Target event row is not a target here - it is the Player ID, and the two rows edit the same byte.",
     fields = {
         {
             key = "player_id",
@@ -20,13 +20,6 @@ return {
                 { value = 1, label = "Player 0" },
                 { value = 2, label = "Player 1" },
             },
-        },
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "This event ID will be activated when the specified conditions are met.",
         },
         {
             key = "player_zone_id",

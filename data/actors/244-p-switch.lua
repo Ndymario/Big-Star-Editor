@@ -29,22 +29,8 @@ return {
     objectId = 244,
     name = "P Switch",
     category = "Event controllers",
-    notes = "This automatically makes all Blue Coins appear.",
+    notes = "This automatically makes all Blue Coins appear.\n\nTarget event: if not set, the switch will always show. If set, the switch will only show while this event ID is activated. Slightly buggy if used with multiple use, as the switch will pop back up immediately, which looks a bit strange and also causes Mario to be pushed into the air. No \"real\" glitch.\nTrigger event: by default, this switch will activate blue Coins and turn Coins into brick blocks and vice versa. Don't use this switch in combination with a tile god which creates blue Coins; said blue Coins' graphics will be glitched, so use blue Coin objects instead.",
     fields = {
-        {
-            key = "triggering_event_id",
-            label = "Triggering event ID",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "If not set, the switch will always show. If set, the switch will only show while this event ID is activated. Slightly buggy if used with multiple use as the switch will pop back up immediately, which looks a bit strange and also causes Mario to be pushed into the air. No \"real\" glitch.",
-        },
-        {
-            key = "target_event_id",
-            label = "Target event ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "By default, this switch will activate blue coins and turn coins into brick blocks and vice versa. Don't use this switch in combination with a tile god which creates blue coins; said blue coins' graphics will be glitched, so use blue coins objects instead.",
-        },
         {
             key = "settings",
             label = "Settings",

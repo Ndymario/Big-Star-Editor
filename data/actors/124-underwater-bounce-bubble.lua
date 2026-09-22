@@ -22,7 +22,7 @@ return {
     objectId = 124,
     name = "Underwater bounce bubble",
     category = "Enemies - Water",
-    notes = "If it is ground pounded it will be destroyed, which is a unused behaviour.",
+    notes = "If it is ground pounded it will be destroyed, which is a unused behaviour.\n\nBoth event bytes are unused.",
     fields = {
         {
             key = "shift_distance",
@@ -37,20 +37,6 @@ return {
             bitOffset = 0,
             bitWidth = 1,
             checkboxValue = 1,
-        },
-        {
-            key = "destroyer_id_1",
-            label = "Destroyer ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Unused.",
-        },
-        {
-            key = "destroyer_id_2",
-            label = "Destroyer ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Unused.",
         },
     },
     init = init,

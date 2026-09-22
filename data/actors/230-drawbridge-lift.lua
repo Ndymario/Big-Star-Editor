@@ -8,6 +8,7 @@ return {
     objectId = 230,
     name = "Drawbridge lift",
     category = "Platforms and ropes",
+    notes = "Trigger event: unused.\nTarget event: enables/disables movement. Unused.",
     fields = {
         {
             key = "length_of_side",
@@ -76,20 +77,6 @@ return {
                 { value = 0, label = "Up" },
                 { value = 1, label = "Down" },
             },
-        },
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Unused.",
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Enables/disables movement. Unused.",
         },
     },
     grabBounds = grabBounds,

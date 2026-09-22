@@ -74,18 +74,6 @@ return {
             notes = "If you want to go right, put clockwise. If you want to go left, put counterclockwise.",
             checkboxValue = 1,
         },
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
     },
     init = init,
     render = render,

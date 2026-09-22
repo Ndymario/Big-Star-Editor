@@ -11,12 +11,6 @@ return {
     notes = "Spawns any boss outside of the final boss. for more info, see the Final Bowser controller.",
     fields = {
         {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
             key = "boss",
             label = "Boss",
             bitOffset = 0,

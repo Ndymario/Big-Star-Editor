@@ -26,6 +26,7 @@ return {
     objectId = 186,
     name = "Big four platform rickshaw lift (rotates on spot by self)",
     category = "Platforms and ropes",
+    notes = "Both event bytes are unused.",
     fields = {
         {
             key = "rotation",
@@ -44,20 +45,6 @@ return {
             bitWidth = 4,
             notes = "Unused.",
             checkboxValue = 1,
-        },
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Unused.",
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Unused.",
         },
     },
     init = init,

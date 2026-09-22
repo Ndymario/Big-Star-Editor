@@ -42,21 +42,8 @@ return {
     objectId = 250,
     name = "Hanging Bouncing ? Block",
     category = "Platforms and ropes",
+    notes = "Both event bytes are unused. The block starts moving when the event is activated, and turning the event off doesn't affect it.",
     fields = {
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "Unused. Starts moving when this is activated. Turning off event doesn't affect it.",
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "Unused. Starts moving when this is activated. Turning off event doesn't affect it.",
-        },
         {
             key = "drop_swing_amount",
             label = "Drop / Swing Amount",

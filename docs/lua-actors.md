@@ -135,8 +135,24 @@ invisible and uncollidable until `triggerID`'s bit is set in the global 64-bit
 **activates it**, and the panel labels them `Target event` and `Trigger event`.
 Actors may still repurpose a byte -- `Bowser::waitEventState` waits on `targetID`
 because Bowser has nothing to fire -- so treat it as the contract, not a law.
-Names in this catalog are inherited from NSMBe and are looser than that: an actor
-may call both bytes `Trigger ID 1` and `Trigger ID 2`.
+
+Because those two rows are always there, **an actor does not declare a whole
+event byte again**. A field with `bitOffset = 32` or `bitOffset = 40` and
+`bitWidth = 8` and nothing else -- no `choices`, no `checkboxValue`, no
+`valueOffset`, no `signed` -- is the `Target event` or `Trigger event` row under
+a second name, and shows the same number twice in the same panel. The catalog
+declares a field over those bits only when no byte row can stand in for it:
+
+- part of a byte, like `106 Fire Snake`'s `jump` on bits 40-43;
+- reaching across two, like `191`'s `Trigger ID 1` on bits 36-43;
+- naming its values, like `141 Event Controller Zone`'s `Player ID`, which is
+  the whole of bits 40-47 but picks from a Mario/Luigi list.
+
+What an actor does with a byte belongs in its own top-level `notes`, which the
+panel shows on the **ⓘ** beside the actor's name. Those notes name the rows the
+way the panel does, not the way NSMBe did: `103 Spiked Ball` says "Trigger event:
+the spiked ball won't spawn while that ID is activated", where the old field was
+called `Destroyer ID 1`.
 
 A declared field never becomes the only way to edit a sprite. The panel's
 **Raw Fields** section keeps the settings word, from its high byte down, in a hex

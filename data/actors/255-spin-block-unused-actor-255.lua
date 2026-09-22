@@ -21,12 +21,6 @@ return {
     notes = "Not complete because: Unknown values, unknown use\nWon't appear if Sprite 95 is not in immediate vicinity.",
     fields = {
         {
-            key = "trigger_id",
-            label = "Trigger ID",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
             key = "unknown_8",
             label = "Unknown 8",
             bitOffset = 12,

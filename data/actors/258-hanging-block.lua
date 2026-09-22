@@ -34,18 +34,6 @@ return {
     category = "Other",
     fields = {
         {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-        },
-        {
-            key = "trigger_id_2",
-            label = "Trigger ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
-        {
             key = "unknown_5",
             label = "Unknown 5",
             bitOffset = 24,

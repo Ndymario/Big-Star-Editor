@@ -18,6 +18,7 @@ return {
     objectId = 185,
     name = "Large Spiked Ball",
     category = "Enemies - Castle",
+    notes = "Trigger event: the spiked ball won't spawn while that ID is activated; 0 disables it.\nTarget event: a second such ID, which has no effect if the trigger event is 0.",
     fields = {
         {
             key = "direction",
@@ -51,20 +52,6 @@ return {
             bitWidth = 4,
             notes = "If set to true when it collides with a wall it will roll the other direction.",
             checkboxValue = 1,
-        },
-        {
-            key = "destroyer_id_1",
-            label = "Destroyer ID 1",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "The spiked ball won't spawn while the ID is activated. 0=disable",
-        },
-        {
-            key = "destroyer_id_2",
-            label = "Destroyer ID 2",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "This one will have no effect if Destroyer ID 1 is equal to 0.",
         },
     },
     init = init,

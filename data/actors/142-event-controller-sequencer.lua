@@ -8,21 +8,8 @@ return {
     objectId = 142,
     name = "Event Controller Sequencer",
     category = "Event controllers",
+    notes = "Target event: the sequencer starts running when this event ID is triggered.\nTrigger event: the sequencer triggers every event from the starter ID up to this one. If 0, it triggers every single event from the starter ID onward. This may need testing, though.",
     fields = {
-        {
-            key = "starter_id",
-            label = "Starter ID",
-            bitOffset = 40,
-            bitWidth = 8,
-            notes = "The activator will start running when this event ID is triggered.",
-        },
-        {
-            key = "finisher_id",
-            label = "Finisher ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "The activator will trigger all events from the start event ID to this event ID. If 0, the sprite will trigger every single event from the starting from the starter ID. This may need testing, though.",
-        },
         {
             key = "delay",
             label = "Delay",

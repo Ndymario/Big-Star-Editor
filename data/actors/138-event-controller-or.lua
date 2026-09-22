@@ -8,13 +8,8 @@ return {
     objectId = 138,
     name = "Event Controller OR",
     category = "Event controllers",
+    notes = "Up to 4 inputs can trigger the same output ID: the Trigger event row is the first input, then Trigger ID 2-4, and the Target event row is the output. All input IDs must be set to relevant values. Do not leave any IDs as 0 - if you have fewer than four, you can enter the same ID into several spaces.",
     fields = {
-        {
-            key = "trigger_id_1",
-            label = "Trigger ID 1",
-            bitOffset = 40,
-            bitWidth = 8,
-        },
         {
             key = "trigger_id_2",
             label = "Trigger ID 2",
@@ -32,13 +27,6 @@ return {
             label = "Trigger ID 4",
             bitOffset = 8,
             bitWidth = 8,
-        },
-        {
-            key = "target_id",
-            label = "Target ID",
-            bitOffset = 32,
-            bitWidth = 8,
-            notes = "This sprite allows up to 4 inputs to trigger the same output ID. All input IDs must be set to relevant values. Do not leave any IDs as 0 - if you have less than four, you can enter the same ID into several spaces.",
         },
         {
             key = "mode",
