@@ -780,20 +780,31 @@ return {objectId=86, name="Split Box", grabBounds=grab, renderBounds=render})";
         assert(square_stone_wall_commands.value()[command].y == square_stone_wall_y[command]);
     }
 
-    // The flimsy lift reads only three length bits and doubles the logical
-    // value into its tile count, leaving the low nybble's high bit ignored.
+    // The flimsy lift reads only two length bits -- `FallWhenTouchedPlatform`
+    // takes `(settings & 3) + 1` -- and doubles the logical value into its tile
+    // count, so the low nybble's top two bits change nothing. Settings 0xf is
+    // the same four-long, eight-tile lift that 0x3 is.
     auto flimsy_lift_input = barrel_input;
     flimsy_lift_input.settings = 0xf;
     const auto* flimsy_lift = shipped_catalog.value().by_object_id(173);
     auto flimsy_lift_bounds = nsmb::project::lua_actor_bounds(*flimsy_lift, flimsy_lift_input);
     auto flimsy_lift_commands = nsmb::project::render_lua_actor(*flimsy_lift, flimsy_lift_input);
     assert(flimsy_lift_bounds && flimsy_lift_bounds.value());
-    assert(flimsy_lift_bounds.value()->x == 40 && flimsy_lift_bounds.value()->y == 320);
-    assert(flimsy_lift_bounds.value()->width == 256 && flimsy_lift_bounds.value()->height == 16);
-    assert(flimsy_lift_commands && flimsy_lift_commands.value().size() == 16);
-    assert(flimsy_lift_commands.value()[0].x == 40 && flimsy_lift_commands.value()[0].y == 320);
-    assert(flimsy_lift_commands.value()[1].x == 56 && flimsy_lift_commands.value()[1].y == 320);
-    assert(flimsy_lift_commands.value()[15].x == 280 && flimsy_lift_commands.value()[15].y == 320);
+    assert(flimsy_lift_bounds.value()->x == 104 && flimsy_lift_bounds.value()->y == 320);
+    assert(flimsy_lift_bounds.value()->width == 128 && flimsy_lift_bounds.value()->height == 16);
+    assert(flimsy_lift_commands && flimsy_lift_commands.value().size() == 8);
+    assert(flimsy_lift_commands.value()[0].x == 104 && flimsy_lift_commands.value()[0].y == 320);
+    assert(flimsy_lift_commands.value()[1].x == 120 && flimsy_lift_commands.value()[1].y == 320);
+    assert(flimsy_lift_commands.value()[7].x == 216 && flimsy_lift_commands.value()[7].y == 320);
+
+    // The two ignored bits are not merely masked out of the value: 0x3 renders
+    // identically, which is the whole of what narrowing the field bought.
+    auto flimsy_lift_low_input = barrel_input;
+    flimsy_lift_low_input.settings = 0x3;
+    auto flimsy_lift_low_bounds = nsmb::project::lua_actor_bounds(*flimsy_lift, flimsy_lift_low_input);
+    assert(flimsy_lift_low_bounds && flimsy_lift_low_bounds.value());
+    assert(flimsy_lift_low_bounds.value()->x == flimsy_lift_bounds.value()->x);
+    assert(flimsy_lift_low_bounds.value()->width == flimsy_lift_bounds.value()->width);
 
     // The one-way lift clamps its logical length to two tiles and remains
     // centered on the actor origin.
