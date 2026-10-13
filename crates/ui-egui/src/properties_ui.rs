@@ -4,14 +4,21 @@ use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
 use egui::{RichText, Ui};
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
-use crate::level_view::{Kind, LevelView};
+use crate::level_view::{Item, Kind, LevelView};
 use crate::properties::{
     Editor, PanelState, Row, Rows, Span, TABS, Tab, add_edit, add_node_edit, apply, apply_settings, common_settings, delete_edit, delete_node_edit,
-    format_settings, format_value, item_count, parse_settings, parse_value, rows, sprite_types,
+    format_settings, format_value, item_count, line_label, list_lines, parse_settings, parse_value, rows, sprite_types,
 };
 use crate::{dialogs, icons};
 
 const LABEL_WIDTH: f32 = 112.0;
+/// The least a number's box is wide; a longer value widens its own.
+const NUMBER_WIDTH: f32 = 52.0;
+/// How much of its line a drop-down takes.
+const CHOICE_SHARE: f32 = 0.55;
+/// How many lines of the list show before it scrolls.
+const LIST_ROWS: f32 = 7.0;
+const NODE_INDENT: f32 = 16.0;
 
 /// A field's editor. Returns the value to write when the person finished turning it.
 fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Option<i64> {
@@ -22,6 +29,14 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             let unset = min - 1;
             let shown = panel.dragging.filter(|(i, _)| *i == index).map(|(_, v)| v).or(row.value).unwrap_or(unset);
             let mut value = shown;
+            // A spin box, laid out from the right: its arrows, then the number they step, close enough to read as one.
+            let spacing = ui.spacing().clone();
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().interact_size.x = NUMBER_WIDTH;
+            let step = controls::steppers(ui);
+            // The gap a widget leaves is set as it is placed: only the arrows keep the number close, and the number
+            // stands off from the label before it as far as anything else does.
+            ui.spacing_mut().item_spacing.x = spacing.item_spacing.x;
             let response = ui.add(
                 controls::number(&mut value)
                     .range(unset..=*max)
@@ -30,6 +45,11 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
                     .custom_formatter(move |n, _| if n as i64 == unset { "—".to_owned() } else { format_value(n as i64, hex) })
                     .custom_parser(move |text| parse_value(text, hex).map(|v| v as f64)),
             );
+            *ui.spacing_mut() = spacing;
+            if step != 0 {
+                // An arrow steps from the value the selection agrees on; where it disagrees there is nothing to step from.
+                return row.value.map(|v| (v + step).clamp(*min, *max)).filter(|v| Some(*v) != row.value);
+            }
             if response.dragged() && value != shown {
                 panel.dragging = Some((index, value));
             }
@@ -45,10 +65,9 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
                 None => format!("{} — not listed", format_value(value, hex)),
             };
             let mut picked = None;
-            // The note's icon follows on the same line. A drop-down that took the whole line would push it past the
-            // panel's edge, and the panel would widen to fit it every frame.
-            let note = if row.note.is_empty() { 0.0 } else { icons::SIZE_SM + ui.spacing().item_spacing.x };
-            let width = (ui.available_width() - note).max(80.0);
+            // A share of the line, so the label and the note's icon keep theirs. A drop-down that took the whole
+            // line would push them past the panel's edge, and the panel would widen to fit them every frame.
+            let width = (ui.available_width() * CHOICE_SHARE).max(80.0);
             ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
                 controls::drop_down(("property-choice", index))
                     .width(width)
@@ -76,28 +95,76 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
     }
 }
 
-/// One row: its label (a checkbox is its own), its editor and its note.
-fn row_ui(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row, label_width: f32) -> Option<i64> {
-    ui.horizontal(|ui| {
-        if row.editor != Editor::Boolean {
-            ui.add_sized([label_width, 18.0], egui::Label::new(&row.label).truncate()).on_hover_text(&row.label);
+/// One row: its label on the left (a checkbox is its own), its editor against the right edge, and its note between
+/// them, so the editors of every row end on one line whatever their labels and notes.
+fn row_ui(ui: &mut Ui, row: &Row, editor: impl FnOnce(&mut Ui) -> Option<i64>) -> Option<i64> {
+    let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    let leftwards = egui::Layout::left_to_right(egui::Align::Center);
+    ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        if row.editor == Editor::Boolean {
+            return ui
+                .with_layout(leftwards, |ui| {
+                    let written = editor(ui);
+                    if !row.note.is_empty() {
+                        controls::hint(ui, &row.note);
+                    }
+                    written
+                })
+                .inner;
         }
-        let written = editor(ui, panel, index, row);
+        let written = editor(ui);
         if !row.note.is_empty() {
             controls::hint(ui, &row.note);
         }
+        ui.with_layout(leftwards, |ui| ui.add(egui::Label::new(&row.label).truncate()).on_hover_text(&row.label));
         written
     })
     .inner
 }
 
+/// A sprite's Object ID as a drop-down of the actors by name, in place of a number nobody knows by heart. Returns
+/// the type picked.
+fn sprite_type_editor(ui: &mut Ui, row: &Row, types: &[(u16, String)]) -> Option<i64> {
+    let selected = match row.value {
+        Some(value) => match types.iter().find(|(t, _)| i64::from(*t) == value) {
+            Some((t, name)) => format!("{t} — {name}"),
+            None => format!("Actor {value}"),
+        },
+        None => "—".to_owned(),
+    };
+    let width = (ui.available_width() * CHOICE_SHARE).max(80.0);
+    let filter_id = ui.id().with("sprite-picker-filter");
+    let mut picked = None;
+    ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
+        controls::drop_down("sprite-picker").width(width).truncate().selected_text(selected).height(320.0).show_ui(ui, |ui| {
+            // 300 actors are too many to address by number, so the list filters by what is typed.
+            let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+            ui.add(TextField::new(&mut filter).hint("Filter actors…"));
+            ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
+            let needle = filter.to_lowercase();
+            for (t, name) in types {
+                let entry = format!("{t} — {name}");
+                if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
+                    continue;
+                }
+                let value = i64::from(*t);
+                if ui.choice(row.value == Some(value), entry).clicked() && row.value != Some(value) {
+                    picked = Some(value);
+                }
+            }
+        });
+    });
+    picked
+}
+
 fn pairs_up(row: &Row) -> bool {
-    row.span == Span::Half && matches!(row.editor, Editor::Number { .. }) && row.note.is_empty()
+    row.span == Span::Half && !row.group.is_empty() && matches!(row.editor, Editor::Number { .. }) && row.note.is_empty()
 }
 
 /// The panel. Returns the edit the person made, if they made one.
 pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverlays>, busy: bool) -> Option<LevelEdit> {
     view.sync_panel();
+    let reveal = std::mem::take(&mut view.panel.reveal);
     let mut edit = None;
     ui.horizontal_wrapped(|ui| {
         for (tab, name) in TABS {
@@ -113,63 +180,62 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
 
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if tab == Tab::Entity(Kind::Sprite) {
-            sprite_header(ui, view, &shown, busy, &mut edit);
+            sprite_header(ui, view, &shown);
         }
 
-        controls::section(ui, "Selection", |ui| {
-            ui.add_enabled_ui(tab != Tab::Course && count != 0 && !shown.multi(), |ui| {
-                ui.horizontal(|ui| {
-                    ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Item"));
-                    let mut item = view.panel.item.min(count.saturating_sub(1));
-                    if ui.add(controls::number(&mut item).range(0..=count.saturating_sub(1))).changed() {
-                        view.panel_item(item);
-                    }
-                    if shown.multi() {
-                        ui.weak(format!("{} selected", shown.indices.len()));
-                    }
-                });
-            });
-            if let Tab::Entity(kind @ (Kind::Path | Kind::ProgressPath)) = tab
-                && !shown.multi()
-            {
-                let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
-                ui.add_enabled_ui(nodes != 0, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Node"));
-                        let mut node = shown.node;
-                        if ui.add(controls::number(&mut node).range(0..=nodes.saturating_sub(1))).changed() {
-                            view.panel_node(node);
-                        }
+        match tab {
+            Tab::Entity(kind) => edit = item_list(ui, view, kind, &shown, reveal, busy),
+            _ => {
+                controls::section(ui, "Selection", |ui| {
+                    ui.add_enabled_ui(tab != Tab::Course && count != 0, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Item"));
+                            let mut item = view.panel.item.min(count.saturating_sub(1));
+                            if ui.add(controls::number(&mut item).range(0..=count.saturating_sub(1))).changed() {
+                                view.panel_item(item);
+                            }
+                        });
                     });
                 });
             }
-        });
+        }
 
         controls::section(ui, "Properties", |ui| {
             if shown.rows.is_empty() {
                 ui.weak(if count == 0 { "Nothing of this kind in the level." } else { "Nothing to edit here." });
             }
             let mut written = None;
+            let types = if tab == Tab::Entity(Kind::Sprite) { sprite_types(view) } else { Vec::new() };
             ui.add_enabled_ui(!busy, |ui| {
                 let mut index = 0;
                 while let Some(row) = shown.rows.get(index) {
                     match shown.rows.get(index + 1).filter(|next| pairs_up(row) && pairs_up(next)) {
                         Some(next) => {
-                            // Peers share a line, and their labels are as wide as the longer one so the editors line up.
-                            let half = (ui.available_width() / 2.0 - 8.0).max(60.0);
-                            ui.horizontal(|ui| {
-                                for (offset, current) in [(0, row), (1, next)] {
-                                    ui.allocate_ui(egui::vec2(half, 22.0), |ui| {
-                                        if let Some(value) = row_ui(ui, &mut view.panel, index + offset, current, 72.0) {
-                                            written = Some((index + offset, value));
-                                        }
-                                    });
+                            // Peers share a line under the name of what they are together: that on the left, and each
+                            // one's own short label and box against the right edge, the second where every row's box is.
+                            let size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+                            ui.allocate_ui_with_layout(size, egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                for (offset, current) in [(1, next), (0, row)] {
+                                    if let Some(value) = editor(ui, &mut view.panel, index + offset, current) {
+                                        written = Some((index + offset, value));
+                                    }
+                                    ui.label(format!("{}:", current.label));
                                 }
+                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                    ui.add(egui::Label::new(&row.group).truncate()).on_hover_text(&row.group)
+                                });
                             });
                             index += 2;
                         }
                         None => {
-                            if let Some(value) = row_ui(ui, &mut view.panel, index, row, LABEL_WIDTH) {
+                            // A sprite's first row is its type, picked by name wherever the actors are known.
+                            let value = if tab == Tab::Entity(Kind::Sprite) && index == 0 && !types.is_empty() {
+                                row_ui(ui, row, |ui| sprite_type_editor(ui, row, &types))
+                            } else {
+                                let panel = &mut view.panel;
+                                row_ui(ui, row, |ui| editor(ui, panel, index, row))
+                            };
+                            if let Some(value) = value {
                                 written = Some((index, value));
                             }
                             index += 1;
@@ -202,39 +268,95 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
                 }
             });
         }
-
-        if let Tab::Entity(kind) = tab {
-            ui.add_enabled_ui(!busy, |ui| {
-                ui.horizontal(|ui| {
-                    if Button::new("Add").show(ui).clicked() {
-                        view.expect_placement();
-                        edit = add_edit(&view.snapshot, tab);
-                    }
-                    if Button::new("Delete").enabled(count != 0).show(ui).clicked() {
-                        edit = delete_edit(tab, &shown);
-                    }
-                });
-                if kind.path() && !shown.multi() && count != 0 {
-                    ui.horizontal(|ui| {
-                        let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
-                        if Button::new("Add Node").show(ui).clicked() {
-                            edit = add_node_edit(&view.snapshot, tab, &shown);
-                            view.panel_node(nodes);
-                        }
-                        if Button::new("Delete Node").enabled(nodes != 0).show(ui).clicked() {
-                            edit = delete_node_edit(&view.snapshot, tab, &shown);
-                        }
-                    });
-                }
-            });
-        }
     });
     actor_info(ui.ctx(), view, &shown);
     edit
 }
 
-/// The name of the actor the sprite resolved to, and a picker that retypes it by name.
-fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, edit: &mut Option<LevelEdit>) {
+/// Everything of the tab's kind, one line each, the selected ones lit. NSMB Editor's list: picking a line selects it
+/// on the canvas and scrolls there, a path as a whole, and a modifier adds to what is selected. Miyamoto's as well: a
+/// path opens onto its nodes, each one a line of its own. `reveal` scrolls the list to a selection made elsewhere.
+/// What adds to the list and takes from it sits under it. Returns the edit one of those buttons made.
+fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal: bool, busy: bool) -> Option<LevelEdit> {
+    let tab = Tab::Entity(kind);
+    let lines = list_lines(view, kind);
+    let mut edit = None;
+    let line_of = |wanted: Item| lines.iter().position(|line| *line == wanted);
+    let target = view.selection.first().filter(|_| reveal).and_then(|first| line_of(*first).or_else(|| line_of(Item::new(first.kind, first.index))));
+    let mut picked = None;
+    controls::section(ui, &format!("{}s", kind.name()), |ui| {
+        let step = controls::HEIGHT_SM + ui.spacing().item_spacing.y;
+        // The lines sit in a well of their own, as a list box does: its edges line up with the title above and the
+        // buttons below, and the lines keep their padding inside it.
+        let t = crate::theme::Tokens::get(ui.ctx());
+        egui::Frame::NONE
+            .fill(t.well)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(egui::CornerRadius::same(controls::RADIUS))
+            .inner_margin(egui::Margin::same(3))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if lines.is_empty() {
+                    ui.weak("None in this level.");
+                    return;
+                }
+                egui::ScrollArea::vertical().id_salt("item-list").max_height(LIST_ROWS * step).auto_shrink([false, true]).show_rows(
+                    ui,
+                    controls::HEIGHT_SM,
+                    lines.len(),
+                    |ui, range| {
+                        if let Some(line) = target {
+                            // Only the lines in view are laid out, so where the wanted one would be is worked out from them.
+                            let top = ui.max_rect().top() + (line as f32 - range.start as f32) * step;
+                            ui.scroll_to_rect(
+                                egui::Rect::from_min_size(egui::pos2(ui.max_rect().left(), top), egui::vec2(1.0, controls::HEIGHT_SM)),
+                                None,
+                            );
+                        }
+                        for &item in lines.get(range).unwrap_or_default() {
+                            let chosen = view.is_selected(item.kind, item.index, item.node);
+                            let indent = if item.node.is_some() { NODE_INDENT } else { 0.0 };
+                            if controls::Row::new(line_label(view, item)).selected(chosen).indent(indent).show(ui).clicked() {
+                                picked = Some((item, ui.input(|i| i.modifiers.shift || i.modifiers.command)));
+                            }
+                        }
+                    },
+                );
+            });
+        ui.add_enabled_ui(!busy, |ui| {
+            // Each pair shares the line evenly, whatever the panel's width.
+            let half = egui::vec2(((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(0.0), controls::HEIGHT);
+            ui.horizontal_top(|ui| {
+                if ui.add_sized(half, Button::new("Add")).clicked() {
+                    view.expect_placement();
+                    edit = add_edit(&view.snapshot, tab);
+                }
+                if ui.add_sized(half, Button::new("Delete").enabled(!lines.is_empty())).clicked() {
+                    edit = delete_edit(tab, shown);
+                }
+            });
+            if kind.path() && !shown.multi() && !lines.is_empty() {
+                ui.horizontal_top(|ui| {
+                    let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
+                    if ui.add_sized(half, Button::new("Add Node")).clicked() {
+                        edit = add_node_edit(&view.snapshot, tab, shown);
+                        view.panel_node(nodes);
+                    }
+                    if ui.add_sized(half, Button::new("Delete Node").enabled(nodes != 0)).clicked() {
+                        edit = delete_node_edit(&view.snapshot, tab, shown);
+                    }
+                });
+            }
+        });
+    });
+    if let Some((item, add)) = picked {
+        view.pick(item, add);
+    }
+    edit
+}
+
+/// The name of the actor the sprite resolved to, and the way into what it says about itself.
+fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows) {
     let sprite_type = shown.indices.first().and_then(|&i| view.snapshot.course.sprites.get(i)).map(|s| s.id);
     ui.horizontal(|ui| {
         ui.vertical(|ui| match &shown.actor {
@@ -256,34 +378,6 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, ed
                 .clicked()
             {
                 view.panel.show_actor_info = true;
-            }
-        });
-    });
-    let entries = sprite_types(view);
-    let enabled = !entries.is_empty() && !shown.multi() && sprite_type.is_some() && !busy;
-    let current = sprite_type.and_then(|t| entries.iter().find(|(e, _)| *e == t));
-    let selected = match (current, sprite_type) {
-        (Some((t, name)), _) => format!("{t} — {name}"),
-        (None, Some(t)) => format!("Actor {t}"),
-        (None, None) => String::new(),
-    };
-    let filter_id = ui.id().with("sprite-picker-filter");
-    ui.add_enabled_ui(enabled, |ui| {
-        controls::drop_down("sprite-picker").width(ui.available_width()).truncate().selected_text(selected).height(320.0).show_ui(ui, |ui| {
-            // 300 actors are too many to address by number, so the list filters by what is typed.
-            let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-            ui.add(TextField::new(&mut filter).hint("Filter actors…"));
-            ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-            let needle = filter.to_lowercase();
-            for (t, name) in &entries {
-                let entry = format!("{t} — {name}");
-                if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
-                    continue;
-                }
-                if ui.choice(Some(*t) == sprite_type, entry).clicked() && Some(*t) != sprite_type {
-                    // The picker turns the Object ID row, so there is one way the type is written.
-                    *edit = apply(view, &view.panel, shown, 0, i64::from(*t));
-                }
             }
         });
     });

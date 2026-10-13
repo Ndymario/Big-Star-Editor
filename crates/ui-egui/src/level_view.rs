@@ -28,6 +28,8 @@ const SCENE_MARGIN: f32 = 128.0;
 const HIT_SLACK: f32 = 3.0;
 /// A knob takes a click this far from its centre, in screen points.
 const KNOB_REACH: f32 = 6.0;
+/// The room, in level pixels, left around something brought into view.
+const REVEAL_MARGIN: f32 = 32.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Kind {
@@ -678,6 +680,18 @@ impl LevelView {
         self.needs_fit = false;
     }
 
+    /// Pans just far enough to bring `rect` (level pixels) onto the canvas with some room around it, centring what
+    /// is too big to fit. Nothing moves when it is already in view.
+    pub fn reveal(&mut self, rect: Rect) {
+        let size = self.canvas.size() / self.zoom;
+        if !(size.x > 0.0 && size.y > 0.0) {
+            return;
+        }
+        let rect = rect.expand(REVEAL_MARGIN);
+        let along = |pan: f32, size: f32, min: f32, max: f32| if max - min > size { (min + max - size) / 2.0 } else { pan.clamp(max - size, min) };
+        self.pan = Vec2::new(along(self.pan.x, size.x, rect.min.x, rect.max.x), along(self.pan.y, size.y, rect.min.y, rect.max.y));
+    }
+
     /// Zooms to an absolute scale about a screen point, pinning the zoom.
     pub fn zoom_about(&mut self, zoom: f32, about: Pos2) {
         let before = self.to_world(about);
@@ -1097,6 +1111,7 @@ impl LevelView {
     pub fn sync_panel(&mut self) {
         if self.selection != self.panel_seen {
             self.panel_seen = self.selection.clone();
+            self.panel.reveal = true;
             let kinds: BTreeSet<Kind> = self.selection.iter().map(|s| s.kind).collect();
             match (kinds.len(), self.selection.first().copied()) {
                 (0, _) => {
@@ -1145,6 +1160,26 @@ impl LevelView {
         }
         self.panel_seen = self.selection.clone();
         self.panel_kind = self.placement.kind;
+    }
+
+    /// The person picked a line of the panel's list: an item, a whole path or one node of it. It becomes the
+    /// selection, or with `add` joins or leaves it, and the canvas brings it into view.
+    pub fn pick(&mut self, item: Item, add: bool) {
+        if add {
+            let before = self.selection.len();
+            self.selection.retain(|s| !(s.kind == item.kind && s.index == item.index && (item.node.is_none() || s.node == item.node)));
+            if self.selection.len() == before {
+                self.selection.push(item);
+            }
+        } else {
+            self.selection = vec![item];
+        }
+        self.sync_panel();
+        // The list is where the pick was made, so it has nothing to scroll to.
+        self.panel.reveal = false;
+        if let Some(rect) = self.bounds(item).filter(|_| self.selection.contains(&item)) {
+            self.reveal(rect);
+        }
     }
 
     /// The person picked a tab.
@@ -1438,6 +1473,33 @@ mod tests {
         view.placement.set_custom_sprite(0xf46a_44b9);
         let Some(LevelEdit::Add { items, name }) = view.placement_edit(Pos2::new(40.0, 40.0), false) else { panic!() };
         assert_eq!((name.as_str(), items.sprites[0].hash), ("Add custom sprite", Some(0xf46a_44b9)));
+    }
+
+    #[test]
+    fn a_line_picked_in_the_list_is_selected_and_brought_into_view() {
+        let mut view = LevelView::new(snapshot());
+        view.canvas = Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 100.0));
+        // A path is picked whole, and the canvas pans only as far as it must: its nodes span 300..356 by 100..116.
+        view.pick(Item::new(Kind::Path, 0), false);
+        assert_eq!(view.selection, [Item::new(Kind::Path, 0)]);
+        assert_eq!((view.panel.tab, view.panel.reveal), (Tab::Entity(Kind::Path), false));
+        assert_eq!(view.pan, Vec2::new(356.0 + 32.0 - 200.0, 116.0 + 32.0 - 100.0));
+        // One of its nodes, already in view, moves nothing.
+        let pan = view.pan;
+        view.pick(Item::node(Kind::Path, 0, 1), false);
+        assert_eq!((view.selection.as_slice(), view.panel.node, view.pan), ([Item::node(Kind::Path, 0, 1)].as_slice(), 1, pan));
+        // Something too big to fit is centred.
+        view.pick(Item::new(Kind::Zone, 0), false);
+        assert_eq!(view.pan, Vec2::new(100.0, 50.0));
+        // With the modifier a line joins the selection, and leaves it when picked again.
+        view.pick(Item::new(Kind::Path, 0), true);
+        assert_eq!(view.selection, [Item::new(Kind::Zone, 0), Item::new(Kind::Path, 0)]);
+        view.pick(Item::new(Kind::Path, 0), true);
+        assert_eq!(view.selection, [Item::new(Kind::Zone, 0)]);
+        // A selection made on the canvas is one the list has to scroll to.
+        view.selection = vec![Item::new(Kind::Sprite, 0)];
+        view.sync_panel();
+        assert!(view.panel.reveal);
     }
 
     #[test]

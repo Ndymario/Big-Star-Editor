@@ -895,7 +895,8 @@ fn a_trackpad_pans_with_two_fingers_and_zooms_with_command() {
 
 /// The demo level's walker (sprite 0), selected.
 fn walker_selected() -> Harness<'static, BigStarApp> {
-    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    // Tall enough that the actor's fields sit under the list without scrolling.
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 900.0));
     select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
     harness.run();
     harness
@@ -913,6 +914,42 @@ fn a_selected_actor_shows_its_name_and_its_own_fields() {
     let snapshot = &view(&harness).snapshot;
     assert_eq!(snapshot.course.sprites[0].settings, 1 << 8);
     assert_eq!(snapshot.undo_names[0], "Edit sprite");
+}
+
+#[test]
+fn the_panel_lists_every_item_of_its_kind_and_a_line_selects_it() {
+    let node = |x| NsmbLevelPathNode { x, y: 64, ..Default::default() };
+    let path = |id, nodes| NsmbLevelPath { id, nodes, unknown: 0 };
+    let mut harness =
+        level_with(LevelEntityInsertions { paths: vec![path(7, vec![node(32)]), path(3, vec![node(96), node(128)])], ..Default::default() });
+    let first = view(&harness).snapshot.course.paths.len() - 2;
+    harness.get_by_label("Paths").click();
+    harness.run();
+    // Picking a path selects all of it and opens it onto its nodes.
+    harness.get_by_label("Path 3 · 2 nodes").click();
+    harness.run();
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Path, first + 1)]);
+    harness.get_by_label("Node 1 (128, 64)").click();
+    harness.run();
+    assert_eq!(view(&harness).selection, [Item::node(Kind::Path, first + 1, 1)]);
+    // A selection made on the canvas lights its line the same way.
+    select(&mut harness, &[Item::node(Kind::Path, first, 0)]);
+    harness.get_by_label("Node 0 (32, 64)");
+    assert!(harness.query_by_label("Node 1 (128, 64)").is_none());
+}
+
+#[test]
+fn a_number_is_a_spin_box_whose_arrows_step_it_by_one_edit() {
+    let mut harness = walker_selected();
+    // The position's line comes first with arrows, and is laid out from the right: Y's arrows come before X's.
+    let x = view(&harness).snapshot.course.sprites[0].x;
+    harness.get_all_by_label("Increase").nth(1).unwrap().click();
+    harness.run();
+    assert_eq!(view(&harness).snapshot.course.sprites[0].x, x + 1);
+    harness.get_all_by_label("Decrease").nth(1).unwrap().click();
+    harness.run();
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!((snapshot.course.sprites[0].x, snapshot.undo_names.len()), (x, 2));
 }
 
 #[test]

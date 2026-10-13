@@ -338,11 +338,12 @@ pub struct Row {
     icon: Option<Icon>,
     fit: bool,
     min_width: f32,
+    indent: f32,
 }
 
 impl Row {
     pub fn new(text: impl Into<WidgetText>) -> Self {
-        Row { text: text.into(), selected: false, icon: None, fit: false, min_width: 0.0 }
+        Row { text: text.into(), selected: false, icon: None, fit: false, min_width: 0.0, indent: 0.0 }
     }
 
     pub fn selected(mut self, selected: bool) -> Self {
@@ -368,6 +369,12 @@ impl Row {
         self
     }
 
+    /// Set in from the left by this much: for a line that belongs to the one above it.
+    pub fn indent(mut self, indent: f32) -> Self {
+        self.indent = indent;
+        self
+    }
+
     pub fn show(self, ui: &mut Ui) -> Response {
         ui.add(self)
     }
@@ -380,13 +387,13 @@ impl egui::Widget for Row {
         let t = Tokens::get(ui.ctx());
         let name = self.text.text().to_owned();
         let icon_room = if self.icon.is_some() { icons::SIZE + GAP } else { 0.0 };
-        let room = (ui.available_width() - 2.0 * PAD - icon_room).max(0.0);
+        let room = (ui.available_width() - 2.0 * PAD - icon_room - self.indent).max(0.0);
         let galley = if self.fit {
             self.text.into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button)
         } else {
             self.text.into_galley(ui, Some(egui::TextWrapMode::Truncate), room, egui::TextStyle::Button)
         };
-        let width = if self.fit { (galley.size().x + 2.0 * PAD + icon_room).max(self.min_width) } else { ui.available_width() };
+        let width = if self.fit { (galley.size().x + 2.0 * PAD + icon_room + self.indent).max(self.min_width) } else { ui.available_width() };
         let (rect, response) = ui.allocate_exact_size(vec2(width, HEIGHT_SM.max(galley.size().y + 4.0)), Sense::click());
         let (enabled, selected) = (ui.is_enabled(), self.selected);
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, selected, &name));
@@ -404,7 +411,7 @@ impl egui::Widget for Row {
         };
         let painter = ui.painter();
         painter.rect_filled(rect, CornerRadius::same(RADIUS - 2), fill);
-        let mut left = rect.left() + PAD;
+        let mut left = rect.left() + PAD + self.indent;
         if let Some(icon) = self.icon {
             let at = Rect::from_min_size(pos2(left, rect.center().y - icons::SIZE / 2.0), Vec2::splat(icons::SIZE));
             icon.paint(painter, at, if self.selected { t.primary_text } else { t.muted });
@@ -577,6 +584,35 @@ pub fn search(ui: &mut Ui, text: &mut String, hint: &str, width: Width) -> Respo
 /// A number dragged or typed: egui's own, in this set's sizes. Finish it with `.range(..)` and the rest.
 pub fn number<N: egui::emath::Numeric>(value: &mut N) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
+}
+
+/// How wide the arrows of a spin box are.
+const STEPPER_WIDTH: f32 = 14.0;
+
+/// The arrows of a spin box, one over the other, for the [`number`] they sit beside. Returns the step a click asked
+/// for: one up, one down, or none.
+pub fn steppers(ui: &mut Ui) -> i64 {
+    let t = Tokens::get(ui.ctx());
+    let (rect, whole) = ui.allocate_exact_size(vec2(STEPPER_WIDTH, ui.spacing().interact_size.y), Sense::hover());
+    let enabled = ui.is_enabled();
+    let mut step = 0;
+    for (by, name) in [(1, "Increase"), (-1, "Decrease")] {
+        let half = if by > 0 { rect.split_top_bottom_at_fraction(0.5).0 } else { rect.split_top_bottom_at_fraction(0.5).1 };
+        let response = ui.interact(half, whole.id.with(by), Sense::click());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
+        let hover = motion::hover(ui, &response, motion::COLOR);
+        ui.painter().rect_filled(half.shrink(1.0), CornerRadius::same(3), motion::mix(Color32::TRANSPARENT, t.border, hover));
+        // A small triangle pointing the way it steps.
+        let (centre, reach) = (half.center(), vec2(3.5, 2.0 * by as f32));
+        let points =
+            vec![pos2(centre.x - reach.x, centre.y + reach.y), pos2(centre.x + reach.x, centre.y + reach.y), pos2(centre.x, centre.y - reach.y)];
+        let ink = if enabled { motion::mix(t.muted, t.foreground, hover) } else { t.subtle };
+        ui.painter().add(egui::Shape::convex_polygon(points, ink, Stroke::NONE));
+        if response.clicked() {
+            step = by;
+        }
+    }
+    step
 }
 
 /// The side of a checkbox's box.

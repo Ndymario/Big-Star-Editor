@@ -10,7 +10,7 @@ use bigstar_level::{
 };
 use bigstar_protocol::{ActorInfo, LevelEdit, LevelSnapshot, ObjectBankOverlays};
 
-use crate::level_view::{Gesture, Kind, LevelView, TILE};
+use crate::level_view::{Gesture, Item, Kind, LevelView, TILE};
 
 /// The panel's side tabs, in the order they are shown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,11 +50,23 @@ pub struct PanelState {
     /// The raw settings box as typed, while it does not hold a whole value.
     pub settings_text: Option<String>,
     pub show_actor_info: bool,
+    /// The selection changed somewhere other than the list, which has yet to scroll to it.
+    pub reveal: bool,
 }
 
 impl Default for PanelState {
     fn default() -> Self {
-        Self { tab: Tab::Course, item: 0, node: 0, multi: Vec::new(), hex: false, dragging: None, settings_text: None, show_actor_info: false }
+        Self {
+            tab: Tab::Course,
+            item: 0,
+            node: 0,
+            multi: Vec::new(),
+            hex: false,
+            dragging: None,
+            settings_text: None,
+            show_actor_info: false,
+            reveal: false,
+        }
     }
 }
 
@@ -84,6 +96,8 @@ pub struct Row {
     pub value: Option<i64>,
     pub editor: Editor,
     pub span: Span,
+    /// What a row and the peer it shares a line with are together: X and Y are a position. Empty for a row on its own.
+    pub group: String,
     /// What the actor says about the field, shown beside it when there is anything to say.
     pub note: String,
     /// False when the value is one the editor cannot express: bits a choice list does not name, or checkbox bits
@@ -93,7 +107,15 @@ pub struct Row {
 
 impl Row {
     fn number(label: &str, value: Option<i64>, min: i64, max: i64, span: Span) -> Self {
-        Self { label: label.to_owned(), value, editor: Editor::Number { min, max }, span, note: String::new(), representable: true }
+        Self {
+            label: label.to_owned(),
+            value,
+            editor: Editor::Number { min, max },
+            span,
+            group: String::new(),
+            note: String::new(),
+            representable: true,
+        }
     }
 }
 
@@ -166,6 +188,84 @@ fn paths(snapshot: &LevelSnapshot, kind: Kind) -> &Vec<NsmbLevelPath> {
     if kind == Kind::ProgressPath { &snapshot.course.progress_paths } else { &snapshot.course.paths }
 }
 
+/// What the game calls each entrance type, in the order it numbers them.
+const ENTRANCE_TYPES: [&str; 22] = [
+    "Normal",
+    "Normal (overridden)",
+    "Door",
+    "Pipe up",
+    "Pipe down",
+    "Pipe left",
+    "Pipe right",
+    "Falling",
+    "Ground pound",
+    "Sliding",
+    "Swimming",
+    "Transit",
+    "Transit door",
+    "Mario vs. Luigi pipe",
+    "Invisible door (no sound)",
+    "Invisible door",
+    "Mini pipe up",
+    "Mini pipe down",
+    "Mini pipe left",
+    "Mini pipe right",
+    "Jumping",
+    "Vine",
+];
+
+/// The lines of the panel's list for `kind`: every item of it, and under each selected path its nodes. Kinds the
+/// level refers to by ID are listed by it, as Miyamoto lists them, since that is the number the person is looking
+/// for; objects and sprites have none and keep the order the level holds them in.
+pub fn list_lines(view: &LevelView, kind: Kind) -> Vec<Item> {
+    let course = &view.snapshot.course;
+    let ids: Vec<u8> = match kind {
+        Kind::Object | Kind::Sprite => Vec::new(),
+        Kind::Entrance => course.entrances.iter().map(|e| e.id).collect(),
+        Kind::View => course.views.iter().map(|v| v.id).collect(),
+        Kind::Zone => course.zones.iter().map(|z| z.id).collect(),
+        Kind::Path | Kind::ProgressPath => paths(&view.snapshot, kind).iter().map(|p| p.id).collect(),
+    };
+    let mut order: Vec<usize> = (0..item_count(&view.snapshot, Tab::Entity(kind))).collect();
+    order.sort_by_key(|&index| ids.get(index).copied());
+    let mut lines = Vec::with_capacity(order.len());
+    for index in order {
+        lines.push(Item::new(kind, index));
+        if kind.path() && view.is_selected(kind, index, None) {
+            let nodes = view.path(kind, index).map_or(0, Vec::len);
+            lines.extend((0..nodes).map(|node| Item::node(kind, index, node)));
+        }
+    }
+    lines
+}
+
+/// What a line of the list says: enough to tell the item from its neighbours without looking at the canvas.
+pub fn line_label(view: &LevelView, item: Item) -> String {
+    let course = &view.snapshot.course;
+    let index = item.index;
+    let label = match item.kind {
+        Kind::Object => {
+            view.snapshot.objects.get(index).map(|o| format!("Object {}:{} ({}, {}) {}×{}", o.tileset_slot, o.object_id, o.x, o.y, o.width, o.height))
+        }
+        Kind::Sprite => course.sprites.get(index).map(|s| {
+            let actor = view.art.actors.actor(s.id, view.sprite_hash(index));
+            let name = actor.map_or_else(|| format!("Actor {}", s.id), |a| a.definition.name.clone());
+            format!("{name} ({}, {})", s.x, s.y)
+        }),
+        Kind::Entrance => course.entrances.get(index).map(|e| {
+            let kind = ENTRANCE_TYPES.get(usize::from(e.kind)).map_or_else(|| format!("Type {}", e.kind), |name| (*name).to_owned());
+            format!("Entrance {} · {kind} ({}, {})", e.id, e.x, e.y)
+        }),
+        Kind::View => course.views.get(index).map(|v| format!("View {} ({}, {}) {}×{}", v.id, v.x, v.y, v.width, v.height)),
+        Kind::Zone => course.zones.get(index).map(|z| format!("Zone {} ({}, {}) {}×{}", z.id, z.x, z.y, z.width, z.height)),
+        Kind::Path | Kind::ProgressPath => paths(&view.snapshot, item.kind).get(index).and_then(|path| match item.node {
+            Some(node) => path.nodes.get(node).map(|n| format!("Node {node} ({}, {})", n.x, n.y)),
+            None => Some(format!("{} {} · {} node{}", item.kind.name(), path.id, path.nodes.len(), if path.nodes.len() == 1 { "" } else { "s" })),
+        }),
+    };
+    label.unwrap_or_default()
+}
+
 /// Reads one byte field of an entrance.
 type EntranceByte = fn(&NsmbLevelEntrance) -> i64;
 
@@ -208,9 +308,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         values.all(|v| v == first).then_some(first)
     }
     let full = |rows: &mut Vec<Row>, label: &str, value: Option<i64>, min: i64, max: i64| rows.push(Row::number(label, value, min, max, Span::Full));
-    let pair = |rows: &mut Vec<Row>, (a, av): (&str, Option<i64>), (b, bv): (&str, Option<i64>), min: i64, max: i64| {
-        rows.push(Row::number(a, av, min, max, Span::Half));
-        rows.push(Row::number(b, bv, min, max, Span::Half));
+    let pair = |rows: &mut Vec<Row>, group: &str, (a, av): (&str, Option<i64>), (b, bv): (&str, Option<i64>), min: i64, max: i64| {
+        for (label, value) in [(a, av), (b, bv)] {
+            rows.push(Row { group: group.to_owned(), ..Row::number(label, value, min, max, Span::Half) });
+        }
     };
     match panel.tab {
         Tab::Course => {
@@ -241,15 +342,17 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             full(rows, "Tileset slot", common(&indices, list, |o| i64::from(o.tileset_slot)), 0, 15);
             pair(
                 rows,
-                ("X (tiles)", common(&indices, list, |o| i64::from(o.x))),
-                ("Y (tiles)", common(&indices, list, |o| i64::from(o.y))),
+                "Position (tiles)",
+                ("X", common(&indices, list, |o| i64::from(o.x))),
+                ("Y", common(&indices, list, |o| i64::from(o.y))),
                 -32768,
                 32767,
             );
             pair(
                 rows,
-                ("Width", common(&indices, list, |o| i64::from(o.width))),
-                ("Height", common(&indices, list, |o| i64::from(o.height))),
+                "Size (tiles)",
+                ("W", common(&indices, list, |o| i64::from(o.width))),
+                ("H", common(&indices, list, |o| i64::from(o.height))),
                 1,
                 65535,
             );
@@ -268,14 +371,16 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             }
             pair(
                 rows,
-                ("X (tiles)", common(&indices, list, |s| i64::from(s.x))),
-                ("Y (tiles)", common(&indices, list, |s| i64::from(s.y))),
+                "Position (tiles)",
+                ("X", common(&indices, list, |s| i64::from(s.x))),
+                ("Y", common(&indices, list, |s| i64::from(s.y))),
                 0,
                 65535,
             );
             // One names the event this actor raises when it fires, the other the event that lets it act.
             pair(
                 rows,
+                "",
                 ("Target event", common(&indices, list, |s| i64::from(s.events[0]))),
                 ("Trigger event", common(&indices, list, |s| i64::from(s.events[1]))),
                 0,
@@ -298,8 +403,8 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         Tab::Entity(Kind::Entrance) => {
             let list = &course.entrances;
             let get = |f: fn(&NsmbLevelEntrance) -> i64| common(&indices, list, f);
-            pair(rows, ("X", get(|e| i64::from(e.x))), ("Y", get(|e| i64::from(e.y))), 0, 65535);
-            pair(rows, ("Camera X", get(|e| i64::from(e.camera_x))), ("Camera Y", get(|e| i64::from(e.camera_y))), 0, 65535);
+            pair(rows, "Position", ("X", get(|e| i64::from(e.x))), ("Y", get(|e| i64::from(e.y))), 0, 65535);
+            pair(rows, "Camera", ("X", get(|e| i64::from(e.camera_x))), ("Y", get(|e| i64::from(e.camera_y))), 0, 65535);
             let bytes: [(&str, EntranceByte); 12] = [
                 ("ID", |e| i64::from(e.id)),
                 ("Target area", |e| i64::from(e.target_stage_area)),
@@ -321,8 +426,8 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         Tab::Entity(Kind::View) => {
             // A view reads only the first selected one, and a selection of views edits nothing: as the Qt panel.
             if let Some(v) = course.views.get(index) {
-                pair(rows, ("X", Some(i64::from(v.x))), ("Y", Some(i64::from(v.y))), 0, 65535);
-                pair(rows, ("Width", Some(i64::from(v.width))), ("Height", Some(i64::from(v.height))), 1, 65535);
+                pair(rows, "Position", ("X", Some(i64::from(v.x))), ("Y", Some(i64::from(v.y))), 0, 65535);
+                pair(rows, "Size", ("W", Some(i64::from(v.width))), ("H", Some(i64::from(v.height))), 1, 65535);
                 for (label, value) in [
                     ("ID", v.id),
                     ("Camera settings", v.camera_settings_id),
@@ -339,11 +444,12 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         }
         Tab::Entity(Kind::Zone) => {
             let list = &course.zones;
-            pair(rows, ("X", common(&indices, list, |z| i64::from(z.x))), ("Y", common(&indices, list, |z| i64::from(z.y))), 0, 65535);
+            pair(rows, "Position", ("X", common(&indices, list, |z| i64::from(z.x))), ("Y", common(&indices, list, |z| i64::from(z.y))), 0, 65535);
             pair(
                 rows,
-                ("Width", common(&indices, list, |z| i64::from(z.width))),
-                ("Height", common(&indices, list, |z| i64::from(z.height))),
+                "Size",
+                ("W", common(&indices, list, |z| i64::from(z.width))),
+                ("H", common(&indices, list, |z| i64::from(z.height))),
                 1,
                 65535,
             );
@@ -354,7 +460,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 out.node = panel.node.min(path.nodes.len().saturating_sub(1));
                 full(rows, "Path ID", Some(i64::from(path.id)), 0, 255);
                 if let Some(node) = path.nodes.get(out.node) {
-                    pair(rows, ("X", Some(i64::from(node.x))), ("Y", Some(i64::from(node.y))), -32768, 32767);
+                    pair(rows, "Position", ("X", Some(i64::from(node.x))), ("Y", Some(i64::from(node.y))), -32768, 32767);
                     let (raw_min, raw_max) = (-i64::from(i32::MAX), i64::from(i32::MAX));
                     full(rows, "Speed (fx32 raw)", Some(i64::from(node.speed.raw())), raw_min, raw_max);
                     full(rows, "Acceleration (fx32 raw)", Some(i64::from(node.acceleration.raw())), raw_min, raw_max);
@@ -388,7 +494,7 @@ fn declared_row(field: &SpriteFieldDefinition, value: i32) -> Row {
         }
         note.push_str(&format!("This actor does not name the value {value}, which is what these bits hold."));
     }
-    Row { label: field.label.clone(), value: Some(value), editor, span: Span::Full, note, representable }
+    Row { label: field.label.clone(), value: Some(value), editor, span: Span::Full, group: String::new(), note, representable }
 }
 
 /// The rows as the canvas gesture in progress would leave them: the inspector follows a drag before it is committed.
@@ -1008,6 +1114,28 @@ mod tests {
         overlays[0][2] = 77;
         assert_eq!(rows(&view, &view.panel, Some(&overlays)).rows[0].label, "Bank ID (overlay 77)");
         assert_eq!(apply(&view, &view.panel, &shown(&view), 0, 4), Some(LevelEdit::SetObjectBank { slot: 0, value: 4 }));
+    }
+
+    #[test]
+    fn the_list_goes_by_id_and_opens_a_selected_path_onto_its_nodes() {
+        let mut level = snapshot();
+        level.course.paths.insert(0, NsmbLevelPath { id: 4, nodes: vec![Default::default()], unknown: 0 });
+        level.course.entrances =
+            vec![NsmbLevelEntrance { id: 2, kind: 3, x: 16, y: 32, ..Default::default() }, NsmbLevelEntrance { kind: 99, ..Default::default() }];
+        let mut view = LevelView::new(level);
+        // Path 0 is held second and listed first; neither is open until something of it is selected.
+        assert_eq!(list_lines(&view, Kind::Path), [Item::new(Kind::Path, 1), Item::new(Kind::Path, 0)]);
+        view.selection = vec![Item::node(Kind::Path, 1, 1)];
+        let lines = list_lines(&view, Kind::Path);
+        assert_eq!(lines, [Item::new(Kind::Path, 1), Item::node(Kind::Path, 1, 0), Item::node(Kind::Path, 1, 1), Item::new(Kind::Path, 0)]);
+        let labels: Vec<String> = lines.iter().map(|line| line_label(&view, *line)).collect();
+        assert_eq!(labels, ["Path 0 · 2 nodes", "Node 0 (300, 100)", "Node 1 (340, 100)", "Path 4 · 1 node"]);
+
+        let labels: Vec<String> = list_lines(&view, Kind::Entrance).iter().map(|line| line_label(&view, *line)).collect();
+        assert_eq!(labels, ["Entrance 0 · Type 99 (0, 0)", "Entrance 2 · Pipe up (16, 32)"]);
+        assert_eq!(line_label(&view, Item::new(Kind::Object, 0)), "Object 0:1 (2, 3) 4×1");
+        assert_eq!(line_label(&view, Item::new(Kind::Sprite, 0)), "Actor 1 (6, 4)");
+        assert_eq!(line_label(&view, Item::new(Kind::Zone, 0)), "Zone 0 (0, 0) 400×200");
     }
 
     #[test]
