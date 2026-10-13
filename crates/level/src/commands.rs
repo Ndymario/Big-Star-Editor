@@ -28,7 +28,7 @@ impl<V: Clone> Replace<V> {
     }
 }
 
-impl<V: Clone> Command<LevelState> for Replace<V> {
+impl<V: Clone + Send> Command<LevelState> for Replace<V> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -60,7 +60,7 @@ impl<V: Clone> Value<V> {
     }
 }
 
-impl<V: Clone> Command<LevelState> for Value<V> {
+impl<V: Clone + Send> Command<LevelState> for Value<V> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -89,7 +89,7 @@ impl<V> Insert<V> {
     }
 }
 
-impl<V: Clone> Command<LevelState> for Insert<V> {
+impl<V: Clone + Send> Command<LevelState> for Insert<V> {
     fn name(&self) -> &str {
         &self.name
     }
@@ -127,7 +127,7 @@ impl<V: Clone> Erase<V> {
     }
 }
 
-impl<V: Clone> Command<LevelState> for Erase<V> {
+impl<V: Clone + Send> Command<LevelState> for Erase<V> {
     fn name(&self) -> &str {
         &self.name
     }

@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-host"
-description = "Big Star Editor host layer (stub)"
+description = "Big Star Editor host: the service that owns projects, ROMs and level sessions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,12 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-formats.workspace = true
+bigstar-level.workspace = true
+bigstar-nds.workspace = true
+bigstar-project.workspace = true
+bigstar-protocol.workspace = true
+
+[dev-dependencies]
+bigstar-project = { workspace = true, features = ["test-support"] }

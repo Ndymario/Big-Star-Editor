@@ -23,6 +23,11 @@ bigstar-ui-egui = { path = "crates/ui-egui" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 log = "0.4"
+rmp-serde = "1"
+ewebsock = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
+getrandom = "0.3"
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [workspace.lints.rust]

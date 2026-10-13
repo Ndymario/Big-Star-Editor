@@ -2,7 +2,7 @@ use crate::{Error, ErrorCode, Result};
 
 /// An undoable edit of a `T`. The history owns the commands and lends them the target on every call, so a
 /// command never holds a reference into the thing it edits.
-pub trait Command<T> {
+pub trait Command<T>: Send {
     fn name(&self) -> &str;
     fn execute(&mut self, target: &mut T) -> Result<()>;
     fn undo(&mut self, target: &mut T) -> Result<()>;

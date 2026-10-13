@@ -78,7 +78,7 @@ fn out_of_bounds() -> Error {
     Error::new(ErrorCode::OutOfBounds, "item index is outside the collection")
 }
 
-fn replacements<V: Clone + 'static>(
+fn replacements<V: Clone + Send + 'static>(
     state: &mut LevelState,
     field: Field<Vec<V>>,
     items: Vec<IndexedLevelValue<V>>,
@@ -92,7 +92,7 @@ fn replacements<V: Clone + 'static>(
 }
 
 /// Erase commands for `indices`, highest first so earlier ones do not shift later ones.
-fn erasures<V: Clone + 'static>(
+fn erasures<V: Clone + Send + 'static>(
     state: &mut LevelState,
     field: Field<Vec<V>>,
     mut indices: Vec<usize>,
@@ -107,7 +107,13 @@ fn erasures<V: Clone + 'static>(
     Ok(())
 }
 
-fn insertions<V: Clone + 'static>(state: &mut LevelState, field: Field<Vec<V>>, values: Vec<V>, name: &str, commands: &mut Vec<Cmd>) -> Vec<usize> {
+fn insertions<V: Clone + Send + 'static>(
+    state: &mut LevelState,
+    field: Field<Vec<V>>,
+    values: Vec<V>,
+    name: &str,
+    commands: &mut Vec<Cmd>,
+) -> Vec<usize> {
     let first = field(state).len();
     let mut indices = Vec::with_capacity(values.len());
     for (offset, value) in values.into_iter().enumerate() {
@@ -286,18 +292,18 @@ impl EditableLevel {
         self.run(Box::new(command))
     }
 
-    fn replace_at<V: Clone + 'static>(&mut self, field: Field<Vec<V>>, index: usize, value: V, name: &str) -> Result<()> {
+    fn replace_at<V: Clone + Send + 'static>(&mut self, field: Field<Vec<V>>, index: usize, value: V, name: &str) -> Result<()> {
         let command = Replace::new(&mut self.state, field, index, value, name)?;
         self.run(Box::new(command))
     }
 
-    fn append<V: Clone + 'static>(&mut self, field: Field<Vec<V>>, value: V, name: &str) -> Result<usize> {
+    fn append<V: Clone + Send + 'static>(&mut self, field: Field<Vec<V>>, value: V, name: &str) -> Result<usize> {
         let index = field(&mut self.state).len();
         self.run(Box::new(Insert::new(field, index, value, name)))?;
         Ok(index)
     }
 
-    fn erase_at<V: Clone + 'static>(&mut self, field: Field<Vec<V>>, index: usize, name: &str) -> Result<()> {
+    fn erase_at<V: Clone + Send + 'static>(&mut self, field: Field<Vec<V>>, index: usize, name: &str) -> Result<()> {
         let command = Erase::new(&mut self.state, field, index, name)?;
         self.run(Box::new(command))
     }
@@ -488,7 +494,7 @@ impl EditableLevel {
 
     /// Swaps an entity with its neighbour in draw order and returns its new index.
     pub fn reorder_entity(&mut self, kind: ReorderKind, index: usize, forward: bool) -> Result<usize> {
-        fn swap<V: Clone + 'static>(
+        fn swap<V: Clone + Send + 'static>(
             state: &mut LevelState,
             field: Field<Vec<V>>,
             index: usize,

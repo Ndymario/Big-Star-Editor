@@ -1,6 +1,7 @@
-//! bigstar-host: the command line verbs of the host. `serve` arrives with Phase 5.
+//! bigstar-host: the headless host (`serve`) and the command line verbs.
 
 mod cli;
+mod server;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();

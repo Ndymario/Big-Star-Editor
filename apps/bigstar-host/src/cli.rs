@@ -1,15 +1,23 @@
 use std::io::Write;
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use bigstar_core::read_file_prefix;
 use bigstar_formats::{GraphicsFormatKind, identify_graphics_format};
+use bigstar_host::Host;
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, RomHeader, parse_rom_header};
 use bigstar_project::{INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, create_empty_project, index_rom_files, save_manifest};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+const DEFAULT_PORT: u16 = 7878;
+
+use crate::server;
 
 fn usage(out: &mut dyn Write) {
-    let _ = write!(out, "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n");
+    let _ = write!(
+        out,
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
+    );
 }
 
 fn read_header(path: &Path) -> Result<RomHeader, String> {
@@ -111,6 +119,86 @@ fn import_rom(rom_path: &Path, project_dir: &Path, out: &mut dyn Write, err: &mu
     0
 }
 
+/// `serve <root> [--bind <address>] [--port <port>]`: hosts a workspace until interrupted.
+fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let Some((root, flags)) = args.split_first() else {
+        usage(err);
+        return 1;
+    };
+    let (mut bind, mut port) = ("127.0.0.1".to_owned(), DEFAULT_PORT);
+    let mut flags = flags.iter();
+    while let Some(flag) = flags.next() {
+        let value = flags.next();
+        match (*flag, value) {
+            ("--bind", Some(value)) => bind = (*value).to_owned(),
+            ("--port", Some(value)) => match value.parse::<u16>() {
+                Ok(parsed) => port = parsed,
+                Err(_) => {
+                    let _ = writeln!(err, "--port needs a number from 0 to 65535");
+                    return 1;
+                }
+            },
+            _ => {
+                usage(err);
+                return 1;
+            }
+        }
+    }
+    let address = match format!("{bind}:{port}").parse::<SocketAddr>().or_else(|_| format!("[{bind}]:{port}").parse()) {
+        Ok(address) => address,
+        Err(_) => {
+            let _ = writeln!(err, "\"{bind}\" is not an IP address");
+            return 1;
+        }
+    };
+    let host = match Host::new(Path::new(root)) {
+        Ok(host) => host,
+        Err(e) => {
+            let _ = writeln!(err, "{}", e.message);
+            return 2;
+        }
+    };
+    let token = match server::generate_token() {
+        Ok(token) => token,
+        Err(message) => {
+            let _ = writeln!(err, "{message}");
+            return 2;
+        }
+    };
+    let runtime = match tokio::runtime::Runtime::new() {
+        Ok(runtime) => runtime,
+        Err(e) => {
+            let _ = writeln!(err, "could not start the runtime: {e}");
+            return 2;
+        }
+    };
+    runtime.block_on(async {
+        let (listener, bound) = match server::bind(address).await {
+            Ok(bound) => bound,
+            Err(e) => {
+                let _ = writeln!(err, "could not listen on {address}: {e}");
+                return 2;
+            }
+        };
+        let _ = writeln!(out, "Serving \"{}\" on ws://{bound}/ws", host.workspace_name());
+        let _ = writeln!(out, "Token: {token}");
+        if !bound.ip().is_loopback() {
+            let _ = writeln!(err, "warning: {bound} is not a loopback address; the connection is not encrypted");
+        }
+        let _ = out.flush();
+        tokio::select! {
+            result = server::serve(listener, host, token) => match result {
+                Ok(()) => 0,
+                Err(e) => {
+                    let _ = writeln!(err, "the server stopped: {e}");
+                    2
+                }
+            },
+            _ = tokio::signal::ctrl_c() => 0,
+        }
+    })
+}
+
 /// Runs one invocation (without the program name) and returns the process exit code.
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -121,6 +209,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
         ["inspect-rom", path] => inspect_rom(Path::new(path), out, err),
         ["import-rom", rom, dir] => import_rom(Path::new(rom), Path::new(dir), out, err),
+        ["serve", rest @ ..] => serve(rest, out, err),
         _ => {
             usage(out);
             1
@@ -154,6 +243,20 @@ mod tests {
         assert_eq!(code, 1);
         assert!(out.contains("import-rom <rom> <project-dir>"));
         assert_eq!(invoke(&["inspect-rom"]).0, 1);
+    }
+
+    #[test]
+    fn serve_rejects_bad_arguments_before_listening() {
+        let dir = TempDir::new("cli-serve");
+        let root = dir.path().to_string_lossy().into_owned();
+        assert_eq!(invoke(&["serve"]).0, 1);
+        assert_eq!(invoke(&["serve", &root, "--port", "99999"]).0, 1);
+        assert_eq!(invoke(&["serve", &root, "--port"]).0, 1);
+        assert_eq!(invoke(&["serve", &root, "--bind", "not-an-address"]).0, 1);
+        assert_eq!(invoke(&["serve", &root, "--colour", "red"]).0, 1);
+        let (code, _, err) = invoke(&["serve", &format!("{root}/missing")]);
+        assert_eq!(code, 2);
+        assert!(err.contains("does not exist"), "{err}");
     }
 
     #[test]

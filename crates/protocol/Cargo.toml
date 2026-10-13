@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-protocol"
-description = "Big Star Editor protocol layer (stub)"
+description = "Big Star Editor protocol: the messages between the host and its frontends"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-formats.workspace = true
+bigstar-level.workspace = true
+serde.workspace = true
+rmp-serde.workspace = true

@@ -1,12 +1,17 @@
-//! Big Star Editor `client` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `client` layer: how a frontend talks to a host. One `Connection` trait, two transports:
+//! `InProcess` (native only) hands requests to a service on a worker thread, `WebSocket` reaches a remote host
+//! natively and from the browser alike. Wasm-safe: nothing here touches a file.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-client";
+mod connection;
+mod websocket;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod in_process;
+
+pub use connection::{Connection, ConnectionState, HostInfo, Incoming, Waker};
+#[cfg(not(target_arch = "wasm32"))]
+pub use in_process::InProcess;
+pub use websocket::{WebSocket, websocket_url};
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-client");
-    }
-}
+mod tests;

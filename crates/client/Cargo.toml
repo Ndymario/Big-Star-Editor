@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-client"
-description = "Big Star Editor client layer (stub)"
+description = "Big Star Editor client: Connection, with in-process and WebSocket transports"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-protocol.workspace = true
+ewebsock.workspace = true
+log.workspace = true

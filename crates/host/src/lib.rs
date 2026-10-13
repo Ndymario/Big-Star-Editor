@@ -1,12 +1,12 @@
-//! Big Star Editor `host` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `host` layer: the service that owns the workspace, its projects, the ROM reader and the level
+//! sessions with their undo history. Host only: it reads files, so it never builds for the browser.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-host";
+mod host;
+mod levels;
+mod workspace;
+
+pub use host::{Host, HostSession};
+pub use workspace::Workspace;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-host");
-    }
-}
+mod tests;

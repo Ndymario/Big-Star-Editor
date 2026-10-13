@@ -1,12 +1,20 @@
-//! Big Star Editor `protocol` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `protocol` layer: every message between the host and a frontend, and how they travel.
+//! Pure: no filesystem, no sockets, safe for the browser.
+//!
+//! A connection opens with a `Hello` carrying the protocol version and the access token, answered by a `Welcome` or a
+//! `Refused`. After that the frontend sends `Request`s with ids of its own choosing, the host answers each with one
+//! `Response` carrying the same id, and sends `Event`s whenever something happens that nobody asked about.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-protocol";
+mod message;
+mod service;
+mod wire;
+
+pub use message::{
+    AreaSummary, ClientFrame, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
+    LevelSummary, LevelWorld, LogLevel, PROTOCOL_VERSION, ProjectInfo, ProjectSummary, Request, RequestId, Response, ResponseResult, ServerFrame,
+};
+pub use service::Service;
+pub use wire::{decode_client_frame, decode_server_frame, encode_client_frame, encode_server_frame};
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-protocol");
-    }
-}
+mod tests;
