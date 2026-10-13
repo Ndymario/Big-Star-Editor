@@ -6,7 +6,7 @@
 //! Writes `connect.png`, `projects.png`, `levels.png` and `level.png` (the demo level, a sprite selected) into the directory.
 
 use bigstar_ui_egui::demo::DemoConnection;
-use bigstar_ui_egui::{BigStarApp, Kind, MemoryServices};
+use bigstar_ui_egui::{BigStarApp, Item, Kind, MemoryServices};
 use egui::Vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -24,11 +24,12 @@ fn build(app: BigStarApp) -> Harness<'static, BigStarApp> {
     Harness::builder()
         .with_size(Vec2::new(1100.0, 700.0))
         .with_pixels_per_point(1.5)
+        .with_max_steps(16)
         .wgpu()
         .build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app)
 }
 
-/// `ui_shot <out-dir> <host> <token>`: connects to a real host instead, opens its first project and writes `remote.png`.
+/// `ui_shot <out-dir> <host> <token>`: connects to a real host instead, opens its first project and writes `remote-levels.png`, `remote.png` (A01_1 fitted) and `remote-100.png` (at 100%).
 fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> {
     let mut harness = build(BigStarApp::new(Box::new(MemoryServices::default())));
     harness.run();
@@ -58,8 +59,24 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     if let Some(session) = harness.state_mut().session_mut() {
         session.open_level("A01_1");
     }
-    until(&mut harness, &|app| app.session().is_some_and(|s| s.level.is_some()));
-    shot(&mut harness, dir, "remote.png")
+    // The level, then its graphics, draw lists and textures, each a round trip.
+    let drawn = |app: &BigStarApp| {
+        app.session().and_then(|s| s.level.as_ref().map(|v| (s, v))).is_some_and(|(s, v)| {
+            v.art.graphics.is_some() && v.art.requested.is_empty() && v.art.texture_ids().iter().all(|id| s.textures.contains_key(id))
+        })
+    };
+    until(&mut harness, &drawn);
+    for _ in 0..10 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    shot(&mut harness, dir, "remote.png")?;
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
+        view.zoom_about(1.0, view.canvas.min);
+        view.pan = egui::Vec2::new(0.0, 160.0);
+        view.selection = vec![Item::new(Kind::Sprite, 0), Item::new(Kind::Object, 3)];
+    }
+    shot(&mut harness, dir, "remote-100.png")
 }
 
 fn main() -> Result<(), String> {
@@ -83,8 +100,8 @@ fn main() -> Result<(), String> {
     harness.get_by_label("Area 1").click();
     harness.run();
     if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
-        view.selection.insert((Kind::Sprite, 1));
-        view.selection.insert((Kind::Object, 2));
+        view.selection.push(Item::new(Kind::Sprite, 1));
+        view.selection.push(Item::new(Kind::Object, 4));
     }
     shot(&mut harness, &dir, "level.png")
 }

@@ -6,7 +6,7 @@ use bigstar_client::{Connection, ConnectionState, Waker, WebSocket, websocket_ur
 use bigstar_protocol::{DirectoryEntryKind, LogLevel};
 use egui::{Color32, Key, Modifiers, RichText, Ui};
 
-use crate::canvas;
+use crate::canvas::{self, TexturePool};
 use crate::services::Services;
 use crate::session::Session;
 
@@ -74,6 +74,7 @@ pub struct BigStarApp {
     confirm_leave: Option<Leave>,
     show_log: bool,
     actions: Vec<Action>,
+    textures: TexturePool,
 }
 
 fn waker(ctx: &egui::Context) -> Waker {
@@ -97,7 +98,15 @@ fn parent(directory: &str) -> String {
 
 impl BigStarApp {
     pub fn new(services: Box<dyn Services>) -> Self {
-        Self { services, form: ConnectForm::default(), session: None, confirm_leave: None, show_log: false, actions: Vec::new() }
+        Self {
+            services,
+            form: ConnectForm::default(),
+            session: None,
+            confirm_leave: None,
+            show_log: false,
+            actions: Vec::new(),
+            textures: TexturePool::default(),
+        }
     }
 
     /// Starts on a connection that already exists (screenshots, tests).
@@ -192,6 +201,8 @@ impl BigStarApp {
         self.shortcuts(&ctx);
         self.top_bar(ui);
         self.bottom_bar(ui);
+        // The canvas takes keys only when nothing else wants them: no text field, no question waiting.
+        let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm_leave.is_none();
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let busy = session.busy();
@@ -202,7 +213,8 @@ impl BigStarApp {
                     ui.label("Connecting…");
                 });
             } else if let Some(view) = &mut session.level {
-                if let Some(edit) = canvas::show(ui, view, busy) {
+                let edits = canvas::show(ui, view, &session.textures, &mut self.textures, busy, keyboard);
+                for edit in edits {
                     session.edit(edit);
                 }
             } else if session.project.is_some() {
@@ -537,13 +549,12 @@ impl BigStarApp {
         if self.confirm_leave.is_some() {
             return;
         }
-        let (undo, redo, save, delete, escape) = ctx.input_mut(|i| {
+        // Redo first: Cmd+Shift+Z would otherwise also match Cmd+Z.
+        let (redo, undo, save) = ctx.input_mut(|i| {
             (
-                i.consume_key(Modifiers::COMMAND, Key::Z),
                 i.consume_key(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z) || i.consume_key(Modifiers::COMMAND, Key::Y),
+                i.consume_key(Modifiers::COMMAND, Key::Z),
                 i.consume_key(Modifiers::COMMAND, Key::S),
-                i.consume_key(Modifiers::NONE, Key::Delete) || i.consume_key(Modifiers::NONE, Key::Backspace),
-                i.consume_key(Modifiers::NONE, Key::Escape),
             )
         });
         if undo {
@@ -554,20 +565,6 @@ impl BigStarApp {
         }
         if save {
             self.actions.push(Action::Save);
-        }
-        if let Some(session) = &mut self.session {
-            if delete
-                && !session.busy()
-                && let Some(edit) = session.level.as_ref().and_then(|v| v.remove_edit())
-            {
-                if let Some(view) = &mut session.level {
-                    view.selection.clear();
-                }
-                session.edit(edit);
-            }
-            if escape && let Some(view) = &mut session.level {
-                view.selection.clear();
-            }
         }
     }
 

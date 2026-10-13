@@ -1,19 +1,20 @@
 //! One connection to a host and everything the frontend has learned from it. Pure state: no drawing, so the
 //! request/response bookkeeping can be tested without a window.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    DirectoryListing, Event, LevelEdit, LevelSnapshot, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary, Request, RequestId,
-    Response, ResponseResult,
+    ActorCatalog, DirectoryListing, Event, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary,
+    Request, RequestId, Response, ResponseResult, TextureData, TextureId,
 };
 
-use crate::level_view::LevelView;
+use crate::level_view::{ActorIndex, ActorKey, LevelView};
 
 /// What a request in flight was for, so its response lands in the right place.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Pending {
     ListProjects,
     Browse,
@@ -26,6 +27,17 @@ enum Pending {
     Save,
     CloseLevel,
     CloseProject,
+    Textures,
+    LevelGraphics(LevelId),
+    ActorCatalog,
+    ActorDraws(Vec<ActorKey>),
+}
+
+impl Pending {
+    /// Graphics are not the person's request: when one fails it is logged, not put in front of them.
+    fn graphics(&self) -> bool {
+        matches!(self, Pending::Textures | Pending::LevelGraphics(_) | Pending::ActorCatalog | Pending::ActorDraws(_))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +81,12 @@ pub struct Session {
     /// The newest graphics generation the host has announced; anything older is stale.
     pub graphics_generation: u64,
     pub settings: Option<ProjectSettings>,
+    /// Every texture the host has sent, by content hash. Kept across levels: the same pixels have the same id.
+    pub textures: HashMap<TextureId, Arc<TextureData>>,
+    textures_requested: HashSet<TextureId>,
+    /// The project's actors; every level view shares it.
+    catalog: Option<Arc<ActorCatalog>>,
+    catalog_requested: bool,
 }
 
 impl Session {
@@ -88,6 +106,10 @@ impl Session {
             own_closes: 0,
             graphics_generation: 0,
             settings: None,
+            textures: HashMap::new(),
+            textures_requested: HashSet::new(),
+            catalog: None,
+            catalog_requested: false,
         };
         session.note_state();
         session
@@ -213,6 +235,17 @@ impl Session {
     fn respond(&mut self, kind: Pending, result: ResponseResult) {
         let response = match result {
             Ok(response) => response,
+            Err(error) if kind.graphics() => {
+                self.log_line(LogLevel::Warning, format!("Graphics: {}", error.message));
+                // Sprites whose draw lists will not come are drawn as markers rather than left blank.
+                if let (Pending::ActorDraws(keys), Some(view)) = (kind, &mut self.level) {
+                    for key in keys {
+                        view.art.requested.remove(&key);
+                        view.art.draws.insert(key, Default::default());
+                    }
+                }
+                return;
+            }
             Err(error) => {
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
@@ -240,6 +273,7 @@ impl Session {
                 }
                 self.worlds.clear();
                 self.level = None;
+                self.forget_project_graphics();
                 self.project = Some(info);
                 self.request(Request::ListLevels, Pending::ListLevels);
             }
@@ -251,18 +285,72 @@ impl Session {
             (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
             (Pending::OpenLevel, Response::Level(snapshot)) => self.take_snapshot(*snapshot),
             (Pending::Edit | Pending::History | Pending::Save, Response::Edited { snapshot, outcome }) => {
-                if let Some(view) = &mut self.level {
-                    view.edited(*snapshot, &outcome);
+                let owed = self.level.as_mut().and_then(|view| view.edited(*snapshot, &outcome));
+                if let Some(edit) = owed {
+                    self.edit(edit);
                 }
+                self.request_actor_draws();
             }
             (Pending::CloseProject, Response::Done) => {
                 self.own_closes += 1;
                 self.project = None;
+                self.forget_project_graphics();
                 self.worlds.clear();
                 self.level = None;
                 self.list_projects();
             }
             (Pending::CloseLevel, Response::Done) => {}
+            (Pending::Textures, Response::Textures(textures)) => {
+                for texture in textures {
+                    self.textures_requested.remove(&texture.id);
+                    self.textures.insert(texture.id.clone(), Arc::new(texture));
+                }
+            }
+            (Pending::LevelGraphics(level), Response::LevelGraphics(graphics)) => {
+                if graphics.generation < self.graphics_generation {
+                    return;
+                }
+                if let Some(error) = &graphics.error {
+                    self.log_line(LogLevel::Warning, format!("Level graphics: {error}"));
+                }
+                let slots =
+                    graphics.tilesets.iter().enumerate().filter_map(|(slot, t)| t.error.as_ref().map(|e| format!("Tileset slot {slot}: {e}")));
+                let images = [("Background", &graphics.background), ("Foreground", &graphics.foreground)]
+                    .into_iter()
+                    .filter_map(|(name, image)| image.error.as_ref().map(|e| format!("{name}: {e}")));
+                let warnings: Vec<String> = slots.chain(images).collect();
+                for warning in warnings {
+                    self.log_line(LogLevel::Warning, warning);
+                }
+                let Some(view) = self.level.as_mut().filter(|v| v.snapshot.level == level) else { return };
+                view.art.set_graphics(*graphics);
+                let ids = view.art.texture_ids();
+                self.request_textures(ids);
+            }
+            (Pending::ActorCatalog, Response::ActorCatalog(catalog)) => {
+                self.catalog_requested = false;
+                if catalog.generation < self.graphics_generation {
+                    return;
+                }
+                let catalog = Arc::new(*catalog);
+                self.catalog = Some(catalog.clone());
+                if let Some(view) = &mut self.level {
+                    view.art.actors = ActorIndex::new(catalog);
+                }
+            }
+            (Pending::ActorDraws(keys), Response::ActorDraws { generation, draws }) => {
+                let Some(view) = &mut self.level else { return };
+                for key in &keys {
+                    view.art.requested.remove(key);
+                }
+                if generation < self.graphics_generation {
+                    self.request_actor_draws();
+                    return;
+                }
+                let ids: Vec<TextureId> = draws.iter().flat_map(|d| d.commands.iter().filter_map(|c| c.texture.clone())).collect();
+                view.art.draws.extend(keys.into_iter().zip(draws));
+                self.request_textures(ids);
+            }
             (_, other) => log::warn!("unexpected response {other:?}"),
         }
     }
@@ -270,7 +358,59 @@ impl Session {
     fn take_snapshot(&mut self, snapshot: LevelSnapshot) {
         match &mut self.level {
             Some(view) if view.snapshot.level == snapshot.level => view.replace(snapshot),
-            slot => *slot = Some(LevelView::new(snapshot)),
+            slot => {
+                let level = snapshot.level;
+                let mut view = LevelView::new(snapshot);
+                if let Some(catalog) = &self.catalog {
+                    view.art.actors = ActorIndex::new(catalog.clone());
+                }
+                *slot = Some(view);
+                self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
+                self.request_catalog();
+            }
+        }
+        self.request_actor_draws();
+    }
+
+    /// Another project's actors are not this one's.
+    fn forget_project_graphics(&mut self) {
+        self.catalog = None;
+        self.catalog_requested = false;
+    }
+
+    fn request_catalog(&mut self) {
+        if !self.catalog_requested {
+            self.catalog_requested = true;
+            self.request(Request::ActorCatalog, Pending::ActorCatalog);
+        }
+    }
+
+    /// Asks for the draw lists of the sprites that have none yet.
+    fn request_actor_draws(&mut self) {
+        let Some(view) = &mut self.level else { return };
+        let keys = view.take_missing_actor_keys();
+        if !keys.is_empty() {
+            let inputs = keys.iter().map(ActorKey::input).collect();
+            self.request(Request::RenderActors { inputs }, Pending::ActorDraws(keys));
+        }
+    }
+
+    fn request_textures(&mut self, ids: Vec<TextureId>) {
+        let mut wanted: Vec<TextureId> = Vec::new();
+        for id in ids {
+            if !self.textures.contains_key(&id) && self.textures_requested.insert(id.clone()) {
+                wanted.push(id);
+            }
+        }
+        if !wanted.is_empty() {
+            self.request(Request::GetTextures { ids: wanted }, Pending::Textures);
+        }
+    }
+
+    fn log_line(&mut self, level: LogLevel, text: String) {
+        self.log.push(LogLine { level, text });
+        if self.log.len() > LOG_LIMIT {
+            self.log.remove(0);
         }
     }
 
@@ -282,12 +422,7 @@ impl Session {
 
     fn event(&mut self, event: Event) {
         match event {
-            Event::Log { level, message } => {
-                self.log.push(LogLine { level, text: message });
-                if self.log.len() > LOG_LIMIT {
-                    self.log.remove(0);
-                }
-            }
+            Event::Log { level, message } => self.log_line(level, message),
             Event::LevelChanged { level, revision, dirty } => {
                 let stale =
                     self.level.as_ref().is_some_and(|v| v.snapshot.level == level && (v.snapshot.revision < revision || v.snapshot.dirty != dirty));
@@ -296,7 +431,19 @@ impl Session {
                 }
             }
             Event::FilesChanged { .. } => {}
-            Event::GraphicsChanged { generation } => self.graphics_generation = self.graphics_generation.max(generation),
+            // Everything served before is stale. What is on screen stays there until its replacement arrives.
+            Event::GraphicsChanged { generation } if generation > self.graphics_generation => {
+                self.graphics_generation = generation;
+                self.catalog_requested = false;
+                self.request_catalog();
+                if let Some(view) = &mut self.level {
+                    let level = view.snapshot.level;
+                    view.art.forget_draws();
+                    self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
+                    self.request_actor_draws();
+                }
+            }
+            Event::GraphicsChanged { .. } => {}
             // A variant switch closes every level session on the host, so the open level is fetched again.
             Event::SettingsChanged(settings) => {
                 self.settings = Some(settings);
@@ -305,6 +452,7 @@ impl Session {
             Event::ProjectClosed if self.own_closes > 0 => self.own_closes -= 1,
             Event::ProjectClosed => {
                 self.project = None;
+                self.forget_project_graphics();
                 self.worlds.clear();
                 self.level = None;
                 self.list_projects();

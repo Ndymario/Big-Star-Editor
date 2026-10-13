@@ -1,11 +1,18 @@
-use bigstar_client::Connection;
-use bigstar_protocol::{LevelEdit, Request, Response};
-use egui::Vec2;
+use std::collections::VecDeque;
+
+use bigstar_client::{Connection, ConnectionState, HostInfo, Incoming};
+use bigstar_formats::{
+    NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelStageObject, NsmbLevelView, NsmbLevelZone,
+    OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage,
+};
+use bigstar_level::{LevelEntityInsertions, SpriteInsertion};
+use bigstar_protocol::{Event, LevelEdit, LevelGraphics, LevelSnapshot, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics};
+use egui::{Key, Modifiers, PointerButton, Pos2, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
-use crate::demo::DemoConnection;
-use crate::level_view::{DragMode, Kind};
+use crate::demo::{DemoConnection, DemoTileset};
+use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, handle_centres};
 use crate::{BigStarApp, MemoryServices, Session};
 
 fn settle(session: &mut Session) {
@@ -42,17 +49,17 @@ fn opening_a_level_gives_a_snapshot_and_edits_come_back_with_a_new_revision() {
     let mut session = opened();
     let view = session.level.as_mut().unwrap();
     assert_eq!(view.snapshot.revision, 1);
-    view.selection.insert((Kind::Sprite, 0));
-    view.drag = Some(DragMode::Move { delta: Vec2::new(16.0, 0.0), submitted: true });
-    let edit = view.move_edit().unwrap();
+    view.selection.push(Item::new(Kind::Sprite, 0));
+    let edit = view.move_edit(Vec2::new(16.0, 0.0)).unwrap();
+    view.gesture = Some(Gesture::Move { delta: Vec2::new(16.0, 0.0), submitted: true });
     let before = view.snapshot.course.sprites[0].x;
     session.edit(edit);
     settle(&mut session);
     let view = session.level.as_ref().unwrap();
     assert_eq!(view.snapshot.course.sprites[0].x, before + 1);
     assert_eq!((view.snapshot.revision, view.snapshot.dirty, view.snapshot.can_undo), (2, true, true));
-    assert_eq!(view.snapshot.undo_names, ["Move"]);
-    assert_eq!(view.drag, None, "the moved things stop being previews once the host has answered");
+    assert_eq!(view.snapshot.undo_names, ["Move selection"]);
+    assert_eq!(view.gesture, None, "the moved things stop being previews once the host has answered");
 }
 
 #[test]
@@ -60,18 +67,18 @@ fn undo_redo_and_save_follow_the_hosts_answers() {
     let mut session = opened();
     let remove = {
         let view = session.level.as_mut().unwrap();
-        view.selection.insert((Kind::Object, 0));
+        view.selection.push(Item::new(Kind::Object, 0));
         view.remove_edit().unwrap()
     };
     session.edit(remove);
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 5);
+    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 6);
     session.undo();
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 6);
+    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 7);
     session.redo();
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 5);
+    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 6);
     session.save();
     settle(&mut session);
     assert!(!session.level.as_ref().unwrap().snapshot.dirty);
@@ -96,15 +103,218 @@ fn a_demo_host_answers_requests_it_does_not_know_with_an_error() {
     let mut connection = DemoConnection::new();
     let id = connection.send(Request::ListProjects);
     let id2 = connection.send(Request::CloseLevel { level: 1 });
+    let id3 = connection.send(Request::ProjectSettings);
     let answers = connection.poll();
-    assert_eq!(answers.len(), 2);
-    assert!(matches!(&answers[0], bigstar_client::Incoming::Response { id: first, result: Ok(Response::Projects(_)) } if *first == id));
-    assert!(matches!(&answers[1], bigstar_client::Incoming::Response { id: second, result: Ok(Response::Done) } if *second == id2));
+    assert_eq!(answers.len(), 3);
+    assert!(matches!(&answers[0], Incoming::Response { id: first, result: Ok(Response::Projects(_)) } if *first == id));
+    assert!(matches!(&answers[1], Incoming::Response { id: second, result: Ok(Response::Done) } if *second == id2));
+    assert!(matches!(&answers[2], Incoming::Response { id: third, result: Err(_) } if *third == id3));
+}
+
+#[test]
+fn an_opened_level_fetches_its_graphics_actors_and_textures() {
+    let session = opened();
+    let view = session.level.as_ref().unwrap();
+    let graphics = view.art.graphics.as_ref().expect("level graphics");
+    assert_eq!(graphics.tilesets[0].blocks, 16);
+    assert!(view.art.tilesets[0].is_some());
+    assert!(!view.art.actors.catalog.actors.is_empty());
+    // Every sprite has its draw list, and every texture named is here.
+    assert_eq!(view.art.draws.len(), 4);
+    assert!(view.art.requested.is_empty());
+    for id in view.art.texture_ids() {
+        assert!(session.textures.contains_key(&id), "{id}");
+    }
+    assert!(session.textures.contains_key("demo-walker"));
+    // The ground object is laid out of blocks, so the tile array has cells.
+    let mut view = view.clone();
+    assert!(view.tilemap().cell_at(0, 20).draws());
+}
+
+/// What a host was asked, and what the test has it answer.
+#[derive(Default)]
+struct Scripted {
+    sent: Vec<(RequestId, Request)>,
+    inbox: VecDeque<Incoming>,
+}
+
+/// A host that answers what the test tells it to, when it says so.
+struct Shared(std::sync::Arc<std::sync::Mutex<Scripted>>);
+
+impl Connection for Shared {
+    fn send(&mut self, request: Request) -> RequestId {
+        let mut script = self.0.lock().unwrap();
+        let id = script.sent.len() as RequestId + 1;
+        script.sent.push((id, request));
+        id
+    }
+
+    fn poll(&mut self) -> Vec<Incoming> {
+        self.0.lock().unwrap().inbox.drain(..).collect()
+    }
+
+    fn state(&self) -> &ConnectionState {
+        // The state never changes in these tests.
+        &CONNECTED
+    }
+}
+
+static CONNECTED: std::sync::LazyLock<ConnectionState> =
+    std::sync::LazyLock::new(|| ConnectionState::Connected(HostInfo { host_version: "test".to_owned(), workspace_name: "Test".to_owned() }));
+
+fn last_request(script: &std::sync::Arc<std::sync::Mutex<Scripted>>, matches: impl Fn(&Request) -> bool) -> RequestId {
+    script.lock().unwrap().sent.iter().rev().find(|(_, r)| matches(r)).map(|(id, _)| *id).expect("request sent")
+}
+
+fn answer(script: &std::sync::Arc<std::sync::Mutex<Scripted>>, id: RequestId, result: ResponseResult) {
+    script.lock().unwrap().inbox.push_back(Incoming::Response { id, result });
+}
+
+#[test]
+fn graphics_from_before_a_change_on_disk_are_dropped() {
+    let script = std::sync::Arc::new(std::sync::Mutex::new(Scripted::default()));
+    let mut session = Session::new(Box::new(Shared(script.clone())));
+    let snapshot = demo_snapshot();
+    session.open_level("A01_1");
+    let open = last_request(&script, |r| matches!(r, Request::OpenLevel { .. }));
+    answer(&script, open, Ok(Response::Level(Box::new(snapshot))));
+    session.poll();
+    let first = last_request(&script, |r| matches!(r, Request::LevelGraphics { .. }));
+    assert!(script.lock().unwrap().sent.iter().any(|(_, r)| matches!(r, Request::ActorCatalog)));
+    assert!(script.lock().unwrap().sent.iter().any(|(_, r)| matches!(r, Request::RenderActors { inputs } if inputs.len() == 4)));
+
+    // A file changed: generation 2. The answer to the request made before it is stale.
+    script.lock().unwrap().inbox.push_back(Incoming::Event(Event::GraphicsChanged { generation: 2 }));
+    session.poll();
+    let second = last_request(&script, |r| matches!(r, Request::LevelGraphics { .. }));
+    assert_ne!(first, second, "the change asks again");
+    let graphics = |generation, blocks| LevelGraphics {
+        level: 1,
+        generation,
+        tilesets: [TilesetGraphics { blocks, ..Default::default() }, TilesetGraphics::default(), TilesetGraphics::default()],
+        ..Default::default()
+    };
+    answer(&script, first, Ok(Response::LevelGraphics(Box::new(graphics(1, 5)))));
+    session.poll();
+    assert!(session.level.as_ref().unwrap().art.graphics.is_none(), "an answer from generation 1 is dropped");
+    answer(&script, second, Ok(Response::LevelGraphics(Box::new(graphics(2, 7)))));
+    session.poll();
+    assert_eq!(session.level.as_ref().unwrap().art.graphics.as_ref().map(|g| g.tilesets[0].blocks), Some(7));
+
+    // Draw lists from before the change are asked for again, and a stale answer does not land.
+    let draws = last_request(&script, |r| matches!(r, Request::RenderActors { .. }));
+    answer(&script, draws, Ok(Response::ActorDraws { generation: 1, draws: vec![Default::default(); 4] }));
+    session.poll();
+    assert!(session.level.as_ref().unwrap().art.draws.is_empty());
+    let again = last_request(&script, |r| matches!(r, Request::RenderActors { .. }));
+    assert_ne!(again, draws);
+    // A refused one leaves the sprites as markers rather than waiting forever.
+    answer(&script, again, Err(bigstar_core::Error::new(bigstar_core::ErrorCode::Unsupported, "no")));
+    session.poll();
+    let view = session.level.as_ref().unwrap();
+    assert_eq!(view.art.draws.len(), 4);
+    assert!(view.art.draws.values().all(|d| !d.found));
+    assert!(session.notice.is_none(), "graphics failures are logged, not put in front of the person");
+}
+
+fn demo_snapshot() -> LevelSnapshot {
+    let mut demo = DemoConnection::new();
+    demo.send(Request::OpenLevel { area: "A01_1".to_owned() });
+    match demo.poll().pop() {
+        Some(Incoming::Response { result: Ok(Response::Level(snapshot)), .. }) => *snapshot,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn textures_are_asked_for_once_and_kept() {
+    let mut session = opened();
+    let count = session.textures.len();
+    assert!(count >= 2);
+    // Reopening the level asks for nothing it already holds.
+    session.close_level();
+    settle(&mut session);
+    session.open_level("A01_1");
+    settle(&mut session);
+    assert_eq!(session.textures.len(), count);
+    let texture: &TextureData = session.textures.values().next().unwrap();
+    assert_eq!(texture.rgba.len(), (texture.width * texture.height * 4) as usize);
+}
+
+// --- the canvas, driven through the whole app ----------------------------------------------------------------------
+
+fn harness_on(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp> {
+    let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(connection));
+    Harness::builder().with_size(size).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app)
 }
 
 fn harness() -> Harness<'static, BigStarApp> {
-    let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(DemoConnection::new()));
-    Harness::builder().with_size(Vec2::new(1000.0, 640.0)).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app)
+    harness_on(DemoConnection::new(), Vec2::new(1000.0, 640.0))
+}
+
+/// The app with the level open on its canvas.
+fn canvas_on(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp> {
+    let mut harness = harness_on(connection, size);
+    harness.run();
+    let session = harness.state_mut().session_mut().unwrap();
+    session.open_project("demo");
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness
+}
+
+fn level_with(items: LevelEntityInsertions) -> Harness<'static, BigStarApp> {
+    canvas_on(DemoConnection::with_level(items), Vec2::new(900.0, 700.0))
+}
+
+fn view<'h>(harness: &'h Harness<'_, BigStarApp>) -> &'h LevelView {
+    harness.state().session().unwrap().level.as_ref().unwrap()
+}
+
+fn view_mut<'a>(harness: &'a mut Harness<'_, BigStarApp>) -> &'a mut LevelView {
+    harness.state_mut().session_mut().unwrap().level.as_mut().unwrap()
+}
+
+fn screen(harness: &Harness<'_, BigStarApp>, world: Pos2) -> Pos2 {
+    view(harness).to_screen(world)
+}
+
+fn button(harness: &Harness<'_, BigStarApp>, pos: Pos2, button: PointerButton, pressed: bool, modifiers: Modifiers) {
+    harness.event(egui::Event::PointerButton { pos, button, pressed, modifiers });
+}
+
+/// Press at `from`, move to `to` and release there, a frame for each.
+fn drag(harness: &mut Harness<'_, BigStarApp>, from: Pos2, to: Pos2, modifiers: Modifiers) {
+    harness.hover_at(from);
+    harness.run();
+    button(harness, from, PointerButton::Primary, true, modifiers);
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+    button(harness, to, PointerButton::Primary, false, modifiers);
+    harness.run();
+}
+
+fn click(harness: &mut Harness<'_, BigStarApp>, at: Pos2, which: PointerButton, modifiers: Modifiers) {
+    harness.hover_at(at);
+    harness.run();
+    button(harness, at, which, true, modifiers);
+    button(harness, at, which, false, modifiers);
+    harness.run();
+}
+
+fn select(harness: &mut Harness<'_, BigStarApp>, items: &[Item]) {
+    view_mut(harness).selection = items.to_vec();
+    harness.run();
+}
+
+fn object(object_id: u16, x: i16, y: i16, width: u16, height: u16) -> NsmbLevelObject {
+    NsmbLevelObject { object_id, tileset_slot: 0, x, y, width, height }
+}
+
+fn view_at(x: u16, y: u16) -> NsmbLevelView {
+    NsmbLevelView { x, y, width: 256, height: 192, ..Default::default() }
 }
 
 #[test]
@@ -120,6 +330,7 @@ fn the_screens_lead_from_projects_to_levels_to_the_canvas() {
     let session = harness.state().session().unwrap();
     assert_eq!(session.level.as_ref().map(|v| v.snapshot.title.as_str()), Some("1-1"));
     harness.get_by_label("Save");
+    harness.get_by_label("Fit");
     harness.get_by_label("Levels").click();
     harness.run();
     assert!(harness.state().session().unwrap().level.is_none());
@@ -127,27 +338,486 @@ fn the_screens_lead_from_projects_to_levels_to_the_canvas() {
 
 #[test]
 fn dragging_a_sprite_moves_it_by_one_undoable_edit() {
-    let mut harness = harness();
-    harness.run();
-    harness.get_by_label("Demo").click();
-    harness.run();
-    harness.get_by_label("World 1").click();
-    harness.run();
-    harness.get_by_label("Area 1").click();
-    harness.run();
-    let (screen, x_before, zoom) = {
-        let view = harness.state().session().unwrap().level.as_ref().unwrap();
-        let center = view.bounds((Kind::Sprite, 0)).unwrap().center();
-        (view.canvas.min + (center.to_vec2() - view.pan) * view.zoom, view.snapshot.course.sprites[0].x, view.zoom)
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1000.0, 640.0));
+    let (centre, x_before, zoom) = {
+        let view = view(&harness);
+        (view.to_screen(view.bounds(Item::new(Kind::Sprite, 0)).unwrap().center()), view.snapshot.course.sprites[0].x, view.zoom)
     };
-    harness.drag_at(screen);
-    harness.run();
-    harness.hover_at(screen + Vec2::new(64.0 * zoom, 0.0));
-    harness.run();
-    harness.drop_at(screen + Vec2::new(64.0 * zoom, 0.0));
-    harness.run();
-    let view = harness.state().session().unwrap().level.as_ref().unwrap();
-    assert!(view.selection.contains(&(Kind::Sprite, 0)));
+    drag(&mut harness, centre, centre + Vec2::new(64.0 * zoom, 0.0), Modifiers::NONE);
+    let view = view(&harness);
+    assert_eq!(view.selection, [Item::new(Kind::Sprite, 0)]);
     assert_eq!(view.snapshot.course.sprites[0].x, x_before + 4, "moved by 64 level pixels (four tiles) in one step");
-    assert_eq!(view.snapshot.undo_names, ["Move"]);
+    assert_eq!(view.snapshot.undo_names, ["Move selection"]);
+}
+
+#[test]
+fn right_click_creates_the_current_kind_and_left_click_never_does() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    let at = view(&harness).canvas.center();
+    // Left-click selects and marquees. It never creates, whatever kind is chosen.
+    click(&mut harness, at, PointerButton::Primary, Modifiers::NONE);
+    assert!(view(&harness).snapshot.objects.is_empty());
+
+    // Right-click creates without anything armed: object 0 of tileset slot 0.
+    click(&mut harness, at, PointerButton::Secondary, Modifiers::NONE);
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.objects.len(), 1);
+    assert_eq!((snapshot.objects[0].tileset_slot, snapshot.objects[0].object_id), (0, 0));
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 0)]);
+
+    // A different pick changes what is stamped, not whether stamping works.
+    view_mut(&mut harness).placement.set_object(1, 12);
+    assert_eq!(view(&harness).placement.kind, Kind::Object);
+    click(&mut harness, at + Vec2::new(20.0, 20.0), PointerButton::Secondary, Modifiers::NONE);
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.objects.len(), 2);
+    assert_eq!((snapshot.objects[1].tileset_slot, snapshot.objects[1].object_id), (1, 12));
+
+    // The kind alone decides what is created, views included.
+    view_mut(&mut harness).placement.kind = Kind::View;
+    click(&mut harness, at + Vec2::new(40.0, 40.0), PointerButton::Secondary, Modifiers::NONE);
+    assert_eq!(view(&harness).snapshot.course.views.len(), 1);
+    assert_eq!(view(&harness).snapshot.undo_names.first().map(String::as_str), Some("Add view"));
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.course.views.len(), 0);
+}
+
+#[test]
+fn a_custom_placement_carries_its_hash() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    view_mut(&mut harness).placement.set_custom_sprite(0xf46a_44b9);
+    let at = view(&harness).canvas.center();
+    click(&mut harness, at, PointerButton::Secondary, Modifiers::NONE);
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.course.sprites.len(), 1);
+    assert_eq!(snapshot.sprite_hashes, [Some(0xf46a_44b9)]);
+    assert_eq!(snapshot.course.sprites[0].id, 326);
+}
+
+#[test]
+fn an_object_knob_resizes_and_escape_cancels() {
+    let mut harness = level_with(LevelEntityInsertions { objects: vec![object(1, 10, 10, 2, 2)], ..Default::default() });
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    let knob = screen(&harness, Pos2::new(12.0 * 16.0, 12.0 * 16.0));
+    assert_eq!(view(&harness).handle_at(knob), Some(Handle::BottomRight));
+    drag(&mut harness, knob, knob + Vec2::new(40.0, 40.0), Modifiers::NONE);
+    let resized = &view(&harness).snapshot.objects[0];
+    assert!(resized.width > 2 && resized.height > 2, "{resized:?}");
+    assert_eq!(view(&harness).snapshot.undo_names.first().map(String::as_str), Some("Resize selection"));
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!((view(&harness).snapshot.objects[0].width, view(&harness).snapshot.objects[0].height), (2, 2));
+
+    // Escape mid-drag abandons it: the release changes nothing.
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    let knob = screen(&harness, Pos2::new(12.0 * 16.0, 12.0 * 16.0));
+    harness.hover_at(knob);
+    harness.run();
+    button(&harness, knob, PointerButton::Primary, true, Modifiers::NONE);
+    harness.run();
+    harness.hover_at(knob + Vec2::new(40.0, 40.0));
+    harness.run();
+    assert!(matches!(view(&harness).gesture, Some(Gesture::Resize { .. })));
+    harness.key_press(Key::Escape);
+    harness.run();
+    button(&harness, knob + Vec2::new(40.0, 40.0), PointerButton::Primary, false, Modifiers::NONE);
+    harness.run();
+    assert_eq!((view(&harness).snapshot.objects[0].width, view(&harness).snapshot.objects[0].height), (2, 2));
+    assert!(!view(&harness).snapshot.can_redo || view(&harness).snapshot.undo_names.is_empty());
+}
+
+#[test]
+fn every_resizable_kind_has_eight_knobs() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 10, 10, 4, 4)],
+        zones: vec![NsmbLevelZone { x: 320, y: 320, width: 256, height: 192, ..Default::default() }],
+        views: vec![view_at(640, 640)],
+        sprites: vec![SpriteInsertion { value: NsmbLevelStageObject { id: 7, x: 4, y: 4, ..Default::default() }, hash: None }],
+        ..Default::default()
+    });
+    // Objects, zones and views all resize; sprites and entrances do not.
+    for kind in [Kind::Object, Kind::Zone, Kind::View] {
+        select(&mut harness, &[Item::new(kind, 0)]);
+        let view = view(&harness);
+        let rect = view.screen_rect(view.selected_resizable_rect().unwrap_or_else(|| panic!("{kind:?} has no knobs")));
+        // All eight answer, each with its own corner or edge.
+        for (handle, centre) in Handle::ALL.into_iter().zip(handle_centres(rect)) {
+            assert_eq!(view.handle_at(centre), Some(handle), "{kind:?}");
+        }
+        assert_eq!(view.handle_at(rect.center()), None);
+    }
+    select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
+    assert_eq!(view(&harness).selected_resizable_rect(), None);
+    // Only one selected thing has knobs.
+    select(&mut harness, &[Item::new(Kind::Zone, 0), Item::new(Kind::View, 0)]);
+    assert_eq!(view(&harness).selected_resizable_rect(), None);
+}
+
+#[test]
+fn the_top_left_knob_moves_a_views_origin_rather_than_its_extent() {
+    let mut harness = level_with(LevelEntityInsertions { views: vec![view_at(320, 320)], ..Default::default() });
+    select(&mut harness, &[Item::new(Kind::View, 0)]);
+    // The bottom-right knob grows the view away from its origin.
+    let knob = view(&harness).screen_rect(view(&harness).selected_resizable_rect().unwrap()).right_bottom();
+    drag(&mut harness, knob, knob + Vec2::new(48.0, 48.0), Modifiers::NONE);
+    let grown = view(&harness).snapshot.course.views[0].clone();
+    assert_eq!((grown.x, grown.y), (320, 320));
+    assert!(grown.width > 256 && grown.height > 192);
+
+    // The top-left knob moves the origin instead.
+    select(&mut harness, &[Item::new(Kind::View, 0)]);
+    let knob = view(&harness).screen_rect(view(&harness).selected_resizable_rect().unwrap()).left_top();
+    drag(&mut harness, knob, knob + Vec2::new(32.0, 32.0), Modifiers::NONE);
+    let moved = &view(&harness).snapshot.course.views[0];
+    assert!(moved.x > 320 && moved.y > 320);
+    assert!(moved.width < grown.width && moved.height < grown.height);
+    // The far edge held still.
+    assert_eq!(u32::from(moved.x) + u32::from(moved.width), u32::from(grown.x) + u32::from(grown.width));
+}
+
+#[test]
+fn selection_ignores_the_create_kind() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 1, 1, 1, 1)],
+        sprites: vec![SpriteInsertion { value: NsmbLevelStageObject { id: 7, x: 10, y: 10, ..Default::default() }, hash: None }],
+        ..Default::default()
+    });
+    select(&mut harness, &[Item::new(Kind::Object, 0), Item::new(Kind::Sprite, 0)]);
+    // Deciding what to place next is not a reason to drop what is held, and nothing has to be switched to before it can
+    // be grabbed.
+    for key in [Key::O, Key::S, Key::Z, Key::V] {
+        harness.key_press(key);
+        harness.run();
+        let view = view(&harness);
+        assert_eq!(view.selection.len(), 2);
+        assert_eq!(view.hit_test(Pos2::new(20.0, 20.0)).map(|i| i.kind), Some(Kind::Object));
+        assert_eq!(view.hit_test(Pos2::new(160.0, 160.0)).map(|i| i.kind), Some(Kind::Sprite));
+    }
+    assert_eq!(view(&harness).placement.kind, Kind::View);
+}
+
+#[test]
+fn containers_yield_the_click_to_what_they_enclose() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 16, 16, 4, 4)],
+        zones: vec![NsmbLevelZone { x: 0, y: 0, width: 1024, height: 768, ..Default::default() }],
+        views: vec![NsmbLevelView { width: 1024, height: 768, ..Default::default() }],
+        ..Default::default()
+    });
+    // Over the object all three overlap, and the object wins; clear of it the zone beats the larger view.
+    assert_eq!(view(&harness).hit_test(Pos2::new(260.0, 260.0)).map(|i| i.kind), Some(Kind::Object));
+    assert_eq!(view(&harness).hit_test(Pos2::new(700.0, 600.0)).map(|i| i.kind), Some(Kind::Zone));
+    // A view is reachable wherever nothing else covers it.
+    view_mut(&mut harness).snapshot.course.zones[0].width = 64;
+    view_mut(&mut harness).snapshot.course.zones[0].height = 64;
+    assert_eq!(view(&harness).hit_test(Pos2::new(700.0, 600.0)).map(|i| i.kind), Some(Kind::View));
+    // And a click there selects it.
+    let at = screen(&harness, Pos2::new(700.0, 600.0));
+    view_mut(&mut harness).snapshot.course.zones[0].width = 64;
+    click(&mut harness, at, PointerButton::Primary, Modifiers::NONE);
+    assert!(view(&harness).selection.iter().all(|i| i.kind != Kind::Object));
+}
+
+#[test]
+fn shift_click_adds_and_removes_and_a_marquee_selects_what_it_touches() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 4, 4, 1, 1), object(1, 8, 4, 1, 1), object(1, 30, 30, 1, 1)],
+        ..Default::default()
+    });
+    let centre = |harness: &Harness<'_, BigStarApp>, x: f32, y: f32| screen(harness, Pos2::new(x * 16.0 + 8.0, y * 16.0 + 8.0));
+    let first = centre(&harness, 4.0, 4.0);
+    click(&mut harness, first, PointerButton::Primary, Modifiers::NONE);
+    let second = centre(&harness, 8.0, 4.0);
+    click(&mut harness, second, PointerButton::Primary, Modifiers::SHIFT);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 0), Item::new(Kind::Object, 1)]);
+    click(&mut harness, first, PointerButton::Primary, Modifiers::SHIFT);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 1)]);
+    // A click on nothing clears, and a drag from nothing is a rubber band.
+    let empty = screen(&harness, Pos2::new(2.0 * 16.0, 2.0 * 16.0));
+    let across = screen(&harness, Pos2::new(10.0 * 16.0, 6.0 * 16.0));
+    drag(&mut harness, empty, across, Modifiers::NONE);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 0), Item::new(Kind::Object, 1)]);
+    assert_eq!(view(&harness).gesture, None);
+}
+
+#[test]
+fn ctrl_drag_clones_and_ctrl_d_and_page_keys_are_one_step_each() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 2, 3, 1, 1), object(2, 5, 6, 1, 1)],
+        sprites: vec![SpriteInsertion {
+            value: NsmbLevelStageObject { id: 326, x: 7, y: 8, settings: 9, ..Default::default() },
+            hash: Some(0x1234_5678),
+        }],
+        ..Default::default()
+    });
+    // Ctrl+D copies the selection one tile along, as pasting it would.
+    select(&mut harness, &[Item::new(Kind::Object, 0), Item::new(Kind::Sprite, 0)]);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::D);
+    harness.run();
+    let snapshot = view(&harness).snapshot.clone();
+    assert_eq!((snapshot.objects.len(), snapshot.course.sprites.len()), (3, 2));
+    assert_eq!((snapshot.objects[2].x, snapshot.objects[2].y), (3, 4));
+    assert_eq!(snapshot.sprite_hashes[1], Some(0x1234_5678));
+    assert_eq!(snapshot.undo_names[0], "Paste selection");
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 2), Item::new(Kind::Sprite, 1)]);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.objects.len(), 2);
+
+    // Ctrl-drag drags a copy and leaves the original where it was.
+    let grab = screen(&harness, Pos2::new(2.0 * 16.0 + 8.0, 3.0 * 16.0 + 8.0));
+    let zoom = view(&harness).zoom;
+    drag(&mut harness, grab, grab + Vec2::new(64.0 * zoom, 0.0), Modifiers::COMMAND);
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.objects.len(), 3);
+    assert_eq!((snapshot.objects[0].x, snapshot.objects[0].y), (2, 3));
+    assert_eq!((snapshot.objects[2].x, snapshot.objects[2].y), (7, 4), "the copy, one tile along, then dragged four");
+    assert_eq!(snapshot.undo_names[..2], ["Move selection", "Paste selection"]);
+
+    // PageUp brings the one selected thing forward in draw order, and the selection follows it.
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    harness.key_press(Key::PageUp);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.objects[1].object_id, 1);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 1)]);
+    assert_eq!(view(&harness).snapshot.undo_names[0], "Bring forward");
+    harness.key_press(Key::PageDown);
+    harness.run();
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Object, 0)]);
+}
+
+#[test]
+fn arrows_nudge_by_the_snap_and_delete_removes() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 2, 3, 1, 1)],
+        entrances: vec![NsmbLevelEntrance { x: 32, y: 48, ..Default::default() }],
+        ..Default::default()
+    });
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    harness.key_press(Key::ArrowRight);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.objects[0].x, 3, "objects step by a tile");
+    select(&mut harness, &[Item::new(Kind::Entrance, 0)]);
+    harness.get_by_label("8 px").click();
+    harness.run();
+    harness.key_press(Key::ArrowDown);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.course.entrances[0].y, 56, "everything else by the snap size");
+    harness.key_press(Key::Delete);
+    harness.run();
+    assert!(view(&harness).snapshot.course.entrances.is_empty());
+    assert!(view(&harness).selection.is_empty());
+    assert_eq!(view(&harness).snapshot.undo_names[0], "Delete selection");
+}
+
+#[test]
+fn panning_by_middle_button_space_alt_and_wasd() {
+    let mut harness = level_with(LevelEntityInsertions { objects: vec![object(1, 2, 3, 1, 1)], ..Default::default() });
+    let at = view(&harness).canvas.center();
+    let pan = |harness: &Harness<'_, BigStarApp>| view(harness).pan;
+    let zoom = view(&harness).zoom;
+
+    let before = pan(&harness);
+    harness.hover_at(at);
+    harness.run();
+    button(&harness, at, PointerButton::Middle, true, Modifiers::NONE);
+    harness.run();
+    harness.hover_at(at + Vec2::new(30.0, 0.0));
+    harness.run();
+    button(&harness, at + Vec2::new(30.0, 0.0), PointerButton::Middle, false, Modifiers::NONE);
+    harness.run();
+    assert!((pan(&harness).x - (before.x - 30.0 / zoom)).abs() < 0.01, "the level follows the pointer");
+
+    // Alt pans even over an entity.
+    let object = screen(&harness, Pos2::new(40.0, 56.0));
+    let before = pan(&harness);
+    drag(&mut harness, object, object + Vec2::new(0.0, 20.0), Modifiers::ALT);
+    assert!((pan(&harness).y - (before.y - 20.0 / zoom)).abs() < 0.01);
+    assert_eq!(view(&harness).snapshot.objects[0].y, 3, "nothing moved");
+
+    // Space held pans too.
+    let before = pan(&harness);
+    harness.key_down(Key::Space);
+    harness.run();
+    drag(&mut harness, object, object + Vec2::new(-10.0, 0.0), Modifiers::NONE);
+    harness.key_up(Key::Space);
+    harness.run();
+    assert!((pan(&harness).x - (before.x + 10.0 / zoom)).abs() < 0.01);
+
+    // W, A and D scroll 32 points; S chooses sprites.
+    let before = pan(&harness);
+    harness.key_press(Key::A);
+    harness.key_press(Key::W);
+    harness.key_press(Key::S);
+    harness.run();
+    assert!((pan(&harness) - (before - Vec2::new(32.0, 32.0) / zoom)).length() < 0.01);
+    assert_eq!(view(&harness).placement.kind, Kind::Sprite);
+}
+
+#[test]
+fn zoom_presets_pin_the_zoom_and_fit_unpins_it() {
+    let mut harness = level_with(LevelEntityInsertions { objects: vec![object(1, 2, 3, 1, 1)], ..Default::default() });
+    let fitted = view(&harness).zoom;
+    assert!(!view(&harness).zoom_pinned);
+    harness.get_by_label("200%").click();
+    harness.run();
+    assert_eq!((view(&harness).zoom, view(&harness).zoom_pinned), (2.0, true));
+    // The wheel zooms about the pointer: what is under it stays put.
+    let at = view(&harness).canvas.center() + Vec2::new(40.0, 10.0);
+    let under = view(&harness).to_world(at);
+    harness.hover_at(at);
+    harness.run();
+    harness.event(egui::Event::MouseWheel {
+        unit: egui::MouseWheelUnit::Line,
+        delta: Vec2::new(0.0, 1.0),
+        modifiers: Modifiers::NONE,
+        phase: egui::TouchPhase::Move,
+    });
+    harness.run();
+    assert!(view(&harness).zoom > 2.0);
+    assert!((view(&harness).to_world(at) - under).length() < 0.01);
+    harness.get_by_label("Fit").click();
+    harness.run();
+    assert_eq!((view(&harness).zoom, view(&harness).zoom_pinned), (fitted, false));
+}
+
+#[test]
+fn unsigned_entities_snap_back_and_hold_the_same_bound() {
+    let mut harness = level_with(LevelEntityInsertions {
+        entrances: vec![NsmbLevelEntrance { x: 32, y: 48, ..Default::default() }],
+        zones: vec![NsmbLevelZone { x: 64, y: 80, width: 256, height: 192, ..Default::default() }],
+        views: vec![NsmbLevelView { x: 96, y: 112, width: 256, height: 192, ..Default::default() }],
+        ..Default::default()
+    });
+    for kind in [Kind::Entrance, Kind::Zone, Kind::View] {
+        select(&mut harness, &[Item::new(kind, 0)]);
+        assert_eq!(view(&harness).move_edit(Vec2::new(-1024.0, -1024.0)), None, "{kind:?}");
+    }
+    // A near edge dragged past the origin moves nothing and keeps the size; one that stays in bounds lands.
+    select(&mut harness, &[Item::new(Kind::Zone, 0)]);
+    assert_eq!(view(&harness).resize_edit(Handle::TopLeft.edges(Vec2::new(-1024.0, -1024.0))), None);
+    let edit = view(&harness).resize_edit(Handle::TopLeft.edges(Vec2::new(-64.0, -80.0))).unwrap();
+    harness.state_mut().session_mut().unwrap().edit(edit);
+    harness.run();
+    let zone = &view(&harness).snapshot.course.zones[0];
+    assert_eq!((zone.x, zone.y, zone.width, zone.height), (0, 0, 320, 272));
+}
+
+#[test]
+fn a_signed_path_node_moves_past_the_origin() {
+    let mut harness = level_with(LevelEntityInsertions {
+        paths: vec![NsmbLevelPath { nodes: vec![NsmbLevelPathNode { x: -20, y: -30, ..Default::default() }], ..Default::default() }],
+        ..Default::default()
+    });
+    select(&mut harness, &[Item::node(Kind::Path, 0, 0)]);
+    let edit = view(&harness).move_edit(Vec2::new(-8.0, -8.0)).unwrap();
+    harness.state_mut().session_mut().unwrap().edit(edit);
+    harness.run();
+    let node = &view(&harness).snapshot.course.paths[0].nodes[0];
+    assert_eq!((node.x, node.y), (-28, -38));
+}
+
+// --- what the canvas draws -----------------------------------------------------------------------------------------
+
+fn rendered(harness: &mut Harness<'_, BigStarApp>) -> image::RgbaImage {
+    harness.run();
+    harness.render().expect("render")
+}
+
+fn pixel(image: &image::RgbaImage, at: Pos2) -> [u8; 4] {
+    image.get_pixel(at.x.round() as u32, at.y.round() as u32).0
+}
+
+fn lightness([r, g, b, _]: [u8; 4]) -> u32 {
+    (u32::from(r.max(g).max(b)) + u32::from(r.min(g).min(b))) / 2
+}
+
+fn drawn(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp> {
+    let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(connection));
+    let mut harness = Harness::builder().with_size(size).with_max_steps(16).wgpu().build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness
+}
+
+#[test]
+fn the_canvas_follows_the_theme() {
+    let mut harness = drawn(DemoConnection::with_level(LevelEntityInsertions::default()).without_background(), Vec2::new(480.0, 360.0));
+    let inside = view(&harness).canvas.min + Vec2::new(30.0, 30.0);
+    harness.ctx.set_visuals(egui::Visuals::light());
+    let light = rendered(&mut harness);
+    harness.ctx.set_visuals(egui::Visuals::dark());
+    let dark = rendered(&mut harness);
+    // The map surface follows the theme, and so does the minimap's; neither may stay light on a dark one. The fine grid
+    // makes the surface a wash a few units off its flat colour, which the thresholds leave room for.
+    let minimap = view(&harness).canvas.max - Vec2::new(100.0, 25.0);
+    for at in [inside, minimap] {
+        assert!(lightness(pixel(&light, at)) > 180, "{:?}", pixel(&light, at));
+        assert!(lightness(pixel(&dark, at)) < 80, "{:?}", pixel(&dark, at));
+    }
+}
+
+#[test]
+fn the_out_of_bounds_quadrant_is_tinted() {
+    let items = LevelEntityInsertions { objects: vec![object(1, 4, 4, 4, 4)], ..Default::default() };
+    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(480.0, 360.0));
+    harness.ctx.set_visuals(egui::Visuals::light());
+    let image = rendered(&mut harness);
+    // Either side of the origin, away from grid lines and the object, so only the tint separates them.
+    let outside = pixel(&image, screen(&harness, Pos2::new(-40.0, -40.0)));
+    let inside = pixel(&image, screen(&harness, Pos2::new(40.0, 150.0)));
+    assert!(outside[1] < inside[1], "{outside:?} {inside:?}");
+    assert!(i32::from(outside[0]) - i32::from(outside[1]) > i32::from(inside[0]) - i32::from(inside[1]));
+}
+
+#[test]
+fn an_object_in_front_culls_the_one_behind() {
+    // A level is one array of blocks, not a stack of objects: a cell keeps whichever object wrote it last, and the
+    // eraser every tileset has clears what it is laid over.
+    let blank = RgbaImage { width: 16, height: 16, pixels: vec![0; 16 * 16 * 4] };
+    let red = RgbaImage { width: 16, height: 16, pixels: [230, 0, 0, 255].repeat(16 * 16) };
+    let mut blocks = vec![blank; 7];
+    blocks.push(red);
+    let layout = |tile| ObjectLayout { rows: vec![vec![ObjectLayoutTile::new(tile, 0)]], ..Default::default() };
+    let tileset = DemoTileset { blocks, objects: vec![layout(7), layout(OBJECT_LAYOUT_EMPTY_TILE)] };
+    let items = LevelEntityInsertions { objects: vec![object(0, 4, 4, 4, 4), object(1, 5, 5, 2, 2)], ..Default::default() };
+    let connection = DemoConnection::with_level(items).without_background().with_tileset(0, Some(tileset));
+    let mut harness = drawn(connection, Vec2::new(640.0, 480.0));
+    harness.ctx.set_visuals(egui::Visuals::light());
+    view_mut(&mut harness).zoom = 1.0;
+    view_mut(&mut harness).zoom_pinned = true;
+    view_mut(&mut harness).pan = Vec2::ZERO;
+    view_mut(&mut harness).options.show_grid = false;
+    let image = rendered(&mut harness);
+    let behind = pixel(&image, screen(&harness, Pos2::new(4.0 * 16.0 + 8.0, 4.0 * 16.0 + 8.0)));
+    let erased = pixel(&image, screen(&harness, Pos2::new(5.0 * 16.0 + 8.0, 5.0 * 16.0 + 8.0)));
+    assert!(i32::from(behind[0]) > i32::from(behind[1]) + 60, "{behind:?}");
+    assert!(i32::from(erased[0]) < i32::from(erased[1]) + 30, "{erased:?}");
+}
+
+#[test]
+fn actors_draw_their_own_art_and_the_rest_are_numbered_markers() {
+    let items = LevelEntityInsertions {
+        sprites: vec![
+            SpriteInsertion { value: NsmbLevelStageObject { id: 21, x: 4, y: 4, ..Default::default() }, hash: None },
+            SpriteInsertion { value: NsmbLevelStageObject { id: 55, x: 8, y: 4, ..Default::default() }, hash: None },
+        ],
+        ..Default::default()
+    };
+    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(640.0, 480.0));
+    harness.ctx.set_visuals(egui::Visuals::light());
+    view_mut(&mut harness).zoom = 2.0;
+    view_mut(&mut harness).zoom_pinned = true;
+    view_mut(&mut harness).pan = Vec2::ZERO;
+    view_mut(&mut harness).options.show_grid = false;
+    let image = rendered(&mut harness);
+    // The walker's body is brown; the actor with no renderer is a grey box.
+    let body = pixel(&image, screen(&harness, Pos2::new(4.0 * 16.0 + 4.0, 4.0 * 16.0 + 11.0)));
+    assert!(body[0] > body[2] + 60, "{body:?}");
+    let marker = pixel(&image, screen(&harness, Pos2::new(8.0 * 16.0 + 2.0, 4.0 * 16.0 + 2.0)));
+    assert!(i32::from(marker[0]).abs_diff(i32::from(marker[2])) < 20 && marker[0] < 200, "{marker:?}");
 }

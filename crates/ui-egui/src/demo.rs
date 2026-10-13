@@ -1,22 +1,32 @@
 //! A host that lives inside the frontend, with one made-up project and one made-up level. It exists so screenshots and
-//! tests have something to show without a ROM; it understands just enough of the protocol to move and delete things.
+//! tests have something to show without a ROM. The level is a real `EditableLevel`, so every edit, its undo name and
+//! its outcome are the ones a real host gives; the tileset art and the actors are drawn up here.
+
+use std::collections::HashMap;
 
 use bigstar_client::{Connection, ConnectionState, HostInfo, Incoming};
 use bigstar_core::{Error, ErrorCode};
 use bigstar_formats::{
-    NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelStageObject, NsmbLevelView, NsmbLevelZone,
+    NSMB_LEVEL_BLOCK_COUNT, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelStageObject, NsmbLevelView, NsmbLevelZone,
+    OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage,
 };
+use bigstar_level::{EditableLevel, LevelEntityInsertions, SpriteBounds, SpriteDefinition, SpriteInsertion};
 use bigstar_protocol::{
-    AreaSummary, EditOutcome, Event, LevelEdit, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectInfo, ProjectSummary, Request, RequestId,
-    Response, ResponseResult,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, ImageGraphics, LevelEdit,
+    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectInfo, ProjectSummary, Request, RequestId, Response,
+    ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
+const LEVEL: LevelId = 1;
+const BACKGROUND: &str = "demo-background";
+const WALKER: &str = "demo-walker";
 
+/// One tileset slot's art: a 16x16 image per block and the objects laid out of them.
 #[derive(Clone)]
-struct State {
-    course: NsmbLevelCourse,
-    objects: Vec<NsmbLevelObject>,
+pub struct DemoTileset {
+    pub blocks: Vec<RgbaImage>,
+    pub objects: Vec<ObjectLayout>,
 }
 
 pub struct DemoConnection {
@@ -25,22 +35,61 @@ pub struct DemoConnection {
     inbox: Vec<Incoming>,
     /// Events the request being answered raised; they follow its response.
     events: Vec<Incoming>,
-    history: Vec<(String, State)>,
-    position: usize,
-    clean: usize,
+    /// `None` only if the made-up level failed to build, which an empty course never does; every level request then
+    /// fails.
+    level: Option<EditableLevel>,
     revision: u64,
+    tilesets: [Option<DemoTileset>; 3],
+    background: bool,
+    textures: HashMap<String, TextureData>,
+}
+
+fn put_u32(data: &mut [u8], offset: usize, value: u32) {
+    if let Some(target) = data.get_mut(offset..offset + 4) {
+        target.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// A course with nothing in it but a zeroed header and one zeroed screen.
+fn empty_course() -> Vec<u8> {
+    let mut course = vec![0u8; NSMB_LEVEL_BLOCK_COUNT * 8];
+    for block in 0..NSMB_LEVEL_BLOCK_COUNT {
+        let end = course.len() as u32;
+        put_u32(&mut course, block * 8, end);
+    }
+    put_u32(&mut course, 4, 32);
+    course.resize(course.len() + 32, 0);
+    let end = course.len() as u32;
+    put_u32(&mut course, 16, end);
+    put_u32(&mut course, 20, 20);
+    course.resize(course.len() + 20, 0);
+    course
+}
+
+/// A level holding `items` and no history.
+fn level_with(items: LevelEntityInsertions) -> Result<EditableLevel, Error> {
+    let mut level = EditableLevel::load(&empty_course(), &[0xff, 0xff], None)?;
+    level.add_entities(items, "Demo")?;
+    EditableLevel::load(&level.serialize_course()?, &level.serialize_bgdat()?, None)
 }
 
 fn object(object_id: u16, x: i16, y: i16, width: u16, height: u16) -> NsmbLevelObject {
     NsmbLevelObject { object_id, tileset_slot: 0, x, y, width, height }
 }
 
-fn sample_state() -> State {
-    let course = NsmbLevelCourse {
-        sprites: [(0x15, 26, 18), (0x37, 35, 17), (0x40, 44, 18), (0x15, 55, 16)]
-            .into_iter()
-            .map(|(id, x, y)| NsmbLevelStageObject { id, x, y, ..Default::default() })
-            .collect(),
+fn sample_items() -> LevelEntityInsertions {
+    let sprite = |id, x, y| SpriteInsertion { value: NsmbLevelStageObject { id, x, y, ..Default::default() }, hash: None };
+    LevelEntityInsertions {
+        objects: vec![
+            object(0, 0, 20, 40, 4),
+            object(0, 44, 20, 36, 4),
+            object(1, 10, 15, 3, 1),
+            object(3, 11, 15, 1, 1),
+            object(1, 22, 13, 5, 1),
+            object(2, 30, 16, 2, 4),
+            object(4, 52, 14, 4, 6),
+        ],
+        sprites: vec![sprite(21, 26, 19), sprite(55, 35, 18), sprite(64, 44, 17), sprite(21, 55, 13)],
         entrances: vec![
             NsmbLevelEntrance { id: 0, x: 48, y: 288, ..Default::default() },
             NsmbLevelEntrance { id: 1, x: 1180, y: 224, ..Default::default() },
@@ -53,110 +102,304 @@ fn sample_state() -> State {
             unknown: 0,
         }],
         ..Default::default()
+    }
+}
+
+/// A 16x16 block painted by `pixel(x, y)`.
+fn block(pixel: impl Fn(usize, usize) -> [u8; 4]) -> RgbaImage {
+    let mut pixels = Vec::with_capacity(16 * 16 * 4);
+    for y in 0..16 {
+        for x in 0..16 {
+            pixels.extend_from_slice(&pixel(x, y));
+        }
+    }
+    RgbaImage { width: 16, height: 16, pixels }
+}
+
+fn shade([r, g, b]: [u8; 3], by: i16) -> [u8; 4] {
+    let channel = |c: u8| (i16::from(c) + by).clamp(0, 255) as u8;
+    [channel(r), channel(g), channel(b), 255]
+}
+
+fn row(tiles: &[(i32, u8)]) -> Vec<ObjectLayoutTile> {
+    tiles.iter().map(|&(tile, control)| ObjectLayoutTile::new(tile, control)).collect()
+}
+
+/// Grass, earth, bricks, a question block, a pipe and stone, drawn in code.
+pub fn sample_tileset() -> DemoTileset {
+    let earth = [176, 112, 64];
+    let speckle = |x: usize, y: usize| (x * 7 + y * 13).is_multiple_of(11);
+    let mut blocks = vec![block(|_, _| [0, 0, 0, 0]); 7];
+    // 7: grass over earth.
+    blocks.push(block(|x, y| match y {
+        0 => shade([120, 216, 88], 20),
+        1..=4 => shade([72, 176, 56], if (x + y) % 5 == 0 { -24 } else { 0 }),
+        _ => shade(earth, if speckle(x, y) { -40 } else { 0 }),
+    }));
+    // 8: earth.
+    blocks.push(block(|x, y| shade(earth, if speckle(x, y) { -40 } else { 0 })));
+    // 9: bricks.
+    blocks.push(block(|x, y| {
+        let mortar = y % 8 == 7 || (x + if y < 8 { 0 } else { 8 }) % 16 == 15;
+        if mortar { shade([90, 50, 30], 0) } else { shade([200, 96, 48], if y % 8 == 0 { 30 } else { 0 }) }
+    }));
+    // 10: question block.
+    blocks.push(block(|x, y| {
+        let border = x == 0 || y == 0 || x == 15 || y == 15;
+        let mark = matches!((x, y), (6..=9, 3) | (10, 4..=6) | (8..=9, 7) | (7..=8, 8..=9) | (7..=8, 11..=12));
+        if border {
+            shade([120, 72, 16], 0)
+        } else if mark {
+            shade([255, 255, 240], 0)
+        } else {
+            shade([248, 184, 32], if x == 1 || y == 1 { 30 } else { 0 })
+        }
+    }));
+    let pipe = |x: usize, lip: bool, left: bool| {
+        let edge = if left { x == 0 } else { x == 15 };
+        let light = if left { (3..6).contains(&x) } else { (10..12).contains(&x) };
+        if edge {
+            shade([16, 64, 16], 0)
+        } else if light {
+            shade([152, 232, 120], 0)
+        } else {
+            shade([48, 168, 48], if lip { 16 } else { 0 })
+        }
     };
+    // 11-14: a pipe's lip and body, left and right halves.
+    blocks.push(block(move |x, y| if y == 0 || y == 15 { shade([16, 64, 16], 0) } else { pipe(x, true, true) }));
+    blocks.push(block(move |x, y| if y == 0 || y == 15 { shade([16, 64, 16], 0) } else { pipe(x, true, false) }));
+    blocks.push(block(move |x, _| pipe(x, false, true)));
+    blocks.push(block(move |x, _| pipe(x, false, false)));
+    // 15: stone.
+    blocks.push(block(|x, y| {
+        let by = if x == 0 || y == 0 {
+            40
+        } else if x == 15 || y == 15 {
+            -50
+        } else {
+            0
+        };
+        shade([150, 150, 160], by)
+    }));
     let objects = vec![
-        object(0, 0, 20, 40, 4),
-        object(0, 44, 20, 36, 4),
-        object(1, 10, 15, 3, 1),
-        object(1, 22, 13, 5, 1),
-        object(2, 30, 16, 2, 4),
-        object(3, 52, 14, 4, 6),
+        ObjectLayout { rows: vec![row(&[(7, 1)]), row(&[(8, 3)])], ..Default::default() },
+        ObjectLayout { rows: vec![row(&[(9, 3)])], ..Default::default() },
+        ObjectLayout { rows: vec![row(&[(11, 0), (12, 0)]), row(&[(13, 2), (14, 0)])], ..Default::default() },
+        ObjectLayout { rows: vec![row(&[(10, 3)])], ..Default::default() },
+        ObjectLayout { rows: vec![row(&[(15, 3)])], ..Default::default() },
+        ObjectLayout { rows: vec![row(&[(OBJECT_LAYOUT_EMPTY_TILE, 3)])], ..Default::default() },
     ];
-    State { course, objects }
+    DemoTileset { blocks, objects }
+}
+
+/// Every block of a slot packed into one atlas, `ATLAS_COLUMNS` to a row.
+fn atlas(id: String, blocks: &[RgbaImage]) -> TextureData {
+    let columns = ATLAS_COLUMNS as usize;
+    let rows = blocks.len().div_ceil(columns).max(1);
+    let (width, height) = (columns * 16, rows * 16);
+    let mut rgba = vec![0; width * height * 4];
+    for (index, image) in blocks.iter().enumerate() {
+        let (bx, by) = ((index % columns) * 16, (index / columns) * 16);
+        for y in 0..16usize.min(image.height) {
+            let from = y * image.width * 4;
+            let to = ((by + y) * width + bx) * 4;
+            let length = 16usize.min(image.width) * 4;
+            if let (Some(source), Some(target)) = (image.pixels.get(from..from + length), rgba.get_mut(to..to + length)) {
+                target.copy_from_slice(source);
+            }
+        }
+    }
+    TextureData { id, width: width as u32, height: height as u32, rgba }
+}
+
+fn image(id: &str, width: usize, height: usize, pixel: impl Fn(usize, usize) -> [u8; 4]) -> TextureData {
+    let mut rgba = Vec::with_capacity(width * height * 4);
+    for y in 0..height {
+        for x in 0..width {
+            rgba.extend_from_slice(&pixel(x, y));
+        }
+    }
+    TextureData { id: id.to_owned(), width: width as u32, height: height as u32, rgba }
+}
+
+/// A sky, darker at the top.
+fn background() -> TextureData {
+    image(BACKGROUND, 64, 64, |_, y| {
+        let t = y as f32 / 63.0;
+        let mix = |a: f32, b: f32| (a + (b - a) * t) as u8;
+        [mix(96.0, 200.0), mix(160.0, 232.0), mix(232.0, 255.0), 255]
+    })
+}
+
+/// A round walker with two eyes.
+fn walker() -> TextureData {
+    image(WALKER, 16, 16, |x, y| {
+        let (dx, dy) = (x as f32 - 7.5, y as f32 - 8.5);
+        let body = dx * dx / 64.0 + dy * dy / 56.0 <= 1.0;
+        let eye = (y == 6 || y == 7) && (x == 5 || x == 10);
+        let feet = y >= 14 && ((2..6).contains(&x) || (10..14).contains(&x));
+        if eye {
+            [255, 255, 255, 255]
+        } else if feet {
+            [40, 24, 16, 255]
+        } else if body {
+            [150, 84, 40, 255]
+        } else {
+            [0, 0, 0, 0]
+        }
+    })
+}
+
+fn definition(object_id: u32, name: &str, category: &str) -> SpriteDefinition {
+    SpriteDefinition { object_id, name: name.to_owned(), category: category.to_owned(), ..Default::default() }
 }
 
 impl DemoConnection {
     pub fn new() -> Self {
-        Self {
+        Self::with_level(sample_items())
+    }
+
+    /// The demo host with its art and a level holding just `items`.
+    pub fn with_level(items: LevelEntityInsertions) -> Self {
+        let level = level_with(items).or_else(|_| level_with(LevelEntityInsertions::default())).ok();
+        let mut connection = Self {
             state: ConnectionState::Connected(HostInfo { host_version: "demo".to_owned(), workspace_name: "Demo workspace".to_owned() }),
             next_id: 1,
             inbox: Vec::new(),
             events: Vec::new(),
-            history: vec![("Open".to_owned(), sample_state())],
-            position: 0,
-            clean: 0,
+            level,
             revision: 1,
+            tilesets: [Some(sample_tileset()), None, None],
+            background: true,
+            textures: HashMap::new(),
+        };
+        connection.rebuild_textures();
+        connection
+    }
+
+    /// Replaces the art of one tileset slot, or takes it away.
+    pub fn with_tileset(mut self, slot: usize, tileset: Option<DemoTileset>) -> Self {
+        if let Some(target) = self.tilesets.get_mut(slot) {
+            *target = tileset;
         }
+        self.rebuild_textures();
+        self
     }
 
-    fn current(&self) -> State {
-        self.history.get(self.position).map_or_else(sample_state, |(_, state)| state.clone())
+    pub fn without_background(mut self) -> Self {
+        self.background = false;
+        self.rebuild_textures();
+        self
     }
 
-    fn snapshot(&self) -> LevelSnapshot {
-        let state = self.current();
-        let names =
-            |range: &mut dyn Iterator<Item = usize>| range.filter_map(|i| self.history.get(i).map(|(name, _)| name.clone())).collect::<Vec<_>>();
-        LevelSnapshot {
-            level: 1,
+    fn rebuild_textures(&mut self) {
+        self.textures.clear();
+        for (slot, tileset) in self.tilesets.iter().enumerate() {
+            if let Some(tileset) = tileset {
+                let texture = atlas(format!("demo-tileset-{slot}"), &tileset.blocks);
+                self.textures.insert(texture.id.clone(), texture);
+            }
+        }
+        if self.background {
+            self.textures.insert(BACKGROUND.to_owned(), background());
+        }
+        self.textures.insert(WALKER.to_owned(), walker());
+    }
+
+    fn level(&mut self) -> Result<&mut EditableLevel, Error> {
+        self.level.as_mut().ok_or_else(|| Error::new(ErrorCode::NotFound, "the demo level could not be built"))
+    }
+
+    fn snapshot(&self) -> Result<LevelSnapshot, Error> {
+        let level = self.level.as_ref().ok_or_else(|| Error::new(ErrorCode::NotFound, "the demo level could not be built"))?;
+        Ok(LevelSnapshot {
+            level: LEVEL,
             area: AREA.to_owned(),
             title: "1-1".to_owned(),
             revision: self.revision,
-            course: state.course,
-            objects: state.objects,
-            tileset_references: Default::default(),
-            glue_error: None,
-            sprite_hashes: Vec::new(),
-            dirty: self.position != self.clean,
-            can_undo: self.position > 0,
-            can_redo: self.position + 1 < self.history.len(),
-            undo_names: names(&mut (1..=self.position).rev()),
-            redo_names: names(&mut (self.position + 1..self.history.len())),
+            course: level.course().clone(),
+            objects: level.objects().to_vec(),
+            tileset_references: level.tileset_references(),
+            glue_error: level.glue_error().map(str::to_owned),
+            sprite_hashes: (0..level.course().sprites.len()).map(|index| level.sprite_hash(index)).collect(),
+            dirty: level.dirty(),
+            can_undo: level.can_undo(),
+            can_redo: level.can_redo(),
+            undo_names: level.undo_names(),
+            redo_names: level.redo_names(),
+        })
+    }
+
+    fn edited(&mut self, outcome: EditOutcome) -> ResponseResult {
+        self.revision += 1;
+        let snapshot = self.snapshot()?;
+        self.events.push(Incoming::Event(Event::LevelChanged { level: LEVEL, revision: self.revision, dirty: snapshot.dirty }));
+        Ok(Response::Edited { snapshot: Box::new(snapshot), outcome })
+    }
+
+    fn graphics(&self, level: LevelId) -> LevelGraphics {
+        let tilesets = std::array::from_fn(|slot| match self.tilesets.get(slot).and_then(Option::as_ref) {
+            Some(tileset) => TilesetGraphics {
+                atlas: Some(format!("demo-tileset-{slot}")),
+                blocks: tileset.blocks.len() as u32,
+                objects: tileset.objects.clone(),
+                error: None,
+            },
+            None => TilesetGraphics::default(),
+        });
+        let background = if self.background {
+            ImageGraphics { texture: Some(BACKGROUND.to_owned()), error: None }
+        } else {
+            ImageGraphics { texture: None, error: Some("the demo has no background".to_owned()) }
+        };
+        LevelGraphics { level, generation: 0, tilesets, background, foreground: ImageGraphics::default(), error: None }
+    }
+
+    fn catalog() -> ActorCatalog {
+        let actor = |definition, has_renderer| ActorInfo { definition, has_renderer, init_error: None };
+        let mut walker = definition(21, "Walker", "Enemies");
+        walker.render_bounds = SpriteBounds { x: 0, y: 0, width: 16, height: 16 };
+        ActorCatalog {
+            generation: 0,
+            actors: vec![actor(walker, true), actor(definition(55, "Shell walker", "Enemies"), false), actor(definition(64, "Coin", "Items"), true)],
+            sprite_object_ids: (0..400).collect(),
         }
     }
 
-    fn edit(&mut self, edit: LevelEdit) -> Result<(), Error> {
-        let mut next = self.current();
-        let name = match edit {
-            LevelEdit::Update { updates, name } => {
-                for u in updates.objects {
-                    *next.objects.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.sprites {
-                    *next.course.sprites.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.entrances {
-                    *next.course.entrances.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.views {
-                    *next.course.views.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.zones {
-                    *next.course.zones.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.paths {
-                    *next.course.paths.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                for u in updates.progress_paths {
-                    *next.course.progress_paths.get_mut(u.index).ok_or_else(missing)? = u.value;
-                }
-                name
-            }
-            LevelEdit::Remove { selection, name } => {
-                fn drop_all<T>(list: &mut Vec<T>, mut indices: Vec<usize>) {
-                    indices.sort_unstable_by(|a, b| b.cmp(a));
-                    for index in indices {
-                        if index < list.len() {
-                            list.remove(index);
-                        }
-                    }
-                }
-                drop_all(&mut next.objects, selection.objects);
-                drop_all(&mut next.course.sprites, selection.sprites);
-                drop_all(&mut next.course.entrances, selection.entrances);
-                drop_all(&mut next.course.views, selection.views);
-                drop_all(&mut next.course.zones, selection.zones);
-                drop_all(&mut next.course.paths, selection.paths);
-                drop_all(&mut next.course.progress_paths, selection.progress_paths);
-                name
-            }
-            _ => return Err(Error::new(ErrorCode::Unsupported, "the demo host only moves and deletes")),
+    fn render(input: &ActorInput) -> ActorDraw {
+        let at = |x: f64, y: f64, width: f64, height: f64| DrawCommand {
+            x: input.pixel_x + x,
+            y: input.pixel_y + y,
+            width,
+            height,
+            opacity: 1.0,
+            ..Default::default()
         };
-        self.history.truncate(self.position + 1);
-        self.history.push((name, next));
-        self.position += 1;
-        self.revision += 1;
-        Ok(())
+        let commands = match (input.hash, input.sprite_type) {
+            (None, 21) => {
+                vec![DrawCommand { kind: DrawKind::Image, texture: Some(WALKER.to_owned()), source_size: [16, 16], ..at(0.0, 0.0, 16.0, 16.0) }]
+            }
+            (None, 64) => vec![
+                DrawCommand { kind: DrawKind::FillEllipse, color: 0xf8c8_38ff, ..at(2.0, 0.0, 12.0, 16.0) },
+                DrawCommand { kind: DrawKind::FillRect, color: 0xfff0_a0ff, ..at(7.0, 3.0, 2.0, 10.0) },
+            ],
+            (None, 55) => return ActorDraw { found: true, ..Default::default() },
+            _ => return ActorDraw::default(),
+        };
+        ActorDraw { found: true, commands, custom_rendered: true, ..Default::default() }
+    }
+
+    fn edit(&mut self, edit: LevelEdit) -> Result<EditOutcome, Error> {
+        let level = self.level()?;
+        match edit {
+            LevelEdit::Update { updates, name } => level.update_entities(updates, &name).map(|()| EditOutcome::None),
+            LevelEdit::Add { items, name } => level.add_entities(items, &name).map(EditOutcome::Added),
+            LevelEdit::Remove { selection, name } => level.remove_entities(selection, &name).map(|()| EditOutcome::None),
+            LevelEdit::Reorder { kind, index, forward } => level.reorder_entity(kind, index, forward).map(EditOutcome::Moved),
+            LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
+            LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
+        }
     }
 
     fn answer(&mut self, request: Request) -> ResponseResult {
@@ -183,39 +426,35 @@ impl DemoConnection {
                     ],
                 }]))
             }
-            Request::OpenLevel { .. } => Ok(Response::Level(Box::new(self.snapshot()))),
+            Request::OpenLevel { .. } => Ok(Response::Level(Box::new(self.snapshot()?))),
             Request::EditLevel { base_revision, edit, .. } => {
                 if base_revision != self.revision {
                     return Err(Error::new(ErrorCode::InvalidArgument, "the level changed since it was last seen"));
                 }
-                self.edit(edit)?;
-                Ok(Response::Edited { snapshot: Box::new(self.snapshot()), outcome: EditOutcome::None })
+                let outcome = self.edit(edit)?;
+                self.edited(outcome)
             }
-            Request::UndoLevel { .. } if self.position > 0 => {
-                self.position -= 1;
-                self.revision += 1;
-                Ok(Response::Edited { snapshot: Box::new(self.snapshot()), outcome: EditOutcome::None })
+            Request::UndoLevel { .. } => {
+                self.level()?.undo()?;
+                self.edited(EditOutcome::None)
             }
-            Request::RedoLevel { .. } if self.position + 1 < self.history.len() => {
-                self.position += 1;
-                self.revision += 1;
-                Ok(Response::Edited { snapshot: Box::new(self.snapshot()), outcome: EditOutcome::None })
+            Request::RedoLevel { .. } => {
+                self.level()?.redo()?;
+                self.edited(EditOutcome::None)
             }
-            Request::UndoLevel { .. } | Request::RedoLevel { .. } => Err(Error::new(ErrorCode::InvalidArgument, "nothing to undo or redo")),
             Request::SaveLevel { .. } => {
-                self.clean = self.position;
-                self.revision += 1;
+                self.level()?.mark_clean();
                 self.events.push(Incoming::Event(Event::Log { level: LogLevel::Info, message: "Saved 1-1".to_owned() }));
-                Ok(Response::Edited { snapshot: Box::new(self.snapshot()), outcome: EditOutcome::None })
+                self.edited(EditOutcome::None)
             }
             Request::CloseLevel { .. } => Ok(Response::Done),
+            Request::LevelGraphics { level } => Ok(Response::LevelGraphics(Box::new(self.graphics(level)))),
+            Request::ActorCatalog => Ok(Response::ActorCatalog(Box::new(Self::catalog()))),
+            Request::RenderActors { inputs } => Ok(Response::ActorDraws { generation: 0, draws: inputs.iter().map(Self::render).collect() }),
+            Request::GetTextures { ids } => Ok(Response::Textures(ids.iter().filter_map(|id| self.textures.get(id).cloned()).collect())),
             _ => Err(Error::new(ErrorCode::Unsupported, "the demo host does not do that")),
         }
     }
-}
-
-fn missing() -> Error {
-    Error::new(ErrorCode::InvalidArgument, "there is no such entity")
 }
 
 impl Default for DemoConnection {

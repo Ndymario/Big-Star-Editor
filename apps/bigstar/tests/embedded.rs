@@ -9,7 +9,7 @@ use bigstar_client::{Connection, HostInfo, InProcess, Waker};
 use bigstar_host::Host;
 use bigstar_level::EditableLevel;
 use bigstar_project::test_support::{RomFile, TempDir, make_rom, write_bytes};
-use bigstar_ui_egui::{BigStarApp, EMBEDDED_ROOT_KEY, Kind, Services};
+use bigstar_ui_egui::{BigStarApp, EMBEDDED_ROOT_KEY, Item, Kind, Services};
 use egui::Vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
@@ -108,9 +108,11 @@ fn import_open_drag_and_save_through_the_embedded_host() {
     let (grab, drop, x_before) = {
         let view = harness.state().session().unwrap().level.as_ref().unwrap();
         let to_screen = |p: egui::Pos2| view.canvas.min + (p.to_vec2() - view.pan) * view.zoom;
-        let center = view.bounds((Kind::Object, 0)).unwrap().center();
+        let center = view.bounds(Item::new(Kind::Object, 0)).unwrap().center();
         (to_screen(center), to_screen(center + Vec2::new(64.0, 0.0)), view.snapshot.objects[0].x)
     };
+    harness.hover_at(grab);
+    harness.run();
     harness.drag_at(grab);
     harness.run();
     harness.hover_at(drop);
@@ -119,7 +121,7 @@ fn import_open_drag_and_save_through_the_embedded_host() {
     until(&mut harness, "the move to be answered", |app| app.session().and_then(|s| s.level.as_ref()).is_some_and(|v| v.snapshot.dirty));
     let view = harness.state().session().unwrap().level.as_ref().unwrap();
     assert_eq!(view.snapshot.objects[0].x, x_before + 4, "64 pixels is four tiles");
-    assert_eq!(view.snapshot.undo_names, ["Move"]);
+    assert_eq!(view.snapshot.undo_names, ["Move selection"]);
 
     harness.get_by_label("Save").click();
     until(&mut harness, "the save", |app| app.session().and_then(|s| s.level.as_ref()).is_some_and(|v| !v.snapshot.dirty));

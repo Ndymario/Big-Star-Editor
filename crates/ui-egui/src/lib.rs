@@ -9,7 +9,7 @@ mod services;
 mod session;
 
 pub use app::{BigStarApp, EMBEDDED_ROOT_KEY, RECENT_HOSTS_KEY};
-pub use level_view::{Kind, LevelView};
+pub use level_view::{Item, Kind, LevelView};
 pub use services::{MemoryServices, Services};
 pub use session::Session;
 
