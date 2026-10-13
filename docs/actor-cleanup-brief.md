@@ -9,7 +9,7 @@ a transpiler** that walked NSMB Editor 5's `NSMBStageObj.GetGrabBounds()` and
 
 The transpiled files are *correct* — the whole catalog loads, and every actor's
 bounds and render survive a spread of settings values in
-`libs/nsmb-project/tests/lua_actors_tests.cpp` — but they read like decompiler
+`crates/project/tests/lua_actors.rs` — but they read like decompiler
 output, because that is what they are. This document is the brief for rewriting
 them by hand, one file at a time, into the shape a person would have written.
 
@@ -150,7 +150,7 @@ represents. Do not narrate the code.
 The rewrite is cosmetic plus the field additions. The drawing must come out
 pixel-identical.
 
-- Run `cmake --build build && ctest --test-dir build` after each file. The
+- Run `cargo test -p bigstar-project --test lua_actors` after each file. The
   catalog test loads every actor and runs its bounds and render across five
   settings values; a rewrite that throws or produces an out-of-range box fails
   there.

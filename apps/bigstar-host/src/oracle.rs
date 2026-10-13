@@ -1,8 +1,7 @@
-//! `oracle <project> <data-dir>`: one line per fact about a project, printed exactly as `nsmb-cli oracle` prints it,
-//! so `cargo xtask oracle` can diff the C++ and Rust implementations on a real ROM. Every ROM file's format and the
-//! hash of what parsing and writing it back produces, every course's entities and decoded graphics, and every shipped
-//! actor's bounds and draw list at default settings. Error messages differ between the two by design, so only error
-//! codes are printed.
+//! `oracle <project> <data-dir>`: one line per fact about a project, so two builds of the editor can be diffed on a
+//! real ROM: every ROM file's format and the hash of what parsing and writing it back produces, every course's entities
+//! and decoded graphics, and every shipped actor's bounds and draw list at default settings. It began as the report
+//! the C++ `nsmb-cli oracle` printed, line for line, to check the port; only error codes are printed, not messages.
 
 use std::cell::RefCell;
 use std::fmt::Write as _;

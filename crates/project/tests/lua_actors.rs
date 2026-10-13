@@ -2124,7 +2124,7 @@ return {objectId=7, name="Late", init=init, render=function() saved.loadImage("s
     // A module actor overriding a vanilla class, ported from the NSMBe Signboard plugin: the same settings must pick
     // the same still and the same box.
     let signboard = vec![
-        layer("module signboard", source_dir().join("libs/nsmb-project/tests/fixtures/signboard-module/actors")),
+        layer("module signboard", source_dir().join("crates/project/tests/fixtures/signboard-module/actors")),
         layer("shipped", source_dir().join("data/actors")),
     ];
     let signboard_catalog = load_lua_actor_layers(&signboard, &resolve, Some(&decode_image), None).unwrap();

@@ -1,5 +1,8 @@
 # Roadmap
 
+The milestones of the C++ implementation, kept as history. The Rust tree that replaced it was built phase by phase
+in [the port plan](rust-port-plan.md), whose Status table records what each phase did and left.
+
 ## M0: project skeleton
 
 - CMake project, backend libraries, CLI, optional Qt 6 Widgets shell, tests, docs, and external-tool service boundaries.

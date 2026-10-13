@@ -1,7 +1,7 @@
 # M13 manual checklist
 
 Automated tests cover loss-preserving round trips, malformed-input refusal,
-editable Qt surfaces and resolved banner configuration. Use user-provided ROMs and historical code projects for the checks
+editable surfaces and resolved banner configuration. Use user-provided ROMs and historical code projects for the checks
 that require visual or game-runtime confirmation.
 
 ## UI resources

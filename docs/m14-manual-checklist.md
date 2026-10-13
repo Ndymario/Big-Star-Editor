@@ -1,5 +1,8 @@
 # M14 WebAssembly manual checklist
 
+> Retired with the C++ tree. The browser build is now a view of a host (`apps/bigstar-web`, served by `bigstar-host
+> serve`) and never opens course files itself; these checks are kept as the record of the Emscripten editor.
+
 Build the web target with Emscripten, serve its output over HTTP, and use a
 user-provided course/BGDat pair. No ROM or game asset is packaged with Big Star.
 

@@ -18,8 +18,8 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
 ## What it edits
 
 - **Levels**: objects, sprites, entrances, zones, views, paths and progress paths on a canvas with real tilesets and
-  actor graphics, with selection, marquee, resize, Ctrl-drag clone, snapping, copy/paste compatible with the Qt
-  editor, named undo history, the property panels, the actor picker and the level-data tables. Several levels open
+  actor graphics, with selection, marquee, resize, Ctrl-drag clone, snapping, copy/paste compatible with the
+  earlier Qt editor, named undo history, the property panels, the actor picker and the level-data tables. Several levels open
   as documents, in tabs or windows of their own; a workspace is remembered per host and project.
 - **Files**: the Filesystem dock lists the ROM as the active variant's modules change it, opens NARCs like folders,
   and adds, replaces, extracts and removes module files. Files open in the editor that understands them, through
@@ -84,8 +84,8 @@ is unpacked: the ROM is read in place, through its own FAT and name table. Build
 ui_shot -- <dir>` renders the interface headlessly against a built-in demo host, or against a running host given its
 address and token. Tests that need a real NSMB ROM run when `BIGSTAR_NSMB_ROM` names one.
 
-## The C++ tree
+## History
 
-`libs/`, `apps/nsmb-qt`, `apps/nsmb-web`, `apps/nsmb-cli` and `CMakeLists.txt` are the C++/Qt implementation this
-one was ported from ([the port plan](docs/rust-port-plan.md)). They are kept, buildable with CMake, as the reference
-until they are retired.
+Big Star began as a C++20 backend with a Qt 6 editor and an Emscripten level editor. This tree is a port of it
+([the port plan](docs/rust-port-plan.md)); the C++ implementation was retired once the port was complete, and lives
+on in the git history. The `docs/m*-manual-checklist.md` files and `docs/roadmap.md` date from it.

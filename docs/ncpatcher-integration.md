@@ -10,11 +10,11 @@ The Big Star project directory is also the NCPatcher project directory. It
 contains `ncpatcher.yaml` (or `.yml`), the pristine input ROM, and `modules/`.
 The editor reads the built `.nds` where it lies -- `big-star-build.nds`, or the
 imported `rom.nds` before a first build. Nothing is unpacked. An extracted
-directory is an explicit export produced by **File > Extract ROM...**, which
+directory is an explicit export produced by **Build > Extract ROM…**, which
 delegates to `ncpatcher rom extract` so there is one extractor and one layout,
 and it is never an input the editor reads back.
 
-Legacy `ncpatcher.json` projects are not built directly. The Qt frontend offers
+Legacy `ncpatcher.json` projects are not built directly. The editor offers
 `ncpatcher migrate --write`; migration is explicit and leaves the old JSON file
 in place.
 
@@ -97,7 +97,7 @@ archives, `.carc` included.
 
 ## Applying a build
 
-The Qt editor applies a successful build as one transaction:
+The host applies a successful build as one transaction:
 
 1. Build a ROM into the project's staging area, optionally for one selected
    variant.
