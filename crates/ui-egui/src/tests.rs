@@ -335,6 +335,9 @@ fn the_screens_lead_from_projects_to_the_preview_to_a_document() {
     let previewed = harness.state().workspace.preview.unwrap();
     assert_eq!(session.levels[&previewed].snapshot.title, "1-1");
     harness.get_by_label("Objects 7   Sprites 4   Entrances 2   Views 1   Zones 1");
+    // The editing row is already there, with nothing to act on, so opening a document does not shift the layout.
+    assert!(egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Undo")).is_disabled());
+    assert!(egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Save")).is_disabled());
     // Edit opens it as a document of its own, which is what the panels and menus act on.
     harness.get_all_by_label("Edit").next().unwrap().click();
     harness.run();
@@ -1309,7 +1312,7 @@ fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
         *text = "AA BB".to_owned();
     }
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     harness.state_mut().session_mut().unwrap().read_file("message/msg.bmg", crate::session::FileRead::Extract);
@@ -1368,7 +1371,7 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
         doc.paint(0, 0);
     }
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
@@ -1404,7 +1407,7 @@ fn a_message_file_opens_in_the_message_editor_and_saves_its_edits() {
     // Added at the end with the next free ID, then saved into the module.
     harness.get_by_label("Add").click();
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     let saved = bigstar_formats::parse_bmg(&file_bytes(&mut harness, &shelf, "message/msg.bmg")).unwrap();
@@ -1430,7 +1433,7 @@ fn a_touch_layout_and_the_rom_metadata_open_as_pages_of_the_graphics_editor() {
     assert_eq!(doc.rows, [["16", "32", "0", "0", "64", "48"], ["128", "144", "0", "0", "96", "32"]]);
     harness.get_by_label("Add").click();
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     assert_eq!(bigstar_formats::parse_bnbl(&file_bytes(&mut harness, &shelf, "uiStudio/demo.bnbl")).unwrap().entries.len(), 3);
@@ -1468,7 +1471,7 @@ fn the_rom_banner_opens_from_the_tools_menu_and_saves_to_the_configured_file() {
         doc.dirty = true;
     }
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     // Opened again, the banner is what was saved.
@@ -1643,7 +1646,7 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     harness.get_by_label("Ocean").click();
     harness.get_by_label("Light").click();
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     let chosen = Theme { family: "ocean", dark: false, ..Theme::default() };
     assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(None));
@@ -1664,7 +1667,7 @@ fn the_systems_accent_colour_can_stand_in_for_the_themes() {
     assert_eq!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
     harness.get_by_label(checkbox).click();
     harness.run();
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     assert_ne!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY).as_deref(), Some("default dark own-accent"));
@@ -1696,7 +1699,7 @@ fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on
         preferences.autosave_minutes = 5;
         preferences.backups_kept = 3;
     }
-    harness.get_by_label("Save").click();
+    harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     // The menus read in Dutch now, and the choice is kept for the next run.

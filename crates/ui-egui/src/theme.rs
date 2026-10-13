@@ -577,6 +577,9 @@ pub fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.tab_bar.bg_fill = t.base;
     style.tab_bar.hline_color = t.border;
     style.tab_bar.corner_radius = CornerRadius::ZERO;
+    // Tall and wide enough to hit without aiming; the dock's own 24 points is cramped next to the toolbar's buttons.
+    style.tab_bar.height = 32.0;
+    style.tab.minimum_width = Some(96.0);
     style.tab.tab_body.bg_fill = t.base;
     style.tab.tab_body.stroke = Stroke::NONE;
     style.tab.tab_body.corner_radius = CornerRadius::ZERO;

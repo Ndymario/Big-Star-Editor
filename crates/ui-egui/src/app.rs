@@ -595,18 +595,23 @@ impl BigStarApp {
                 });
             });
             let idle = !session.busy();
-            if let Some(view) = session.level() {
-                let snapshot = &view.snapshot;
+            // The row stays when no document is active (the Preview tab, say), so switching tabs does not move everything
+            // below it; its buttons just have nothing to act on.
+            if session.project.is_some() {
+                let snapshot = session.level().map(|view| &view.snapshot);
+                let (can_undo, can_redo) = snapshot.map_or((false, false), |s| (idle && s.can_undo, idle && s.can_redo));
+                let undo_names = snapshot.map_or(&[][..], |s| &s.undo_names);
+                let redo_names = snapshot.map_or(&[][..], |s| &s.redo_names);
                 ui.horizontal(|ui| {
-                    let undo = snapshot.undo_names.first().map_or("Undo".to_owned(), |n| format!("Undo {n}"));
-                    let redo = snapshot.redo_names.first().map_or("Redo".to_owned(), |n| format!("Redo {n}"));
-                    if Button::new(undo).with_icon(icons::UNDO).enabled(idle && snapshot.can_undo).show(ui).clicked() {
+                    let undo = undo_names.first().map_or("Undo".to_owned(), |n| format!("Undo {n}"));
+                    let redo = redo_names.first().map_or("Redo".to_owned(), |n| format!("Redo {n}"));
+                    if Button::new(undo).with_icon(icons::UNDO).enabled(can_undo).show(ui).clicked() {
                         actions.push(Action::Undo);
                     }
                     // Every step back, named; picking one undoes it and everything after it.
-                    ui.add_enabled_ui(idle && snapshot.can_undo, |ui| {
+                    ui.add_enabled_ui(can_undo, |ui| {
                         controls::icon_menu(ui, icons::CHEVRON_DOWN, "Undo several steps", |ui| {
-                            for (index, name) in snapshot.undo_names.iter().enumerate() {
+                            for (index, name) in undo_names.iter().enumerate() {
                                 if Button::menu(name).show(ui).clicked() {
                                     actions.push(Action::History { undo: true, steps: index + 1 });
                                     ui.close();
@@ -614,12 +619,12 @@ impl BigStarApp {
                             }
                         });
                     });
-                    if Button::new(redo).with_icon(icons::REDO).enabled(idle && snapshot.can_redo).show(ui).clicked() {
+                    if Button::new(redo).with_icon(icons::REDO).enabled(can_redo).show(ui).clicked() {
                         actions.push(Action::Redo);
                     }
-                    ui.add_enabled_ui(idle && snapshot.can_redo, |ui| {
+                    ui.add_enabled_ui(can_redo, |ui| {
                         controls::icon_menu(ui, icons::CHEVRON_DOWN, "Redo several steps", |ui| {
-                            for (index, name) in snapshot.redo_names.iter().enumerate() {
+                            for (index, name) in redo_names.iter().enumerate() {
                                 if Button::menu(name).show(ui).clicked() {
                                     actions.push(Action::History { undo: false, steps: index + 1 });
                                     ui.close();
@@ -627,10 +632,14 @@ impl BigStarApp {
                             }
                         });
                     });
-                    if Button::new("Save").with_icon(icons::SAVE).enabled(idle && snapshot.dirty).show(ui).clicked() {
+                    if Button::new("Save").with_icon(icons::SAVE).enabled(idle && snapshot.is_some_and(|s| s.dirty)).show(ui).clicked() {
                         actions.push(Action::Save);
                     }
                     ui.separator();
+                    let Some(snapshot) = snapshot else {
+                        ui.weak("No level open for editing");
+                        return;
+                    };
                     ui.weak(format!(
                         "{} · {} objects · {} sprites · {} entrances · revision {}",
                         snapshot.title,
