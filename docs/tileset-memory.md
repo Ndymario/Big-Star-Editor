@@ -225,6 +225,74 @@ transparent pixels over another block, and 426 put the empty block over one --
 The ice caves are the visible case: `J07_1` erases 200 cells of the stone wall
 its ice blocks sit in front of.
 
+### Slopes
+
+An object whose first byte has bit 7 set goes to `InitBGDat_processSlope @
+020b3f8c` instead of the rectangle path. That byte is the direction, and the
+routine only acts on these four values:
+
+| Byte   | Starts in    | Runs          |
+|--------|--------------|---------------|
+| `0x80` | bottom left  | up and right  |
+| `0x81` | bottom right | up and left   |
+| `0x82` | top left     | down and right|
+| `0x83` | top right    | down and left |
+
+The definition holds up to three blocks of rows: the step itself after the
+direction byte, one after `0x84` and one after `0x85`. Any other byte with bit 7
+set starts the step block over. A block's rows are counted by their `0xfe`, so
+the last row needs one too, and a block's width is the tile count of its last
+row. A grass slope from `I_M_nohara`, as it is stored:
+
+```
+80              slope, bottom left, up and right
+00 20 01  00 21 01  FE      the step: blocks 0x20 0x21
+85              the fill
+04 30 01  04 31 01  FE      blocks 0x30 0x31, each laid once
+FF
+```
+
+The step is laid corner to corner from the starting corner, one call of
+`processSlope_omgstop @ 020b42f0` each, moving a step's width sideways and a
+step's height up or down, until the steps leave the object's height. Width only
+clips. Each line of a step is then carried sideways through
+`processRect_processRow @ 020b4d94`:
+
+- the `0x85` block on the side the slope runs towards, from the step out to the
+  object's edge. That side is the ground under a rising slope and the ceiling
+  over a hanging one.
+- the `0x84` block on the side it came from. On a slope that runs right this one
+  is laid from the object's left edge towards the step, not outwards from it.
+
+A step taller than a side block goes round the block's rows again; a rising
+slope reads every block from its bottom row up.
+
+In a side block's row a tile whose control byte is exactly `4` is laid once. The
+row is read from its end nearest the step: the tiles marked `4` first, then the
+unmarked ones repeating, and from the next marked tile on, whatever is left
+closes the run at the object's edge. A row that has a horizontal-repeat tile
+(control bit 0) is laid as a rectangle's row would be instead. The slope above,
+at 6 by 3 -- `S` the step, `F` the fill, `.` not written:
+
+```
+. . . . S S
+. . S S F F
+S S F F . .
+```
+
+Every retail slope marks its `0x85` tiles `4`, which is why the triangle under a
+slope is left for other objects to fill. The exception is the ghost house's
+ceiling slopes, whose first fill row is the empty block, unmarked: it clears
+that whole line out to the edge. No retail tileset has a `0x84` block.
+
+NSMB Editor stacks the `0x85` block under each step instead and does not know
+`0x84`. That comes to the same cells only while every fill tile is marked `4`.
+
+In this editor a slope is an `ObjectLayout` with `slope` set: `rows` is the
+step, `slope_fill` the `0x85` block and `slope_behind` the `0x84` one.
+`render_object_layout` lays it as above, and the tileset editor's object table
+lists the three blocks one after another.
+
 `rasterize_level_objects` in `nsmb-project` reproduces all of the above, and the
 canvas draws its chunks rather than one image per object.
 

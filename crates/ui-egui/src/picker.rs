@@ -64,8 +64,12 @@ pub fn object_entries(view: &LevelView) -> Vec<(u8, Vec<ObjectEntry>)> {
 /// previewed at its own extent. The two kinds of object that draw nothing are told apart: the eraser clears the cells
 /// it covers, and a block the game never writes leaves them holding whatever was there.
 pub fn object_entry(slot: u8, id: u16, layout: &ObjectLayout) -> ObjectEntry {
-    let width = layout.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
-    let height = layout.rows.len().max(1);
+    let mut width = layout.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+    let mut height = layout.rows.len().max(1);
+    // One step of a slope is not a slope; two show the diagonal and what goes under it.
+    if layout.slope {
+        (width, height) = (width * 2, height * 2);
+    }
     let effect = level_object_effect(layout, slot);
     let mut label = format!("Object {slot}:{id}");
     let mut tooltip = format!("Object {id} of tileset slot {slot} - {width}x{height} tiles");

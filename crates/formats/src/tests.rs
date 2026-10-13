@@ -399,11 +399,52 @@ fn object_layouts_decode_render_and_encode() {
     assert_eq!(decoded[0].rows[1][0].control, 2);
     assert!(encode_object_layouts(&[layout], 0, &[0, 0]).is_err());
 
-    // A slope fills one diagonal and leaves the other cells unwritten; an empty definition is block 0, still written.
+    assert_eq!(encoded.definitions, [0, 1, 0, 1, 2, 0, 0xfe, 2, 3, 0, 0xfe, 0xff], "every row ends in a line break");
+
+    // A slope's step is laid along one diagonal and the other cells are left unwritten; an empty definition is
+    // block 0, still written.
     let slope = ObjectLayout { rows: vec![vec![ObjectLayoutTile::new(4, 0), ObjectLayoutTile::default()]], slope: true, ..ObjectLayout::default() };
-    let cells = render_object_layout(&slope, 2, 2).unwrap();
-    assert_eq!(cells, [OBJECT_LAYOUT_UNWRITTEN, OBJECT_LAYOUT_EMPTY_TILE, 4, OBJECT_LAYOUT_UNWRITTEN]);
+    let cells = render_object_layout(&slope, 4, 2).unwrap();
+    let (u, e) = (OBJECT_LAYOUT_UNWRITTEN, OBJECT_LAYOUT_EMPTY_TILE);
+    assert_eq!(cells, [u, u, 4, e, 4, e, u, u]);
     assert!(render_object_layout(&slope, 0, 2).is_err());
+}
+
+fn slope_cells(definition: &[u8], width: usize, height: usize) -> Vec<Vec<i32>> {
+    let layouts = decode_object_layouts(definition, &[0; 4], 0).unwrap();
+    let encoded = encode_object_layouts(&layouts, 0, &[]).unwrap();
+    assert_eq!(encoded.definitions, definition, "a slope survives being written back");
+    render_object_layout(&layouts[0], width, height).unwrap().chunks(width).map(<[i32]>::to_vec).collect()
+}
+
+#[test]
+fn slopes_are_laid_as_the_game_lays_them() {
+    let (u, e) = (OBJECT_LAYOUT_UNWRITTEN, OBJECT_LAYOUT_EMPTY_TILE);
+
+    // Rising to the right, one tile of ground under each step.
+    assert_eq!(slope_cells(&[0x80, 0, 0x20, 1, 0xfe, 0x85, 4, 0x21, 1, 0xfe, 0xff], 3, 3), [[u, u, 0x120], [u, 0x120, 0x121], [0x120, 0x121, u]]);
+    // Rising to the left, in an object wider than it is tall.
+    assert_eq!(slope_cells(&[0x81, 0, 0x23, 1, 0xfe, 0x85, 4, 0x22, 1, 0xfe, 0xff], 3, 2), [[0x122, 0x123, u], [u, 0x122, 0x123]]);
+    // A gentle slope: a step two wide, and its ground one tile.
+    assert_eq!(
+        slope_cells(&[0x80, 0, 0x20, 1, 0, 0x21, 1, 0xfe, 0x85, 4, 0x30, 1, 0xfe, 0xff], 5, 2),
+        [[u, u, 0x120, 0x121, 0x130], [0x120, 0x121, 0x130, u, u]]
+    );
+    // A steep one: a step two tall and nothing under it.
+    assert_eq!(slope_cells(&[0x80, 0, 0x0b, 3, 0xfe, 0, 0x0c, 3, 0xfe, 0xff], 2, 4), [[u, 0x30b], [u, 0x30c], [0x30b, u], [0x30c, u]]);
+    // Hanging from a ceiling and running left, the fill reads from the step outwards.
+    assert_eq!(
+        slope_cells(&[0x83, 0, 0x30, 1, 0xfe, 0x85, 4, 0x50, 1, 4, 0x40, 1, 0xfe, 0xff], 4, 3),
+        [[u, 0x150, 0x140, 0x130], [0x150, 0x140, 0x130, u], [0x140, 0x130, u, u]]
+    );
+    // A fill tile that is not marked to be laid once runs to the object's edge -- here the empty block, which
+    // clears the first line of each step, over a tile laid once on the second.
+    assert_eq!(
+        slope_cells(&[0x82, 0, 0xae, 1, 0xfe, 0, 0xbe, 1, 0xfe, 0x85, 0, 0, 0, 0xfe, 4, 0xbf, 1, 0xfe, 0xff], 3, 4),
+        [[0x1ae, e, e], [0x1be, 0x1bf, u], [u, 0x1ae, e], [u, 0x1be, 0x1bf]]
+    );
+    // The block behind the steps, which no retail tileset uses, fills the other side.
+    assert_eq!(slope_cells(&[0x80, 0, 1, 1, 0xfe, 0x84, 0, 2, 1, 0xfe, 0xff], 3, 3), [[0x102, 0x102, 0x101], [0x102, 0x101, u], [0x101, u, u]]);
 }
 
 #[test]

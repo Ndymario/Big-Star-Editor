@@ -229,9 +229,41 @@ impl TilesetDoc {
         self.tileset().map_or(&[], |t| t.objects.as_slice())
     }
 
-    fn rows_mut(&mut self) -> Option<&mut Vec<Vec<ObjectLayoutTile>>> {
+    /// The block of the chosen object that table row `row` is in, and the row's place in it. A slope's table goes
+    /// on past its steps into its two side blocks.
+    fn block_mut(&mut self, row: usize) -> Option<(&mut Vec<Vec<ObjectLayoutTile>>, usize)> {
         let object = self.object;
-        self.tileset_mut().and_then(|t| t.objects.get_mut(object)).map(|o| &mut o.rows)
+        let layout = self.tileset_mut().and_then(|t| t.objects.get_mut(object))?;
+        let mut row = row;
+        if layout.slope {
+            for block in [&mut layout.rows, &mut layout.slope_behind] {
+                if row < block.len() {
+                    return Some((block, row));
+                }
+                row -= block.len();
+            }
+            return Some((&mut layout.slope_fill, row));
+        }
+        Some((&mut layout.rows, row))
+    }
+
+    fn cell_mut(&mut self, row: usize, column: usize) -> Option<&mut ObjectLayoutTile> {
+        let (block, row) = self.block_mut(row)?;
+        block.get_mut(row)?.get_mut(column)
+    }
+
+    /// The chosen object's rows as its table shows them, each block's first row named when the object is a slope.
+    pub fn object_table(&self) -> Vec<(&'static str, Vec<ObjectLayoutTile>)> {
+        let Some(layout) = self.objects().get(self.object) else { return Vec::new() };
+        let blocks: &[(&'static str, &[Vec<ObjectLayoutTile>])] = if layout.slope {
+            &[("Step", &layout.rows), ("Behind", &layout.slope_behind), ("Fill", &layout.slope_fill)]
+        } else {
+            &[("", &layout.rows)]
+        };
+        let named = |&(name, rows): &(&'static str, &[Vec<ObjectLayoutTile>])| {
+            rows.iter().enumerate().map(move |(i, row)| (if i == 0 { name } else { "" }, row.clone())).collect::<Vec<_>>()
+        };
+        blocks.iter().flat_map(named).collect()
     }
 
     pub fn add_object(&mut self) {
@@ -255,8 +287,10 @@ impl TilesetDoc {
         }
     }
 
+    /// Adds a row to the block the chosen tile is in, or to the first.
     pub fn add_object_row(&mut self) {
-        if let Some(rows) = self.rows_mut() {
+        let row = self.object_cell.map_or(0, |(row, _)| row);
+        if let Some((rows, _)) = self.block_mut(row) {
             rows.push(vec![ObjectLayoutTile::new(-1, 0)]);
         }
     }
@@ -264,7 +298,7 @@ impl TilesetDoc {
     /// Adds a tile to the end of the chosen row, or of the first.
     pub fn add_object_tile(&mut self) {
         let row = self.object_cell.map_or(0, |(row, _)| row);
-        if let Some(rows) = self.rows_mut() {
+        if let Some((rows, row)) = self.block_mut(row) {
             let last = rows.len().saturating_sub(1);
             if let Some(row) = rows.get_mut(row.min(last)) {
                 row.push(ObjectLayoutTile::new(-1, 0));
@@ -272,10 +306,11 @@ impl TilesetDoc {
         }
     }
 
-    /// Removes the chosen tile; an emptied row goes, and an emptied object keeps one empty tile.
+    /// Removes the chosen tile; an emptied row goes, and an emptied object keeps one empty tile. A slope's side
+    /// blocks may be emptied altogether.
     pub fn remove_object_tile(&mut self) {
         let Some((row, column)) = self.object_cell else { return };
-        if let Some(rows) = self.rows_mut()
+        if let Some((rows, row)) = self.block_mut(row)
             && let Some(cells) = rows.get_mut(row)
             && column < cells.len()
         {
@@ -283,9 +318,11 @@ impl TilesetDoc {
             if cells.is_empty() {
                 rows.remove(row);
             }
-            if rows.is_empty() {
-                rows.push(vec![ObjectLayoutTile::new(-1, 0)]);
-            }
+        }
+        if let Some((rows, _)) = self.block_mut(0)
+            && rows.is_empty()
+        {
+            rows.push(vec![ObjectLayoutTile::new(-1, 0)]);
         }
         self.object_cell = None;
     }
@@ -293,19 +330,19 @@ impl TilesetDoc {
     /// A cell as typed: a number is the Map16 tile, anything else leaves the cell empty.
     pub fn set_object_tile(&mut self, row: usize, column: usize, text: &str) {
         let tile = text.trim().parse::<i32>().unwrap_or(-1);
-        if let Some(cell) = self.rows_mut().and_then(|rows| rows.get_mut(row)).and_then(|cells| cells.get_mut(column)) {
+        if let Some(cell) = self.cell_mut(row, column) {
             cell.tile = tile;
         }
     }
 
     pub fn object_control(&self) -> u8 {
         let Some((row, column)) = self.object_cell else { return 0 };
-        self.objects().get(self.object).and_then(|o| o.rows.get(row)).and_then(|r| r.get(column)).map_or(0, |cell| cell.control)
+        self.object_table().get(row).and_then(|(_, cells)| cells.get(column)).map_or(0, |cell| cell.control)
     }
 
     pub fn set_object_control(&mut self, control: u8) {
         let Some((row, column)) = self.object_cell else { return };
-        if let Some(cell) = self.rows_mut().and_then(|rows| rows.get_mut(row)).and_then(|cells| cells.get_mut(column)) {
+        if let Some(cell) = self.cell_mut(row, column) {
             cell.control = control;
         }
     }
@@ -661,11 +698,15 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
             doc.delete_object();
         }
     });
-    let rows: Vec<Vec<ObjectLayoutTile>> = doc.objects().get(doc.object).map(|o| o.rows.clone()).unwrap_or_default();
+    let rows = doc.object_table();
+    let slope = doc.objects().get(doc.object).is_some_and(|o| o.slope);
     let object = doc.object;
     egui::ScrollArea::both().max_height((ui.available_height() - 40.0).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("tileset-object-table").striped(true).show(ui, |ui| {
-            for (y, row) in rows.iter().enumerate() {
+            for (y, (block, row)) in rows.iter().enumerate() {
+                if slope {
+                    ui.label(*block);
+                }
                 for (x, cell) in row.iter().enumerate() {
                     let key = (object, y, x);
                     let mut text = match &view.typing {
@@ -934,6 +975,25 @@ pub(crate) mod tests {
         assert_eq!(doc.objects().len(), 1, "a tileset keeps one object");
         doc.set_object_tile(0, 0, "x");
         assert_eq!(doc.objects()[0].rows[0][0].tile, -1);
+    }
+
+    #[test]
+    fn a_slopes_table_reaches_its_fill() {
+        let mut doc = TilesetDoc::open(resources(), "1-1").unwrap();
+        let tile = |tile| vec![ObjectLayoutTile::new(tile, 4)];
+        doc.tileset_mut().unwrap().objects[0] =
+            ObjectLayout { rows: vec![tile(1)], slope_fill: vec![tile(2)], slope: true, ..ObjectLayout::default() };
+        assert_eq!(doc.object_table(), [("Step", tile(1)), ("Fill", tile(2))]);
+        doc.object_cell = Some((1, 0));
+        assert_eq!(doc.object_control(), 4);
+        doc.set_object_tile(1, 0, "9");
+        doc.add_object_row();
+        assert_eq!(doc.objects()[0].slope_fill, [tile(9), vec![ObjectLayoutTile::new(-1, 0)]]);
+        doc.remove_object_tile();
+        doc.object_cell = Some((1, 0));
+        doc.remove_object_tile();
+        assert!(doc.objects()[0].slope_fill.is_empty(), "a slope can lose its fill");
+        assert_eq!(doc.objects()[0].rows, [tile(1)]);
     }
 
     #[test]

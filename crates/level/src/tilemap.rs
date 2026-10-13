@@ -113,7 +113,7 @@ fn skipped(block: i32) -> bool {
 pub fn level_object_effect(object: &ObjectLayout, tileset_slot: u8) -> LevelObjectEffect {
     let Some(&base) = LEVEL_TILESET_BLOCK_BASES.get(usize::from(tileset_slot)) else { return LevelObjectEffect::Draws };
     let (mut any, mut all_empty, mut all_skipped) = (false, true, true);
-    for tile in object.rows.iter().flatten() {
+    for tile in object.rows.iter().chain(&object.slope_fill).chain(&object.slope_behind).flatten() {
         any = true;
         let block = if tile.tile == OBJECT_LAYOUT_EMPTY_TILE { 0 } else { tile.tile.wrapping_add(base) };
         if block != 0 {

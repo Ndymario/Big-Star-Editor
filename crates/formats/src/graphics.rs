@@ -115,9 +115,21 @@ impl Default for ObjectLayoutTile {
     }
 }
 
+/// The control bytes that open a slope's two side blocks. Any other byte with the top bit set opens its steps.
+const OBJECT_LAYOUT_SLOPE_BEHIND: u8 = 0x84;
+const OBJECT_LAYOUT_SLOPE_FILL: u8 = 0x85;
+
+/// A fill tile with exactly this control is laid once, against the step; any other repeats along the row.
+const OBJECT_LAYOUT_SLOPE_ONCE: u8 = 4;
+
+/// A slope's `rows` are one step of it, laid corner to corner along the diagonal. Each step's rows are then carried
+/// on to the edges of the object: `slope_fill` on the side the slope runs towards, which is the solid ground under
+/// it or the ceiling over it, and `slope_behind` on the side it came from. No retail tileset has a `slope_behind`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ObjectLayout {
     pub rows: Vec<Vec<ObjectLayoutTile>>,
+    pub slope_fill: Vec<Vec<ObjectLayoutTile>>,
+    pub slope_behind: Vec<Vec<ObjectLayoutTile>>,
     pub slope: bool,
     pub slope_left: bool,
     pub slope_down: bool,
@@ -399,7 +411,9 @@ pub fn decode_object_layouts(definitions: &[u8], index: &[u8], tile_page_offset:
         if offset >= definitions.len() {
             return Err(err(ErrorCode::OutOfBounds, "object layout offset is outside its definition file"));
         }
-        let mut rows: Vec<Vec<ObjectLayoutTile>> = vec![Vec::new()];
+        // The steps, then the two side blocks of a slope: behind and fill.
+        let mut sections: [Vec<Vec<ObjectLayoutTile>>; 3] = [vec![Vec::new()], Vec::new(), Vec::new()];
+        let mut section = 0;
         let mut layout = ObjectLayout::default();
         let mut cursor = offset;
         let mut terminated = false;
@@ -409,6 +423,7 @@ pub fn decode_object_layouts(definitions: &[u8], index: &[u8], tile_page_offset:
                 terminated = true;
                 break;
             }
+            let Some(rows) = sections.get_mut(section) else { break };
             if control == 0xFE {
                 if rows.last().is_some_and(|row| !row.is_empty()) {
                     rows.push(Vec::new());
@@ -416,10 +431,21 @@ pub fn decode_object_layouts(definitions: &[u8], index: &[u8], tile_page_offset:
                 continue;
             }
             if control & 0x80 != 0 {
-                if rows.len() == 1 && rows.first().is_some_and(Vec::is_empty) {
+                // The object's first byte says it is a slope and which way it runs. In a slope every later one
+                // starts a block over, as `InitBGDat_processSlope @ 020b3f8c` reads them.
+                if cursor == offset + 1 {
                     layout.slope = true;
                     layout.slope_left = control & 1 != 0;
                     layout.slope_down = control & 2 != 0;
+                } else if layout.slope {
+                    section = match control {
+                        OBJECT_LAYOUT_SLOPE_BEHIND => 1,
+                        OBJECT_LAYOUT_SLOPE_FILL => 2,
+                        _ => 0,
+                    };
+                    if let Some(rows) = sections.get_mut(section) {
+                        *rows = vec![Vec::new()];
+                    }
                 }
                 continue;
             }
@@ -439,10 +465,12 @@ pub fn decode_object_layouts(definitions: &[u8], index: &[u8], tile_page_offset:
         if !terminated {
             return Err(err(ErrorCode::OutOfBounds, "object layout definition is missing its terminator"));
         }
-        while rows.last().is_some_and(Vec::is_empty) {
-            rows.pop();
+        for rows in &mut sections {
+            while rows.last().is_some_and(Vec::is_empty) {
+                rows.pop();
+            }
         }
-        layout.rows = rows;
+        [layout.rows, layout.slope_behind, layout.slope_fill] = sections;
         objects.push(layout);
     }
     Ok(objects)
@@ -470,12 +498,20 @@ pub fn encode_object_layouts(objects: &[ObjectLayout], tile_page_offset: u8, ind
         if object.slope {
             output.definitions.push(0x80 | u8::from(object.slope_left) | (u8::from(object.slope_down) << 1));
         }
-        for (row_index, row) in object.rows.iter().enumerate() {
-            if row_index != 0 {
-                output.definitions.push(0xfe);
+        // Every row ends in a line break, the last one too: the game counts a slope's rows by them. A slope's side
+        // blocks follow its steps, each behind its own marker.
+        let sides: [(u8, &[Vec<ObjectLayoutTile>]); 2] = if object.slope {
+            [(OBJECT_LAYOUT_SLOPE_BEHIND, &object.slope_behind), (OBJECT_LAYOUT_SLOPE_FILL, &object.slope_fill)]
+        } else {
+            [(0, &[]), (0, &[])]
+        };
+        let mut markers = sides.iter().flat_map(|&(marker, rows)| rows.iter().enumerate().map(move |(i, row)| ((i == 0).then_some(marker), row)));
+        for (marker, row) in object.rows.iter().map(|row| (None, row)).chain(&mut markers) {
+            if let Some(marker) = marker {
+                output.definitions.push(marker);
             }
             for entry in row {
-                if entry.control & 0x80 != 0 || entry.control == 0xfe || entry.control == 0xff {
+                if entry.control & 0x80 != 0 {
                     return Err(err(ErrorCode::InvalidArgument, "object tile control collides with a layout marker"));
                 }
                 output.definitions.push(entry.control);
@@ -494,10 +530,113 @@ pub fn encode_object_layouts(objects: &[ObjectLayout], tile_page_offset: u8, ind
                 output.definitions.push(tile as u8);
                 output.definitions.push(page as u8);
             }
+            output.definitions.push(0xfe);
         }
         output.definitions.push(0xff);
     }
     Ok(output)
+}
+
+/// The tiles one row of a slope's side block puts in a run of `count` cells, nearest the step first. A run may come
+/// back short, and the cells past its end are not written. Follows `processRect_processRow @ 020b4d94`.
+fn slope_run(row: &[ObjectLayoutTile], count: usize, towards_step: bool) -> Vec<i32> {
+    let mut run = Vec::with_capacity(count);
+    if row.iter().any(|tile| tile.control & 1 != 0) {
+        // A row with a horizontal repeat is laid as a rectangle's would be, left to right whichever way the slope
+        // runs.
+        let first_repeat = row.iter().position(|tile| tile.control & 1 != 0).unwrap_or(0);
+        let after_repeat = row.iter().skip(first_repeat).position(|tile| tile.control & 1 == 0).map_or(row.len(), |i| first_repeat + i);
+        let (before, rest) = row.split_at(first_repeat);
+        let (repeat, after) = rest.split_at(after_repeat - first_repeat);
+        run.extend(before.iter().take(count).map(|tile| tile.tile));
+        let mut repeating = repeat.iter().cycle();
+        while run.len() + after.len() < count {
+            let Some(tile) = repeating.next() else { break };
+            run.push(tile.tile);
+        }
+        let mut trailing = after.iter().cycle();
+        while run.len() < count {
+            let Some(tile) = trailing.next() else { break };
+            run.push(tile.tile);
+        }
+        if towards_step {
+            run.reverse();
+        }
+        return run;
+    }
+    // Otherwise the row is read from its end nearest the step: tiles marked to be laid once, then the ones that
+    // repeat, and from the next once-only tile on, whatever closes the run at the object's edge.
+    let tiles: Vec<ObjectLayoutTile> = if towards_step { row.iter().rev().copied().collect() } else { row.to_vec() };
+    let once = |tile: &ObjectLayoutTile| tile.control == OBJECT_LAYOUT_SLOPE_ONCE;
+    let leading = tiles.iter().take_while(|tile| once(tile)).count();
+    run.extend(tiles.iter().take(leading.min(count)).map(|tile| tile.tile));
+    let Some(rest) = tiles.get(leading..).filter(|rest| !rest.is_empty()) else { return run };
+    let closing = rest.iter().position(once).unwrap_or(rest.len());
+    let (repeat, close) = rest.split_at(closing);
+    let mut repeating = repeat.iter().cycle();
+    while run.len() + close.len() < count {
+        let Some(tile) = repeating.next() else { break };
+        run.push(tile.tile);
+    }
+    run.extend(close.iter().take(count.saturating_sub(run.len())).map(|tile| tile.tile));
+    run
+}
+
+/// A slope, as `InitBGDat_processSlope @ 020b3f8c` lays it: one step per call of `processSlope_omgstop @ 020b42f0`,
+/// from the corner the slope starts in -- the bottom one, or the top one for a slope that hangs down, on the side it
+/// runs away from -- until the steps leave the object's height.
+fn render_slope(object: &ObjectLayout, width: usize, height: usize, output: &mut [i32]) {
+    let (width, height) = (width as i64, height as i64);
+    let mut write = |x: i64, y: i64, tile: i32| {
+        if (0..width).contains(&x)
+            && (0..height).contains(&y)
+            && let Some(slot) = output.get_mut((y * width + x) as usize)
+        {
+            *slot = tile;
+        }
+    };
+    // The game takes a block's width from its last row, and a row shorter than that leaves its cells alone.
+    let step_width = object.rows.last().map_or(0, Vec::len) as i64;
+    let step_height = object.rows.len() as i64;
+    if step_width == 0 {
+        return;
+    }
+    // The rows of a block, in the order a step's lines meet them: from the bottom up on a rising slope, and round
+    // again when the step is taller than the block.
+    fn line(block: &[Vec<ObjectLayoutTile>], index: i64, down: bool) -> Option<&Vec<ObjectLayoutTile>> {
+        let wrapped = (index as usize).checked_rem(block.len())?;
+        block.get(if down { wrapped } else { block.len() - 1 - wrapped })
+    }
+    let mut x = if object.slope_left { width - step_width } else { 0 };
+    let mut y = if object.slope_down { 0 } else { height - 1 };
+    while (0..height).contains(&y) {
+        for index in 0..step_height {
+            let row_y = if object.slope_down { y + index } else { y - index };
+            if let Some(row) = line(&object.rows, index, object.slope_down) {
+                for (column, tile) in row.iter().take(step_width as usize).enumerate() {
+                    write(x + column as i64, row_y, tile.tile);
+                }
+            }
+            // The cells left and right of the step, out to the object's edges.
+            let left = x.clamp(0, width);
+            let right = (x + step_width).clamp(0, width);
+            let (fill, behind) = if object.slope_left { ((0, left), (right, width)) } else { ((right, width), (0, left)) };
+            if let Some(row) = line(&object.slope_fill, index, object.slope_down) {
+                let run = slope_run(row, (fill.1 - fill.0) as usize, object.slope_left);
+                for (offset, &tile) in run.iter().enumerate() {
+                    write(if object.slope_left { fill.1 - 1 - offset as i64 } else { fill.0 + offset as i64 }, row_y, tile);
+                }
+            }
+            if let Some(row) = line(&object.slope_behind, index, object.slope_down) {
+                // Laid left to right on either slope, so on one that runs right it starts at the object's edge.
+                for (offset, &tile) in slope_run(row, (behind.1 - behind.0) as usize, false).iter().enumerate() {
+                    write(behind.0 + offset as i64, row_y, tile);
+                }
+            }
+        }
+        x += if object.slope_left { -step_width } else { step_width };
+        y += if object.slope_down { step_height } else { -step_height };
+    }
 }
 
 /// The block each cell of an object at this size holds. A cell the layout does not reach comes back as
@@ -509,14 +648,7 @@ pub fn render_object_layout(object: &ObjectLayout, width: usize, height: usize) 
     let cells = width.checked_mul(height).ok_or_else(|| err(ErrorCode::InvalidArgument, "object layout dimensions are too large"))?;
     let mut output = vec![OBJECT_LAYOUT_UNWRITTEN; cells];
     if object.slope {
-        let Some(row) = object.rows.first().filter(|row| !row.is_empty()) else { return Ok(output) };
-        for step in 0..width.min(height) {
-            let x = if object.slope_left { width - 1 - step } else { step };
-            let y = if object.slope_down { step } else { height - 1 - step };
-            if let (Some(slot), Some(tile)) = (output.get_mut(y * width + x), row.get(step % row.len())) {
-                *slot = tile.tile;
-            }
-        }
+        render_slope(object, width, height, &mut output);
         return Ok(output);
     }
 
