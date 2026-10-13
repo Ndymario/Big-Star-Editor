@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use bigstar_client::{Connection, ConnectionState, Waker, WebSocket, websocket_url};
-use bigstar_protocol::{DirectoryEntryKind, LevelId, LogLevel};
+use bigstar_protocol::{DirectoryEntryKind, LevelId};
 use egui::{Color32, Key, Modifiers, RichText, Ui, ViewportCommand};
 
 use crate::canvas::{Art, TexturePool};
@@ -105,7 +105,7 @@ pub struct BigStarApp {
     confirm: Option<Confirm>,
     /// The person said the window may close with unsaved edits.
     allow_quit: bool,
-    show_log: bool,
+    pub(crate) builds: crate::builds::Builds,
     actions: Vec<Action>,
     textures: TexturePool,
     pub(crate) picker: PickerState,
@@ -146,7 +146,7 @@ impl BigStarApp {
             host_key: String::new(),
             confirm: None,
             allow_quit: false,
-            show_log: false,
+            builds: crate::builds::Builds::default(),
             actions: Vec::new(),
             textures: TexturePool::default(),
             picker: PickerState::default(),
@@ -292,6 +292,7 @@ impl BigStarApp {
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
         self.tools.open_metadata(session);
+        self.builds.follow(session, &*self.services);
         if let Some((bytes, target)) = session.banner.take() {
             self.workspace.open_banner(&bytes, &target);
         }
@@ -361,6 +362,7 @@ impl BigStarApp {
         if let Some(session) = &mut self.session {
             self.workspace.show_detached(&ctx, session, &mut self.textures, keyboard);
             self.tools.show(&ctx, session, &mut self.workspace);
+            self.builds.windows(&ctx, session);
             session.request_actor_draws();
         }
         self.import_window(&ctx);
@@ -446,7 +448,7 @@ impl BigStarApp {
         let services = &*self.services;
         let tools = &mut self.tools;
         let workspace = &mut self.workspace;
-        let show_log = &mut self.show_log;
+        let builds = &mut self.builds;
         egui::Panel::top("top").show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
@@ -468,16 +470,28 @@ impl BigStarApp {
                     }
                     ui.separator();
                     ui.menu_button("Tools", |ui| tools::menu(ui, tools, session, services));
+                    ui.menu_button("Build", |ui| builds.build_menu(ui, session));
+                    ui.menu_button("Distribution", |ui| builds.distribution_menu(ui, session, services));
                     ui.menu_button("View", |ui| {
                         if ui.button("Preview").clicked() {
                             workspace.show_preview_tab();
                             ui.close();
                         }
-                        if ui.selectable_label(*show_log, "Log").clicked() {
-                            *show_log = !*show_log;
+                        if ui.selectable_label(builds.show_output, "Output").clicked() {
+                            builds.show_output = !builds.show_output;
                             ui.close();
                         }
                     });
+                    ui.separator();
+                    // A rebuild-and-test loop should not mean digging through a menu.
+                    if ui
+                        .add_enabled(!session.build.running, egui::Button::new("▶ Run Patcher"))
+                        .on_hover_text("Saves the edited levels, builds the active variant with NCPatcher, and reads the ROM it makes")
+                        .clicked()
+                    {
+                        builds.run(session);
+                    }
+                    crate::builds::Builds::variant_selector(ui, session);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
@@ -547,24 +561,18 @@ impl BigStarApp {
 
     fn bottom_bar(&mut self, ui: &mut Ui) {
         let Some(session) = &mut self.session else { return };
-        if self.show_log {
-            egui::Panel::bottom("log").resizable(true).default_size(120.0).show(ui, |ui| {
-                egui::ScrollArea::vertical().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
-                    for line in &session.log {
-                        let color = match line.level {
-                            LogLevel::Info => ui.visuals().text_color(),
-                            LogLevel::Warning => Color32::from_rgb(210, 140, 40),
-                            LogLevel::Error => ERROR_COLOR,
-                        };
-                        ui.colored_label(color, &line.text);
-                    }
-                });
-            });
+        if self.builds.show_output {
+            let builds = &mut self.builds;
+            egui::Panel::bottom("output").resizable(true).default_size(180.0).show(ui, |ui| builds.output(ui, session));
         }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.show_log, "Log").clicked() {
-                    self.show_log = !self.show_log;
+                if ui.selectable_label(self.builds.show_output, "Output").clicked() {
+                    self.builds.show_output = !self.builds.show_output;
+                }
+                if session.build.running {
+                    ui.spinner();
+                    ui.weak(&session.build.status);
                 }
                 let mut dismiss = false;
                 if let Some(notice) = &session.notice {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 pub type RequestId = u64;
 
@@ -159,6 +159,95 @@ pub enum Request {
     WriteFiles {
         files: Vec<FileWrite>,
     },
+    /// What NCPatcher configuration the project has, so a legacy one can be offered for migration before a build.
+    BuildConfig,
+    /// Converts a legacy `ncpatcher.json` to `ncpatcher.yaml`, leaving the original where it is.
+    MigrateConfig,
+    /// Saves the edited levels and starts a build of the active variant. It runs on the host; `Event::Build` reports
+    /// it, and a build that succeeds becomes the ROM the project reads.
+    Build {
+        verbose: bool,
+    },
+    /// Asks the running build to stop; nothing happens when none is running.
+    CancelBuild,
+    /// Has NCPatcher extract the project's built ROM into a directory under the workspace.
+    ExtractRom {
+        directory: String,
+    },
+    /// The module files that differ from the ROM, as a `.nsmbpatch`, after saving the edited levels.
+    ExportPatch,
+    /// Writes a `.nsmbpatch` into the modules, all files or none. Without `accept_id_mismatch` a patch whose file IDs
+    /// disagree with this ROM's is answered with `PatchIdsDiffer` instead.
+    ImportPatch {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+        accept_id_mismatch: bool,
+    },
+    /// Runs xdelta3 on the host: with `create`, a patch (`output`) from a clean (`source`) and a modified ROM
+    /// (`target`); otherwise the patched ROM (`output`) from a clean ROM (`source`) and a patch (`target`). Paths are
+    /// under the workspace.
+    Xdelta {
+        create: bool,
+        source: String,
+        target: String,
+        output: String,
+    },
+}
+
+/// The project's NCPatcher configuration file, as far as building is concerned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuildConfigKind {
+    /// No `ncpatcher.yaml`: nothing for NCPatcher to build.
+    None,
+    /// The legacy `ncpatcher.json`, at this path relative to the project.
+    Legacy(String),
+    Yaml,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiagnosticLevel {
+    Info,
+    Warning,
+    #[default]
+    Error,
+}
+
+/// One diagnostic NCPatcher reported, with where, when it knows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildDiagnostic {
+    pub level: DiagnosticLevel,
+    pub code: String,
+    pub message: String,
+    /// Empty when the location is unknown.
+    pub file: String,
+    pub line: i32,
+    pub column: i32,
+}
+
+/// How a build ended. `ok` is the whole answer: NCPatcher can exit zero with errors recorded.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BuildOutcome {
+    pub ok: bool,
+    /// -1 when the run never started.
+    pub exit_code: i32,
+    /// The stage that failed, or why the run never started, or that the output was rejected.
+    pub stage: String,
+    pub errors: i32,
+    pub warnings: i32,
+    pub cancelled: bool,
+    /// The build became the project's ROM.
+    pub applied: bool,
+}
+
+/// What a running build reports, in order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuildEvent {
+    Started { variant: String },
+    Progress { phase: String, current: i64, total: i64, item: String },
+    Diagnostic(BuildDiagnostic),
+    Log(String),
+    Artifact(String),
+    Finished(BuildOutcome),
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -301,6 +390,15 @@ pub enum Response {
         target: String,
     },
     TilesetResources(Box<TilesetResources>),
+    BuildConfig(BuildConfigKind),
+    /// A `.nsmbpatch` and the name to suggest for it.
+    Patch {
+        name: String,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// The patch was not written: some of its file IDs differ from this ROM's.
+    PatchIdsDiffer,
     Done,
 }
 
@@ -450,6 +548,9 @@ pub enum Event {
     },
     /// The project's settings changed, from this connection or another. A variant switch closes every level session.
     SettingsChanged(ProjectSettings),
+    /// A build's progress; a build that applied is followed by `SettingsChanged`, since it closed every level
+    /// session to read the new ROM.
+    Build(BuildEvent),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

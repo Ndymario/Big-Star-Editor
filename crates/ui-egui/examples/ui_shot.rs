@@ -132,7 +132,16 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         harness.step();
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
-    tileset_tabs(&mut harness, dir, "remote-tilesets")
+    tileset_tabs(&mut harness, dir, "remote-tilesets")?;
+    // Run Patcher on a project without NCPatcher's configuration says why there is nothing to build.
+    if let Some(button) = harness.query_by_label("▶ Run Patcher") {
+        button.click();
+    }
+    for _ in 0..20 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    shot(&mut harness, dir, "remote-build.png")
 }
 
 fn main() -> Result<(), String> {
@@ -209,7 +218,13 @@ fn main() -> Result<(), String> {
     // The tileset workspace of the open level, a tab at a time.
     harness.state_mut().open_tilesets_for_screenshot("A01_2");
     harness.run();
-    tileset_tabs(&mut harness, &dir, "tilesets")
+    tileset_tabs(&mut harness, &dir, "tilesets")?;
+    // A build of the demo project, reported into the Output panel.
+    if let Some(button) = harness.query_by_label("▶ Run Patcher") {
+        button.click();
+    }
+    harness.run();
+    shot(&mut harness, &dir, "build-output.png")
 }
 
 /// Each tab of the open tileset workspace but Slots: graphics, Map16, objects, behaviours and both backgrounds.

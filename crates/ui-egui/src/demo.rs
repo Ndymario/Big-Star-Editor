@@ -61,6 +61,7 @@ pub struct DemoConnection {
     files: BTreeMap<String, DemoFile>,
     /// The ROM banner, as the configured banner file would hold it.
     banner: Vec<u8>,
+    settings: bigstar_protocol::ProjectSettings,
 }
 
 struct DemoFile {
@@ -498,6 +499,13 @@ impl DemoConnection {
             recoverable: Vec::new(),
             files: demo_files(),
             banner: demo_banner(),
+            settings: bigstar_protocol::ProjectSettings {
+                active_module: "demo".to_owned(),
+                generated_path: "build/generated".to_owned(),
+                variants: vec!["en".to_owned(), "fr".to_owned()],
+                modules: vec!["demo".to_owned()],
+                ..Default::default()
+            },
         };
         connection.rebuild_textures();
         connection
@@ -940,6 +948,70 @@ impl DemoConnection {
             Request::WriteFiles { files } => {
                 for write in files {
                     self.answer(Request::WriteFile { path: write.path, bytes: write.bytes })?;
+                }
+                Ok(Response::Done)
+            }
+            Request::ProjectSettings => Ok(Response::Settings(self.settings.clone())),
+            Request::SetActiveVariant { variant } => {
+                self.settings.active_variant = variant;
+                self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
+                Ok(Response::Settings(self.settings.clone()))
+            }
+            Request::BuildConfig => Ok(Response::BuildConfig(bigstar_protocol::BuildConfigKind::Yaml)),
+            Request::MigrateConfig | Request::CancelBuild | Request::ExtractRom { .. } | Request::Xdelta { .. } => Ok(Response::Done),
+            // A build that compiles two files, warns once and applies, all at once.
+            Request::Build { .. } => {
+                use bigstar_protocol::{BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
+                let events = [
+                    BuildEvent::Started { variant: self.settings.active_variant.clone() },
+                    BuildEvent::Progress { phase: "compile".to_owned(), current: 1, total: 2, item: "source/main.cpp".to_owned() },
+                    BuildEvent::Log("[arm9] compiling source/main.cpp".to_owned()),
+                    BuildEvent::Diagnostic(BuildDiagnostic {
+                        level: DiagnosticLevel::Warning,
+                        code: "NCP0204".to_owned(),
+                        message: "unused variable 'speed'\n  3 | int speed = 4;".to_owned(),
+                        file: "source/main.cpp".to_owned(),
+                        line: 3,
+                        column: 9,
+                    }),
+                    BuildEvent::Progress { phase: "link".to_owned(), current: 2, total: 2, item: String::new() },
+                    BuildEvent::Artifact("arm9 (patched)".to_owned()),
+                    BuildEvent::Finished(BuildOutcome { ok: true, stage: "succeeded".to_owned(), warnings: 1, applied: true, ..Default::default() }),
+                ];
+                for event in events {
+                    self.events.push(Incoming::Event(Event::Build(event)));
+                }
+                self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
+                Ok(Response::Done)
+            }
+            Request::ExportPatch => {
+                let entries: Vec<bigstar_level::NsmbPatchEntry> = self
+                    .files
+                    .iter()
+                    .filter(|(_, file)| file.module.is_some())
+                    .map(|(path, file)| bigstar_level::NsmbPatchEntry {
+                        path: path.clone(),
+                        expected_file_id: file.id.and_then(|id| i32::try_from(id).ok()).unwrap_or(-1),
+                        contents: file.bytes.clone(),
+                    })
+                    .collect();
+                if entries.is_empty() {
+                    return Err(Error::new(ErrorCode::InvalidArgument, "There are no module changes to distribute."));
+                }
+                Ok(Response::Patch { name: "Demo.nsmbpatch".to_owned(), bytes: bigstar_level::encode_nsmbpatch(&entries)? })
+            }
+            Request::ImportPatch { bytes, accept_id_mismatch } => {
+                let entries = bigstar_level::decode_nsmbpatch(&bytes)?;
+                let differ = entries.iter().any(|entry| {
+                    let id = self.files.get(&entry.path).and_then(|file| file.id);
+                    entry.expected_file_id >= 0 && id.is_some_and(|id| id != i64::from(entry.expected_file_id))
+                });
+                if differ && !accept_id_mismatch {
+                    return Ok(Response::PatchIdsDiffer);
+                }
+                for entry in entries {
+                    let id = self.files.get(&entry.path).and_then(|f| f.id);
+                    self.files.insert(entry.path, DemoFile { id, member_id: None, bytes: entry.contents, module: Some("demo".to_owned()) });
                 }
                 Ok(Response::Done)
             }

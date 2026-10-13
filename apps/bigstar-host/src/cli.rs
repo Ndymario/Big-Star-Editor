@@ -17,7 +17,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
     );
 }
 
@@ -198,8 +198,9 @@ fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: 
     0
 }
 
-/// `serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]`: hosts a workspace until interrupted. `--data` is where
-/// the shipped actor and tile scripts are, `--ncpatcher` which NCPatcher to ask about variants, modules and plans.
+/// `serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]`: hosts a workspace until
+/// interrupted. `--data` is where the shipped actor and tile scripts are, `--ncpatcher` which NCPatcher builds and is asked about
+/// variants, modules and plans, `--xdelta` which xdelta3 the patch tools run.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some((root, flags)) = args.split_first() else {
         usage(err);
@@ -214,6 +215,7 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             ("--bind", Some(value)) => bind = (*value).to_owned(),
             ("--data", Some(value)) => options.data_dir = PathBuf::from(value),
             ("--ncpatcher", Some(value)) => options.ncpatcher = PathBuf::from(value),
+            ("--xdelta", Some(value)) => options.xdelta = PathBuf::from(value),
             ("--port", Some(value)) => match value.parse::<u16>() {
                 Ok(parsed) => port = parsed,
                 Err(_) => {

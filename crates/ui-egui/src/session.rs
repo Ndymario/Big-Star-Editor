@@ -11,6 +11,7 @@ use bigstar_protocol::{
     LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
     TextureId, TilesetResources,
 };
+use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
 use crate::level_view::{ActorIndex, ActorKey, LevelView};
 
@@ -50,6 +51,42 @@ enum Pending {
     Banner,
     BannerWrite,
     TilesetResources,
+    BuildConfig,
+    Migrate,
+    Build,
+    /// A request whose answer is only `Done`; what it did, the host logs.
+    Quiet,
+    ExportPatch,
+    ImportPatch(Vec<u8>),
+}
+
+/// What the Output panel shows about the last build.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct BuildState {
+    pub running: bool,
+    pub cancelling: bool,
+    /// The phase and item in progress, or how the build ended.
+    pub status: String,
+    /// Done and total, when the phase says; `None` for work of unknown length.
+    pub progress: Option<(i64, i64)>,
+    pub diagnostics: Vec<BuildDiagnostic>,
+    pub outcome: Option<BuildOutcome>,
+}
+
+impl BuildState {
+    /// The status line for how a build ended, as the Output dock words it.
+    pub fn finished_status(outcome: &BuildOutcome) -> String {
+        if outcome.cancelled {
+            // Not a failure: it did what it was asked to do.
+            "Cancelled".to_owned()
+        } else if outcome.ok && outcome.warnings > 0 {
+            format!("Succeeded with {} warning(s)", outcome.warnings)
+        } else if outcome.ok {
+            "Succeeded".to_owned()
+        } else {
+            format!("Failed: {}", outcome.stage)
+        }
+    }
 }
 
 /// What a file's bytes were asked for.
@@ -157,6 +194,15 @@ pub struct Session {
     pub banner: Option<(Vec<u8>, String)>,
     /// A level's tilesets and backgrounds as files, once asked for.
     pub tileset_resources: Option<TilesetResources>,
+    pub build: BuildState,
+    /// The project's NCPatcher configuration, once asked for before a build.
+    pub build_config: Option<BuildConfigKind>,
+    /// A legacy configuration was converted; the build it was converted for can start.
+    pub migrated: bool,
+    /// An exported `.nsmbpatch` and the name to suggest for it.
+    pub patch: Option<(String, Vec<u8>)>,
+    /// A patch the host did not import because its file IDs differ from this ROM's, waiting for the person to say.
+    pub patch_ids_differ: Option<Vec<u8>>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -203,6 +249,11 @@ impl Session {
             file_targets: None,
             banner: None,
             tileset_resources: None,
+            build: BuildState::default(),
+            build_config: None,
+            migrated: false,
+            patch: None,
+            patch_ids_differ: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -418,6 +469,54 @@ impl Session {
         self.request(Request::TilesetResources { level }, Pending::TilesetResources);
     }
 
+    /// Chooses the build variant whose module layers the editor reads and writes; the host closes every level session
+    /// and the open levels are opened again.
+    pub fn set_active_variant(&mut self, variant: &str) {
+        self.request(Request::SetActiveVariant { variant: variant.to_owned() }, Pending::Settings);
+    }
+
+    /// Asks what NCPatcher configuration the project has; the answer lands in `build_config`.
+    pub fn request_build_config(&mut self) {
+        self.build_config = None;
+        self.request(Request::BuildConfig, Pending::BuildConfig);
+    }
+
+    pub fn migrate_config(&mut self) {
+        self.migrated = false;
+        self.request(Request::MigrateConfig, Pending::Migrate);
+    }
+
+    /// Starts a build; `Event::Build` reports it into `build`.
+    pub fn start_build(&mut self, verbose: bool) {
+        self.build = BuildState { running: true, status: "Starting NCPatcher...".to_owned(), ..BuildState::default() };
+        self.request(Request::Build { verbose }, Pending::Build);
+    }
+
+    pub fn cancel_build(&mut self) {
+        if self.build.running {
+            self.build.cancelling = true;
+            self.build.status = "Cancelling...".to_owned();
+            self.request(Request::CancelBuild, Pending::Quiet);
+        }
+    }
+
+    pub fn extract_rom(&mut self, directory: &str) {
+        self.request(Request::ExtractRom { directory: directory.to_owned() }, Pending::Quiet);
+    }
+
+    pub fn export_patch(&mut self) {
+        self.request(Request::ExportPatch, Pending::ExportPatch);
+    }
+
+    pub fn import_patch(&mut self, bytes: Vec<u8>, accept_id_mismatch: bool) {
+        self.request(Request::ImportPatch { bytes: bytes.clone(), accept_id_mismatch }, Pending::ImportPatch(bytes));
+    }
+
+    pub fn xdelta(&mut self, create: bool, source: &str, target: &str, output: &str) {
+        let request = Request::Xdelta { create, source: source.to_owned(), target: target.to_owned(), output: output.to_owned() };
+        self.request(request, Pending::Quiet);
+    }
+
     /// Writes several files into their modules in one request.
     pub fn write_files(&mut self, files: Vec<FileWrite>) {
         self.request(Request::WriteFiles { files }, Pending::FileChange);
@@ -513,6 +612,11 @@ impl Session {
                 if kind == Pending::Filesystem {
                     self.filesystem_requested = false;
                 }
+                // A build the host refused never started.
+                if kind == Pending::Build {
+                    self.build.running = false;
+                    self.build.status = format!("Failed: {}", error.message);
+                }
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
                 if let Pending::Edit(level) | Pending::History(level) | Pending::Save(level) = kind {
@@ -540,6 +644,7 @@ impl Session {
                 self.forget_project();
                 self.project = Some(info);
                 self.request(Request::ListLevels, Pending::ListLevels);
+                self.request(Request::ProjectSettings, Pending::Settings);
                 self.request(Request::ProjectData, Pending::ProjectData);
                 self.request(Request::Recovery, Pending::Recovery);
                 self.refresh_filesystem();
@@ -595,6 +700,12 @@ impl Session {
             (Pending::Banner, Response::Banner { bytes, target }) => self.banner = Some((bytes, target)),
             (Pending::BannerWrite, Response::Done) => {}
             (Pending::TilesetResources, Response::TilesetResources(resources)) => self.tileset_resources = Some(*resources),
+            (Pending::BuildConfig, Response::BuildConfig(kind)) => self.build_config = Some(kind),
+            (Pending::Migrate, Response::Done) => self.migrated = true,
+            (Pending::Quiet | Pending::Build, Response::Done) => {}
+            (Pending::ExportPatch, Response::Patch { name, bytes }) => self.patch = Some((name, bytes)),
+            (Pending::ImportPatch(bytes), Response::PatchIdsDiffer) => self.patch_ids_differ = Some(bytes),
+            (Pending::ImportPatch(_), Response::Done) => self.refresh_filesystem(),
             (Pending::Settings, Response::Settings(settings)) => {
                 self.settings = Some(settings);
                 self.refresh_filesystem();
@@ -742,6 +853,59 @@ impl Session {
         }
     }
 
+    fn follow_build(&mut self, event: BuildEvent) {
+        match event {
+            BuildEvent::Started { variant } => {
+                self.build = BuildState { running: true, ..BuildState::default() };
+                self.build.status = if variant.is_empty() { "Building...".to_owned() } else { format!("Building {variant}...") };
+            }
+            BuildEvent::Progress { phase, current, total, item } => {
+                // An indeterminate phase should look like work, not like a bar stuck at zero.
+                self.build.progress = (total > 0).then_some((current, total));
+                self.build.status = if item.is_empty() { phase } else { format!("{phase}  {item}") };
+            }
+            BuildEvent::Diagnostic(diagnostic) => {
+                let level = match diagnostic.level {
+                    DiagnosticLevel::Error => LogLevel::Error,
+                    DiagnosticLevel::Warning => LogLevel::Warning,
+                    DiagnosticLevel::Info => LogLevel::Info,
+                };
+                self.log_line(level, format!("{}: {}", diagnostic.code, diagnostic.message));
+                self.build.diagnostics.push(diagnostic);
+            }
+            BuildEvent::Log(line) => self.log_line(LogLevel::Info, line),
+            BuildEvent::Artifact(description) => self.log_line(LogLevel::Info, format!("  -> {description}")),
+            BuildEvent::Finished(outcome) => {
+                self.build.running = false;
+                self.build.cancelling = false;
+                self.build.status = BuildState::finished_status(&outcome);
+                self.build.progress = outcome.ok.then_some((1, 1));
+                if !outcome.cancelled {
+                    self.notice = Some(if outcome.ok {
+                        let text = if outcome.warnings > 0 {
+                            format!("NCPatcher completed with {} warning(s).", outcome.warnings)
+                        } else {
+                            "NCPatcher completed successfully.".to_owned()
+                        };
+                        Notice { error: false, text }
+                    } else {
+                        let text = format!(
+                            "NCPatcher did not finish: {} (exit code {}, {} error(s), {} warning(s)). See the Output panel for the diagnostics.",
+                            outcome.stage, outcome.exit_code, outcome.errors, outcome.warnings
+                        );
+                        Notice { error: true, text }
+                    });
+                }
+                // The project reads the built ROM now: which areas it holds, and its files, may have changed.
+                if outcome.applied {
+                    self.request(Request::ListLevels, Pending::ListLevels);
+                    self.refresh_filesystem();
+                }
+                self.build.outcome = Some(outcome);
+            }
+        }
+    }
+
     fn log_line(&mut self, level: LogLevel, text: String) {
         self.log.push(LogLine { level, text });
         if self.log.len() > LOG_LIMIT {
@@ -789,6 +953,7 @@ impl Session {
                     self.request(Request::OpenLevel { area }, Pending::OpenLevel(Opening::Reopen(level)));
                 }
             }
+            Event::Build(event) => self.follow_build(event),
             Event::ProjectClosed if self.own_closes > 0 => self.own_closes -= 1,
             Event::ProjectClosed => {
                 self.project = None;

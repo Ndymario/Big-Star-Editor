@@ -104,7 +104,7 @@ fn a_demo_host_answers_requests_it_does_not_know_with_an_error() {
     let mut connection = DemoConnection::new();
     let id = connection.send(Request::ListProjects);
     let id2 = connection.send(Request::CloseLevel { level: 1 });
-    let id3 = connection.send(Request::ProjectSettings);
+    let id3 = connection.send(Request::CreateProject { path: "x".to_owned(), name: "x".to_owned() });
     let answers = connection.poll();
     assert_eq!(answers.len(), 3);
     assert!(matches!(&answers[0], Incoming::Response { id: first, result: Ok(Response::Projects(_)) } if *first == id));
@@ -1522,4 +1522,84 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     assert!(listing.entries.iter().all(|e| e.path != "BG_ncg/demo_t1_ncg.bin" || !e.from_module), "untouched files stay the ROM's");
     let log = &harness.state().session().unwrap().log;
     assert!(log.iter().any(|line| line.text == "Saved 1 edited graphics resource(s) to module targets."));
+}
+
+#[test]
+fn a_build_reports_into_the_output_panel_and_its_diagnostics_show_where() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("▶ Run Patcher").click();
+    harness.run();
+    harness.run();
+    let state = &harness.state().session().unwrap().build;
+    assert!(!state.running);
+    assert_eq!(state.status, "Succeeded with 1 warning(s)");
+    assert_eq!(state.diagnostics.len(), 1);
+    assert!(harness.state().session().unwrap().notice.as_ref().is_some_and(|n| !n.error && n.text == "NCPatcher completed with 1 warning(s)."));
+    // The Output panel opened: the diagnostic's headline, its location, and the build's own lines in the log.
+    harness.get_by_label("NCP0204");
+    harness.get_by_label("unused variable 'speed'");
+    harness.get_by_label("[arm9] compiling source/main.cpp");
+    harness.get_by_label("  -> arm9 (patched)");
+    harness.get_by_label("source/main.cpp:3:9").click();
+    harness.run();
+    harness.get_by_label_contains("Line 3, column 9");
+    harness.get_by_label("OK").click();
+    harness.run();
+    // The build applied: the open level was opened again from the new ROM.
+    assert_eq!(harness.state().workspace.documents().len(), 1);
+}
+
+#[test]
+fn the_variant_selector_switches_the_whole_window() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("Variant:");
+    // The selector shows the active variant, none yet.
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| egui_kittest::kittest::NodeT::accesskit_node(node).value().as_deref() == Some("(none)"))
+        .expect("the variant selector")
+        .click();
+    harness.run();
+    harness.get_by_label("fr").click();
+    harness.run();
+    harness.run();
+    assert_eq!(harness.state().session().unwrap().settings.as_ref().unwrap().active_variant, "fr");
+    assert_eq!(harness.state().workspace.documents().len(), 1, "the open level follows into the variant");
+}
+
+#[test]
+fn module_changes_export_as_a_patch_and_a_mismatched_one_asks_first() {
+    let (mut harness, shelf) = filesystem();
+    harness.get_by_label("Distribution").click();
+    harness.run();
+    harness.get_by_label("Export .nsmbpatch…").click();
+    harness.run();
+    assert!(harness.state().session().unwrap().notice.as_ref().is_some_and(|n| n.text == "There are no module changes to distribute."));
+
+    harness.state_mut().session_mut().unwrap().write_file("message/msg.bmg", vec![1, 2, 3]);
+    harness.run();
+    harness.get_by_label("Distribution").click();
+    harness.run();
+    harness.get_by_label("Export .nsmbpatch…").click();
+    harness.run();
+    let (name, bytes) = shelf.lock().unwrap().saved.pop().unwrap();
+    assert_eq!(name, "Demo.nsmbpatch");
+    let mut entries = bigstar_level::decode_nsmbpatch(&bytes).unwrap();
+    assert_eq!(entries[0].path, "message/msg.bmg");
+
+    // Made against another ROM: the IDs differ, and nothing is written until the person says so.
+    entries[0].expected_file_id += 1;
+    entries[0].contents = vec![7];
+    shelf.lock().unwrap().to_open.push_back(("other.nsmbpatch".to_owned(), bigstar_level::encode_nsmbpatch(&entries).unwrap()));
+    harness.get_by_label("Distribution").click();
+    harness.run();
+    harness.get_by_label("Import .nsmbpatch…").click();
+    harness.run();
+    harness.get_by_label_contains("One or more file IDs differ");
+    harness.get_by_label("Apply").click();
+    harness.run();
+    harness.run();
+    harness.state_mut().session_mut().unwrap().read_file("message/msg.bmg", crate::session::FileRead::Extract);
+    harness.run();
+    assert_eq!(shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes), Some(vec![7]));
 }

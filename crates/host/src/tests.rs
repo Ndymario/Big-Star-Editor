@@ -779,3 +779,173 @@ return {
         assert_eq!(after.actors.len(), before.actors.len() + 1);
     }
 }
+
+/// Events until one answers `done`, or none for five seconds.
+fn events_until(session: &mut HostSession, done: impl Fn(&Event) -> bool) -> Vec<Event> {
+    let start = std::time::Instant::now();
+    let mut seen = Vec::new();
+    while start.elapsed() < std::time::Duration::from_secs(5) {
+        let events = session.drain_events();
+        let finished = events.iter().any(&done);
+        seen.extend(events);
+        if finished {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    seen
+}
+
+#[test]
+fn a_build_needs_a_yaml_config_and_a_legacy_one_is_offered_for_migration() {
+    let (fixture, mut session) = Fixture::with_project("host-build-config");
+    assert_eq!(session.handle(Request::BuildConfig).unwrap(), Response::BuildConfig(bigstar_protocol::BuildConfigKind::None));
+    let error = session.handle(Request::Build { verbose: false }).unwrap_err();
+    assert_eq!(error.message, "This project has no ncpatcher.yaml, so there is nothing for NCPatcher to build.");
+    write_bytes(&fixture.root.path().join("proj/ncpatcher.json"), b"{}");
+    assert_eq!(
+        session.handle(Request::BuildConfig).unwrap(),
+        Response::BuildConfig(bigstar_protocol::BuildConfigKind::Legacy("ncpatcher.json".into()))
+    );
+    assert!(session.handle(Request::Build { verbose: false }).unwrap_err().message.contains("legacy ncpatcher.json"));
+    // Cancelling with nothing running is not an error.
+    assert_eq!(session.handle(Request::CancelBuild).unwrap(), Response::Done);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_build_streams_what_it_does_and_its_rom_becomes_the_projects() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fixture, _) = Fixture::with_project("host-build");
+    let project = fixture.root.path().join("proj");
+    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
+    // Builds by copying the project's ROM to `--out`, after one progress line, one diagnostic and one log line.
+    let script = fixture.root.path().join("ncpatcher.sh");
+    let text = format!(
+        r#"#!/bin/sh
+out=""; prev=""; build=""
+for a in "$@"; do [ "$prev" = --out ] && out="$a"; [ "$a" = build ] && build=1; prev="$a"; done
+[ -z "$build" ] && exit 3
+echo '{{"type":"progress","phase":"compile","current":1,"total":2,"item":"main.cpp"}}'
+echo '{{"type":"diagnostic","level":"warning","code":"NCP0100","message":"unused variable","location":{{"file":"src/main.cpp","line":3,"col":5}}}}'
+echo linking >&2
+cp {rom} "$out"
+"#,
+        rom = bigstar_project::INPUT_ROM_FILE_NAME
+    );
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let snapshot = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &snapshot, 7);
+    assert!(moved.dirty);
+    session.drain_events();
+
+    assert_eq!(session.handle(Request::Build { verbose: false }).unwrap(), Response::Done);
+    let events = events_until(&mut session, |event| matches!(event, Event::Build(bigstar_protocol::BuildEvent::Finished(_))));
+    let build: Vec<&bigstar_protocol::BuildEvent> =
+        events.iter().filter_map(|event| if let Event::Build(build) = event { Some(build) } else { None }).collect();
+    assert!(matches!(build.first(), Some(bigstar_protocol::BuildEvent::Started { .. })));
+    assert!(build.iter().any(|e| matches!(e, bigstar_protocol::BuildEvent::Progress { phase, total: 2, .. } if phase == "compile")));
+    assert!(build.iter().any(|e| matches!(e, bigstar_protocol::BuildEvent::Diagnostic(d)
+        if d.code == "NCP0100" && d.file == "src/main.cpp" && d.line == 3 && d.level == bigstar_protocol::DiagnosticLevel::Warning)));
+    assert!(build.iter().any(|e| matches!(e, bigstar_protocol::BuildEvent::Log(line) if line == "linking")));
+    let Some(bigstar_protocol::BuildEvent::Finished(outcome)) = build.last() else { panic!("{build:?}") };
+    assert!(outcome.ok && outcome.applied, "{outcome:?}");
+    // The edit was saved first, the built ROM is the project's now, and every level session closed to read it.
+    assert!(project.join(bigstar_project::BUILT_ROM_FILE_NAME).is_file());
+    assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(_))));
+    assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
+    let reopened = open_level(&mut session, "A01_1");
+    assert!(!reopened.dirty);
+    assert_eq!(reopened.objects[0].x, moved.objects[0].x, "the saved edit");
+}
+
+/// A project with module `mine` whose NCPatcher (a script) answers `config dump`, `modules dump` and `files plan`
+/// with the documents given, the plan built from `planned` (path, id, module source) entries.
+#[cfg(unix)]
+fn with_plan(label: &str, planned: &[(&str, i64, &str)]) -> (Fixture, HostSession) {
+    use std::os::unix::fs::PermissionsExt;
+    let (fixture, _) = Fixture::with_project(label);
+    let project = fixture.root.path().join("proj");
+    std::fs::create_dir_all(project.join("modules/mine/nitrofs")).unwrap();
+    let modules = format!(
+        r#"{{"schema":"ncpatcher.modules/1","dir":"{dir}/modules","modules":[{{"key":"mine","id":"Mine","name":"My module","enabled":true,
+            "dir":"{dir}/modules/mine","nitrofs":{{"dir":"{dir}/modules/mine/nitrofs"}},"components":[]}}]}}"#,
+        dir = project.display()
+    );
+    let files: Vec<String> = planned
+        .iter()
+        .map(|(path, id, source)| {
+            format!(r#"{{"id":{id},"path":"{path}","size":3,"action":"modified","source":"{source}","module":"mine","component":"Vanilla"}}"#)
+        })
+        .collect();
+    let plan = format!(r#"{{"schema":"ncpatcher.files/1","planned":true,"count":{},"files":[{}]}}"#, files.len(), files.join(","));
+    let config = r#"{"schema":"ncpatcher.config/1","version":2,"variants":{}}"#;
+    let answers = fixture.root.path().join("answers");
+    for (name, text) in [("config", config.to_owned()), ("modules", modules), ("plan", plan)] {
+        write_bytes(&answers.join(format!("{name}.json")), text.as_bytes());
+    }
+    let script = fixture.root.path().join("ncpatcher.sh");
+    let text = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in config|modules|plan) exec cat '{}/'\"$a\".json;; esac; done\nexit 3\n",
+        answers.display()
+    );
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    (fixture, session)
+}
+
+#[cfg(unix)]
+#[test]
+fn module_changes_travel_as_a_patch_that_checks_file_ids() {
+    let (_fixture, mut session) = with_plan("host-patch-none", &[]);
+    assert_eq!(session.handle(Request::ExportPatch).unwrap_err().message, "There are no module changes to distribute.");
+
+    let (fixture, mut session) = with_plan("host-patch", &[("course/A01_1.bin", 0, "modules/mine/nitrofs/course/A01_1.bin")]);
+    let target = fixture.root.path().join("proj/modules/mine/nitrofs/course/A01_1.bin");
+    write_bytes(&target, &[1, 2, 3]);
+    let id = listing(&mut session).entries.iter().find(|e| e.path == "course/A01_1.bin").and_then(|e| e.id).unwrap();
+    let Response::Patch { name, bytes } = session.handle(Request::ExportPatch).unwrap() else { panic!() };
+    assert!(name.ends_with(".nsmbpatch"));
+    let mut entries = bigstar_level::decode_nsmbpatch(&bytes).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!((entries[0].path.as_str(), entries[0].contents.as_slice()), ("course/A01_1.bin", &[1, 2, 3][..]));
+    assert_eq!(i64::from(entries[0].expected_file_id), id);
+
+    // A patch made against another ROM says so before anything is written.
+    entries[0].expected_file_id += 1;
+    entries[0].contents = vec![9];
+    let other = bigstar_level::encode_nsmbpatch(&entries).unwrap();
+    assert_eq!(session.handle(Request::ImportPatch { bytes: other.clone(), accept_id_mismatch: false }).unwrap(), Response::PatchIdsDiffer);
+    assert_eq!(std::fs::read(&target).unwrap(), [1, 2, 3]);
+    assert_eq!(session.handle(Request::ImportPatch { bytes: other, accept_id_mismatch: true }).unwrap(), Response::Done);
+    assert_eq!(std::fs::read(&target).unwrap(), [9]);
+}
+
+#[cfg(unix)]
+#[test]
+fn xdelta_runs_on_paths_under_the_workspace() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("host-xdelta");
+    let root = fixture.root.path();
+    let script = root.join("xdelta.sh");
+    let text = format!("#!/bin/sh\necho \"$@\" > '{}/args'\n[ \"$1\" = -d ] && {{ echo 'bad patch' >&2; exit 1; }}\nexit 0\n", root.display());
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { xdelta: script, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(root, options).unwrap().session();
+    let request = |create| Request::Xdelta { create, source: "a.nds".into(), target: "b.nds".into(), output: "out/p.xdelta".into() };
+    assert_eq!(session.handle(request(true)).unwrap(), Response::Done);
+    let args = std::fs::read_to_string(root.join("args")).unwrap();
+    let real = std::fs::canonicalize(root).unwrap();
+    assert_eq!(args.trim(), format!("-e -f -s {0}/a.nds {0}/b.nds {0}/out/p.xdelta", real.display()));
+    assert_eq!(session.handle(request(false)).unwrap_err().message.trim(), "bad patch");
+    let outside = Request::Xdelta { create: true, source: "../a.nds".into(), target: "b".into(), output: "c".into() };
+    assert!(session.handle(outside).is_err(), "nothing outside the workspace");
+}

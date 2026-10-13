@@ -28,16 +28,20 @@ use crate::settings::{load_settings, save_settings};
 use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
 
+mod build;
+
 /// What a host needs besides its root: where the shipped actor and tile scripts are, and which NCPatcher to ask.
 #[derive(Debug, Clone)]
 pub struct HostOptions {
     pub data_dir: PathBuf,
     pub ncpatcher: PathBuf,
+    /// The xdelta3 executable the patch tools run.
+    pub xdelta: PathBuf,
 }
 
 impl Default for HostOptions {
     fn default() -> Self {
-        Self { data_dir: default_data_dir(), ncpatcher: PathBuf::from("ncpatcher") }
+        Self { data_dir: default_data_dir(), ncpatcher: PathBuf::from("ncpatcher"), xdelta: PathBuf::from("xdelta3") }
     }
 }
 
@@ -122,6 +126,8 @@ pub(crate) struct Shared {
     subscribers: Mutex<Vec<Sender<Event>>>,
     /// Grows whenever a watched file changes or the variant switches; graphics answers carry it.
     generation: AtomicU64,
+    /// The running build's cancel token, while one runs.
+    build: Mutex<Option<Arc<bigstar_patching::ProcessCancel>>>,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -146,6 +152,7 @@ impl Host {
             state: Mutex::new(State::default()),
             subscribers: Mutex::new(Vec::new()),
             generation: AtomicU64::new(1),
+            build: Mutex::new(None),
         });
         // Every minute, the levels with unsaved edits are written where the next session can offer them back. The
         // thread holds the host weakly and ends with it.
@@ -240,6 +247,14 @@ impl Shared {
             Request::WriteBanner { bytes } => self.write_banner(&bytes),
             Request::TilesetResources { level } => self.tileset_resources(level),
             Request::WriteFiles { files } => self.write_files(&files),
+            Request::BuildConfig => self.build_config(),
+            Request::MigrateConfig => self.migrate_config(),
+            Request::Build { verbose } => self.build(verbose),
+            Request::CancelBuild => self.cancel_build(),
+            Request::ExtractRom { directory } => self.extract_rom(&directory),
+            Request::ExportPatch => self.export_patch(),
+            Request::ImportPatch { bytes, accept_id_mismatch } => self.import_patch(&bytes, accept_id_mismatch),
+            Request::Xdelta { create, source, target, output } => self.xdelta(create, &source, &target, &output),
         }
     }
 
