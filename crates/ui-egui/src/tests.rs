@@ -916,6 +916,15 @@ fn a_selected_actor_shows_its_name_and_its_own_fields() {
 }
 
 #[test]
+fn the_properties_panel_holds_its_width_over_an_actors_fields() {
+    let mut harness = walker_selected();
+    let edge = |harness: &Harness<'_, BigStarApp>| harness.get_by_label("Level Data").rect().left();
+    let before = edge(&harness);
+    harness.run_steps(8);
+    assert_eq!(edge(&harness), before);
+}
+
+#[test]
 fn the_history_menus_take_several_steps_at_once() {
     let mut harness = walker_selected();
     for x in [1, 2, 3] {

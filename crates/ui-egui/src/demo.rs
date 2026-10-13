@@ -704,7 +704,11 @@ impl DemoConnection {
         };
         let choice = |value, label: &str| SpriteFieldChoice { value, label: label.to_owned() };
         walker.fields = vec![
-            SpriteFieldDefinition { choices: vec![choice(0, "Left"), choice(1, "Right")], ..field("facing", "Facing", 0, 1) },
+            SpriteFieldDefinition {
+                choices: vec![choice(0, "Left"), choice(1, "Right")],
+                notes: "The way it sets off.".to_owned(),
+                ..field("facing", "Facing", 0, 1)
+            },
             SpriteFieldDefinition { notes: "Pixels a frame, in sixteenths.".to_owned(), ..field("speed", "Speed", 4, 4) },
             SpriteFieldDefinition { checkbox_value: 1, ..field("winged", "Winged", 8, 1) },
         ];

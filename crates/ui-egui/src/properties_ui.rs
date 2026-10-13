@@ -45,17 +45,24 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
                 None => format!("{} — not listed", format_value(value, hex)),
             };
             let mut picked = None;
-            controls::drop_down(("property-choice", index))
-                .width(ui.available_width().max(80.0))
-                .selected_text(row.value.map_or("—".to_owned(), label))
-                .show_ui(ui, |ui| {
-                    for (value, text) in choices {
-                        let entry = format!("{} — {text}", format_value(*value, hex));
-                        if ui.choice(row.value == Some(*value), entry).on_hover_text(text).clicked() {
-                            picked = Some(*value);
+            // The note's icon follows on the same line. A drop-down that took the whole line would push it past the
+            // panel's edge, and the panel would widen to fit it every frame.
+            let note = if row.note.is_empty() { 0.0 } else { icons::SIZE_SM + ui.spacing().item_spacing.x };
+            let width = (ui.available_width() - note).max(80.0);
+            ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
+                controls::drop_down(("property-choice", index))
+                    .width(width)
+                    .truncate()
+                    .selected_text(row.value.map_or("—".to_owned(), label))
+                    .show_ui(ui, |ui| {
+                        for (value, text) in choices {
+                            let entry = format!("{} — {text}", format_value(*value, hex));
+                            if ui.choice(row.value == Some(*value), entry).on_hover_text(text).clicked() {
+                                picked = Some(*value);
+                            }
                         }
-                    }
-                });
+                    });
+            });
             picked.filter(|v| Some(*v) != row.value)
         }
         Editor::Boolean => {
@@ -262,7 +269,7 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, ed
     };
     let filter_id = ui.id().with("sprite-picker-filter");
     ui.add_enabled_ui(enabled, |ui| {
-        controls::drop_down("sprite-picker").width(ui.available_width()).selected_text(selected).height(320.0).show_ui(ui, |ui| {
+        controls::drop_down("sprite-picker").width(ui.available_width()).truncate().selected_text(selected).height(320.0).show_ui(ui, |ui| {
             // 300 actors are too many to address by number, so the list filters by what is typed.
             let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
             ui.add(TextField::new(&mut filter).hint("Filter actors…"));
