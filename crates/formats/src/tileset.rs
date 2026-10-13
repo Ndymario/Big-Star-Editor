@@ -45,9 +45,20 @@ pub struct EditableTileset {
     pub original_objects: Vec<ObjectLayout>,
 }
 
+/// Where the game loads a level's background (`back`) layer: its screens name tiles from 576 and palette rows from 10,
+/// the slots the layer's 320 8bpp tiles and two 256-colour palettes occupy. Measured on every retail level.
+pub const BACKGROUND_TILE_OFFSET: u16 = 576;
+pub const BACKGROUND_PALETTE_OFFSET: u8 = 10;
+/// Where the game loads a level's foreground (`free`) layer: tiles from 256 and palette rows from 8.
+pub const FOREGROUND_TILE_OFFSET: u16 = 256;
+pub const FOREGROUND_PALETTE_OFFSET: u8 = 8;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EditableTilemap {
     pub width_tiles: usize,
+    /// The first tile and palette row the layer's screen names: the editor's tile 0 and palette 0 are these.
+    pub tile_offset: u16,
+    pub palette_offset: u8,
     pub graphics: Vec<IndexedTile8Bpp>,
     pub palette: Vec<Bgr555Color>,
     pub screen: Vec<ScreenMapEntry>,
@@ -372,13 +383,19 @@ pub fn parse_tileset_bundle(bytes: &[u8]) -> Result<TilesetResourceData> {
     Ok(TilesetResourceData { graphics, palette, map16, objects, object_index, behaviors })
 }
 
-pub fn parse_tilemap(resources: &TilemapResourceData, width_tiles: usize) -> Result<EditableTilemap> {
+/// A background or foreground layer, its screen read relative to where the game loads the layer (`tile_offset`,
+/// `palette_offset`; see [`BACKGROUND_TILE_OFFSET`] and [`FOREGROUND_TILE_OFFSET`]). Colour 0 of each 256-colour
+/// palette is see-through, as the hardware draws it.
+pub fn parse_tilemap(resources: &TilemapResourceData, width_tiles: usize, tile_offset: u16, palette_offset: u8) -> Result<EditableTilemap> {
     let graphics = unwrap_resource(&resources.graphics)?;
     let palette = unwrap_resource(&resources.palette)?;
     let screen = unwrap_resource(&resources.screen)?;
     let decoded_graphics = decode_8bpp_tiles(&graphics.decoded);
-    let decoded_palette = decode_bgr555_palette(&palette.decoded, false);
-    let decoded_screen = decode_screen_map(&screen.decoded, 0, 0);
+    let decoded_palette = decode_bgr555_palette(&palette.decoded, false).map(|mut p| {
+        mark_palette_blocks_transparent(&mut p, 256);
+        p
+    });
+    let decoded_screen = decode_screen_map(&screen.decoded, tile_offset, palette_offset);
     let (graphics, palette, screen) = (decoded_graphics?, decoded_palette?, decoded_screen?);
     let width_tiles = if width_tiles != 0 {
         width_tiles
@@ -390,7 +407,7 @@ pub fn parse_tilemap(resources: &TilemapResourceData, width_tiles: usize) -> Res
     if !screen.len().is_multiple_of(width_tiles) {
         return Err(err(ErrorCode::InvalidArgument, "tilemap width does not divide its screen entries"));
     }
-    Ok(EditableTilemap { width_tiles, graphics, palette, screen, original: resources.clone() })
+    Ok(EditableTilemap { width_tiles, tile_offset, palette_offset, graphics, palette, screen, original: resources.clone() })
 }
 
 pub fn write_tilemap(tilemap: &EditableTilemap) -> Result<TilemapResourceData> {
@@ -399,7 +416,7 @@ pub fn write_tilemap(tilemap: &EditableTilemap) -> Result<TilemapResourceData> {
     }
     let graphics = encode_8bpp_tiles(&tilemap.graphics)?;
     let palette = encode_bgr555_palette(&tilemap.palette)?;
-    let screen = encode_screen_map(&tilemap.screen, 0, 0)?;
+    let screen = encode_screen_map(&tilemap.screen, tilemap.tile_offset, tilemap.palette_offset)?;
     Ok(TilemapResourceData {
         graphics: rewrap(&graphics, &tilemap.original.graphics)?,
         palette: rewrap(&palette, &tilemap.original.palette)?,

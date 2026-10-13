@@ -545,6 +545,28 @@ fn scaled_font(zoom: f32, size: f32) -> Option<FontId> {
     (pixels >= 5.0).then(|| FontId::proportional(pixels.min(64.0)))
 }
 
+/// A background or foreground layer over `area` (level pixels), one image pixel to one level pixel, repeated from the
+/// level's origin as the layer repeats across a level wider or taller than it.
+fn tiled(painter: &Painter, frame: Frame, texture: egui::TextureId, size: Vec2, area: Rect, tint: Color32) {
+    if size.x < 1.0 || size.y < 1.0 || !area.is_positive() {
+        return;
+    }
+    let mut y = (area.top() / size.y).floor() * size.y;
+    while y < area.bottom() {
+        let mut x = (area.left() / size.x).floor() * size.x;
+        while x < area.right() {
+            let tile = Rect::from_min_size(Pos2::new(x, y), size);
+            let part = tile.intersect(area);
+            if part.is_positive() {
+                let uv = Rect::from_min_max(((part.min - tile.min) / size).to_pos2(), ((part.max - tile.min) / size).to_pos2());
+                painter.image(texture, frame.rect(part), uv, tint);
+            }
+            x += size.x;
+        }
+        y += size.y;
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Frame, art: &mut Art<'_>, colors: &Colors, live: bool) {
     let course = &view.snapshot.course;
@@ -556,11 +578,10 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     // Where an entity is drawn: where it is, moved or resized by the gesture in progress.
     let placed = |kind: Kind, index: usize| preview(kind, index, view.bounds(Item::new(kind, index)).unwrap_or(Rect::NOTHING));
     let hairline = |color: Color32| Stroke::new(1.0, color);
-    let full_uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
 
     let graphics = view.art.graphics.as_ref();
-    if let Some((texture, _)) = art.texture(graphics.and_then(|g| g.background.texture.as_ref())) {
-        painter.image(texture, frame.rect(bounds), full_uv, Color32::WHITE.gamma_multiply(0.55));
+    if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.background.texture.as_ref())) {
+        tiled(painter, frame, texture, size, bounds.intersect(visible), Color32::WHITE.gamma_multiply(0.55));
     }
     // A coarse grid of screens over the level.
     let grid = 256.0;
@@ -696,8 +717,8 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
         }
     }
 
-    if let Some((texture, _)) = art.texture(graphics.and_then(|g| g.foreground.texture.as_ref())) {
-        painter.image(texture, frame.rect(bounds), full_uv, Color32::WHITE.gamma_multiply(0.35));
+    if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.foreground.texture.as_ref())) {
+        tiled(painter, frame, texture, size, bounds.intersect(visible), Color32::WHITE.gamma_multiply(0.35));
     }
 
     // Last, so nothing -- not even the foreground -- dims the edges a zone or a view is sized against.

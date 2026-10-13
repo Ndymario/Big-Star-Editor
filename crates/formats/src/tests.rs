@@ -825,7 +825,7 @@ fn tilesets_round_trip_untouched_and_edited() {
     let rendered = render_tilemap(&tilemap).unwrap();
     assert_eq!((rendered.width, rendered.height), (16, 8));
     let tilemap_files = write_tilemap(&tilemap).unwrap();
-    assert_eq!(parse_tilemap(&tilemap_files, 2).unwrap().screen.len(), 2);
+    assert_eq!(parse_tilemap(&tilemap_files, 2, 0, 0).unwrap().screen.len(), 2);
     let mut imported_tileset = parsed.clone();
     import_tileset_graphics(&mut imported_tileset, &png).unwrap();
     assert!(imported_tileset.palette[0].transparent);
@@ -913,4 +913,23 @@ fn ui_resources_round_trip() {
     assert!(parse_rom_user_metadata(b"0=x\n").is_err(), "metadata refuses entries before a section");
     assert!(parse_rom_user_metadata(b"[A]\n+1=x\n").is_err());
     assert!(parse_rom_user_metadata(b"[A]\n-0=x\n").is_ok());
+}
+
+#[test]
+fn a_layers_screen_is_read_from_where_the_game_loads_it() {
+    // One 8bpp tile of index 1, two 256-colour palettes, and a background screen naming tile 576 in palette row 11.
+    let graphics = [1u8; 64].to_vec();
+    let palette: Vec<u8> = (0..512u16).flat_map(|i| (i & 0x7fff).to_le_bytes()).collect();
+    let entry = 576u16 | (11 << 12);
+    let screen: Vec<u8> = std::iter::repeat_n(entry.to_le_bytes(), 32).flatten().collect();
+    let files = TilemapResourceData { graphics, palette, screen };
+    let map = parse_tilemap(&files, 0, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET).unwrap();
+    assert_eq!((map.screen[0].tile, map.screen[0].palette), (0, 1));
+    assert!(map.palette[0].transparent && map.palette[256].transparent && !map.palette[1].transparent, "colour 0 of each palette");
+    let image = render_tilemap(&map).unwrap();
+    assert_eq!(image.pixels[3], 255, "tile 0 in the second palette draws");
+    // Untouched, it writes back byte for byte.
+    assert_eq!(write_tilemap(&map).unwrap(), files);
+    // Read from zero, every entry names a tile and palette the layer does not hold.
+    assert_eq!(render_tilemap(&parse_tilemap(&files, 0, 0, 0).unwrap()).unwrap().pixels[3], 0);
 }

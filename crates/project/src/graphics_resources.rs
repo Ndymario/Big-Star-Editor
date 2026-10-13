@@ -309,6 +309,10 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     for (target, (graphics_table, palette_table, screen_table, graphics_id, screen_id)) in
         [&mut result.background, &mut result.foreground].into_iter().zip(backgrounds)
     {
+        // A level without the layer names it 0xFFFF; truncated, that would index an unrelated file.
+        if graphics_id == u16::MAX || screen_id == u16::MAX {
+            continue;
+        }
         let graphics = table(files, graphics_table, graphics_id);
         fill(files, &mut target.graphics, graphics)?;
         let palette = table(files, palette_table, graphics_id);
@@ -400,14 +404,19 @@ pub fn load_level_tilesets(files: &[TilesetResourceFiles; 3], tileset_id: u16, o
     result
 }
 
-pub fn load_background_graphics(files: &BackgroundResourceFiles) -> Result<RgbaImage> {
+/// A background or foreground layer as one image. Its screen names tiles and palette rows from where the game loads
+/// the layer (`tile_offset`, `palette_offset`), and colour 0 of each palette is see-through.
+pub fn load_background_graphics(files: &BackgroundResourceFiles, tile_offset: u16, palette_offset: u8) -> Result<RgbaImage> {
     let graphics = unwrap_resource(&files.graphics.data);
     let palette_data = unwrap_resource(&files.palette.data);
     let screen_data = unwrap_resource(&files.screen.data);
     let (graphics, palette_data, screen_data) = (graphics?, palette_data?, screen_data?);
     let tiles = decode_8bpp_tiles(&graphics);
-    let palette = decode_bgr555_palette(&palette_data, false);
-    let screen = decode_screen_map(&screen_data, 0, 0);
+    let palette = decode_bgr555_palette(&palette_data, false).map(|mut palette| {
+        mark_palette_blocks_transparent(&mut palette, 256);
+        palette
+    });
+    let screen = decode_screen_map(&screen_data, tile_offset, palette_offset);
     let (tiles, palette, screen) = (tiles?, palette?, screen?);
     let width = if screen.len().is_multiple_of(64) { 64 } else { 32 };
     render_screen_map(&screen, width, &tiles, &palette)

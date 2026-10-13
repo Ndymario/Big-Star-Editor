@@ -1029,3 +1029,34 @@ fn preferences_persist_and_saves_keep_that_many_backups() {
     let Response::Settings(restored) = again.handle(Request::ProjectSettings).unwrap() else { panic!() };
     assert_eq!((restored.autosave_minutes, restored.backups_kept), (60, 2));
 }
+
+/// Background and foreground screens name tiles and palette rows from where the game loads each layer; read from
+/// zero, every lookup missed and both layers came out blank. A level without a foreground names it 0xFFFF.
+#[test]
+fn real_backgrounds_and_foregrounds_draw() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-backgrounds");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.session();
+    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let drawn = |session: &mut HostSession, area: &str| {
+        let level = open_level(session, area).level;
+        let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level }).unwrap() else { panic!() };
+        let ids: Vec<String> = [&graphics.background, &graphics.foreground].iter().filter_map(|layer| layer.texture.clone()).collect();
+        let Response::Textures(textures) = session.handle(Request::GetTextures { ids }).unwrap() else { panic!() };
+        let opaque =
+            |texture: &bigstar_protocol::TextureData| texture.rgba.chunks(4).filter(|pixel| pixel[3] != 0).count() * 100 / (texture.rgba.len() / 4);
+        (graphics, textures.iter().map(opaque).collect::<Vec<_>>())
+    };
+    let (graphics, opaque) = drawn(&mut session, "A01_1");
+    assert!(graphics.background.error.is_none() && graphics.foreground.error.is_none(), "{graphics:?}");
+    assert_eq!(opaque.len(), 2);
+    assert_eq!(opaque[0], 100, "the castle wall fills the background");
+    assert!((10..100).contains(&opaque[1]), "the pillars stand over a see-through foreground: {}%", opaque[1]);
+    // 1-1's second area has no foreground: nothing is drawn for it, and nothing is wrong.
+    let (graphics, _) = drawn(&mut session, "A01_2");
+    assert!(graphics.background.texture.is_some());
+    assert_eq!((graphics.foreground.texture.as_ref(), graphics.foreground.error.as_ref()), (None, None));
+}

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result};
-use bigstar_formats::RgbaImage;
+use bigstar_formats::{BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET, FOREGROUND_TILE_OFFSET, RgbaImage};
 use bigstar_level::{LevelTilesetReferences, ModuleDataCatalog};
 use bigstar_patching::{FileManifest, ModuleGraph};
 use bigstar_project::{
@@ -263,12 +263,18 @@ impl ProjectGraphics {
                 error: (!error.is_empty()).then_some(error),
             };
         }
-        let mut image = |files| match load_background_graphics(files) {
-            Ok(image) => ImageGraphics { texture: Some(self.textures.add_owned(image)), error: None },
-            Err(error) => ImageGraphics { texture: None, error: Some(error.message) },
+        let mut image = |files: &bigstar_project::BackgroundResourceFiles, tile_offset, palette_offset| {
+            // A level without the layer has no files for it, which is not an error.
+            if files.screen.is_empty() {
+                return ImageGraphics::default();
+            }
+            match load_background_graphics(files, tile_offset, palette_offset) {
+                Ok(image) => ImageGraphics { texture: Some(self.textures.add_owned(image)), error: None },
+                Err(error) => ImageGraphics { texture: None, error: Some(error.message) },
+            }
         };
-        result.background = image(&resources.background);
-        result.foreground = image(&resources.foreground);
+        result.background = image(&resources.background, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET);
+        result.foreground = image(&resources.foreground, FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET);
         result
     }
 

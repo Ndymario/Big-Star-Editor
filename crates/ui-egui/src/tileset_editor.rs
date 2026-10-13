@@ -8,11 +8,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use bigstar_formats::{
-    EditableTilemap, EditableTileset, ObjectLayout, ObjectLayoutTile, RgbaImage, ScreenMapEntry, TILE_BEHAVIOR_FLAG_NAMES,
-    TILE_BEHAVIOR_PIPE_MAIN_NAMES, TILE_BEHAVIOR_SUBTYPE_NAMES, TileBehaviorParameterKind, TileBehaviorParts, TileOverlay, TilemapResourceData,
-    TilesetResourceData, compose_tileset_memory, decode_tile_behavior, encode_tile_behavior, import_tilemap_image, import_tileset_graphics,
-    overlay_map16_sheet, parse_tilemap, parse_tileset, parse_tileset_bundle, render_composed_map16_sheet, render_map16_sheet, render_tilemap,
-    render_tileset_graphics, tile_behavior_parameter_kind, tile_behavior_parameter_name, write_tilemap, write_tileset, write_tileset_bundle,
+    BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, EditableTilemap, EditableTileset, FOREGROUND_PALETTE_OFFSET, FOREGROUND_TILE_OFFSET,
+    ObjectLayout, ObjectLayoutTile, RgbaImage, ScreenMapEntry, TILE_BEHAVIOR_FLAG_NAMES, TILE_BEHAVIOR_PIPE_MAIN_NAMES, TILE_BEHAVIOR_SUBTYPE_NAMES,
+    TileBehaviorParameterKind, TileBehaviorParts, TileOverlay, TilemapResourceData, TilesetResourceData, compose_tileset_memory,
+    decode_tile_behavior, encode_tile_behavior, import_tilemap_image, import_tileset_graphics, overlay_map16_sheet, parse_tilemap, parse_tileset,
+    parse_tileset_bundle, render_composed_map16_sheet, render_map16_sheet, render_tilemap, render_tileset_graphics, tile_behavior_parameter_kind,
+    tile_behavior_parameter_name, write_tilemap, write_tileset, write_tileset_bundle,
 };
 use bigstar_level::LevelTilesetReferences;
 use bigstar_protocol::{FileWrite, LevelId, ResourceBytes, TilemapSlot, TilesetResources, TilesetSlot};
@@ -114,8 +115,10 @@ impl TilesetDoc {
         if tilesets.len() != 3 {
             return Err("the level does not name three tilesets".to_owned());
         }
-        let background = parse_tilemap(&map_resource(&resources.background), 0).map_err(|e| e.message)?;
-        let foreground = parse_tilemap(&map_resource(&resources.foreground), 0).map_err(|e| e.message)?;
+        let background =
+            parse_tilemap(&map_resource(&resources.background), 0, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET).map_err(|e| e.message)?;
+        let foreground =
+            parse_tilemap(&map_resource(&resources.foreground), 0, FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET).map_err(|e| e.message)?;
         let overlays = resources
             .overlays
             .into_iter()

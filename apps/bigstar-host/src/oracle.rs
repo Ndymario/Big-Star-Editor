@@ -296,8 +296,8 @@ fn report_level(out: &mut dyn Write, files: &RefCell<EffectiveFilesystem>, cours
     let _ = writeln!(
         out,
         "  background {} foreground {}",
-        image(load_background_graphics(&resources.background)),
-        image(load_background_graphics(&resources.foreground))
+        image(load_background_graphics(&resources.background, bigstar_formats::BACKGROUND_TILE_OFFSET, bigstar_formats::BACKGROUND_PALETTE_OFFSET)),
+        image(load_background_graphics(&resources.foreground, bigstar_formats::FOREGROUND_TILE_OFFSET, bigstar_formats::FOREGROUND_PALETTE_OFFSET))
     );
 }
 

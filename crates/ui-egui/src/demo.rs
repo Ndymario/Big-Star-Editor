@@ -238,7 +238,20 @@ fn demo_tilemap_files(foreground: bool) -> Result<bigstar_formats::TilemapResour
             image.pixels.extend(pixel);
         }
     }
-    let mut map = EditableTilemap::default();
+    // Numbered from where the game loads the layer, as the game's own screens are.
+    let mut map = if foreground {
+        EditableTilemap {
+            tile_offset: bigstar_formats::FOREGROUND_TILE_OFFSET,
+            palette_offset: bigstar_formats::FOREGROUND_PALETTE_OFFSET,
+            ..Default::default()
+        }
+    } else {
+        EditableTilemap {
+            tile_offset: bigstar_formats::BACKGROUND_TILE_OFFSET,
+            palette_offset: bigstar_formats::BACKGROUND_PALETTE_OFFSET,
+            ..Default::default()
+        }
+    };
     import_tilemap_image(&mut map, &image)?;
     write_tilemap(&map)
 }
@@ -1068,7 +1081,13 @@ mod tests {
             assert_eq!(tileset.map16.len(), super::sample_tileset().blocks.len());
         }
         for foreground in [false, true] {
-            let map = bigstar_formats::parse_tilemap(&super::demo_tilemap_files(foreground).unwrap(), 0).unwrap();
+            let (tiles, palettes) = if foreground {
+                (bigstar_formats::FOREGROUND_TILE_OFFSET, bigstar_formats::FOREGROUND_PALETTE_OFFSET)
+            } else {
+                (bigstar_formats::BACKGROUND_TILE_OFFSET, bigstar_formats::BACKGROUND_PALETTE_OFFSET)
+            };
+            let map = bigstar_formats::parse_tilemap(&super::demo_tilemap_files(foreground).unwrap(), 0, tiles, palettes).unwrap();
+            assert!(map.screen.iter().all(|entry| entry.tile >= 0 && entry.palette == 0), "numbered from the layer's slots");
             assert_eq!((map.width_tiles, map.screen.len()), (64, 1024));
         }
     }
