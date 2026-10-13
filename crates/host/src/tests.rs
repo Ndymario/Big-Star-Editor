@@ -766,6 +766,27 @@ return {
     }
 
     #[test]
+    fn a_declared_actor_without_a_script_is_still_in_the_catalog() {
+        let (fixture, _) = Fixture::with_project("host-declared-actors");
+        let project = fixture.root.path().join("proj");
+        write(
+            &project.join("build/generated/stageobjects.json"),
+            r#"{"schema":"nsmbtool.stageobjects/1","stageObjectIdBase":326,"stageObjects":[
+                {"name":"coop.CoopFlagActor.Default","hash":"0xf46a44b9","module":"coop","component":"CustomWorldUnlock","object":"CoopFlagActor","variant":"Default","objectId":387,"info":"CoopFlagActor::ObjectInfo_Default","header":"coop_flag.hpp"}
+            ]}"#,
+        );
+        // The catalog is read when the project opens.
+        let mut session = fixture.session();
+        session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+
+        let Response::ActorCatalog(catalog) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+        let declared = catalog.actors.iter().find(|actor| actor.definition.hash == Some(0xf46a_44b9)).expect("the declared actor is listed");
+        assert_eq!(declared.definition.name, "coop.CoopFlagActor.Default");
+        assert_eq!(declared.definition.object_id, 387);
+        assert!(!declared.has_renderer, "nothing draws it, so it keeps the stock marker");
+    }
+
+    #[test]
     fn level_graphics_report_what_could_not_be_resolved() {
         let (_fixture, mut session) = Fixture::with_project("host-level-graphics");
         let snapshot = open_level(&mut session, "A01_1");

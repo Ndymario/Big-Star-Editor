@@ -1,13 +1,13 @@
 //! The open project's graphics as the host serves them: level tilesets as atlases, backgrounds, actor catalogs and
 //! draw lists, every image delivered once by content hash.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result};
 use bigstar_formats::{BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET, FOREGROUND_TILE_OFFSET, RgbaImage};
-use bigstar_level::{LevelTilesetReferences, ModuleDataCatalog};
+use bigstar_level::{LevelTilesetReferences, ModuleDataCatalog, SpriteDefinition};
 use bigstar_patching::{FileManifest, ModuleGraph};
 use bigstar_project::{
     ActorResource, ActorResourceKind, EffectiveFilesystem, LuaActorCatalog, LuaActorDrawKind, LuaActorLayer, LuaActorRenderInput, LuaTileLayer,
@@ -317,7 +317,7 @@ impl ProjectGraphics {
     pub fn actor_catalog(&mut self, generation: u64) -> ActorCatalog {
         self.ensure_actors();
         let sprite_object_ids = self.sprite_object_ids().to_vec();
-        let actors = self
+        let mut actors: Vec<ActorInfo> = self
             .actors
             .as_ref()
             .map(|catalog| {
@@ -332,6 +332,14 @@ impl ProjectGraphics {
                     .collect()
             })
             .unwrap_or_default();
+        // A module actor nobody wrote a script for is still the project's own: it keeps the name it was declared
+        // with and draws as the stock marker.
+        let scripted: HashSet<u32> = actors.iter().filter_map(|actor| actor.definition.hash).collect();
+        for object in self.catalog.stage_objects.iter().filter(|object| !scripted.contains(&object.hash)) {
+            let definition =
+                SpriteDefinition { object_id: object.object_id, hash: Some(object.hash), name: object.name.clone(), ..SpriteDefinition::default() };
+            actors.push(ActorInfo { definition, has_renderer: false, init_error: None });
+        }
         ActorCatalog { generation, actors, sprite_object_ids }
     }
 
