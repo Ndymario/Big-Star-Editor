@@ -16,7 +16,8 @@ pub use graphics::{
 };
 pub use message::{
     AreaSummary, ClientFrame, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
-    LevelSummary, LevelWorld, LogLevel, PROTOCOL_VERSION, ProjectInfo, ProjectSummary, Request, RequestId, Response, ResponseResult, ServerFrame,
+    LevelSummary, LevelWorld, LogLevel, ObjectBankOverlays, PROTOCOL_VERSION, ProjectData, ProjectInfo, ProjectSummary, Request, RequestId, Response,
+    ResponseResult, ServerFrame,
 };
 pub use service::Service;
 pub use wire::{decode_client_frame, decode_server_frame, encode_client_frame, encode_server_frame};

@@ -22,7 +22,7 @@ fn shot(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, name: &str
 
 fn build(app: BigStarApp) -> Harness<'static, BigStarApp> {
     Harness::builder()
-        .with_size(Vec2::new(1100.0, 700.0))
+        .with_size(Vec2::new(1400.0, 800.0))
         .with_pixels_per_point(1.5)
         .with_max_steps(16)
         .wgpu()
@@ -103,5 +103,22 @@ fn main() -> Result<(), String> {
         view.selection.push(Item::new(Kind::Sprite, 1));
         view.selection.push(Item::new(Kind::Object, 4));
     }
-    shot(&mut harness, &dir, "level.png")
+    shot(&mut harness, &dir, "level.png")?;
+    // One actor selected: the properties show its own fields, and the picker its category.
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
+        view.selection = vec![Item::new(Kind::Sprite, 0)];
+    }
+    harness.run();
+    if let Some(node) = harness.query_all_by_label("Sprites").next() {
+        node.click();
+    }
+    harness.run();
+    if let Some(node) = harness.query_by_label("Enemies (2)") {
+        node.click();
+    }
+    shot(&mut harness, &dir, "properties.png")?;
+    if let Some(node) = harness.query_by_label("Level Data") {
+        node.click();
+    }
+    shot(&mut harness, &dir, "level-data.png")
 }

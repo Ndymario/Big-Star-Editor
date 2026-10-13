@@ -7,8 +7,8 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary,
-    Request, RequestId, Response, ResponseResult, TextureData, TextureId,
+    ActorCatalog, DirectoryListing, Event, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings,
+    ProjectSummary, Request, RequestId, Response, ResponseResult, TextureData, TextureId,
 };
 
 use crate::level_view::{ActorIndex, ActorKey, LevelView};
@@ -31,12 +31,13 @@ enum Pending {
     LevelGraphics(LevelId),
     ActorCatalog,
     ActorDraws(Vec<ActorKey>),
+    ProjectData,
 }
 
 impl Pending {
     /// Graphics are not the person's request: when one fails it is logged, not put in front of them.
     fn graphics(&self) -> bool {
-        matches!(self, Pending::Textures | Pending::LevelGraphics(_) | Pending::ActorCatalog | Pending::ActorDraws(_))
+        matches!(self, Pending::Textures | Pending::LevelGraphics(_) | Pending::ActorCatalog | Pending::ActorDraws(_) | Pending::ProjectData)
     }
 }
 
@@ -87,6 +88,10 @@ pub struct Session {
     /// The project's actors; every level view shares it.
     catalog: Option<Arc<ActorCatalog>>,
     catalog_requested: bool,
+    /// What the open project's modules declare, and which overlay each object bank loads.
+    pub project_data: Option<ProjectData>,
+    /// Undo (`true`) or redo steps still to take after the one in flight: a pick from the history menu.
+    history_steps: Option<(bool, usize)>,
 }
 
 impl Session {
@@ -110,6 +115,8 @@ impl Session {
             textures_requested: HashSet::new(),
             catalog: None,
             catalog_requested: false,
+            project_data: None,
+            history_steps: None,
         };
         session.note_state();
         session
@@ -163,6 +170,15 @@ impl Session {
         }
     }
 
+    /// Undoes (or redoes) `steps` steps, one after the other, as a pick from the history menu does.
+    pub fn step_history(&mut self, undo: bool, steps: usize) {
+        if steps == 0 || self.busy() {
+            return;
+        }
+        self.history_steps = Some((undo, steps - 1));
+        if undo { self.undo() } else { self.redo() }
+    }
+
     pub fn undo(&mut self) {
         if let Some(level) = self.level.as_ref().filter(|v| v.snapshot.can_undo).map(|v| v.snapshot.level) {
             self.request(Request::UndoLevel { level }, Pending::History);
@@ -187,6 +203,11 @@ impl Session {
         if let Some(view) = self.level.take() {
             self.request(Request::CloseLevel { level: view.snapshot.level }, Pending::CloseLevel);
         }
+    }
+
+    /// Tells the person something went wrong.
+    pub fn report(&mut self, message: String) {
+        self.notice = Some(Notice { error: true, text: message });
     }
 
     pub fn dismiss_notice(&mut self) {
@@ -247,6 +268,7 @@ impl Session {
                 return;
             }
             Err(error) => {
+                self.history_steps = None;
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
                 if matches!(kind, Pending::Edit | Pending::History | Pending::Save) {
@@ -276,6 +298,7 @@ impl Session {
                 self.forget_project_graphics();
                 self.project = Some(info);
                 self.request(Request::ListLevels, Pending::ListLevels);
+                self.request(Request::ProjectData, Pending::ProjectData);
             }
             (Pending::ImportRom, Response::Project(info)) => {
                 self.browser = None;
@@ -284,13 +307,21 @@ impl Session {
             }
             (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
             (Pending::OpenLevel, Response::Level(snapshot)) => self.take_snapshot(*snapshot),
-            (Pending::Edit | Pending::History | Pending::Save, Response::Edited { snapshot, outcome }) => {
+            (pending @ (Pending::Edit | Pending::History | Pending::Save), Response::Edited { snapshot, outcome }) => {
                 let owed = self.level.as_mut().and_then(|view| view.edited(*snapshot, &outcome));
                 if let Some(edit) = owed {
                     self.edit(edit);
                 }
+                if pending == Pending::History
+                    && let Some((undo, left)) = self.history_steps.take()
+                    && left > 0
+                {
+                    self.history_steps = Some((undo, left - 1));
+                    if undo { self.undo() } else { self.redo() }
+                }
                 self.request_actor_draws();
             }
+            (Pending::ProjectData, Response::ProjectData(data)) => self.project_data = Some(*data),
             (Pending::CloseProject, Response::Done) => {
                 self.own_closes += 1;
                 self.project = None;
@@ -376,6 +407,7 @@ impl Session {
     fn forget_project_graphics(&mut self) {
         self.catalog = None;
         self.catalog_requested = false;
+        self.project_data = None;
     }
 
     fn request_catalog(&mut self) {
@@ -385,8 +417,8 @@ impl Session {
         }
     }
 
-    /// Asks for the draw lists of the sprites that have none yet.
-    fn request_actor_draws(&mut self) {
+    /// Asks for the draw lists of the sprites, and of anything else the view wants drawn, that have none yet.
+    pub fn request_actor_draws(&mut self) {
         let Some(view) = &mut self.level else { return };
         let keys = view.take_missing_actor_keys();
         if !keys.is_empty() {

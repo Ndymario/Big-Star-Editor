@@ -3,8 +3,13 @@
 
 mod app;
 mod canvas;
+mod clipboard;
 pub mod demo;
+mod level_data;
 mod level_view;
+mod picker;
+mod properties;
+mod properties_ui;
 mod services;
 mod session;
 

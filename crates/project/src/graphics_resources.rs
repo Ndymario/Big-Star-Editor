@@ -108,13 +108,30 @@ const EXPECTED_BANKS: ObjectBankOverlayTable = [
     [12, 13, 14, 15, 16, 17, 18, 19, 20, 21],
 ];
 
-/// Finds the table of which overlay holds each object bank by searching ARM9 for its retail contents.
+/// Finds the table of which overlay holds each object bank by searching ARM9 for its retail contents, and returns
+/// the table as the ROM has it.
+///
+/// A slot with no banks is `0xFFFFFFFF` in a retail ARM9. The C++ looked for zeros there, so it never found the table
+/// in a real ROM; either is accepted here.
 pub fn find_object_bank_overlays(arm9: &[u8]) -> Result<ObjectBankOverlayTable> {
-    let expected: Vec<u8> = EXPECTED_BANKS.iter().flatten().flat_map(|value| value.to_le_bytes()).collect();
+    let words = EXPECTED_BANKS.len() * 10;
+    let read = |offset: usize, index: usize| -> Option<u32> {
+        let at = offset.checked_add(index.checked_mul(4)?)?;
+        let bytes: [u8; 4] = arm9.get(at..at + 4)?.try_into().ok()?;
+        Some(u32::from_le_bytes(bytes))
+    };
     let mut offset = 0;
-    while offset + expected.len() <= arm9.len() {
-        if arm9.get(offset..offset + expected.len()) == Some(expected.as_slice()) {
-            return Ok(EXPECTED_BANKS);
+    while offset + words * 4 <= arm9.len() {
+        let mut found: ObjectBankOverlayTable = [[0; 10]; 16];
+        let matched = EXPECTED_BANKS.iter().flatten().enumerate().all(|(index, &expected)| {
+            let Some(value) = read(offset, index) else { return false };
+            if let Some(cell) = found.get_mut(index / 10).and_then(|row| row.get_mut(index % 10)) {
+                *cell = value;
+            }
+            value == expected || (expected == 0 && value == u32::MAX)
+        });
+        if matched {
+            return Ok(found);
         }
         offset += 4;
     }

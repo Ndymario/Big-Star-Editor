@@ -5,16 +5,17 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bigstar_core::{Error, ErrorCode, Result, read_file_prefix, write_file_atomically};
+use bigstar_formats::decompress_blz_overlay;
 use bigstar_level::{EditableLevel, LevelEntityInsertions, ModuleDataCatalog};
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
 use bigstar_patching::{FileManifest, ModuleGraph, NCPatcherClient};
 use bigstar_project::{
-    DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project, default_rom_path, index_rom_files_from,
-    load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
+    DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project, default_rom_path,
+    find_object_bank_overlays, index_rom_files_from, load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
-    LevelSummary, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary, Request, Response, Service, TextureId,
+    LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, Request, Response, Service, TextureId,
 };
 
 use crate::graphics::ProjectGraphics;
@@ -195,6 +196,7 @@ impl Shared {
             Request::ProjectSettings => self.project_settings(),
             Request::SetActiveVariant { variant } => self.set_active_variant(variant),
             Request::SetActiveModule { module } => self.set_active_module(module),
+            Request::ProjectData => self.project_data(),
         }
     }
 
@@ -431,6 +433,7 @@ impl Shared {
             LevelEdit::Reorder { kind, index, forward } => level.reorder_entity(kind, index, forward).map(EditOutcome::Moved),
             LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
             LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
+            LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
         }?;
         session.revision += 1;
         let (snapshot, event) = snapshot_and_event(id, session);
@@ -553,6 +556,19 @@ impl Shared {
         Ok(Response::Settings(open.settings.clone()))
     }
 
+    fn project_data(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        // The table sits in the decompressed ARM9; a ROM whose ARM9 does not hold it simply has none.
+        let object_bank_overlays = open
+            .rom
+            .as_mut()
+            .and_then(|rom| rom.read_arm9().ok())
+            .and_then(|arm9| decompress_blz_overlay(&arm9).ok())
+            .and_then(|arm9| find_object_bank_overlays(&arm9).ok());
+        Ok(Response::ProjectData(Box::new(ProjectData { modules: open.catalog.clone(), object_bank_overlays })))
+    }
+
     fn set_active_variant(&self, variant: String) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -647,6 +663,9 @@ fn snapshot(id: LevelId, session: &LevelSession) -> LevelSnapshot {
         objects: session.level.objects().to_vec(),
         tileset_references: session.level.tileset_references(),
         glue_error: session.level.glue_error().map(str::to_owned),
+        glue: session.level.glue().clone(),
+        stage_object_id_base: session.level.stage_object_id_base(),
+        registration_hashes: session.level.registration_hashes(),
         sprite_hashes: (0..session.level.course().sprites.len()).map(|index| session.level.sprite_hash(index)).collect(),
         dirty: session.level.dirty(),
         can_undo: session.level.can_undo(),

@@ -8,19 +8,24 @@ use bigstar_client::{Connection, ConnectionState, HostInfo, Incoming};
 use bigstar_core::{Error, ErrorCode};
 use bigstar_formats::{
     NSMB_LEVEL_BLOCK_COUNT, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelStageObject, NsmbLevelView, NsmbLevelZone,
-    OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage,
+    OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage, fnv1a_32,
 };
-use bigstar_level::{EditableLevel, LevelEntityInsertions, SpriteBounds, SpriteDefinition, SpriteInsertion};
+use bigstar_level::{
+    EditableLevel, LevelDataDeclaration, LevelDataKind, LevelEntityInsertions, ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice,
+    SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
+};
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, ImageGraphics, LevelEdit,
-    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectInfo, ProjectSummary, Request, RequestId, Response,
-    ResponseResult, TextureData, TilesetGraphics,
+    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSummary, Request, RequestId,
+    Response, ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
 const LEVEL: LevelId = 1;
 const BACKGROUND: &str = "demo-background";
 const WALKER: &str = "demo-walker";
+/// The demo module's one actor.
+pub const SIGNPOST: u32 = 0x5157_0001;
 
 /// One tileset slot's art: a 16x16 image per block and the objects laid out of them.
 #[derive(Clone)]
@@ -322,6 +327,9 @@ impl DemoConnection {
             objects: level.objects().to_vec(),
             tileset_references: level.tileset_references(),
             glue_error: level.glue_error().map(str::to_owned),
+            glue: level.glue().clone(),
+            stage_object_id_base: level.stage_object_id_base(),
+            registration_hashes: level.registration_hashes(),
             sprite_hashes: (0..level.course().sprites.len()).map(|index| level.sprite_hash(index)).collect(),
             dirty: level.dirty(),
             can_undo: level.can_undo(),
@@ -360,11 +368,49 @@ impl DemoConnection {
         let actor = |definition, has_renderer| ActorInfo { definition, has_renderer, init_error: None };
         let mut walker = definition(21, "Walker", "Enemies");
         walker.render_bounds = SpriteBounds { x: 0, y: 0, width: 16, height: 16 };
+        walker.notes = "Walks until it meets a wall, then turns round.".to_owned();
+        let field = |key: &str, label: &str, bit_offset, bit_width| SpriteFieldDefinition {
+            key: key.to_owned(),
+            label: label.to_owned(),
+            bit_offset,
+            bit_width,
+            ..Default::default()
+        };
+        let choice = |value, label: &str| SpriteFieldChoice { value, label: label.to_owned() };
+        walker.fields = vec![
+            SpriteFieldDefinition { choices: vec![choice(0, "Left"), choice(1, "Right")], ..field("facing", "Facing", 0, 1) },
+            SpriteFieldDefinition { notes: "Pixels a frame, in sixteenths.".to_owned(), ..field("speed", "Speed", 4, 4) },
+            SpriteFieldDefinition { checkbox_value: 1, ..field("winged", "Winged", 8, 1) },
+        ];
         ActorCatalog {
             generation: 0,
             actors: vec![actor(walker, true), actor(definition(55, "Shell walker", "Enemies"), false), actor(definition(64, "Coin", "Items"), true)],
             sprite_object_ids: (0..400).collect(),
         }
+    }
+
+    /// One module with one actor and one level-data key, so the custom-actor tree and the level-data tab have something
+    /// to show.
+    fn project_data() -> ProjectData {
+        let modules = ModuleDataCatalog {
+            level_data: vec![LevelDataDeclaration {
+                key: "demo.lowGravity".to_owned(),
+                module: "demo".to_owned(),
+                kind: LevelDataKind::Flag,
+                hash: fnv1a_32("demo.lowGravity"),
+                ..Default::default()
+            }],
+            stage_objects: vec![StageObjectDeclaration {
+                name: "Signpost".to_owned(),
+                module: "demo".to_owned(),
+                component: "props".to_owned(),
+                hash: SIGNPOST,
+                object_id: 400,
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        ProjectData { modules, object_bank_overlays: None }
     }
 
     fn render(input: &ActorInput) -> ActorDraw {
@@ -399,6 +445,7 @@ impl DemoConnection {
             LevelEdit::Reorder { kind, index, forward } => level.reorder_entity(kind, index, forward).map(EditOutcome::Moved),
             LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
             LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
+            LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
         }
     }
 
@@ -451,6 +498,7 @@ impl DemoConnection {
             Request::LevelGraphics { level } => Ok(Response::LevelGraphics(Box::new(self.graphics(level)))),
             Request::ActorCatalog => Ok(Response::ActorCatalog(Box::new(Self::catalog()))),
             Request::RenderActors { inputs } => Ok(Response::ActorDraws { generation: 0, draws: inputs.iter().map(Self::render).collect() }),
+            Request::ProjectData => Ok(Response::ProjectData(Box::new(Self::project_data()))),
             Request::GetTextures { ids } => Ok(Response::Textures(ids.iter().filter_map(|id| self.textures.get(id).cloned()).collect())),
             _ => Err(Error::new(ErrorCode::Unsupported, "the demo host does not do that")),
         }

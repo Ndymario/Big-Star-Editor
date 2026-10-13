@@ -15,6 +15,8 @@ use bigstar_level::{
 use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutcome, LevelEdit, LevelGraphics, LevelSnapshot, TextureId};
 use egui::{Pos2, Rect, Vec2};
 
+use crate::properties::{PanelState, Tab, item_count};
+
 pub const TILE: f32 = 16.0;
 pub const MIN_ZOOM: f32 = 0.02;
 pub const MAX_ZOOM: f32 = 16.0;
@@ -309,6 +311,8 @@ pub struct LevelArt {
     stale: HashMap<ActorKey, ActorDraw>,
     /// Asked for and not answered yet.
     pub requested: HashSet<ActorKey>,
+    /// Draw lists something other than a sprite wants this frame: the picker's stills.
+    pub wanted: Vec<ActorKey>,
     /// Grows whenever the tilesets change, so the tile array is rebuilt.
     serial: u64,
 }
@@ -365,6 +369,10 @@ pub struct LevelView {
     pub options: CanvasOptions,
     pub placement: Placement,
     pub art: LevelArt,
+    pub panel: PanelState,
+    /// The selection and create kind the panel last followed, so it can tell a change made elsewhere.
+    panel_seen: Vec<Item>,
+    panel_kind: Kind,
     /// The sprites of the snapshot before this one, so an actor whose new draw list is still on its way is drawn from
     /// its old one instead of flickering to a marker.
     previous_keys: Vec<ActorKey>,
@@ -440,6 +448,9 @@ impl LevelView {
             options: CanvasOptions::default(),
             placement: Placement::default(),
             art: LevelArt::default(),
+            panel: PanelState::default(),
+            panel_seen: Vec::new(),
+            panel_kind: Kind::Object,
             previous_keys: Vec::new(),
             tile_cache: None,
             awaiting_clone: false,
@@ -523,7 +534,8 @@ impl LevelView {
     /// The sprites whose draw lists are neither here nor asked for; marks them asked for.
     pub fn take_missing_actor_keys(&mut self) -> Vec<ActorKey> {
         let mut missing = Vec::new();
-        for key in self.actor_keys() {
+        let wanted = std::mem::take(&mut self.art.wanted);
+        for key in self.actor_keys().into_iter().chain(wanted) {
             if !self.art.draws.contains_key(&key) && self.art.requested.insert(key) {
                 missing.push(key);
             }
@@ -1072,6 +1084,93 @@ impl LevelView {
         }
     }
 
+    // --- the properties panel ---------------------------------------------------------------------------------------
+
+    /// Brings the panel in line with a selection or create kind that changed elsewhere: the canvas, its toolbar or a
+    /// shortcut. A selection of one kind shows that kind; nothing selected shows the course; a mixed selection leaves
+    /// the panel where it was.
+    pub fn sync_panel(&mut self) {
+        if self.selection != self.panel_seen {
+            self.panel_seen = self.selection.clone();
+            let kinds: BTreeSet<Kind> = self.selection.iter().map(|s| s.kind).collect();
+            match (kinds.len(), self.selection.first().copied()) {
+                (0, _) => {
+                    self.panel.tab = Tab::Course;
+                    self.panel.multi.clear();
+                }
+                (1, Some(first)) => {
+                    let indices: BTreeSet<usize> = self.selection.iter().map(|s| s.index).collect();
+                    self.panel.tab = Tab::Entity(first.kind);
+                    self.panel.item = first.index;
+                    self.panel.node = first.node.unwrap_or(0);
+                    self.panel.multi = if indices.len() > 1 { indices.into_iter().collect() } else { Vec::new() };
+                    // Whatever the panel shows is also what a right-click creates.
+                    self.placement.kind = first.kind;
+                }
+                _ => {}
+            }
+            self.panel.dragging = None;
+            self.panel.settings_text = None;
+        }
+        if self.placement.kind != self.panel_kind {
+            self.panel_kind = self.placement.kind;
+            if self.panel.tab != Tab::Entity(self.placement.kind) {
+                self.panel.tab = Tab::Entity(self.placement.kind);
+                self.panel.multi.clear();
+            }
+        }
+    }
+
+    /// Selects on the canvas what the panel now shows, and remembers it as seen.
+    fn select_from_panel(&mut self) {
+        self.panel.multi.clear();
+        self.panel.dragging = None;
+        self.panel.settings_text = None;
+        let count = item_count(&self.snapshot, self.panel.tab);
+        self.selection = match self.panel.tab {
+            Tab::Entity(kind) if count > 0 => {
+                self.panel.item = self.panel.item.min(count - 1);
+                let node = kind.path().then_some(self.panel.node);
+                vec![Item { kind, index: self.panel.item, node }]
+            }
+            _ => Vec::new(),
+        };
+        if let Tab::Entity(kind) = self.panel.tab {
+            self.placement.kind = kind;
+        }
+        self.panel_seen = self.selection.clone();
+        self.panel_kind = self.placement.kind;
+    }
+
+    /// The person picked a tab.
+    pub fn panel_tab(&mut self, tab: Tab) {
+        self.panel.tab = tab;
+        self.select_from_panel();
+    }
+
+    pub fn panel_item(&mut self, item: usize) {
+        self.panel.item = item;
+        self.select_from_panel();
+    }
+
+    pub fn panel_node(&mut self, node: usize) {
+        self.panel.node = node;
+        self.select_from_panel();
+    }
+
+    /// A kind shortcut: the panel jumps to the kind's first item, as the Qt editor's does.
+    pub fn choose_kind(&mut self, tab: Tab) {
+        self.panel.tab = tab;
+        self.panel.item = 0;
+        self.panel.node = 0;
+        self.select_from_panel();
+    }
+
+    /// The next `Added` is something the panel or a placement made, and selects a path by its first node.
+    pub fn expect_placement(&mut self) {
+        self.placing = true;
+    }
+
     // --- tiles -----------------------------------------------------------------------------------------------------
 
     /// The objects as the gesture in progress shows them, rounded back to whole cells, which is all the tile array
@@ -1162,12 +1261,11 @@ fn items_of(selection: &LevelEntitySelection, first_node: bool) -> Vec<Item> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests_support {
     use bigstar_formats::{NsmbLevelCourse, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelStageObject, NsmbLevelZone};
-    use bigstar_level::SpriteDefinition;
+    use bigstar_protocol::LevelSnapshot;
 
-    use super::*;
-
+    /// A level with one of most things in it.
     pub(crate) fn snapshot() -> LevelSnapshot {
         let course = NsmbLevelCourse {
             sprites: vec![NsmbLevelStageObject { id: 1, x: 6, y: 4, ..Default::default() }],
@@ -1188,6 +1286,9 @@ mod tests {
             objects: vec![NsmbLevelObject { object_id: 1, tileset_slot: 0, x: 2, y: 3, width: 4, height: 1 }],
             tileset_references: Default::default(),
             glue_error: None,
+            glue: Default::default(),
+            stage_object_id_base: 326,
+            registration_hashes: Vec::new(),
             sprite_hashes: Vec::new(),
             dirty: false,
             can_undo: false,
@@ -1196,6 +1297,15 @@ mod tests {
             redo_names: Vec::new(),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use bigstar_formats::NsmbLevelStageObject;
+    use bigstar_level::SpriteDefinition;
+
+    use super::tests_support::snapshot;
+    use super::*;
 
     fn moved(view: &LevelView, delta: Vec2) -> LevelEntityUpdates {
         match view.move_edit(delta) {

@@ -1,12 +1,12 @@
 use bigstar_core::Error;
-use bigstar_formats::{NsmbLevelCourse, NsmbLevelObject};
-use bigstar_level::{LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ReorderKind};
+use bigstar_formats::{GlueBlock, NsmbLevelCourse, NsmbLevelObject};
+use bigstar_level::{LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind};
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 pub type RequestId = u64;
 
@@ -100,17 +100,43 @@ pub enum Request {
     SetActiveModule {
         module: String,
     },
+    /// What the open project's modules declare and which overlay each object bank loads.
+    ProjectData,
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum LevelEdit {
-    Update { updates: LevelEntityUpdates, name: String },
-    Add { items: LevelEntityInsertions, name: String },
-    Remove { selection: LevelEntitySelection, name: String },
-    Reorder { kind: ReorderKind, index: usize, forward: bool },
-    SetObjectBank { slot: usize, value: u8 },
-    SetTilesetReferences { references: LevelTilesetReferences },
+    Update {
+        updates: LevelEntityUpdates,
+        name: String,
+    },
+    Add {
+        items: LevelEntityInsertions,
+        name: String,
+    },
+    Remove {
+        selection: LevelEntitySelection,
+        name: String,
+    },
+    Reorder {
+        kind: ReorderKind,
+        index: usize,
+        forward: bool,
+    },
+    SetObjectBank {
+        slot: usize,
+        value: u8,
+    },
+    SetTilesetReferences {
+        references: LevelTilesetReferences,
+    },
+    /// Replaces the level's glue block: its level-data flags and values. The stage-object registration is derived from
+    /// the sprites and is not the frontend's to write.
+    SetGlue {
+        glue: GlueBlock,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,7 +152,18 @@ pub enum Response {
     ActorCatalog(Box<ActorCatalog>),
     ActorDraws { generation: u64, draws: Vec<ActorDraw> },
     Settings(ProjectSettings),
+    ProjectData(Box<ProjectData>),
     Done,
+}
+
+/// Which code overlay object bank `bank` (1-10) of tileset slot `slot` loads: `table[slot][bank - 1]`.
+pub type ObjectBankOverlays = [[u32; 10]; 16];
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectData {
+    pub modules: ModuleDataCatalog,
+    /// Read out of the ROM's ARM9; `None` when its table is not where the host knows to look.
+    pub object_bank_overlays: Option<ObjectBankOverlays>,
 }
 
 /// What an edit produced besides the new state.
@@ -238,6 +275,13 @@ pub struct LevelSnapshot {
     pub objects: Vec<NsmbLevelObject>,
     pub tileset_references: LevelTilesetReferences,
     pub glue_error: Option<String>,
+    /// The level-data flags and values; when `glue_error` is set this is what could be read, and the block is kept
+    /// byte for byte.
+    pub glue: GlueBlock,
+    /// The id the first registered module sprite takes; the rest follow in `registration_hashes` order.
+    pub stage_object_id_base: u16,
+    /// The module sprites this level registers, derived from its sprites.
+    pub registration_hashes: Vec<u32>,
     /// Per sprite, the hash a module sprite is registered under in the level's glue block; `None` for a vanilla one.
     pub sprite_hashes: Vec<Option<u32>>,
     pub dirty: bool,

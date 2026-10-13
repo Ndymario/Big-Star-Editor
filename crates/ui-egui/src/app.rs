@@ -6,9 +6,11 @@ use bigstar_client::{Connection, ConnectionState, Waker, WebSocket, websocket_ur
 use bigstar_protocol::{DirectoryEntryKind, LogLevel};
 use egui::{Color32, Key, Modifiers, RichText, Ui};
 
-use crate::canvas::{self, TexturePool};
+use crate::canvas::{self, Art, TexturePool};
+use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
+use crate::{level_data, properties_ui};
 
 /// Storage keys, so a shell can seed them.
 pub const RECENT_HOSTS_KEY: &str = "recent_hosts";
@@ -54,6 +56,7 @@ enum Leave {
 enum Action {
     Undo,
     Redo,
+    History { undo: bool, steps: usize },
     Save,
     Leave(Leave),
     OpenProject(String),
@@ -75,6 +78,18 @@ pub struct BigStarApp {
     show_log: bool,
     actions: Vec<Action>,
     textures: TexturePool,
+    pub(crate) picker: PickerState,
+    side: Side,
+    /// Level-data value cells being typed in.
+    data_drafts: level_data::Drafts,
+}
+
+/// The right-hand panel's two tabs.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Side {
+    #[default]
+    Properties,
+    LevelData,
 }
 
 fn waker(ctx: &egui::Context) -> Waker {
@@ -106,6 +121,9 @@ impl BigStarApp {
             show_log: false,
             actions: Vec::new(),
             textures: TexturePool::default(),
+            picker: PickerState::default(),
+            side: Side::default(),
+            data_drafts: level_data::Drafts::new(),
         }
     }
 
@@ -201,6 +219,7 @@ impl BigStarApp {
         self.shortcuts(&ctx);
         self.top_bar(ui);
         self.bottom_bar(ui);
+        self.side_panels(ui);
         // The canvas takes keys only when nothing else wants them: no text field, no question waiting.
         let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm_leave.is_none();
         egui::CentralPanel::default().show(ui, |ui| {
@@ -213,10 +232,14 @@ impl BigStarApp {
                     ui.label("Connecting…");
                 });
             } else if let Some(view) = &mut session.level {
-                let edits = canvas::show(ui, view, &session.textures, &mut self.textures, busy, keyboard);
-                for edit in edits {
+                let out = canvas::show(ui, view, &session.textures, &mut self.textures, busy, keyboard);
+                for edit in out.edits {
                     session.edit(edit);
                 }
+                if let Some(error) = out.error {
+                    session.report(error);
+                }
+                session.request_actor_draws();
             } else if session.project.is_some() {
                 self.levels_screen(ui);
             } else {
@@ -339,9 +362,34 @@ impl BigStarApp {
                     if ui.add_enabled(idle && snapshot.can_undo, egui::Button::new(undo)).clicked() {
                         actions.push(Action::Undo);
                     }
+                    // Every step back, named; picking one undoes it and everything after it.
+                    ui.add_enabled_ui(idle && snapshot.can_undo, |ui| {
+                        ui.menu_button("⏷", |ui| {
+                            for (index, name) in snapshot.undo_names.iter().enumerate() {
+                                if ui.button(name).clicked() {
+                                    actions.push(Action::History { undo: true, steps: index + 1 });
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Undo several steps");
+                    });
                     if ui.add_enabled(idle && snapshot.can_redo, egui::Button::new(redo)).clicked() {
                         actions.push(Action::Redo);
                     }
+                    ui.add_enabled_ui(idle && snapshot.can_redo, |ui| {
+                        ui.menu_button("⏷", |ui| {
+                            for (index, name) in snapshot.redo_names.iter().enumerate() {
+                                if ui.button(name).clicked() {
+                                    actions.push(Action::History { undo: false, steps: index + 1 });
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Redo several steps");
+                    });
                     if ui.add_enabled(idle && snapshot.dirty, egui::Button::new("Save")).clicked() {
                         actions.push(Action::Save);
                     }
@@ -359,6 +407,54 @@ impl BigStarApp {
                 });
             }
         });
+    }
+
+    /// The picker on the left and the properties on the right, while a level is open.
+    fn side_panels(&mut self, ui: &mut Ui) {
+        let Some(session) = &mut self.session else { return };
+        if session.level.is_none() || !session.connected() {
+            return;
+        }
+        let busy = session.busy();
+        let ctx = ui.ctx().clone();
+        let mut edit = None;
+        let mut error = None;
+        egui::Panel::left("picker").resizable(true).default_size(280.0).show(ui, |ui| {
+            let Some(view) = session.level.as_mut() else { return };
+            let mut art = Art { ctx: &ctx, store: &session.textures, pool: &mut self.textures };
+            let modules = session.project_data.as_ref().map(|d| &d.modules);
+            picker::show(ui, view, &mut self.picker, modules, &mut art);
+        });
+        egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
+            let Some(view) = session.level.as_mut() else { return };
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.side, Side::Properties, "Properties");
+                ui.selectable_value(&mut self.side, Side::LevelData, "Level Data");
+            });
+            ui.separator();
+            match self.side {
+                Side::Properties => {
+                    let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
+                    edit = properties_ui::show(ui, view, overlays, busy);
+                }
+                Side::LevelData => {
+                    let modules = session.project_data.as_ref().map(|d| &d.modules);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        match level_data::show(ui, &view.snapshot, modules, &mut self.data_drafts, busy) {
+                            Some(level_data::Outcome::Edit(made)) => edit = Some(made),
+                            Some(level_data::Outcome::Error(message)) => error = Some(message),
+                            None => {}
+                        }
+                    });
+                }
+            }
+        });
+        if let Some(edit) = edit.filter(|_| !busy) {
+            session.edit(edit);
+        }
+        if let Some(error) = error {
+            session.report(error);
+        }
     }
 
     fn bottom_bar(&mut self, ui: &mut Ui) {
@@ -573,6 +669,7 @@ impl BigStarApp {
         match action {
             Action::Undo => session.undo(),
             Action::Redo => session.redo(),
+            Action::History { undo, steps } => session.step_history(undo, steps),
             Action::Save => session.save(),
             Action::Leave(target) => self.request_leave(target),
             Action::OpenProject(path) => session.open_project(&path),

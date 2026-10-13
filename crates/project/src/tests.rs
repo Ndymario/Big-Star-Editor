@@ -644,6 +644,16 @@ fn graphics_profiles_and_the_object_bank_table() {
     }
     assert_eq!(find_object_bank_overlays(&bank_table).unwrap()[15][9], 21);
     assert!(find_object_bank_overlays(&bank_table[8..100]).is_err());
+
+    // A retail ARM9 marks the slots without banks 0xFFFFFFFF, which the C++ never matched; the table comes back as the
+    // ROM holds it.
+    for slot in 10..15 {
+        for bank in 0..10 {
+            put(&mut bank_table, slot, bank, u32::MAX);
+        }
+    }
+    let found = find_object_bank_overlays(&bank_table).unwrap();
+    assert_eq!((found[0][0], found[12][3], found[15][9]), (22, u32::MAX, 21));
 }
 
 #[test]

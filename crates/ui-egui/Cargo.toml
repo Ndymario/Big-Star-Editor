@@ -17,8 +17,8 @@ bigstar-protocol.workspace = true
 bigstar-client.workspace = true
 egui.workspace = true
 log.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu"] }
-serde_json.workspace = true
 image.workspace = true

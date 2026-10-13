@@ -60,6 +60,12 @@ fn snapshot() -> Box<crate::LevelSnapshot> {
         objects: vec![NsmbLevelObject::default()],
         tileset_references: bigstar_level::LevelTilesetReferences::default(),
         glue_error: None,
+        glue: bigstar_formats::GlueBlock {
+            flags: vec![1],
+            values: vec![bigstar_formats::GlueValue { hash: 2, payload: vec![3, 4], payload_order: 0 }],
+        },
+        stage_object_id_base: 326,
+        registration_hashes: vec![7],
         sprite_hashes: vec![None, Some(7)],
         dirty: true,
         can_undo: true,
@@ -105,4 +111,12 @@ fn graphics_messages_survive_the_wire() {
     let input = ActorInput { sprite_type: 83, hash: None, x: 1, y: 2, pixel_x: 16.0, pixel_y: 32.0, settings: 0x10, events: [1, 2] };
     client_round_trip(ClientFrame::Request { id: 10, request: Request::RenderActors { inputs: vec![input] } });
     client_round_trip(ClientFrame::Request { id: 11, request: Request::SetActiveVariant { variant: "en".into() } });
+    client_round_trip(ClientFrame::Request { id: 12, request: Request::ProjectData });
+    let glue = bigstar_formats::GlueBlock { flags: vec![9], values: Vec::new() };
+    let edit = LevelEdit::SetGlue { glue, name: "Edit level data".into() };
+    client_round_trip(ClientFrame::Request { id: 13, request: Request::EditLevel { level: 1, base_revision: 2, edit } });
+    let mut overlays = [[0; 10]; 16];
+    overlays[3][9] = 77;
+    let data = crate::ProjectData { modules: Default::default(), object_bank_overlays: Some(overlays) };
+    server_round_trip(ServerFrame::Response { id: 4, result: Ok(Response::ProjectData(Box::new(data))) });
 }

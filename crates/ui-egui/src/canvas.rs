@@ -12,7 +12,9 @@ use egui::{
     StrokeKind, Ui, Vec2, ViewportCommand,
 };
 
+use crate::clipboard;
 use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
+use crate::properties::Tab;
 
 /// The textures the host has sent, uploaded the first time something draws them.
 #[derive(Default)]
@@ -106,10 +108,10 @@ const KNOB: f32 = 9.0;
 
 /// Level pixels to screen points.
 #[derive(Debug, Clone, Copy)]
-struct Frame {
-    origin: Pos2,
-    pan: Vec2,
-    zoom: f32,
+pub(crate) struct Frame {
+    pub(crate) origin: Pos2,
+    pub(crate) pan: Vec2,
+    pub(crate) zoom: f32,
 }
 
 impl Frame {
@@ -136,14 +138,14 @@ impl Frame {
     }
 }
 
-struct Art<'a> {
-    ctx: &'a egui::Context,
-    store: &'a HashMap<TextureId, Arc<TextureData>>,
-    pool: &'a mut TexturePool,
+pub(crate) struct Art<'a> {
+    pub(crate) ctx: &'a egui::Context,
+    pub(crate) store: &'a HashMap<TextureId, Arc<TextureData>>,
+    pub(crate) pool: &'a mut TexturePool,
 }
 
 impl Art<'_> {
-    fn texture(&mut self, id: Option<&TextureId>) -> Option<(egui::TextureId, Vec2)> {
+    pub(crate) fn texture(&mut self, id: Option<&TextureId>) -> Option<(egui::TextureId, Vec2)> {
         self.pool.get(self.ctx, self.store, id?)
     }
 }
@@ -156,11 +158,11 @@ pub fn show(
     pool: &mut TexturePool,
     busy: bool,
     keyboard: bool,
-) -> Vec<LevelEdit> {
+) -> CanvasOutput {
     toolbar(ui, view);
     let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
     if rect.width() < 1.0 || rect.height() < 1.0 {
-        return Vec::new();
+        return CanvasOutput::default();
     }
     // A level nobody has zoomed stays fitted, so a resized window reframes it instead of cropping it.
     let resized = (view.canvas.size() - rect.size()).length() > 0.5;
@@ -169,10 +171,10 @@ pub fn show(
         view.fit(rect.size());
     }
 
-    let mut edits = Vec::new();
-    pointer(ui, &response, view, busy, &mut edits);
+    let mut out = CanvasOutput::default();
+    pointer(ui, &response, view, busy, &mut out.edits);
     if keyboard {
-        keys(ui, view, busy || !edits.is_empty(), &mut edits);
+        keys(ui, view, busy || !out.edits.is_empty(), &mut out);
     }
 
     let colors = Colors::of(ui.visuals());
@@ -186,11 +188,29 @@ pub fn show(
     if view.options.show_minimap {
         minimap(&painter, view, &tilemap, frame, &mut art, &colors);
     }
-    edits
+    out
+}
+
+/// What the canvas did this frame: the edits to send, in order, and anything to tell the person.
+#[derive(Debug, Default)]
+pub struct CanvasOutput {
+    pub edits: Vec<LevelEdit>,
+    pub error: Option<String>,
 }
 
 fn toolbar(ui: &mut Ui, view: &mut LevelView) {
-    ui.horizontal_wrapped(|ui| {
+    // One line whatever is chosen, scrolling sideways when narrow: a toolbar that wrapped differently per kind would
+    // resize the canvas under the person, and re-fit a level they have not zoomed.
+    egui::ScrollArea::horizontal().id_salt("canvas-toolbar").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
+        ui,
+        |ui| {
+            ui.horizontal(|ui| toolbar_items(ui, view));
+        },
+    );
+}
+
+fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
+    {
         // What right-click creates. Choosing it never touches the selection.
         ui.label("Create");
         egui::ComboBox::from_id_salt("create-kind").selected_text(view.placement.kind.name()).show_ui(ui, |ui| {
@@ -238,7 +258,7 @@ fn toolbar(ui: &mut Ui, view: &mut LevelView) {
             let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
         }
-    });
+    }
 }
 
 fn handle_cursor(handle: Handle) -> CursorIcon {
@@ -408,11 +428,42 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
     }
 }
 
-fn keys(ui: &Ui, view: &mut LevelView, busy: bool, edits: &mut Vec<LevelEdit>) {
+fn keys(ui: &Ui, view: &mut LevelView, busy: bool, out: &mut CanvasOutput) {
     let events = ui.input(|i| i.events.clone());
     let mut busy = busy;
+    let edits = &mut out.edits;
     for event in events {
-        let Event::Key { key, pressed: true, modifiers, .. } = event else { continue };
+        // The clipboard arrives as its own events rather than as keys.
+        let (key, modifiers) = match event {
+            Event::Key { key, pressed: true, modifiers, .. } => (key, modifiers),
+            Event::Copy | Event::Cut => {
+                match clipboard::copy(view) {
+                    Ok(Some(text)) => ui.ctx().copy_text(text),
+                    Ok(None) => {}
+                    Err(error) => out.error = Some(error),
+                }
+                if matches!(event, Event::Cut)
+                    && !busy
+                    && let Some(edit) = view.remove_edit()
+                {
+                    view.selection.clear();
+                    edits.push(edit);
+                    busy = true;
+                }
+                continue;
+            }
+            Event::Paste(text) if !busy => {
+                match clipboard::paste(&text) {
+                    Ok(items) => {
+                        edits.push(LevelEdit::Add { items, name: "Paste selection".to_owned() });
+                        busy = true;
+                    }
+                    Err(error) => out.error = Some(error),
+                }
+                continue;
+            }
+            _ => continue,
+        };
         let plain = modifiers.is_none();
         // Sends an edit unless one is already on its way; says whether it went.
         let mut send = |edit: Option<LevelEdit>| match edit.filter(|_| !busy) {
@@ -446,14 +497,16 @@ fn keys(ui: &Ui, view: &mut LevelView, busy: bool, edits: &mut Vec<LevelEdit>) {
                 };
                 send(view.move_edit(delta));
             }
-            // The kind shortcuts come first, so S chooses sprites rather than scrolling down.
-            Key::O if plain => view.placement.kind = Kind::Object,
-            Key::S if plain => view.placement.kind = Kind::Sprite,
-            Key::E if plain => view.placement.kind = Kind::Entrance,
-            Key::Z if plain => view.placement.kind = Kind::Zone,
-            Key::P if plain => view.placement.kind = Kind::Path,
-            Key::G if plain => view.placement.kind = Kind::ProgressPath,
-            Key::V if plain => view.placement.kind = Kind::View,
+            // The kind shortcuts come first, so S chooses sprites rather than scrolling down. Each takes the properties to
+            // that kind's first item, as the Qt editor's do.
+            Key::C if plain => view.choose_kind(Tab::Course),
+            Key::O if plain => view.choose_kind(Tab::Entity(Kind::Object)),
+            Key::S if plain => view.choose_kind(Tab::Entity(Kind::Sprite)),
+            Key::E if plain => view.choose_kind(Tab::Entity(Kind::Entrance)),
+            Key::Z if plain => view.choose_kind(Tab::Entity(Kind::Zone)),
+            Key::P if plain => view.choose_kind(Tab::Entity(Kind::Path)),
+            Key::G if plain => view.choose_kind(Tab::Entity(Kind::ProgressPath)),
+            Key::V if plain => view.choose_kind(Tab::Entity(Kind::View)),
             Key::W if plain => view.pan.y -= 32.0 / view.zoom,
             Key::A if plain => view.pan.x -= 32.0 / view.zoom,
             Key::D if plain => view.pan.x += 32.0 / view.zoom,
@@ -705,7 +758,7 @@ fn command_color(packed: u32, opacity: f32) -> Color32 {
 
 /// One command of an actor's draw list, moved by `offset` level pixels: rotated about its centre and flipped, the way
 /// the script asked.
-fn paint_command(painter: &Painter, frame: Frame, command: &DrawCommand, offset: Vec2, art: &mut Art<'_>) {
+pub(crate) fn paint_command(painter: &Painter, frame: Frame, command: &DrawCommand, offset: Vec2, art: &mut Art<'_>) {
     let destination =
         Rect::from_min_size(Pos2::new(command.x as f32, command.y as f32) + offset, Vec2::new(command.width as f32, command.height as f32));
     let centre = destination.center();

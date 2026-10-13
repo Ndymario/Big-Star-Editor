@@ -13,6 +13,7 @@ use egui_kittest::kittest::Queryable;
 
 use crate::demo::{DemoConnection, DemoTileset};
 use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, handle_centres};
+use crate::properties::Tab;
 use crate::{BigStarApp, MemoryServices, Session};
 
 fn settle(session: &mut Session) {
@@ -249,7 +250,7 @@ fn harness_on(connection: DemoConnection, size: Vec2) -> Harness<'static, BigSta
 }
 
 fn harness() -> Harness<'static, BigStarApp> {
-    harness_on(DemoConnection::new(), Vec2::new(1000.0, 640.0))
+    harness_on(DemoConnection::new(), Vec2::new(1500.0, 800.0))
 }
 
 /// The app with the level open on its canvas.
@@ -265,7 +266,7 @@ fn canvas_on(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStar
 }
 
 fn level_with(items: LevelEntityInsertions) -> Harness<'static, BigStarApp> {
-    canvas_on(DemoConnection::with_level(items), Vec2::new(900.0, 700.0))
+    canvas_on(DemoConnection::with_level(items), Vec2::new(1500.0, 800.0))
 }
 
 fn view<'h>(harness: &'h Harness<'_, BigStarApp>) -> &'h LevelView {
@@ -338,7 +339,7 @@ fn the_screens_lead_from_projects_to_levels_to_the_canvas() {
 
 #[test]
 fn dragging_a_sprite_moves_it_by_one_undoable_edit() {
-    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1000.0, 640.0));
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
     let (centre, x_before, zoom) = {
         let view = view(&harness);
         (view.to_screen(view.bounds(Item::new(Kind::Sprite, 0)).unwrap().center()), view.snapshot.course.sprites[0].x, view.zoom)
@@ -484,17 +485,24 @@ fn selection_ignores_the_create_kind() {
         ..Default::default()
     });
     select(&mut harness, &[Item::new(Kind::Object, 0), Item::new(Kind::Sprite, 0)]);
-    // Deciding what to place next is not a reason to drop what is held, and nothing has to be switched to before it can
-    // be grabbed.
-    for key in [Key::O, Key::S, Key::Z, Key::V] {
-        harness.key_press(key);
+    // Deciding what to place next (the canvas toolbar) is not a reason to drop what is held, and nothing has to be
+    // switched to before it can be grabbed.
+    for kind in [Kind::Sprite, Kind::Object, Kind::Zone, Kind::View] {
+        view_mut(&mut harness).placement.kind = kind;
         harness.run();
         let view = view(&harness);
         assert_eq!(view.selection.len(), 2);
+        assert_eq!(view.panel.tab, Tab::Entity(kind), "the properties show what a right-click makes");
         assert_eq!(view.hit_test(Pos2::new(20.0, 20.0)).map(|i| i.kind), Some(Kind::Object));
         assert_eq!(view.hit_test(Pos2::new(160.0, 160.0)).map(|i| i.kind), Some(Kind::Sprite));
     }
-    assert_eq!(view(&harness).placement.kind, Kind::View);
+    // A kind shortcut takes the properties to that kind's first item, as the Qt editor's does.
+    harness.key_press(Key::S);
+    harness.run();
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Sprite, 0)]);
+    harness.key_press(Key::C);
+    harness.run();
+    assert_eq!((view(&harness).panel.tab, view(&harness).selection.len()), (Tab::Course, 0));
 }
 
 #[test]
@@ -746,7 +754,7 @@ fn drawn(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp>
 
 #[test]
 fn the_canvas_follows_the_theme() {
-    let mut harness = drawn(DemoConnection::with_level(LevelEntityInsertions::default()).without_background(), Vec2::new(480.0, 360.0));
+    let mut harness = drawn(DemoConnection::with_level(LevelEntityInsertions::default()).without_background(), Vec2::new(1200.0, 500.0));
     let inside = view(&harness).canvas.min + Vec2::new(30.0, 30.0);
     harness.ctx.set_visuals(egui::Visuals::light());
     let light = rendered(&mut harness);
@@ -764,7 +772,7 @@ fn the_canvas_follows_the_theme() {
 #[test]
 fn the_out_of_bounds_quadrant_is_tinted() {
     let items = LevelEntityInsertions { objects: vec![object(1, 4, 4, 4, 4)], ..Default::default() };
-    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(480.0, 360.0));
+    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(1200.0, 500.0));
     harness.ctx.set_visuals(egui::Visuals::light());
     let image = rendered(&mut harness);
     // Either side of the origin, away from grid lines and the object, so only the tint separates them.
@@ -786,7 +794,7 @@ fn an_object_in_front_culls_the_one_behind() {
     let tileset = DemoTileset { blocks, objects: vec![layout(7), layout(OBJECT_LAYOUT_EMPTY_TILE)] };
     let items = LevelEntityInsertions { objects: vec![object(0, 4, 4, 4, 4), object(1, 5, 5, 2, 2)], ..Default::default() };
     let connection = DemoConnection::with_level(items).without_background().with_tileset(0, Some(tileset));
-    let mut harness = drawn(connection, Vec2::new(640.0, 480.0));
+    let mut harness = drawn(connection, Vec2::new(1300.0, 600.0));
     harness.ctx.set_visuals(egui::Visuals::light());
     view_mut(&mut harness).zoom = 1.0;
     view_mut(&mut harness).zoom_pinned = true;
@@ -808,7 +816,7 @@ fn actors_draw_their_own_art_and_the_rest_are_numbered_markers() {
         ],
         ..Default::default()
     };
-    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(640.0, 480.0));
+    let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(1300.0, 600.0));
     harness.ctx.set_visuals(egui::Visuals::light());
     view_mut(&mut harness).zoom = 2.0;
     view_mut(&mut harness).zoom_pinned = true;
@@ -817,7 +825,7 @@ fn actors_draw_their_own_art_and_the_rest_are_numbered_markers() {
     let image = rendered(&mut harness);
     // The walker's body is brown; the actor with no renderer is a grey box.
     let body = pixel(&image, screen(&harness, Pos2::new(4.0 * 16.0 + 4.0, 4.0 * 16.0 + 11.0)));
-    assert!(body[0] > body[2] + 60, "{body:?}");
+    assert!(i32::from(body[0]) > i32::from(body[2]) + 60, "{body:?}");
     let marker = pixel(&image, screen(&harness, Pos2::new(8.0 * 16.0 + 2.0, 4.0 * 16.0 + 2.0)));
     assert!(i32::from(marker[0]).abs_diff(i32::from(marker[2])) < 20 && marker[0] < 200, "{marker:?}");
 }
@@ -843,4 +851,138 @@ fn a_trackpad_pans_with_two_fingers_and_zooms_with_command() {
     harness.run();
     assert!(view(&harness).zoom > zoom);
     assert!((view(&harness).to_world(at) - under).length() < 0.01);
+}
+
+// --- the side panels -----------------------------------------------------------------------------------------------
+
+/// The demo level's walker (sprite 0), selected.
+fn walker_selected() -> Harness<'static, BigStarApp> {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
+    harness.run();
+    harness
+}
+
+#[test]
+fn a_selected_actor_shows_its_name_and_its_own_fields() {
+    let mut harness = walker_selected();
+    assert_eq!(view(&harness).panel.tab, Tab::Entity(Kind::Sprite));
+    harness.get_by_label("Walker");
+    harness.get_by_label("Enemies · actor type 21");
+    // A field that is on or off is a checkbox; clicking it writes only its bit.
+    harness.get_by_label("Winged").click();
+    harness.run();
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.course.sprites[0].settings, 1 << 8);
+    assert_eq!(snapshot.undo_names[0], "Edit sprite");
+}
+
+#[test]
+fn the_history_menus_take_several_steps_at_once() {
+    let mut harness = walker_selected();
+    for x in [1, 2, 3] {
+        let edit = view(&harness).move_edit(Vec2::new(16.0 * x as f32, 0.0)).unwrap();
+        harness.state_mut().session_mut().unwrap().edit(edit);
+        harness.run();
+    }
+    let x = view(&harness).snapshot.course.sprites[0].x;
+    assert_eq!(view(&harness).snapshot.undo_names.len(), 3);
+    harness.get_all_by_label("⏷").next().unwrap().click();
+    harness.run();
+    // The third entry is the oldest step: picking it undoes all three.
+    harness.get_all_by_label("Move selection").nth(2).unwrap().click();
+    harness.run();
+    let view = view(&harness);
+    assert_eq!((view.snapshot.course.sprites[0].x, view.snapshot.redo_names.len()), (x - 6, 3));
+}
+
+#[test]
+fn copy_and_paste_go_through_the_system_clipboard() {
+    let mut harness = walker_selected();
+    harness.event(egui::Event::Copy);
+    // The copy is in the output of the frame that handled it.
+    harness.step();
+    let copied = harness
+        .output()
+        .platform_output
+        .commands
+        .iter()
+        .find_map(|c| match c {
+            egui::OutputCommand::CopyText(text) => Some(text.clone()),
+            _ => None,
+        })
+        .expect("copied");
+    assert!(copied.starts_with("BigStar-Entities/1\n"));
+    let sprites = view(&harness).snapshot.course.sprites.len();
+    harness.event(egui::Event::Paste(copied));
+    harness.run();
+    let view_now = view(&harness);
+    assert_eq!(view_now.snapshot.course.sprites.len(), sprites + 1);
+    assert_eq!(view_now.snapshot.undo_names[0], "Paste selection");
+    assert_eq!(view_now.selection, [Item::new(Kind::Sprite, sprites)], "what was pasted is selected");
+    // Something else on the clipboard is reported, not pasted.
+    harness.event(egui::Event::Paste("hello".to_owned()));
+    harness.run();
+    let session = harness.state().session().unwrap();
+    assert_eq!(session.notice.as_ref().map(|n| n.text.as_str()), Some("Clipboard does not contain Big Star entities"));
+    // Cut is a copy and a delete.
+    select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
+    harness.event(egui::Event::Cut);
+    harness.run();
+    assert_eq!(view(&harness).snapshot.course.sprites.len(), sprites);
+}
+
+#[test]
+fn level_data_flags_are_set_from_the_tab() {
+    let mut harness = walker_selected();
+    harness.get_by_label("Level Data").click();
+    harness.run();
+    harness.get_by_label("demo.lowGravity");
+    let toggle = harness.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::CheckBox)).next().unwrap();
+    toggle.click();
+    harness.run();
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!(snapshot.glue.flags, [bigstar_formats::fnv1a_32("demo.lowGravity")]);
+    assert_eq!(snapshot.undo_names[0], "Edit level data");
+}
+
+#[test]
+fn the_picker_chooses_what_a_right_click_places() {
+    let mut harness = walker_selected();
+    harness.get_by_label("Object 0:2").click();
+    harness.run();
+    let placement = &view(&harness).placement;
+    assert_eq!((placement.kind, placement.object_slot, placement.object_id), (Kind::Object, 0, 2));
+    // The properties follow what a right-click makes.
+    assert_eq!(view(&harness).panel.tab, Tab::Entity(Kind::Object));
+    harness.get_by_label("Object 0:5 - eraser");
+
+    // The picker's tabs come first; the properties have tabs of the same names.
+    harness.get_all_by_label("Sprites").next().unwrap().click();
+    harness.run();
+    harness.get_by_label("Enemies (2)").click();
+    harness.run();
+    harness.get_by_label("Walker (21)").click();
+    harness.run();
+    let placement = &view(&harness).placement;
+    assert_eq!((placement.kind, placement.sprite_type, placement.sprite_hash), (Kind::Sprite, 21, None));
+    // The open category asked the host for its actors' stills.
+    assert!(view(&harness).art.draws.keys().any(|k| k.sprite_type == 21 && k.x == 0 && k.y == 0));
+
+    harness.get_by_label("Custom actors").click();
+    harness.run();
+    harness.get_by_label("Signpost  [object 400]").click();
+    harness.run();
+    assert_eq!(view(&harness).placement.sprite_hash, Some(crate::demo::SIGNPOST));
+
+    // The filter narrows every page.
+    harness.get_all_by_label("Objects").next().unwrap().click();
+    harness.run();
+    // The picker's filter is the first text field in the window.
+    harness.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::TextInput)).next().unwrap().focus();
+    harness.run();
+    harness.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::TextInput)).next().unwrap().type_text("eraser");
+    harness.run();
+    assert_eq!(harness.state().picker.search, "eraser");
+    assert_eq!(harness.query_all_by_label_contains("Object 0:").count(), 1);
 }

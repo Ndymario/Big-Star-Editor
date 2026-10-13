@@ -288,6 +288,52 @@ fn add_and_remove_report_what_changed() {
 }
 
 #[test]
+fn level_data_is_in_the_snapshot_and_edited_as_one_step() {
+    let (_fixture, mut session) = Fixture::with_project("host-glue");
+    let opened = open_level(&mut session, "A01_1");
+    assert_eq!((opened.glue.clone(), opened.stage_object_id_base, opened.registration_hashes.clone()), (Default::default(), 326, vec![]));
+    let glue = bigstar_formats::GlueBlock { flags: vec![0x1234_5678], values: vec![] };
+    let request =
+        Request::EditLevel { level: opened.level, base_revision: 1, edit: LevelEdit::SetGlue { glue: glue.clone(), name: "Edit level data".into() } };
+    let (changed, _) = edited(session.handle(request).unwrap());
+    assert_eq!(changed.glue, glue);
+    assert_eq!(changed.undo_names, ["Edit level data"]);
+
+    // A module sprite registers itself, and the snapshot says so.
+    let sprite = bigstar_level::SpriteInsertion { value: Default::default(), hash: Some(0xabcd_0001) };
+    let items = LevelEntityInsertions { sprites: vec![sprite], ..LevelEntityInsertions::default() };
+    let request = Request::EditLevel { level: opened.level, base_revision: 2, edit: LevelEdit::Add { items, name: "Add custom sprite".into() } };
+    let (added, _) = edited(session.handle(request).unwrap());
+    assert_eq!(added.registration_hashes, [0xabcd_0001]);
+    assert_eq!(added.course.sprites[0].id, 326);
+}
+
+#[test]
+fn project_data_names_the_module_catalog() {
+    let (_fixture, mut session) = Fixture::with_project("host-project-data");
+    let Response::ProjectData(data) = session.handle(Request::ProjectData).unwrap() else { panic!() };
+    assert_eq!(data.modules.stage_object_id_base, 326);
+    // The synthetic ROM's ARM9 holds no bank table.
+    assert_eq!(data.object_bank_overlays, None);
+}
+
+/// Against a real ROM, named by `BIGSTAR_NSMB_ROM`: the bank table is found in its ARM9. Skipped without one.
+#[test]
+fn a_real_rom_names_the_overlay_of_every_object_bank() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-banks");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.session();
+    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::ProjectData(data) = session.handle(Request::ProjectData).unwrap() else { panic!() };
+    let table = data.object_bank_overlays.expect("the clean ROM's bank table");
+    assert_eq!((table[0][0], table[15][9]), (22, 21));
+    assert_eq!(table[10], [u32::MAX; 10], "a slot with no banks");
+}
+
+#[test]
 fn download_play_areas_are_read_from_their_archive() {
     let (fixture, mut session) = Fixture::with_project("host-narc");
     let opened = open_level(&mut session, "J01_1@Dat_Field");
