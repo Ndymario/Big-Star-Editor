@@ -30,7 +30,7 @@ Use an imported ROM project with at least one available level. These checks inte
 26. With a project that uses `base-variant`, `module-variants`, `into:`, disabled component file globs, and `_narc` member folders, compare the displayed winners and provenance with NCPatcher's generated `files.json`.
 27. Open each Project Hub tab and confirm Level Listing, Tilesets, Backgrounds, Filesystem, and Tools target the same active project as their dock/menu counterparts. Restart with the Hub active and confirm it is restored.
 28. Confirm each vanilla palette category is a scrollable thumbnail grid and search matches both actor names and category names. Confirm custom actors remain grouped by module/component.
-29. Toggle Minimap, Grid, 8 px, DS Screen, each zoom preset, and Fullscreen. Load a reference image and Shift+Alt-drag it to a useful alignment.
+29. Toggle Minimap, Grid, 8 px, each DS screen choice, each zoom preset, and Fullscreen. Load a reference image and Shift+Alt-drag it to a useful alignment.
 30. Use `C O S E V Z P G` to switch entity tabs, arrows to nudge, WASD to scroll, middle- and Alt-drag to pan, Ctrl-drag/Ctrl+D to clone, and PgUp/PgDn to change z-order.
 31. Copy a mixed selection containing a custom sprite, paste it, and undo once. Confirm all pasted entities and the custom hash appear/disappear together. Inspect the Undo/Redo split menus for meaningful newest-first names.
 32. Export a level as `.nml`, modify it, import the export, and undo once. Open the same export in NSMB Editor if available and confirm both course and BGDat data are accepted.

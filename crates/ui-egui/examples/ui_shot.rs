@@ -81,14 +81,14 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     // The DS screen: where the first entrance opens the camera, and another under the pointer further along.
     let mut pointer = egui::Pos2::ZERO;
     if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
-        view.options.show_ds_screen = true;
+        view.options.ds_screens = bigstar_ui_egui::DsScreens::Both;
         view.selection = vec![Item::new(Kind::Entrance, 0)];
         pointer = view.canvas.min + egui::Vec2::new(620.0, 150.0);
     }
     harness.event(egui::Event::PointerMoved(pointer));
     shot(&mut harness, dir, "remote-ds.png")?;
     if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
-        view.options.show_ds_screen = false;
+        view.options.ds_screens = bigstar_ui_egui::DsScreens::Off;
         view.selection.clear();
     }
     // The Filesystem dock, with an archive opened.

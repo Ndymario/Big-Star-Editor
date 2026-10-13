@@ -354,7 +354,7 @@ fn spawn_note(view: &LevelView, entrance: &NsmbLevelEntrance) -> String {
             None => note.push_str(&format!(" The view shows no {}.", layer.name())),
         }
     }
-    note.push_str(" Turn on DS Screen to see it.");
+    note.push_str(" The toolbar's DS menu draws it.");
     if !matches!(entrance.camera_zoom, 0 | 16 | 255) {
         note.push_str(" This entrance changes the zoom, which the prediction leaves out.");
     }

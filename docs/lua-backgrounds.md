@@ -224,14 +224,23 @@ so both offsets can be changed there. Views naming the same settings share
 them; a view naming settings that do not exist reads the level's first, as the
 game does, and gets its own the first time one is changed.
 
-**DS Screen** in the canvas toolbar shows all of this. A hollow 256 by 192
-rectangle follows the pointer, and inside it both layers are drawn as the game
-scrolls them with its camera there, in the view the pointer is over. Select
-one entrance and its view is used instead, and a second, dashed rectangle
-marks the screen the game opens on when the player comes in through it;
-dragging the entrance moves the prediction with it. Each rectangle is labelled
-with its corner and each layer's scroll, and the entrance's View ID row in
-the properties panel says the same in words.
+The **DS** menu in the canvas toolbar shows all of this, and chooses what is
+drawn:
+
+| Choice | Draws |
+| --- | --- |
+| No DS screen | nothing |
+| DS screen under the cursor | a hollow 256 by 192 rectangle that follows the pointer |
+| DS screen of selected entrances | a dashed one where each selected entrance opens the camera |
+| Both | both |
+
+Inside a rectangle both layers are drawn as the game scrolls them with its
+camera there. The pointer's goes by the view the pointer is over; with both
+shown and one entrance selected it goes by that entrance's view instead, so
+the parallax can be tried from where the entrance opens. Dragging an entrance
+moves its prediction with it. Each rectangle is labelled with its corner and
+each layer's scroll, and an entrance's View ID row in the properties panel
+says the same in words.
 
 The prediction leaves out the zoom an entrance can set, and assumes the
 camera was not already framing the player: arriving through a warp inside one

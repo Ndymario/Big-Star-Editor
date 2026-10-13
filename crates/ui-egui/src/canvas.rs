@@ -15,7 +15,7 @@ use egui::{
 
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
-use crate::level_view::{Backgrounds, Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
+use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
 /// The textures the host has sent, uploaded the first time something draws them.
@@ -268,7 +268,18 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         }
         controls::toggle(ui, &mut options.show_grid, "Grid");
         controls::toggle(ui, &mut options.show_minimap, "Minimap");
-        controls::toggle(ui, &mut options.show_ds_screen, "DS Screen");
+        ui.menu_button(options.ds_screens.short(), |ui| {
+            for choice in DsScreens::ALL {
+                if Button::menu(choice.name()).selected(options.ds_screens == choice).show(ui).clicked() {
+                    options.ds_screens = choice;
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text(
+            "The DS screen: a 256 by 192 rectangle with the backgrounds inside it scrolled as the game scrolls them. Under the cursor, where each selected entrance opens the camera, or both",
+        );
         // Named in short on the toolbar, which has no room to spare, and in full in the menu.
         ui.menu_button(options.backgrounds.short(), |ui| {
             for choice in Backgrounds::ALL {

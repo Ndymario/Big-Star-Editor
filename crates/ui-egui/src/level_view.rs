@@ -200,10 +200,44 @@ pub struct CanvasOptions {
     pub snap_size: f32,
     pub show_minimap: bool,
     pub show_grid: bool,
-    pub show_ds_screen: bool,
+    pub ds_screens: DsScreens,
     pub backgrounds: Backgrounds,
     /// Whether the layers move as the game moves them: their clouds drifting, their lava and torches turning over.
     pub animate_backgrounds: bool,
+}
+
+/// Which DS screens the canvas draws: 256 by 192 rectangles showing what the game would with its camera there.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DsScreens {
+    #[default]
+    Off,
+    /// One under the pointer.
+    Cursor,
+    /// One where each selected entrance opens the camera.
+    Entrances,
+    Both,
+}
+
+impl DsScreens {
+    pub const ALL: [Self; 4] = [Self::Off, Self::Cursor, Self::Entrances, Self::Both];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "No DS screen",
+            Self::Cursor => "DS screen under the cursor",
+            Self::Entrances => "DS screen of selected entrances",
+            Self::Both => "Both",
+        }
+    }
+
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Off => "DS off",
+            Self::Cursor => "DS at cursor",
+            Self::Entrances => "DS at entrances",
+            Self::Both => "DS both",
+        }
+    }
 }
 
 /// Where the canvas draws a level's background and foreground layers.
@@ -244,7 +278,7 @@ impl Default for CanvasOptions {
             snap_size: TILE,
             show_minimap: true,
             show_grid: true,
-            show_ds_screen: false,
+            ds_screens: DsScreens::Off,
             backgrounds: Backgrounds::default(),
             animate_backgrounds: true,
         }
@@ -712,17 +746,16 @@ impl LevelView {
         self.selection.iter().any(|s| s.kind == kind && s.index == index && (node.is_none() || s.node.is_none() || s.node == node))
     }
 
-    /// The entrance the DS screen goes by: the only thing selected, where a drag in progress has it.
-    fn screen_entrance(&self) -> Option<NsmbLevelEntrance> {
-        let [item] = self.selection.as_slice() else { return None };
-        if item.kind != Kind::Entrance {
-            return None;
-        }
-        let mut entrance = self.snapshot.course.entrances.get(item.index)?.clone();
-        let at = self.preview(Kind::Entrance, item.index, entrance_rect(&entrance)).min;
-        entrance.x = at.x.round().clamp(0.0, 65535.0) as u16;
-        entrance.y = at.y.round().clamp(0.0, 65535.0) as u16;
-        Some(entrance)
+    /// The selected entrances, each where a drag in progress has it.
+    fn screen_entrances(&self) -> Vec<NsmbLevelEntrance> {
+        let place = |item: &Item| {
+            let mut entrance = self.snapshot.course.entrances.get(item.index)?.clone();
+            let at = self.preview(Kind::Entrance, item.index, entrance_rect(&entrance)).min;
+            entrance.x = at.x.round().clamp(0.0, 65535.0) as u16;
+            entrance.y = at.y.round().clamp(0.0, 65535.0) as u16;
+            Some(entrance)
+        };
+        self.selection.iter().filter(|item| item.kind == Kind::Entrance).filter_map(place).collect()
     }
 
     /// The screen the game opens on when the player comes in through `entrance`: the entrance's type and alignment
@@ -746,24 +779,24 @@ impl LevelView {
         DsScreen { rect: Rect::from_min_size(Pos2::new(corner.0 as f32, corner.1 as f32), size), view: entered, spawn: true }
     }
 
-    /// What the DS screen overlay shows. A screen follows the pointer, centred on it, scrolled by the view the pointer
-    /// is in. With one entrance selected the view is that entrance's instead, wherever the pointer goes, and a second
-    /// screen stands where the game puts the camera when the player comes in through it.
+    /// What the DS screen overlay shows, as the toolbar chooses. A screen follows the pointer, centred on it, scrolled
+    /// by the view the pointer is in; and one stands where the game puts the camera when the player comes in through
+    /// each selected entrance. With both shown and one entrance selected, the pointer's screen is scrolled by that
+    /// entrance's view instead, so its parallax can be tried from where it opens.
     pub fn ds_screens(&self) -> Vec<DsScreen> {
+        let mode = self.options.ds_screens;
         let mut screens = Vec::new();
-        if !self.options.show_ds_screen {
-            return screens;
+        if matches!(mode, DsScreens::Entrances | DsScreens::Both) {
+            screens.extend(self.screen_entrances().iter().map(|entrance| self.spawn_screen(entrance)));
         }
-        let course = &self.snapshot.course;
-        let size = Vec2::new(DS_SCREEN_WIDTH as f32, DS_SCREEN_HEIGHT as f32);
-        let entrance = self.screen_entrance();
-        let spawn = entrance.as_ref().map(|entrance| self.spawn_screen(entrance));
-        let entered = spawn.and_then(|screen| screen.view);
-        screens.extend(spawn);
-        if let Some(hover) = self.hover {
+        if let (DsScreens::Cursor | DsScreens::Both, Some(hover)) = (mode, self.hover) {
+            let size = Vec2::new(DS_SCREEN_WIDTH as f32, DS_SCREEN_HEIGHT as f32);
             let corner = Pos2::new((hover.x - size.x / 2.0).round(), (hover.y - size.y / 2.0).round());
-            let under = course.views.iter().position(|view| view_rect(view).contains(hover));
-            screens.push(DsScreen { rect: Rect::from_min_size(corner, size), view: if entrance.is_some() { entered } else { under }, spawn: false });
+            let view = match screens.as_slice() {
+                [only] => only.view,
+                _ => self.snapshot.course.views.iter().position(|view| view_rect(view).contains(hover)),
+            };
+            screens.push(DsScreen { rect: Rect::from_min_size(corner, size), view, spawn: false });
         }
         screens
     }
@@ -1601,7 +1634,7 @@ mod tests {
         assert!(view.ds_screens().is_empty());
 
         // Under the pointer, centred, scrolled by the view the pointer is in.
-        view.options.show_ds_screen = true;
+        view.options.ds_screens = DsScreens::Both;
         let screens = view.ds_screens();
         assert_eq!(screens, [DsScreen { rect: rect(372.0, 1104.0, 256.0, 192.0), view: Some(1), spawn: false }]);
         assert_eq!(view.screen_layer(&screens[0], BackgroundLayer::Background).map(|scroll| (scroll.screen_id, scroll.x >> 12)), Some((9, 372)));
@@ -1629,6 +1662,17 @@ mod tests {
         view.gesture = Some(Gesture::Move { delta: Vec2::new(64.0, 0.0), submitted: false });
         assert_eq!(view.ds_screens()[0].rect.left(), 264.0);
         view.gesture = None;
+
+        // The toolbar chooses which of the two are drawn. Alone, the pointer's screen goes by the view it is over.
+        view.options.ds_screens = DsScreens::Entrances;
+        assert_eq!(view.ds_screens().iter().map(|screen| screen.spawn).collect::<Vec<_>>(), [true]);
+        view.options.ds_screens = DsScreens::Cursor;
+        assert_eq!(view.ds_screens().iter().map(|screen| (screen.spawn, screen.view)).collect::<Vec<_>>(), [(false, None)]);
+        // Every selected entrance gets its screen.
+        view.options.ds_screens = DsScreens::Entrances;
+        view.selection = vec![Item::new(Kind::Entrance, 0), Item::new(Kind::Object, 0), Item::new(Kind::Entrance, 1)];
+        assert_eq!(view.ds_screens().len(), 2);
+        view.options.ds_screens = DsScreens::Both;
 
         // An entrance whose view does not exist still shows where the player would be framed, with nothing scrolled.
         view.selection = vec![Item::new(Kind::Entrance, 1)];
