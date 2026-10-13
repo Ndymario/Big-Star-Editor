@@ -28,12 +28,40 @@ pub trait Services {
     fn default_host(&self) -> String {
         "ws://127.0.0.1:7878".to_owned()
     }
+
+    /// Asks the person where to save `bytes` (a file named like `suggested`, of type `extension`) and writes them.
+    /// `Ok(false)` when they cancelled.
+    fn save_file(&self, _title: &str, _suggested: &str, _extension: &str, _bytes: &[u8]) -> Result<bool, String> {
+        Err("this build cannot save files".to_owned())
+    }
+
+    /// Asks the person for a file of type `extension` and reads it. `None` when they cancelled.
+    fn open_file(&self, _title: &str, _extension: &str) -> Option<Result<Vec<u8>, String>> {
+        None
+    }
 }
 
-/// Keeps values in memory; for tests and screenshots.
+/// Files a test hands the frontend, and the ones it saved.
+#[derive(Debug, Default)]
+pub struct FileShelf {
+    /// What the next "open" dialogs return, first first.
+    pub to_open: std::collections::VecDeque<Vec<u8>>,
+    /// Every file saved, by suggested name.
+    pub saved: Vec<(String, Vec<u8>)>,
+}
+
+/// Keeps values and files in memory; for tests and screenshots.
 #[derive(Default)]
 pub struct MemoryServices {
-    values: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+    values: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
+    pub shelf: std::sync::Arc<std::sync::Mutex<FileShelf>>,
+}
+
+impl MemoryServices {
+    /// Services sharing this one's stored values, as a later run of the program would find them.
+    pub fn sharing_values(&self) -> Self {
+        Self { values: self.values.clone(), shelf: std::sync::Arc::default() }
+    }
 }
 
 impl Services for MemoryServices {
@@ -45,5 +73,15 @@ impl Services for MemoryServices {
         if let Ok(mut values) = self.values.lock() {
             values.insert(key.to_owned(), value.to_owned());
         }
+    }
+
+    fn save_file(&self, _title: &str, suggested: &str, _extension: &str, bytes: &[u8]) -> Result<bool, String> {
+        let mut shelf = self.shelf.lock().map_err(|_| "the shelf is poisoned".to_owned())?;
+        shelf.saved.push((suggested.to_owned(), bytes.to_vec()));
+        Ok(true)
+    }
+
+    fn open_file(&self, _title: &str, _extension: &str) -> Option<Result<Vec<u8>, String>> {
+        self.shelf.lock().ok()?.to_open.pop_front().map(Ok)
     }
 }

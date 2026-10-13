@@ -863,3 +863,36 @@ fn minimap(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: F
     mini_painter.rect(on_screen, 0.0, with_alpha(colors.highlight, 25), Stroke::new(2.0, colors.highlight), StrokeKind::Middle);
     painter.rect_stroke(mini, 0.0, Stroke::new(2.0, colors.outline), StrokeKind::Middle);
 }
+
+/// The Preview tab: the whole level fitted into the space, read-only, with what it is and what it holds above it. It
+/// never moves the level's own camera, which a document of the same level may be using.
+pub fn show_preview(ui: &mut Ui, view: &mut LevelView, store: &HashMap<TextureId, Arc<TextureData>>, pool: &mut TexturePool) {
+    let snapshot = &view.snapshot;
+    let course = &snapshot.course;
+    ui.heading(&snapshot.title);
+    ui.weak(&snapshot.area);
+    ui.label(format!(
+        "Objects {}   Sprites {}   Entrances {}   Views {}   Zones {}",
+        snapshot.objects.len(),
+        course.sprites.len(),
+        course.entrances.len(),
+        course.views.len(),
+        course.zones.len()
+    ));
+    let r = snapshot.tileset_references;
+    ui.label(format!(
+        "Tileset {}   BG graphics {}   BG screen {}   FG graphics {}   FG screen {}",
+        r.tileset_id, r.background_graphics_id, r.background_screen_id, r.foreground_graphics_id, r.foreground_screen_id
+    ));
+    let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    if rect.width() < 20.0 || rect.height() < 20.0 {
+        return;
+    }
+    let colors = Colors::of(ui.visuals());
+    let painter = ui.painter_at(rect);
+    painter.rect(rect, 0.0, colors.surface, Stroke::new(1.0, colors.frame), StrokeKind::Inside);
+    let frame = Frame::fitted(rect, view.scene_bounds());
+    let tilemap = view.tilemap();
+    let mut art = Art { ctx: ui.ctx(), store, pool };
+    draw_map(&painter, view, &tilemap, frame, &mut art, &colors, false);
+}

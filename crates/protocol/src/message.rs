@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 pub type RequestId = u64;
 
@@ -102,6 +102,21 @@ pub enum Request {
     },
     /// What the open project's modules declare and which overlay each object bank loads.
     ProjectData,
+    /// The open level serialized as it would be saved, for the hex editor and `.nml` export.
+    LevelBytes {
+        level: LevelId,
+    },
+    /// Every placement of object `id` (or, with `sprites`, sprite type `id`) in every level the project holds.
+    FindEntities {
+        sprites: bool,
+        id: u16,
+    },
+    /// The levels an interrupted session left autosaved and unsaved.
+    Recovery,
+    /// Applies (`accept`) or throws away the autosaved levels. Applied ones become dirty level sessions.
+    Recover {
+        accept: bool,
+    },
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
@@ -137,6 +152,14 @@ pub enum LevelEdit {
         glue: GlueBlock,
         name: String,
     },
+    /// Replaces the whole level with these serialized files, as one undo step: the hex editor and `.nml` import.
+    ReplaceSerialized {
+        #[serde(with = "serde_bytes")]
+        course: Vec<u8>,
+        #[serde(with = "serde_bytes")]
+        bgdat: Vec<u8>,
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -146,14 +169,53 @@ pub enum Response {
     Project(ProjectInfo),
     Levels(Vec<LevelWorld>),
     Level(Box<LevelSnapshot>),
-    Edited { snapshot: Box<LevelSnapshot>, outcome: EditOutcome },
+    Edited {
+        snapshot: Box<LevelSnapshot>,
+        outcome: EditOutcome,
+    },
     Textures(Vec<TextureData>),
     LevelGraphics(Box<LevelGraphics>),
     ActorCatalog(Box<ActorCatalog>),
-    ActorDraws { generation: u64, draws: Vec<ActorDraw> },
+    ActorDraws {
+        generation: u64,
+        draws: Vec<ActorDraw>,
+    },
     Settings(ProjectSettings),
     ProjectData(Box<ProjectData>),
+    LevelBytes(Box<LevelBytes>),
+    Found(Vec<FoundEntity>),
+    Recovery(Vec<RecoverableLevel>),
+    /// The areas whose autosaves were applied; open them to see the recovered edits.
+    Recovered(Vec<String>),
     Done,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelBytes {
+    #[serde(with = "serde_bytes")]
+    pub course: Vec<u8>,
+    #[serde(with = "serde_bytes")]
+    pub bgdat: Vec<u8>,
+    /// The ROM file ids of the two files, which an `.nml` records; `None` for a file inside an archive.
+    pub course_file_id: Option<u16>,
+    pub bgdat_file_id: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FoundEntity {
+    pub area: String,
+    pub title: String,
+    pub index: usize,
+    pub x: i32,
+    pub y: i32,
+    /// A sprite's settings word.
+    pub settings: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RecoverableLevel {
+    pub area: String,
+    pub title: String,
 }
 
 /// Which code overlay object bank `bank` (1-10) of tileset slot `slot` loads: `table[slot][bank - 1]`.

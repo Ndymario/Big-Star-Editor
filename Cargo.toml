@@ -32,6 +32,7 @@ getrandom = "0.3"
 egui = "0.36"
 eframe = { version = "0.36", default-features = false }
 egui_kittest = "0.36"
+egui_dock = "0.21"
 rfd = "0.17"
 image = { version = "0.25", default-features = false, features = ["png"] }
 serde_json = { version = "1", features = ["preserve_order"] }

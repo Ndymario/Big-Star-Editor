@@ -1,14 +1,14 @@
 //! One connection to a host and everything the frontend has learned from it. Pure state: no drawing, so the
 //! request/response bookkeeping can be tested without a window.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings,
-    ProjectSummary, Request, RequestId, Response, ResponseResult, TextureData, TextureId,
+    ActorCatalog, DirectoryListing, Event, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectData,
+    ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TextureId,
 };
 
 use crate::level_view::{ActorIndex, ActorKey, LevelView};
@@ -21,23 +21,55 @@ enum Pending {
     OpenProject,
     ImportRom,
     ListLevels,
-    OpenLevel,
-    Edit,
-    History,
-    Save,
+    OpenLevel(Opening),
+    Edit(LevelId),
+    History(LevelId),
+    Save(LevelId),
     CloseLevel,
     CloseProject,
     Textures,
     LevelGraphics(LevelId),
     ActorCatalog,
-    ActorDraws(Vec<ActorKey>),
+    ActorDraws(LevelId, Vec<ActorKey>),
     ProjectData,
+    LevelBytes(LevelId, BytesFor),
+    Find { sprites: bool, id: u16 },
+    Recovery,
+    Recover,
+}
+
+/// Why a level is being opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Opening {
+    /// As a document of its own.
+    Document,
+    /// In the reusable Preview tab, read-only.
+    Preview,
+    /// Fetched again because the host's copy is the truth.
+    Refresh,
+    /// Fetched again after the host dropped the session (a variant switch); the answer takes over this view.
+    Reopen(LevelId),
+}
+
+/// What a level's serialized bytes were asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BytesFor {
+    HexEditor,
+    Export,
+}
+
+/// What a finder found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Found {
+    pub sprites: bool,
+    pub id: u16,
+    pub entities: Vec<FoundEntity>,
 }
 
 impl Pending {
     /// Graphics are not the person's request: when one fails it is logged, not put in front of them.
     fn graphics(&self) -> bool {
-        matches!(self, Pending::Textures | Pending::LevelGraphics(_) | Pending::ActorCatalog | Pending::ActorDraws(_) | Pending::ProjectData)
+        matches!(self, Pending::Textures | Pending::LevelGraphics(_) | Pending::ActorCatalog | Pending::ActorDraws(..) | Pending::ProjectData)
     }
 }
 
@@ -71,7 +103,18 @@ pub struct Session {
     pub projects: Vec<ProjectSummary>,
     pub project: Option<ProjectInfo>,
     pub worlds: Vec<LevelWorld>,
-    pub level: Option<LevelView>,
+    /// Every level open on the host for this frontend, documents and preview alike.
+    pub levels: BTreeMap<LevelId, LevelView>,
+    /// The document the panels, the menus and the shortcuts act on.
+    pub active: Option<LevelId>,
+    opened: Vec<(LevelId, Opening)>,
+    renamed: Vec<(LevelId, LevelId)>,
+    recovered: Vec<String>,
+    /// Bytes asked for by the hex editor or an export, until they are taken.
+    pub level_bytes: Option<(LevelId, BytesFor, LevelBytes)>,
+    pub found: Option<Found>,
+    /// Levels an interrupted session left autosaved, waiting for the person to say whether to recover them.
+    pub recovery_offer: Option<Vec<RecoverableLevel>>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -103,7 +146,14 @@ impl Session {
             projects: Vec::new(),
             project: None,
             worlds: Vec::new(),
-            level: None,
+            levels: BTreeMap::new(),
+            active: None,
+            opened: Vec::new(),
+            renamed: Vec::new(),
+            recovered: Vec::new(),
+            level_bytes: None,
+            found: None,
+            recovery_offer: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -128,7 +178,31 @@ impl Session {
 
     /// An edit, history step or save is waiting for its answer; the canvas takes no new input meanwhile.
     pub fn busy(&self) -> bool {
-        self.pending.values().any(|kind| matches!(kind, Pending::Edit | Pending::History | Pending::Save | Pending::OpenLevel))
+        self.pending.values().any(|kind| matches!(kind, Pending::Edit(_) | Pending::History(_) | Pending::Save(_)))
+    }
+
+    /// The active document.
+    pub fn level(&self) -> Option<&LevelView> {
+        self.levels.get(&self.active?)
+    }
+
+    pub fn level_mut(&mut self) -> Option<&mut LevelView> {
+        self.levels.get_mut(&self.active?)
+    }
+
+    /// Levels that arrived since last asked, and why they were opened.
+    pub fn take_opened(&mut self) -> Vec<(LevelId, Opening)> {
+        std::mem::take(&mut self.opened)
+    }
+
+    /// Views the host gave a new id (old, new), since last asked.
+    pub fn take_renamed(&mut self) -> Vec<(LevelId, LevelId)> {
+        std::mem::take(&mut self.renamed)
+    }
+
+    /// Areas whose autosaves were just recovered, to open as documents.
+    pub fn take_recovered(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.recovered)
     }
 
     fn request(&mut self, request: Request, kind: Pending) {
@@ -159,14 +233,27 @@ impl Session {
         self.request(Request::CloseProject, Pending::CloseProject);
     }
 
+    /// Opens an area as a document, or brings it forward if it is open.
     pub fn open_level(&mut self, area: &str) {
-        self.request(Request::OpenLevel { area: area.to_owned() }, Pending::OpenLevel);
+        self.request(Request::OpenLevel { area: area.to_owned() }, Pending::OpenLevel(Opening::Document));
     }
 
+    /// Shows an area in the Preview tab.
+    pub fn preview_level(&mut self, area: &str) {
+        self.request(Request::OpenLevel { area: area.to_owned() }, Pending::OpenLevel(Opening::Preview));
+    }
+
+    /// An edit of the active document.
     pub fn edit(&mut self, edit: LevelEdit) {
-        if let Some(view) = &self.level {
-            let request = Request::EditLevel { level: view.snapshot.level, base_revision: view.snapshot.revision, edit };
-            self.request(request, Pending::Edit);
+        if let Some(level) = self.active {
+            self.edit_level(level, edit);
+        }
+    }
+
+    pub fn edit_level(&mut self, level: LevelId, edit: LevelEdit) {
+        if let Some(view) = self.levels.get(&level) {
+            let request = Request::EditLevel { level, base_revision: view.snapshot.revision, edit };
+            self.request(request, Pending::Edit(level));
         }
     }
 
@@ -180,29 +267,62 @@ impl Session {
     }
 
     pub fn undo(&mut self) {
-        if let Some(level) = self.level.as_ref().filter(|v| v.snapshot.can_undo).map(|v| v.snapshot.level) {
-            self.request(Request::UndoLevel { level }, Pending::History);
+        if let Some(level) = self.level().filter(|v| v.snapshot.can_undo).map(|v| v.snapshot.level) {
+            self.request(Request::UndoLevel { level }, Pending::History(level));
         }
     }
 
     pub fn redo(&mut self) {
-        if let Some(level) = self.level.as_ref().filter(|v| v.snapshot.can_redo).map(|v| v.snapshot.level) {
-            self.request(Request::RedoLevel { level }, Pending::History);
+        if let Some(level) = self.level().filter(|v| v.snapshot.can_redo).map(|v| v.snapshot.level) {
+            self.request(Request::RedoLevel { level }, Pending::History(level));
         }
     }
 
     pub fn save(&mut self) {
-        if let Some(level) = self.level.as_ref().map(|v| v.snapshot.level) {
-            self.request(Request::SaveLevel { level }, Pending::Save);
+        if let Some(level) = self.active {
+            self.save_level(level);
         }
     }
 
-    /// Leaves the level. The host keeps the session (and its unsaved edits) only until this arrives, so a dirty level
-    /// is closed only on the person's say-so; the caller asks first.
-    pub fn close_level(&mut self) {
-        if let Some(view) = self.level.take() {
-            self.request(Request::CloseLevel { level: view.snapshot.level }, Pending::CloseLevel);
+    pub fn save_level(&mut self, level: LevelId) {
+        if self.levels.contains_key(&level) {
+            self.request(Request::SaveLevel { level }, Pending::Save(level));
         }
+    }
+
+    /// Leaves a level. The host keeps the session (and its unsaved edits) only until this arrives, so a dirty level
+    /// is closed only on the person's say-so; the caller asks first.
+    pub fn close_level(&mut self, level: LevelId) {
+        if self.levels.remove(&level).is_some() {
+            self.request(Request::CloseLevel { level }, Pending::CloseLevel);
+        }
+        if self.active == Some(level) {
+            self.active = None;
+        }
+    }
+
+    /// The active document serialized, for the hex editor or an export.
+    pub fn request_level_bytes(&mut self, purpose: BytesFor) {
+        if let Some(level) = self.active {
+            self.request(Request::LevelBytes { level }, Pending::LevelBytes(level, purpose));
+        }
+    }
+
+    /// Looks for every placement of an object (or sprite type) in the project.
+    pub fn find(&mut self, sprites: bool, id: u16) {
+        self.found = None;
+        self.request(Request::FindEntities { sprites, id }, Pending::Find { sprites, id });
+    }
+
+    /// The person's answer to the recovery offer.
+    pub fn answer_recovery(&mut self, accept: bool) {
+        self.recovery_offer = None;
+        self.request(Request::Recover { accept }, Pending::Recover);
+    }
+
+    /// Whether any open level has edits that were not saved.
+    pub fn dirty(&self) -> bool {
+        self.levels.values().any(|view| view.snapshot.dirty)
     }
 
     /// Tells the person something went wrong.
@@ -259,7 +379,9 @@ impl Session {
             Err(error) if kind.graphics() => {
                 self.log_line(LogLevel::Warning, format!("Graphics: {}", error.message));
                 // Sprites whose draw lists will not come are drawn as markers rather than left blank.
-                if let (Pending::ActorDraws(keys), Some(view)) = (kind, &mut self.level) {
+                if let Pending::ActorDraws(level, keys) = kind
+                    && let Some(view) = self.levels.get_mut(&level)
+                {
                     for key in keys {
                         view.art.requested.remove(&key);
                         view.art.draws.insert(key, Default::default());
@@ -271,11 +393,11 @@ impl Session {
                 self.history_steps = None;
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
-                if matches!(kind, Pending::Edit | Pending::History | Pending::Save) {
-                    self.refresh_level();
-                }
-                if let Some(view) = &mut self.level {
-                    view.settled();
+                if let Pending::Edit(level) | Pending::History(level) | Pending::Save(level) = kind {
+                    self.refresh_level(level);
+                    if let Some(view) = self.levels.get_mut(&level) {
+                        view.settled();
+                    }
                 }
                 return;
             }
@@ -293,12 +415,11 @@ impl Session {
                 if self.project.is_some() {
                     self.own_closes += 1;
                 }
-                self.worlds.clear();
-                self.level = None;
-                self.forget_project_graphics();
+                self.forget_project();
                 self.project = Some(info);
                 self.request(Request::ListLevels, Pending::ListLevels);
                 self.request(Request::ProjectData, Pending::ProjectData);
+                self.request(Request::Recovery, Pending::Recovery);
             }
             (Pending::ImportRom, Response::Project(info)) => {
                 self.browser = None;
@@ -306,13 +427,14 @@ impl Session {
                 self.list_projects();
             }
             (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
-            (Pending::OpenLevel, Response::Level(snapshot)) => self.take_snapshot(*snapshot),
-            (pending @ (Pending::Edit | Pending::History | Pending::Save), Response::Edited { snapshot, outcome }) => {
-                let owed = self.level.as_mut().and_then(|view| view.edited(*snapshot, &outcome));
+            (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
+            (pending @ (Pending::Edit(_) | Pending::History(_) | Pending::Save(_)), Response::Edited { snapshot, outcome }) => {
+                let level = snapshot.level;
+                let owed = self.levels.get_mut(&level).and_then(|view| view.edited(*snapshot, &outcome));
                 if let Some(edit) = owed {
-                    self.edit(edit);
+                    self.edit_level(level, edit);
                 }
-                if pending == Pending::History
+                if matches!(pending, Pending::History(_))
                     && let Some((undo, left)) = self.history_steps.take()
                     && left > 0
                 {
@@ -325,11 +447,13 @@ impl Session {
             (Pending::CloseProject, Response::Done) => {
                 self.own_closes += 1;
                 self.project = None;
-                self.forget_project_graphics();
-                self.worlds.clear();
-                self.level = None;
+                self.forget_project();
                 self.list_projects();
             }
+            (Pending::LevelBytes(level, purpose), Response::LevelBytes(bytes)) => self.level_bytes = Some((level, purpose, *bytes)),
+            (Pending::Find { sprites, id }, Response::Found(entities)) => self.found = Some(Found { sprites, id, entities }),
+            (Pending::Recovery, Response::Recovery(levels)) => self.recovery_offer = (!levels.is_empty()).then_some(levels),
+            (Pending::Recover, Response::Recovered(areas)) => self.recovered.extend(areas),
             (Pending::CloseLevel, Response::Done) => {}
             (Pending::Textures, Response::Textures(textures)) => {
                 for texture in textures {
@@ -353,7 +477,7 @@ impl Session {
                 for warning in warnings {
                     self.log_line(LogLevel::Warning, warning);
                 }
-                let Some(view) = self.level.as_mut().filter(|v| v.snapshot.level == level) else { return };
+                let Some(view) = self.levels.get_mut(&level) else { return };
                 view.art.set_graphics(*graphics);
                 let ids = view.art.texture_ids();
                 self.request_textures(ids);
@@ -365,12 +489,12 @@ impl Session {
                 }
                 let catalog = Arc::new(*catalog);
                 self.catalog = Some(catalog.clone());
-                if let Some(view) = &mut self.level {
-                    view.art.actors = ActorIndex::new(catalog);
+                for view in self.levels.values_mut() {
+                    view.art.actors = ActorIndex::new(catalog.clone());
                 }
             }
-            (Pending::ActorDraws(keys), Response::ActorDraws { generation, draws }) => {
-                let Some(view) = &mut self.level else { return };
+            (Pending::ActorDraws(level, keys), Response::ActorDraws { generation, draws }) => {
+                let Some(view) = self.levels.get_mut(&level) else { return };
                 for key in &keys {
                     view.art.requested.remove(key);
                 }
@@ -386,21 +510,50 @@ impl Session {
         }
     }
 
-    fn take_snapshot(&mut self, snapshot: LevelSnapshot) {
-        match &mut self.level {
-            Some(view) if view.snapshot.level == snapshot.level => view.replace(snapshot),
-            slot => {
-                let level = snapshot.level;
+    fn take_snapshot(&mut self, snapshot: LevelSnapshot, opening: Opening) {
+        let level = snapshot.level;
+        // A view the host gave a new id keeps its camera, its selection and what it has drawn.
+        if let Opening::Reopen(old) = opening
+            && old != level
+            && let Some(view) = self.levels.remove(&old)
+        {
+            self.levels.insert(level, view);
+            self.renamed.push((old, level));
+            if self.active == Some(old) {
+                self.active = Some(level);
+            }
+            self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
+        }
+        match self.levels.get_mut(&level) {
+            Some(view) => view.replace(snapshot),
+            None => {
                 let mut view = LevelView::new(snapshot);
                 if let Some(catalog) = &self.catalog {
                     view.art.actors = ActorIndex::new(catalog.clone());
                 }
-                *slot = Some(view);
+                self.levels.insert(level, view);
                 self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
                 self.request_catalog();
             }
         }
+        if opening == Opening::Document {
+            self.active = Some(level);
+        }
+        if matches!(opening, Opening::Document | Opening::Preview) {
+            self.opened.push((level, opening));
+        }
         self.request_actor_draws();
+    }
+
+    /// Everything that belonged to the project that just closed.
+    fn forget_project(&mut self) {
+        self.worlds.clear();
+        self.levels.clear();
+        self.active = None;
+        self.level_bytes = None;
+        self.found = None;
+        self.recovery_offer = None;
+        self.forget_project_graphics();
     }
 
     /// Another project's actors are not this one's.
@@ -419,11 +572,11 @@ impl Session {
 
     /// Asks for the draw lists of the sprites, and of anything else the view wants drawn, that have none yet.
     pub fn request_actor_draws(&mut self) {
-        let Some(view) = &mut self.level else { return };
-        let keys = view.take_missing_actor_keys();
-        if !keys.is_empty() {
+        let wanted: Vec<(LevelId, Vec<ActorKey>)> =
+            self.levels.iter_mut().map(|(&level, view)| (level, view.take_missing_actor_keys())).filter(|(_, keys)| !keys.is_empty()).collect();
+        for (level, keys) in wanted {
             let inputs = keys.iter().map(ActorKey::input).collect();
-            self.request(Request::RenderActors { inputs }, Pending::ActorDraws(keys));
+            self.request(Request::RenderActors { inputs }, Pending::ActorDraws(level, keys));
         }
     }
 
@@ -446,9 +599,9 @@ impl Session {
         }
     }
 
-    fn refresh_level(&mut self) {
-        if let Some(area) = self.level.as_ref().map(|v| v.snapshot.area.clone()) {
-            self.open_level(&area);
+    fn refresh_level(&mut self, level: LevelId) {
+        if let Some(area) = self.levels.get(&level).map(|v| v.snapshot.area.clone()) {
+            self.request(Request::OpenLevel { area }, Pending::OpenLevel(Opening::Refresh));
         }
     }
 
@@ -456,10 +609,9 @@ impl Session {
         match event {
             Event::Log { level, message } => self.log_line(level, message),
             Event::LevelChanged { level, revision, dirty } => {
-                let stale =
-                    self.level.as_ref().is_some_and(|v| v.snapshot.level == level && (v.snapshot.revision < revision || v.snapshot.dirty != dirty));
+                let stale = self.levels.get(&level).is_some_and(|v| v.snapshot.revision < revision || v.snapshot.dirty != dirty);
                 if stale && !self.busy() {
-                    self.refresh_level();
+                    self.refresh_level(level);
                 }
             }
             Event::FilesChanged { .. } => {}
@@ -468,25 +620,28 @@ impl Session {
                 self.graphics_generation = generation;
                 self.catalog_requested = false;
                 self.request_catalog();
-                if let Some(view) = &mut self.level {
-                    let level = view.snapshot.level;
-                    view.art.forget_draws();
+                let levels: Vec<LevelId> = self.levels.keys().copied().collect();
+                for level in levels {
+                    if let Some(view) = self.levels.get_mut(&level) {
+                        view.art.forget_draws();
+                    }
                     self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
-                    self.request_actor_draws();
                 }
+                self.request_actor_draws();
             }
             Event::GraphicsChanged { .. } => {}
-            // A variant switch closes every level session on the host, so the open level is fetched again.
+            // A variant switch closes every level session on the host, so each open level is opened again.
             Event::SettingsChanged(settings) => {
                 self.settings = Some(settings);
-                self.refresh_level();
+                let open: Vec<(LevelId, String)> = self.levels.iter().map(|(&level, view)| (level, view.snapshot.area.clone())).collect();
+                for (level, area) in open {
+                    self.request(Request::OpenLevel { area }, Pending::OpenLevel(Opening::Reopen(level)));
+                }
             }
             Event::ProjectClosed if self.own_closes > 0 => self.own_closes -= 1,
             Event::ProjectClosed => {
                 self.project = None;
-                self.forget_project_graphics();
-                self.worlds.clear();
-                self.level = None;
+                self.forget_project();
                 self.list_projects();
             }
         }

@@ -1,15 +1,18 @@
-//! The application: which screen is showing and what its buttons do.
+//! The application: which screen is showing and what its menus and buttons do. With a project open it is
+//! `MainWindow`: the level list and the picker on the left, the documents in the middle, the properties on the right.
 
 use std::sync::Arc;
 
 use bigstar_client::{Connection, ConnectionState, Waker, WebSocket, websocket_url};
-use bigstar_protocol::{DirectoryEntryKind, LogLevel};
-use egui::{Color32, Key, Modifiers, RichText, Ui};
+use bigstar_protocol::{DirectoryEntryKind, LevelId, LogLevel};
+use egui::{Color32, Key, Modifiers, RichText, Ui, ViewportCommand};
 
-use crate::canvas::{self, Art, TexturePool};
+use crate::canvas::{Art, TexturePool};
 use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
+use crate::tools::{self, Tools};
+use crate::workspace::Workspace;
 use crate::{level_data, properties_ui};
 
 /// Storage keys, so a shell can seed them.
@@ -48,9 +51,16 @@ mod tests {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Leave {
-    Level,
     Project,
     Host,
+}
+
+/// A question waiting for the person, about edits that would be lost.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Confirm {
+    Leave(Leave),
+    Close(LevelId),
+    Quit,
 }
 
 enum Action {
@@ -60,7 +70,6 @@ enum Action {
     Save,
     Leave(Leave),
     OpenProject(String),
-    OpenArea(String),
     Refresh,
     BeginImport,
     Browse(String),
@@ -69,19 +78,12 @@ enum Action {
     CancelImport,
 }
 
-pub struct BigStarApp {
-    services: Box<dyn Services>,
-    form: ConnectForm,
-    session: Option<Session>,
-    /// Waiting for the person to say whether unsaved edits may go.
-    confirm_leave: Option<Leave>,
-    show_log: bool,
-    actions: Vec<Action>,
-    textures: TexturePool,
-    pub(crate) picker: PickerState,
-    side: Side,
-    /// Level-data value cells being typed in.
-    data_drafts: level_data::Drafts,
+/// The left panel's tabs.
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum Left {
+    #[default]
+    Levels,
+    Palette,
 }
 
 /// The right-hand panel's two tabs.
@@ -90,6 +92,27 @@ enum Side {
     #[default]
     Properties,
     LevelData,
+}
+
+pub struct BigStarApp {
+    services: Box<dyn Services>,
+    form: ConnectForm,
+    pub(crate) session: Option<Session>,
+    /// What the workspace is remembered under: the host's address, or the embedded host's folder.
+    host_key: String,
+    confirm: Option<Confirm>,
+    /// The person said the window may close with unsaved edits.
+    allow_quit: bool,
+    show_log: bool,
+    actions: Vec<Action>,
+    textures: TexturePool,
+    pub(crate) picker: PickerState,
+    pub(crate) workspace: Workspace,
+    pub(crate) tools: Tools,
+    left: Left,
+    side: Side,
+    /// Level-data value cells being typed in.
+    data_drafts: level_data::Drafts,
 }
 
 fn waker(ctx: &egui::Context) -> Waker {
@@ -117,11 +140,16 @@ impl BigStarApp {
             services,
             form: ConnectForm::default(),
             session: None,
-            confirm_leave: None,
+            host_key: String::new(),
+            confirm: None,
+            allow_quit: false,
             show_log: false,
             actions: Vec::new(),
             textures: TexturePool::default(),
             picker: PickerState::default(),
+            workspace: Workspace::default(),
+            tools: Tools::default(),
+            left: Left::default(),
             side: Side::default(),
             data_drafts: level_data::Drafts::new(),
         }
@@ -130,6 +158,7 @@ impl BigStarApp {
     /// Starts on a connection that already exists (screenshots, tests).
     pub fn with_connection(services: Box<dyn Services>, conn: Box<dyn Connection>) -> Self {
         let mut app = Self::new(services);
+        app.host_key = "local".to_owned();
         app.session = Some(Session::new(conn));
         app
     }
@@ -167,6 +196,13 @@ impl BigStarApp {
         self.connect_remote(ctx);
     }
 
+    fn start(&mut self, conn: Box<dyn Connection>, host_key: String) {
+        self.form.error = None;
+        self.host_key = host_key;
+        self.workspace = Workspace::default();
+        self.session = Some(Session::new(conn));
+    }
+
     fn connect_remote(&mut self, ctx: &egui::Context) {
         let base = host_base(&self.form.host);
         if base.is_empty() {
@@ -175,8 +211,7 @@ impl BigStarApp {
         }
         self.remember_host(&base);
         let conn = WebSocket::connect(&websocket_url(&base, &self.form.token), &self.form.token, Some(waker(ctx)));
-        self.form.error = None;
-        self.session = Some(Session::new(Box::new(conn)));
+        self.start(Box::new(conn), base);
     }
 
     fn connect_embedded(&mut self, ctx: &egui::Context) {
@@ -188,14 +223,13 @@ impl BigStarApp {
         match self.services.connect_embedded(&root, waker(ctx)) {
             Ok(conn) => {
                 self.services.store(EMBEDDED_ROOT_KEY, &root);
-                self.form.error = None;
-                self.session = Some(Session::new(conn));
+                self.start(conn, format!("embedded:{root}"));
             }
             Err(message) => self.form.error = Some(message),
         }
     }
 
-    /// Per-frame work that is not drawing: take in what the host sent.
+    /// Per-frame work that is not drawing: take in what the host sent, and follow it.
     pub fn logic(&mut self, ctx: &egui::Context) {
         if let Some(session) = &mut self.session
             && session.poll()
@@ -205,6 +239,15 @@ impl BigStarApp {
         if let Some(reason) = self.session.as_ref().and_then(|s| s.ended.clone()) {
             self.form.error = Some(format!("Disconnected: {reason}"));
             self.session = None;
+        }
+        let Some(session) = &mut self.session else { return };
+        self.workspace.sync(session);
+        self.tools.take_bytes(session, &*self.services);
+        self.workspace.remember(session, &*self.services, &self.host_key);
+        if self.confirm.is_none()
+            && let Some(level) = self.workspace.asking_close.take()
+        {
+            self.confirm = Some(Confirm::Close(level));
         }
     }
 
@@ -216,40 +259,50 @@ impl BigStarApp {
             self.connect_screen(ui, &ctx);
             return;
         }
+        self.guard_quit(&ctx);
         self.shortcuts(&ctx);
         self.top_bar(ui);
         self.bottom_bar(ui);
-        self.side_panels(ui);
         // The canvas takes keys only when nothing else wants them: no text field, no question waiting.
-        let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm_leave.is_none();
+        let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm.is_none();
+        let project_open = self.session.as_ref().is_some_and(|s| s.connected() && s.project.is_some());
+        if project_open {
+            self.left_panel(ui);
+            self.right_panel(ui);
+        }
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
-            let busy = session.busy();
             if !session.connected() {
                 ui.vertical_centered(|ui| {
                     ui.add_space(80.0);
                     ui.spinner();
                     ui.label("Connecting…");
                 });
-            } else if let Some(view) = &mut session.level {
-                let out = canvas::show(ui, view, &session.textures, &mut self.textures, busy, keyboard);
-                for edit in out.edits {
-                    session.edit(edit);
-                }
-                if let Some(error) = out.error {
-                    session.report(error);
-                }
-                session.request_actor_draws();
             } else if session.project.is_some() {
-                self.levels_screen(ui);
+                self.workspace.show(ui, session, &mut self.textures, keyboard);
             } else {
                 self.workspace_screen(ui);
             }
         });
+        if let Some(session) = &mut self.session {
+            self.workspace.show_detached(&ctx, session, &mut self.textures, keyboard);
+            self.tools.show(&ctx, session, &mut self.workspace);
+            session.request_actor_draws();
+        }
         self.import_window(&ctx);
+        self.recovery_window(&ctx);
         self.confirm_window(&ctx);
         for action in std::mem::take(&mut self.actions) {
             self.apply(action);
+        }
+    }
+
+    /// Closing the window with unsaved edits asks first.
+    fn guard_quit(&mut self, ctx: &egui::Context) {
+        let dirty = self.session.as_ref().is_some_and(Session::dirty);
+        if dirty && !self.allow_quit && ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(ViewportCommand::CancelClose);
+            self.confirm = Some(Confirm::Quit);
         }
     }
 
@@ -316,8 +369,12 @@ impl BigStarApp {
     }
 
     fn top_bar(&mut self, ui: &mut Ui) {
+        let services = &*self.services;
+        let tools = &mut self.tools;
+        let workspace = &mut self.workspace;
+        let show_log = &mut self.show_log;
         egui::Panel::top("top").show(ui, |ui| {
-            let Some(session) = &self.session else { return };
+            let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
             ui.horizontal(|ui| {
                 match &session.state {
@@ -335,11 +392,18 @@ impl BigStarApp {
                     if let Some(title) = &project.game_title {
                         ui.weak(title);
                     }
-                }
-                if let Some(view) = &session.level {
                     ui.separator();
-                    let dirty = if view.snapshot.dirty { " •" } else { "" };
-                    ui.label(RichText::new(format!("{}{dirty}", view.snapshot.title)).strong());
+                    ui.menu_button("Level", |ui| tools::menu(ui, tools, session, services));
+                    ui.menu_button("View", |ui| {
+                        if ui.button("Preview").clicked() {
+                            workspace.show_preview_tab();
+                            ui.close();
+                        }
+                        if ui.selectable_label(*show_log, "Log").clicked() {
+                            *show_log = !*show_log;
+                            ui.close();
+                        }
+                    });
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Disconnect").clicked() {
@@ -348,14 +412,11 @@ impl BigStarApp {
                     if session.project.is_some() && ui.button("Close project").clicked() {
                         actions.push(Action::Leave(Leave::Project));
                     }
-                    if session.level.is_some() && ui.button("Levels").clicked() {
-                        actions.push(Action::Leave(Leave::Level));
-                    }
                 });
             });
-            if let Some(view) = &session.level {
+            let idle = !session.busy();
+            if let Some(view) = session.level() {
                 let snapshot = &view.snapshot;
-                let idle = !session.busy();
                 ui.horizontal(|ui| {
                     let undo = snapshot.undo_names.first().map_or("Undo".to_owned(), |n| format!("Undo {n}"));
                     let redo = snapshot.redo_names.first().map_or("Redo".to_owned(), |n| format!("Redo {n}"));
@@ -395,7 +456,8 @@ impl BigStarApp {
                     }
                     ui.separator();
                     ui.weak(format!(
-                        "{} objects · {} sprites · {} entrances · revision {}",
+                        "{} · {} objects · {} sprites · {} entrances · revision {}",
+                        snapshot.title,
                         snapshot.objects.len(),
                         snapshot.course.sprites.len(),
                         snapshot.course.entrances.len(),
@@ -407,54 +469,6 @@ impl BigStarApp {
                 });
             }
         });
-    }
-
-    /// The picker on the left and the properties on the right, while a level is open.
-    fn side_panels(&mut self, ui: &mut Ui) {
-        let Some(session) = &mut self.session else { return };
-        if session.level.is_none() || !session.connected() {
-            return;
-        }
-        let busy = session.busy();
-        let ctx = ui.ctx().clone();
-        let mut edit = None;
-        let mut error = None;
-        egui::Panel::left("picker").resizable(true).default_size(280.0).show(ui, |ui| {
-            let Some(view) = session.level.as_mut() else { return };
-            let mut art = Art { ctx: &ctx, store: &session.textures, pool: &mut self.textures };
-            let modules = session.project_data.as_ref().map(|d| &d.modules);
-            picker::show(ui, view, &mut self.picker, modules, &mut art);
-        });
-        egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
-            let Some(view) = session.level.as_mut() else { return };
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.side, Side::Properties, "Properties");
-                ui.selectable_value(&mut self.side, Side::LevelData, "Level Data");
-            });
-            ui.separator();
-            match self.side {
-                Side::Properties => {
-                    let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
-                    edit = properties_ui::show(ui, view, overlays, busy);
-                }
-                Side::LevelData => {
-                    let modules = session.project_data.as_ref().map(|d| &d.modules);
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        match level_data::show(ui, &view.snapshot, modules, &mut self.data_drafts, busy) {
-                            Some(level_data::Outcome::Edit(made)) => edit = Some(made),
-                            Some(level_data::Outcome::Error(message)) => error = Some(message),
-                            None => {}
-                        }
-                    });
-                }
-            }
-        });
-        if let Some(edit) = edit.filter(|_| !busy) {
-            session.edit(edit);
-        }
-        if let Some(error) = error {
-            session.report(error);
-        }
     }
 
     fn bottom_bar(&mut self, ui: &mut Ui) {
@@ -493,6 +507,71 @@ impl BigStarApp {
         });
     }
 
+    /// The level list and the picker.
+    fn left_panel(&mut self, ui: &mut Ui) {
+        let Some(session) = &mut self.session else { return };
+        let ctx = ui.ctx().clone();
+        egui::Panel::left("left").resizable(true).default_size(280.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.left, Left::Levels, "Levels");
+                ui.selectable_value(&mut self.left, Left::Palette, "Palette");
+            });
+            ui.separator();
+            match self.left {
+                Left::Levels => level_list(ui, session, self.workspace.preview),
+                Left::Palette => match session.active.and_then(|level| session.levels.get_mut(&level)) {
+                    Some(view) => {
+                        let mut art = Art { ctx: &ctx, store: &session.textures, pool: &mut self.textures };
+                        let modules = session.project_data.as_ref().map(|d| &d.modules);
+                        picker::show(ui, view, &mut self.picker, modules, &mut art);
+                    }
+                    None => {
+                        ui.weak("Open a level to pick from its tileset objects and actors.");
+                    }
+                },
+            }
+        });
+    }
+
+    /// The properties and level data of the active document.
+    fn right_panel(&mut self, ui: &mut Ui) {
+        let Some(session) = &mut self.session else { return };
+        let Some(level) = session.active else { return };
+        let busy = session.busy();
+        let mut edit = None;
+        let mut error = None;
+        egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
+            let Some(view) = session.levels.get_mut(&level) else { return };
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.side, Side::Properties, "Properties");
+                ui.selectable_value(&mut self.side, Side::LevelData, "Level Data");
+            });
+            ui.separator();
+            match self.side {
+                Side::Properties => {
+                    let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
+                    edit = properties_ui::show(ui, view, overlays, busy);
+                }
+                Side::LevelData => {
+                    let modules = session.project_data.as_ref().map(|d| &d.modules);
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                        match level_data::show(ui, &view.snapshot, modules, &mut self.data_drafts, busy) {
+                            Some(level_data::Outcome::Edit(made)) => edit = Some(made),
+                            Some(level_data::Outcome::Error(message)) => error = Some(message),
+                            None => {}
+                        }
+                    });
+                }
+            }
+        });
+        if let Some(edit) = edit.filter(|_| !busy) {
+            session.edit_level(level, edit);
+        }
+        if let Some(error) = error {
+            session.report(error);
+        }
+    }
+
     fn workspace_screen(&mut self, ui: &mut Ui) {
         let Some(session) = &self.session else { return };
         let actions = &mut self.actions;
@@ -516,40 +595,6 @@ impl BigStarApp {
                         actions.push(Action::OpenProject(project.path.clone()));
                     }
                     ui.weak(&project.path);
-                });
-            }
-        });
-    }
-
-    fn levels_screen(&mut self, ui: &mut Ui) {
-        let Some(session) = &self.session else { return };
-        let actions = &mut self.actions;
-        if let Some(project) = &session.project {
-            if project.rom_path.is_none() {
-                ui.colored_label(ERROR_COLOR, "This project has no ROM, so no level can be opened.");
-            }
-            ui.horizontal(|ui| {
-                ui.heading("Levels");
-                if let (Some(title), Some(code)) = (&project.game_title, &project.game_code) {
-                    ui.weak(format!("{title} ({code}) · {} files", project.file_count));
-                }
-            });
-        }
-        ui.separator();
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-            for world in &session.worlds {
-                egui::CollapsingHeader::new(RichText::new(&world.name).strong()).id_salt(&world.name).default_open(false).show(ui, |ui| {
-                    for level in &world.levels {
-                        ui.horizontal(|ui| {
-                            ui.label(&level.display_name);
-                            for area in &level.areas {
-                                let text = if level.areas.len() == 1 { "Open".to_owned() } else { area.display_name.clone() };
-                                if ui.add_enabled(area.available, egui::Button::new(text)).on_hover_text(&area.token).clicked() {
-                                    actions.push(Action::OpenArea(area.token.clone()));
-                                }
-                            }
-                        });
-                    }
                 });
             }
         });
@@ -614,13 +659,45 @@ impl BigStarApp {
         }
     }
 
+    /// The offer of what an interrupted session left autosaved.
+    fn recovery_window(&mut self, ctx: &egui::Context) {
+        let Some(session) = &mut self.session else { return };
+        let Some(levels) = &session.recovery_offer else { return };
+        let mut answer = None;
+        egui::Window::new("Recover Autosaved Levels").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
+            ctx,
+            |ui| {
+                ui.label(format!("Big Star found {} autosaved level(s) from an interrupted or unsaved session. Recover them?", levels.len()));
+                for level in levels {
+                    ui.weak(format!("• {}", level.title));
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("Recover").clicked() {
+                        answer = Some(true);
+                    }
+                    if ui.button("Discard").clicked() {
+                        answer = Some(false);
+                    }
+                });
+            },
+        );
+        if let Some(accept) = answer {
+            session.answer_recovery(accept);
+        }
+    }
+
     fn confirm_window(&mut self, ctx: &egui::Context) {
-        let Some(target) = self.confirm_leave else { return };
+        let Some(question) = self.confirm else { return };
+        let (text, leave) = match question {
+            Confirm::Close(_) => ("This level has changes that were not saved. Closing it drops them.", "Close without saving"),
+            Confirm::Quit => ("Some levels have changes that were not saved. Quitting drops them.", "Quit without saving"),
+            Confirm::Leave(_) => ("Some levels have changes that were not saved. Leaving drops them.", "Leave without saving"),
+        };
         let mut decision = None;
         egui::Window::new("Unsaved changes").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
-            ui.label("This level has changes that were not saved. Leaving drops them.");
+            ui.label(text);
             ui.horizontal(|ui| {
-                if ui.button("Leave without saving").clicked() {
+                if ui.button(leave).clicked() {
                     decision = Some(true);
                 }
                 if ui.button("Stay").clicked() {
@@ -630,19 +707,27 @@ impl BigStarApp {
         });
         match decision {
             Some(true) => {
-                self.confirm_leave = None;
-                self.leave(target);
+                self.confirm = None;
+                match question {
+                    Confirm::Leave(target) => self.leave(target),
+                    Confirm::Close(level) => {
+                        if let Some(session) = &mut self.session {
+                            self.workspace.discard_document(session, level);
+                        }
+                    }
+                    Confirm::Quit => {
+                        self.allow_quit = true;
+                        ctx.send_viewport_cmd(ViewportCommand::Close);
+                    }
+                }
             }
-            Some(false) => self.confirm_leave = None,
+            Some(false) => self.confirm = None,
             None => {}
         }
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.session.as_ref().is_none_or(|s| s.level.is_none()) {
-            return;
-        }
-        if self.confirm_leave.is_some() {
+        if self.session.as_ref().is_none_or(|s| s.active.is_none()) || self.confirm.is_some() {
             return;
         }
         // Redo first: Cmd+Shift+Z would otherwise also match Cmd+Z.
@@ -673,7 +758,6 @@ impl BigStarApp {
             Action::Save => session.save(),
             Action::Leave(target) => self.request_leave(target),
             Action::OpenProject(path) => session.open_project(&path),
-            Action::OpenArea(token) => session.open_level(&token),
             Action::Refresh => session.list_projects(),
             Action::BeginImport => session.browse(""),
             Action::Browse(path) => {
@@ -694,9 +778,8 @@ impl BigStarApp {
     }
 
     fn request_leave(&mut self, target: Leave) {
-        let dirty = self.session.as_ref().and_then(|s| s.level.as_ref()).is_some_and(|v| v.snapshot.dirty);
-        if dirty {
-            self.confirm_leave = Some(target);
+        if self.session.as_ref().is_some_and(Session::dirty) {
+            self.confirm = Some(Confirm::Leave(target));
         } else {
             self.leave(target);
         }
@@ -704,18 +787,63 @@ impl BigStarApp {
 
     fn leave(&mut self, target: Leave) {
         match target {
-            Leave::Level => {
-                if let Some(session) = &mut self.session {
-                    session.close_level();
-                }
-            }
             Leave::Project => {
                 if let Some(session) = &mut self.session {
-                    session.close_level();
+                    for level in session.levels.keys().copied().collect::<Vec<_>>() {
+                        session.close_level(level);
+                    }
                     session.close_project();
                 }
+                self.workspace = Workspace::default();
             }
-            Leave::Host => self.session = None,
+            Leave::Host => {
+                self.session = None;
+                self.workspace = Workspace::default();
+            }
         }
+    }
+}
+
+/// The project's levels by world. Picking an area shows it in the Preview tab; Edit (or a double-click) opens it as a
+/// document.
+fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) {
+    if let Some(project) = &session.project
+        && project.rom_path.is_none()
+    {
+        ui.colored_label(ERROR_COLOR, "This project has no ROM, so no level can be opened.");
+    }
+    let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
+    let mut preview = None;
+    let mut open = None;
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        for world in &session.worlds {
+            egui::CollapsingHeader::new(RichText::new(&world.name).strong()).id_salt(&world.name).default_open(false).show(ui, |ui| {
+                for level in &world.levels {
+                    ui.label(&level.display_name);
+                    for area in &level.areas {
+                        ui.horizontal(|ui| {
+                            ui.add_space(12.0);
+                            ui.add_enabled_ui(area.available, |ui| {
+                                let response =
+                                    ui.selectable_label(shown.as_deref() == Some(area.token.as_str()), &area.display_name).on_hover_text(&area.token);
+                                if response.double_clicked() {
+                                    open = Some(area.token.clone());
+                                } else if response.clicked() {
+                                    preview = Some(area.token.clone());
+                                }
+                                if ui.small_button("Edit").clicked() {
+                                    open = Some(area.token.clone());
+                                }
+                            });
+                        });
+                    }
+                }
+            });
+        }
+    });
+    if let Some(area) = open {
+        session.open_level(&area);
+    } else if let Some(area) = preview {
+        session.preview_level(&area);
     }
 }

@@ -4,22 +4,25 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use bigstar_core::{Error, ErrorCode, Result, read_file_prefix, write_file_atomically};
+use bigstar_core::{Error, ErrorCode, Result, read_file, read_file_prefix, write_file_atomically};
 use bigstar_formats::decompress_blz_overlay;
-use bigstar_level::{EditableLevel, LevelEntityInsertions, ModuleDataCatalog};
+use bigstar_level::{
+    EditableLevel, LevelEntityInsertions, LevelPackage, LevelRecoverySnapshot, ModuleDataCatalog, decode_level_recovery, encode_level_recovery,
+};
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
 use bigstar_patching::{FileManifest, ModuleGraph, NCPatcherClient};
 use bigstar_project::{
-    DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project, default_rom_path,
-    find_object_bank_overlays, index_rom_files_from, load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
+    DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, LevelCatalogArea, LevelCatalogEntry, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project,
+    default_rom_path, find_object_bank_overlays, index_rom_files_from, load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
 };
 use bigstar_protocol::{
-    ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
-    LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, Request, Response, Service, TextureId,
+    ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FoundEntity, LevelBytes, LevelEdit, LevelId,
+    LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request,
+    Response, Service, TextureId,
 };
 
 use crate::graphics::ProjectGraphics;
-use crate::levels::{LevelFiles, RomIndex, edit_path, locate, read_source};
+use crate::levels::{LevelFiles, RomIndex, Source, edit_path, locate, read_source};
 use crate::settings::{load_settings, save_settings};
 use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
@@ -120,15 +123,24 @@ impl Host {
     }
 
     pub fn with_options(root: &Path, options: HostOptions) -> Result<Self> {
-        Ok(Self {
-            shared: Arc::new(Shared {
-                workspace: Workspace::new(root)?,
-                options,
-                state: Mutex::new(State::default()),
-                subscribers: Mutex::new(Vec::new()),
-                generation: AtomicU64::new(1),
-            }),
-        })
+        let shared = Arc::new(Shared {
+            workspace: Workspace::new(root)?,
+            options,
+            state: Mutex::new(State::default()),
+            subscribers: Mutex::new(Vec::new()),
+            generation: AtomicU64::new(1),
+        });
+        // Every minute, the levels with unsaved edits are written where the next session can offer them back. The
+        // thread holds the host weakly and ends with it.
+        let weak = Arc::downgrade(&shared);
+        let _ = std::thread::Builder::new().name("bigstar-autosave".to_owned()).spawn(move || {
+            loop {
+                std::thread::sleep(AUTOSAVE_INTERVAL);
+                let Some(shared) = weak.upgrade() else { break };
+                shared.write_recovery_snapshots();
+            }
+        });
+        Ok(Self { shared })
     }
 
     pub fn workspace_name(&self) -> String {
@@ -197,6 +209,10 @@ impl Shared {
             Request::SetActiveVariant { variant } => self.set_active_variant(variant),
             Request::SetActiveModule { module } => self.set_active_module(module),
             Request::ProjectData => self.project_data(),
+            Request::LevelBytes { level } => self.level_bytes(level),
+            Request::FindEntities { sprites, id } => self.find_entities(sprites, id),
+            Request::Recovery => self.recovery(),
+            Request::Recover { accept } => self.recover(accept),
         }
     }
 
@@ -401,16 +417,13 @@ impl Shared {
         if let Some((id, session)) = open.levels.iter().find(|(_, session)| session.area == area_token) {
             return Ok(Response::Level(Box::new(snapshot(*id, session))));
         }
-        let (entry, area) = nsmb_level_catalog()
-            .iter()
-            .find_map(|entry| entry.areas.iter().find(|area| area.source_token == area_token).map(|area| (entry, area)))
-            .ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
+        let (entry, area) = find_area(area_token).ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
         let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
         let files = locate(rom, &open.index, area).ok_or_else(|| not_found(format!("the ROM does not hold {area_token}")))?;
         let course = read_source(rom, &open.directory, &files.course)?;
         let bgdat = read_source(rom, &open.directory, &files.bgdat)?;
         let level = EditableLevel::load(&course, &bgdat, Some(&open.catalog))?;
-        let title = if entry.areas.len() == 1 { entry.display_name.clone() } else { format!("{} {}", entry.display_name, area.display_name) };
+        let title = area_title(entry, area);
         let id = open.next_level;
         open.next_level += 1;
         let session = LevelSession { area: area_token.to_owned(), title, files, level, revision: 1 };
@@ -421,6 +434,7 @@ impl Shared {
 
     fn edit_level(&self, id: LevelId, base_revision: u64, edit: LevelEdit) -> Result<Response> {
         let mut state = lock(&self.state);
+        let catalog = state.open.as_ref().map(|open| open.catalog.clone());
         let session = session_mut(&mut state, id)?;
         if session.revision != base_revision {
             return Err(invalid(format!("the level changed since revision {base_revision}; it is at {}", session.revision)));
@@ -434,6 +448,9 @@ impl Shared {
             LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
             LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
             LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
+            LevelEdit::ReplaceSerialized { course, bgdat, name } => {
+                level.replace_serialized(&course, &bgdat, catalog.as_ref(), &name).map(|()| EditOutcome::None)
+            }
         }?;
         session.revision += 1;
         let (snapshot, event) = snapshot_and_event(id, session);
@@ -569,6 +586,154 @@ impl Shared {
         Ok(Response::ProjectData(Box::new(ProjectData { modules: open.catalog.clone(), object_bank_overlays })))
     }
 
+    fn level_bytes(&self, id: LevelId) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let session = open.levels.get(&id).ok_or_else(unknown_level)?;
+        let file_id = |source: &Source| match source {
+            Source::File(path) => open.rom.as_ref().and_then(|rom| rom.file_id(path)),
+            Source::Member { .. } => None,
+        };
+        Ok(Response::LevelBytes(Box::new(LevelBytes {
+            course: session.level.serialize_course()?,
+            bgdat: session.level.serialize_bgdat()?,
+            course_file_id: file_id(&session.files.course),
+            bgdat_file_id: file_id(&session.files.bgdat),
+        })))
+    }
+
+    /// Reads every level the ROM holds -- an open session as it stands, the rest as saved -- and lists where object
+    /// (or sprite type) `id` is placed.
+    fn find_entities(&self, sprites: bool, id: u16) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let mut found = Vec::new();
+        for entry in nsmb_level_catalog() {
+            for area in &entry.areas {
+                let title = area_title(entry, area);
+                let loaded;
+                let level = match open.levels.values().find(|session| session.area == area.source_token) {
+                    Some(session) => &session.level,
+                    None => {
+                        let Some(rom) = open.rom.as_mut() else { continue };
+                        let Some(files) = locate(rom, &open.index, area) else { continue };
+                        let (Ok(course), Ok(bgdat)) =
+                            (read_source(rom, &open.directory, &files.course), read_source(rom, &open.directory, &files.bgdat))
+                        else {
+                            continue;
+                        };
+                        let Ok(level) = EditableLevel::load(&course, &bgdat, Some(&open.catalog)) else { continue };
+                        loaded = level;
+                        &loaded
+                    }
+                };
+                let place =
+                    |index, x: i32, y: i32, settings| FoundEntity { area: area.source_token.clone(), title: title.clone(), index, x, y, settings };
+                if sprites {
+                    let matches = level.course().sprites.iter().enumerate().filter(|(_, s)| s.id == id);
+                    found.extend(matches.map(|(i, s)| place(i, i32::from(s.x), i32::from(s.y), Some(s.settings))));
+                } else {
+                    let matches = level.objects().iter().enumerate().filter(|(_, o)| o.object_id == id);
+                    found.extend(matches.map(|(i, o)| place(i, i32::from(o.x), i32::from(o.y), None)));
+                }
+            }
+        }
+        Ok(Response::Found(found))
+    }
+
+    /// Writes an autosave of every level with unsaved edits, and removes the autosaves of levels that have none. The
+    /// host does this every minute; a session that ends without saving leaves its autosaves for the next to offer.
+    pub(crate) fn write_recovery_snapshots(&self) {
+        let mut state = lock(&self.state);
+        let Some(open) = state.open.as_mut() else { return };
+        let root = open.directory.join(AUTOSAVE_DIR);
+        let mut keep = std::collections::BTreeSet::new();
+        for session in open.levels.values().filter(|session| session.level.dirty()) {
+            let written = (|| -> Result<String> {
+                let snapshot = LevelRecoverySnapshot {
+                    course_path: edit_path(&session.files.course)?.to_string_lossy().replace('\\', "/"),
+                    bgdat_path: edit_path(&session.files.bgdat)?.to_string_lossy().replace('\\', "/"),
+                    package: LevelPackage {
+                        course: session.level.serialize_course()?,
+                        bgdat: session.level.serialize_bgdat()?,
+                        ..Default::default()
+                    },
+                };
+                let name = recovery_name(&session.area);
+                std::fs::create_dir_all(&root).map_err(|_| Error::new(ErrorCode::IoError, "could not create the autosave directory"))?;
+                write_file_atomically(&root.join(&name), &encode_level_recovery(&snapshot)?)?;
+                Ok(name)
+            })();
+            match written {
+                Ok(name) => {
+                    keep.insert(name);
+                }
+                Err(error) => self.log(LogLevel::Warning, format!("Autosave of {}: {}", session.title, error.message)),
+            }
+        }
+        for (name, path) in recovery_files(&root) {
+            if !keep.contains(&name) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    fn recovery(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let root = open.directory.join(AUTOSAVE_DIR);
+        let mut levels = Vec::new();
+        for (name, _) in recovery_files(&root) {
+            let Some(area) = recovery_area(&name) else { continue };
+            // A level already open here is this session's own autosave, not one left behind.
+            if open.levels.values().any(|session| session.area == area) {
+                continue;
+            }
+            let title = find_area(&area).map_or_else(|| area.clone(), |(entry, found)| area_title(entry, found));
+            levels.push(RecoverableLevel { area, title });
+        }
+        Ok(Response::Recovery(levels))
+    }
+
+    fn recover(&self, accept: bool) -> Result<Response> {
+        let root = {
+            let state = lock(&self.state);
+            state.open.as_ref().ok_or_else(no_project)?.directory.join(AUTOSAVE_DIR)
+        };
+        let files = recovery_files(&root);
+        if !accept {
+            for (_, path) in files {
+                let _ = std::fs::remove_file(path);
+            }
+            return Ok(Response::Recovered(Vec::new()));
+        }
+        let mut recovered = Vec::new();
+        for (name, path) in files {
+            let Some(area) = recovery_area(&name) else { continue };
+            let applied = (|| -> Result<()> {
+                let snapshot = decode_level_recovery(&read_file(&path)?)?;
+                let Response::Level(opened) = self.open_level(&area)? else { return Err(invalid("the level did not open")) };
+                let mut state = lock(&self.state);
+                let catalog = state.open.as_ref().map(|open| open.catalog.clone());
+                let session = session_mut(&mut state, opened.level)?;
+                session.level.replace_serialized(&snapshot.package.course, &snapshot.package.bgdat, catalog.as_ref(), "Recover autosave")?;
+                session.revision += 1;
+                let (_, event) = snapshot_and_event(opened.level, session);
+                drop(state);
+                self.emit(event);
+                Ok(())
+            })();
+            match applied {
+                Ok(()) => recovered.push(area),
+                Err(error) => self.log(LogLevel::Warning, format!("Recovery of {area}: {}", error.message)),
+            }
+        }
+        if !recovered.is_empty() {
+            self.log(LogLevel::Info, format!("Recovered {} autosaved level(s). Save them to keep them.", recovered.len()));
+        }
+        Ok(Response::Recovered(recovered))
+    }
+
     fn set_active_variant(&self, variant: String) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -643,6 +808,50 @@ fn no_project() -> Error {
 
 fn unknown_level() -> Error {
     not_found("that level is not open")
+}
+
+const AUTOSAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Where autosaves live, relative to the project.
+pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";
+
+/// An autosave is named for its area, hex-encoded so any token makes a file name.
+fn recovery_name(area: &str) -> String {
+    let hex: String = area.bytes().map(|b| format!("{b:02x}")).collect();
+    format!("{hex}.bsrecover")
+}
+
+#[cfg(test)]
+pub(crate) fn recovery_name_for_tests(area: &str) -> String {
+    recovery_name(area)
+}
+
+fn recovery_area(name: &str) -> Option<String> {
+    let hex = name.strip_suffix(".bsrecover")?;
+    let bytes: Option<Vec<u8>> = (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok()).collect();
+    String::from_utf8(bytes?).ok()
+}
+
+/// The autosaves in `root`, by file name, in name order.
+fn recovery_files(root: &Path) -> Vec<(String, PathBuf)> {
+    let Ok(entries) = std::fs::read_dir(root) else { return Vec::new() };
+    let mut files: Vec<(String, PathBuf)> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.path().is_file())
+        .filter_map(|entry| Some((entry.file_name().into_string().ok()?, entry.path())))
+        .filter(|(name, _)| name.ends_with(".bsrecover"))
+        .collect();
+    files.sort();
+    files
+}
+
+fn find_area(token: &str) -> Option<(&'static LevelCatalogEntry, &'static LevelCatalogArea)> {
+    nsmb_level_catalog().iter().find_map(|entry| entry.areas.iter().find(|area| area.source_token == token).map(|area| (entry, area)))
+}
+
+/// "1-1", or "1-1 Area 2" for a level of several areas.
+fn area_title(entry: &LevelCatalogEntry, area: &LevelCatalogArea) -> String {
+    if entry.areas.len() == 1 { entry.display_name.clone() } else { format!("{} {}", entry.display_name, area.display_name) }
 }
 
 fn session_mut(state: &mut State, id: LevelId) -> Result<&mut LevelSession> {

@@ -16,7 +16,9 @@ bigstar-level.workspace = true
 bigstar-protocol.workspace = true
 bigstar-client.workspace = true
 egui.workspace = true
+egui_dock.workspace = true
 log.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

@@ -61,7 +61,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     }
     // The level, then its graphics, draw lists and textures, each a round trip.
     let drawn = |app: &BigStarApp| {
-        app.session().and_then(|s| s.level.as_ref().map(|v| (s, v))).is_some_and(|(s, v)| {
+        app.session().and_then(|s| s.level().map(|v| (s, v))).is_some_and(|(s, v)| {
             v.art.graphics.is_some() && v.art.requested.is_empty() && v.art.texture_ids().iter().all(|id| s.textures.contains_key(id))
         })
     };
@@ -71,7 +71,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     shot(&mut harness, dir, "remote.png")?;
-    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
         view.zoom_about(1.0, view.canvas.min);
         view.pan = egui::Vec2::new(0.0, 160.0);
         view.selection = vec![Item::new(Kind::Sprite, 0), Item::new(Kind::Object, 3)];
@@ -96,16 +96,27 @@ fn main() -> Result<(), String> {
     harness.get_by_label("Demo").click();
     harness.run();
     harness.get_by_label("World 1").click();
-    shot(&mut harness, &dir, "levels.png")?;
-    harness.get_by_label("Area 1").click();
     harness.run();
-    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
+    // Picking an area previews it; Edit opens it as a document.
+    if let Some(area) = harness.query_all_by_label("Area 1").next() {
+        area.click();
+    }
+    shot(&mut harness, &dir, "levels.png")?;
+    if let Some(session) = harness.state_mut().session_mut() {
+        session.open_level("A01_2");
+    }
+    harness.run();
+    if let Some(edit) = harness.query_all_by_label("Edit").next() {
+        edit.click();
+    }
+    harness.run();
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
         view.selection.push(Item::new(Kind::Sprite, 1));
         view.selection.push(Item::new(Kind::Object, 4));
     }
     shot(&mut harness, &dir, "level.png")?;
     // One actor selected: the properties show its own fields, and the picker its category.
-    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level.as_mut()) {
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
         view.selection = vec![Item::new(Kind::Sprite, 0)];
     }
     harness.run();

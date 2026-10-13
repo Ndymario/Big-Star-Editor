@@ -15,13 +15,14 @@ use bigstar_level::{
     SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, ImageGraphics, LevelEdit,
-    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSummary, Request, RequestId,
-    Response, ResponseResult, TextureData, TilesetGraphics,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FoundEntity,
+    ImageGraphics, LevelBytes, LevelEdit, LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo,
+    ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
-const LEVEL: LevelId = 1;
+/// A second, smaller area, so there is more than one document to open.
+const SECOND_AREA: &str = "A01_2";
 const BACKGROUND: &str = "demo-background";
 const WALKER: &str = "demo-walker";
 /// The demo module's one actor.
@@ -34,19 +35,27 @@ pub struct DemoTileset {
     pub objects: Vec<ObjectLayout>,
 }
 
+struct DemoLevel {
+    area: &'static str,
+    title: &'static str,
+    level: EditableLevel,
+    revision: u64,
+}
+
 pub struct DemoConnection {
     state: ConnectionState,
     next_id: RequestId,
     inbox: Vec<Incoming>,
     /// Events the request being answered raised; they follow its response.
     events: Vec<Incoming>,
-    /// `None` only if the made-up level failed to build, which an empty course never does; every level request then
-    /// fails.
-    level: Option<EditableLevel>,
-    revision: u64,
+    /// The demo's levels; a level's id is its place here plus one. Empty only if they failed to build, which an empty
+    /// course never does; every level request then fails.
+    levels: Vec<DemoLevel>,
     tilesets: [Option<DemoTileset>; 3],
     background: bool,
     textures: HashMap<String, TextureData>,
+    /// Areas the demo pretends an earlier session left autosaved.
+    recoverable: Vec<String>,
 }
 
 fn put_u32(data: &mut [u8], offset: usize, value: u32) {
@@ -80,6 +89,17 @@ fn level_with(items: LevelEntityInsertions) -> Result<EditableLevel, Error> {
 
 fn object(object_id: u16, x: i16, y: i16, width: u16, height: u16) -> NsmbLevelObject {
     NsmbLevelObject { object_id, tileset_slot: 0, x, y, width, height }
+}
+
+/// A short stretch of ground with one walker on it.
+fn second_items() -> LevelEntityInsertions {
+    LevelEntityInsertions {
+        objects: vec![object(0, 0, 10, 24, 4), object(1, 8, 6, 4, 1)],
+        sprites: vec![SpriteInsertion { value: NsmbLevelStageObject { id: 21, x: 12, y: 9, ..Default::default() }, hash: None }],
+        entrances: vec![NsmbLevelEntrance { x: 32, y: 128, ..Default::default() }],
+        zones: vec![NsmbLevelZone { width: 384, height: 224, ..Default::default() }],
+        ..Default::default()
+    }
 }
 
 fn sample_items() -> LevelEntityInsertions {
@@ -267,17 +287,25 @@ impl DemoConnection {
 
     /// The demo host with its art and a level holding just `items`.
     pub fn with_level(items: LevelEntityInsertions) -> Self {
-        let level = level_with(items).or_else(|_| level_with(LevelEntityInsertions::default())).ok();
+        let first = level_with(items).or_else(|_| level_with(LevelEntityInsertions::default()));
+        let second = level_with(second_items());
+        let levels = match (first, second) {
+            (Ok(first), Ok(second)) => vec![
+                DemoLevel { area: AREA, title: "1-1", level: first, revision: 1 },
+                DemoLevel { area: SECOND_AREA, title: "1-1 Area 2", level: second, revision: 1 },
+            ],
+            _ => Vec::new(),
+        };
         let mut connection = Self {
             state: ConnectionState::Connected(HostInfo { host_version: "demo".to_owned(), workspace_name: "Demo workspace".to_owned() }),
             next_id: 1,
             inbox: Vec::new(),
             events: Vec::new(),
-            level,
-            revision: 1,
+            levels,
             tilesets: [Some(sample_tileset()), None, None],
             background: true,
             textures: HashMap::new(),
+            recoverable: Vec::new(),
         };
         connection.rebuild_textures();
         connection
@@ -289,6 +317,12 @@ impl DemoConnection {
             *target = tileset;
         }
         self.rebuild_textures();
+        self
+    }
+
+    /// Offers the demo level as recoverable when the project opens.
+    pub fn with_recovery(mut self) -> Self {
+        self.recoverable = vec![AREA.to_owned()];
         self
     }
 
@@ -312,17 +346,23 @@ impl DemoConnection {
         self.textures.insert(WALKER.to_owned(), walker());
     }
 
-    fn level(&mut self) -> Result<&mut EditableLevel, Error> {
-        self.level.as_mut().ok_or_else(|| Error::new(ErrorCode::NotFound, "the demo level could not be built"))
+    fn entry(&mut self, id: LevelId) -> Result<&mut DemoLevel, Error> {
+        let index = usize::try_from(id).ok().and_then(|id| id.checked_sub(1));
+        index.and_then(|index| self.levels.get_mut(index)).ok_or_else(|| Error::new(ErrorCode::NotFound, "there is no such level session"))
     }
 
-    fn snapshot(&self) -> Result<LevelSnapshot, Error> {
-        let level = self.level.as_ref().ok_or_else(|| Error::new(ErrorCode::NotFound, "the demo level could not be built"))?;
+    fn level(&mut self, id: LevelId) -> Result<&mut EditableLevel, Error> {
+        self.entry(id).map(|entry| &mut entry.level)
+    }
+
+    fn snapshot(&mut self, id: LevelId) -> Result<LevelSnapshot, Error> {
+        let entry = self.entry(id)?;
+        let level = &entry.level;
         Ok(LevelSnapshot {
-            level: LEVEL,
-            area: AREA.to_owned(),
-            title: "1-1".to_owned(),
-            revision: self.revision,
+            level: id,
+            area: entry.area.to_owned(),
+            title: entry.title.to_owned(),
+            revision: entry.revision,
             course: level.course().clone(),
             objects: level.objects().to_vec(),
             tileset_references: level.tileset_references(),
@@ -339,10 +379,10 @@ impl DemoConnection {
         })
     }
 
-    fn edited(&mut self, outcome: EditOutcome) -> ResponseResult {
-        self.revision += 1;
-        let snapshot = self.snapshot()?;
-        self.events.push(Incoming::Event(Event::LevelChanged { level: LEVEL, revision: self.revision, dirty: snapshot.dirty }));
+    fn edited(&mut self, id: LevelId, outcome: EditOutcome) -> ResponseResult {
+        self.entry(id)?.revision += 1;
+        let snapshot = self.snapshot(id)?;
+        self.events.push(Incoming::Event(Event::LevelChanged { level: id, revision: snapshot.revision, dirty: snapshot.dirty }));
         Ok(Response::Edited { snapshot: Box::new(snapshot), outcome })
     }
 
@@ -436,8 +476,8 @@ impl DemoConnection {
         ActorDraw { found: true, commands, custom_rendered: true, ..Default::default() }
     }
 
-    fn edit(&mut self, edit: LevelEdit) -> Result<EditOutcome, Error> {
-        let level = self.level()?;
+    fn edit(&mut self, id: LevelId, edit: LevelEdit) -> Result<EditOutcome, Error> {
+        let level = self.level(id)?;
         match edit {
             LevelEdit::Update { updates, name } => level.update_entities(updates, &name).map(|()| EditOutcome::None),
             LevelEdit::Add { items, name } => level.add_entities(items, &name).map(EditOutcome::Added),
@@ -446,6 +486,9 @@ impl DemoConnection {
             LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
             LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
             LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
+            LevelEdit::ReplaceSerialized { course, bgdat, name } => {
+                level.replace_serialized(&course, &bgdat, None, &name).map(|()| EditOutcome::None)
+            }
         }
     }
 
@@ -473,32 +516,86 @@ impl DemoConnection {
                     ],
                 }]))
             }
-            Request::OpenLevel { .. } => Ok(Response::Level(Box::new(self.snapshot()?))),
-            Request::EditLevel { base_revision, edit, .. } => {
-                if base_revision != self.revision {
+            Request::OpenLevel { area } => {
+                let index = self.levels.iter().position(|entry| entry.area == area);
+                let id = index.ok_or_else(|| Error::new(ErrorCode::NotFound, format!("the demo ROM does not hold {area}")))? as LevelId + 1;
+                Ok(Response::Level(Box::new(self.snapshot(id)?)))
+            }
+            Request::EditLevel { level, base_revision, edit } => {
+                if base_revision != self.entry(level)?.revision {
                     return Err(Error::new(ErrorCode::InvalidArgument, "the level changed since it was last seen"));
                 }
-                let outcome = self.edit(edit)?;
-                self.edited(outcome)
+                let outcome = self.edit(level, edit)?;
+                self.edited(level, outcome)
             }
-            Request::UndoLevel { .. } => {
-                self.level()?.undo()?;
-                self.edited(EditOutcome::None)
+            Request::UndoLevel { level } => {
+                self.level(level)?.undo()?;
+                self.edited(level, EditOutcome::None)
             }
-            Request::RedoLevel { .. } => {
-                self.level()?.redo()?;
-                self.edited(EditOutcome::None)
+            Request::RedoLevel { level } => {
+                self.level(level)?.redo()?;
+                self.edited(level, EditOutcome::None)
             }
-            Request::SaveLevel { .. } => {
-                self.level()?.mark_clean();
-                self.events.push(Incoming::Event(Event::Log { level: LogLevel::Info, message: "Saved 1-1".to_owned() }));
-                self.edited(EditOutcome::None)
+            Request::SaveLevel { level } => {
+                self.level(level)?.mark_clean();
+                let title = self.entry(level)?.title;
+                self.events.push(Incoming::Event(Event::Log { level: LogLevel::Info, message: format!("Saved {title}") }));
+                self.edited(level, EditOutcome::None)
             }
             Request::CloseLevel { .. } => Ok(Response::Done),
             Request::LevelGraphics { level } => Ok(Response::LevelGraphics(Box::new(self.graphics(level)))),
             Request::ActorCatalog => Ok(Response::ActorCatalog(Box::new(Self::catalog()))),
             Request::RenderActors { inputs } => Ok(Response::ActorDraws { generation: 0, draws: inputs.iter().map(Self::render).collect() }),
             Request::ProjectData => Ok(Response::ProjectData(Box::new(Self::project_data()))),
+            Request::LevelBytes { level } => {
+                let level = self.level(level)?;
+                let bytes = LevelBytes {
+                    course: level.serialize_course()?,
+                    bgdat: level.serialize_bgdat()?,
+                    course_file_id: Some(300),
+                    bgdat_file_id: Some(301),
+                };
+                Ok(Response::LevelBytes(Box::new(bytes)))
+            }
+            Request::FindEntities { sprites, id } => {
+                let mut entities = Vec::new();
+                for entry in &self.levels {
+                    let level = &entry.level;
+                    let found = |index, x: i32, y: i32, settings| FoundEntity {
+                        area: entry.area.to_owned(),
+                        title: entry.title.to_owned(),
+                        index,
+                        x,
+                        y,
+                        settings,
+                    };
+                    if sprites {
+                        let matches = level.course().sprites.iter().enumerate().filter(|(_, s)| s.id == id);
+                        entities.extend(matches.map(|(i, s)| found(i, i32::from(s.x), i32::from(s.y), Some(s.settings))));
+                    } else {
+                        let matches = level.objects().iter().enumerate().filter(|(_, o)| o.object_id == id);
+                        entities.extend(matches.map(|(i, o)| found(i, i32::from(o.x), i32::from(o.y), None)));
+                    }
+                }
+                Ok(Response::Found(entities))
+            }
+            Request::Recovery => {
+                let offered = self.recoverable.iter().map(|area| RecoverableLevel { area: area.clone(), title: "1-1".to_owned() }).collect();
+                Ok(Response::Recovery(offered))
+            }
+            Request::Recover { accept } => {
+                let areas = std::mem::take(&mut self.recoverable);
+                if !accept {
+                    return Ok(Response::Recovered(Vec::new()));
+                }
+                // The "autosave" is the level with its first object gone.
+                if !self.level(1)?.objects().is_empty() {
+                    let selection = bigstar_level::LevelEntitySelection { objects: vec![0], ..Default::default() };
+                    self.level(1)?.remove_entities(selection, "Recover autosave")?;
+                    self.entry(1)?.revision += 1;
+                }
+                Ok(Response::Recovered(areas))
+            }
             Request::GetTextures { ids } => Ok(Response::Textures(ids.iter().filter_map(|id| self.textures.get(id).cloned()).collect())),
             _ => Err(Error::new(ErrorCode::Unsupported, "the demo host does not do that")),
         }

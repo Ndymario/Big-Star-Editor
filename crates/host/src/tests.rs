@@ -334,6 +334,74 @@ fn a_real_rom_names_the_overlay_of_every_object_bank() {
 }
 
 #[test]
+fn a_level_round_trips_through_its_bytes_as_one_step() {
+    let (_fixture, mut session) = Fixture::with_project("host-bytes");
+    let opened = open_level(&mut session, "A01_1");
+    let Response::LevelBytes(bytes) = session.handle(Request::LevelBytes { level: opened.level }).unwrap() else { panic!() };
+    assert!(bytes.course_file_id.is_some() && bytes.bgdat_file_id.is_some(), "plain ROM files have ids");
+    // One object fewer: the BGDat is ten bytes an object, then the terminator.
+    let mut bgdat = bytes.bgdat.clone();
+    bgdat.drain(..10);
+    let edit = LevelEdit::ReplaceSerialized { course: bytes.course.clone(), bgdat, name: "Hex edit level".into() };
+    let (replaced, _) = edited(session.handle(Request::EditLevel { level: opened.level, base_revision: 1, edit }).unwrap());
+    assert_eq!((replaced.objects.len(), replaced.undo_names[0].as_str()), (opened.objects.len() - 1, "Hex edit level"));
+    // Garbage is refused and changes nothing.
+    let edit = LevelEdit::ReplaceSerialized { course: vec![1, 2, 3], bgdat: vec![], name: "x".into() };
+    assert!(session.handle(Request::EditLevel { level: opened.level, base_revision: 2, edit }).is_err());
+}
+
+#[test]
+fn finders_search_every_level_including_unsaved_edits() {
+    let (_fixture, mut session) = Fixture::with_project("host-find");
+    let Response::Found(found) = session.handle(Request::FindEntities { sprites: false, id: 2 }).unwrap() else { panic!() };
+    let areas: Vec<&str> = found.iter().map(|f| f.area.as_str()).collect();
+    assert!(areas.contains(&"A01_1") && areas.contains(&"J01_1@Dat_Field"), "{areas:?}");
+    // An open session counts as it stands.
+    let opened = open_level(&mut session, "A01_1");
+    let remove = LevelEntitySelection { objects: (0..opened.objects.len()).collect(), ..LevelEntitySelection::default() };
+    session
+        .handle(Request::EditLevel { level: opened.level, base_revision: 1, edit: LevelEdit::Remove { selection: remove, name: "x".into() } })
+        .unwrap();
+    let Response::Found(found) = session.handle(Request::FindEntities { sprites: false, id: 2 }).unwrap() else { panic!() };
+    assert!(found.iter().all(|f| f.area != "A01_1"));
+    let Response::Found(none) = session.handle(Request::FindEntities { sprites: true, id: 9999 }).unwrap() else { panic!() };
+    assert!(none.is_empty());
+}
+
+#[test]
+fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
+    let (fixture, mut session) = Fixture::with_project("host-recovery");
+    let opened = open_level(&mut session, "A01_1");
+    move_first_object(&mut session, &opened, 9);
+    session.shared().write_recovery_snapshots();
+    let autosaves = fixture.root.path().join("proj/.big-star-autosave");
+    assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 1);
+    // This session's own autosave is not offered back to it.
+    let Response::Recovery(offered) = session.handle(Request::Recovery).unwrap() else { panic!() };
+    assert!(offered.is_empty());
+
+    // The next host finds it, and accepting it makes a dirty session holding the edit.
+    drop(session);
+    let mut next = fixture.session();
+    next.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Recovery(offered) = next.handle(Request::Recovery).unwrap() else { panic!() };
+    assert_eq!(offered, [bigstar_protocol::RecoverableLevel { area: "A01_1".into(), title: "1-1 Area 1".into() }]);
+    let Response::Recovered(areas) = next.handle(Request::Recover { accept: true }).unwrap() else { panic!() };
+    assert_eq!(areas, ["A01_1"]);
+    let recovered = open_level(&mut next, "A01_1");
+    assert_eq!((recovered.objects[0].x, recovered.dirty, recovered.undo_names[0].as_str()), (9, true, "Recover autosave"));
+
+    // Saved, there is nothing left to recover; declined, the autosaves go.
+    next.handle(Request::SaveLevel { level: recovered.level }).unwrap();
+    next.shared().write_recovery_snapshots();
+    assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 0);
+    std::fs::write(autosaves.join(super::host::recovery_name_for_tests("A01_1")), b"stale").unwrap();
+    let Response::Recovered(none) = next.handle(Request::Recover { accept: false }).unwrap() else { panic!() };
+    assert!(none.is_empty());
+    assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 0);
+}
+
+#[test]
 fn download_play_areas_are_read_from_their_archive() {
     let (fixture, mut session) = Fixture::with_project("host-narc");
     let opened = open_level(&mut session, "J01_1@Dat_Field");

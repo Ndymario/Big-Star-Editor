@@ -42,13 +42,13 @@ fn a_connected_host_lists_its_projects_then_the_levels_of_the_opened_one() {
     settle(&mut session);
     assert_eq!(session.project.as_ref().map(|p| p.name.as_str()), Some("Demo"));
     assert_eq!(session.worlds.len(), 1);
-    assert!(session.level.is_none());
+    assert!(session.level().is_none());
 }
 
 #[test]
 fn opening_a_level_gives_a_snapshot_and_edits_come_back_with_a_new_revision() {
     let mut session = opened();
-    let view = session.level.as_mut().unwrap();
+    let view = session.level_mut().unwrap();
     assert_eq!(view.snapshot.revision, 1);
     view.selection.push(Item::new(Kind::Sprite, 0));
     let edit = view.move_edit(Vec2::new(16.0, 0.0)).unwrap();
@@ -56,7 +56,7 @@ fn opening_a_level_gives_a_snapshot_and_edits_come_back_with_a_new_revision() {
     let before = view.snapshot.course.sprites[0].x;
     session.edit(edit);
     settle(&mut session);
-    let view = session.level.as_ref().unwrap();
+    let view = session.level().unwrap();
     assert_eq!(view.snapshot.course.sprites[0].x, before + 1);
     assert_eq!((view.snapshot.revision, view.snapshot.dirty, view.snapshot.can_undo), (2, true, true));
     assert_eq!(view.snapshot.undo_names, ["Move selection"]);
@@ -67,22 +67,22 @@ fn opening_a_level_gives_a_snapshot_and_edits_come_back_with_a_new_revision() {
 fn undo_redo_and_save_follow_the_hosts_answers() {
     let mut session = opened();
     let remove = {
-        let view = session.level.as_mut().unwrap();
+        let view = session.level_mut().unwrap();
         view.selection.push(Item::new(Kind::Object, 0));
         view.remove_edit().unwrap()
     };
     session.edit(remove);
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 6);
+    assert_eq!(session.level().unwrap().snapshot.objects.len(), 6);
     session.undo();
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 7);
+    assert_eq!(session.level().unwrap().snapshot.objects.len(), 7);
     session.redo();
     settle(&mut session);
-    assert_eq!(session.level.as_ref().unwrap().snapshot.objects.len(), 6);
+    assert_eq!(session.level().unwrap().snapshot.objects.len(), 6);
     session.save();
     settle(&mut session);
-    assert!(!session.level.as_ref().unwrap().snapshot.dirty);
+    assert!(!session.level().unwrap().snapshot.dirty);
     assert_eq!(session.log.last().map(|l| l.text.as_str()), Some("Saved 1-1"));
 }
 
@@ -90,13 +90,13 @@ fn undo_redo_and_save_follow_the_hosts_answers() {
 fn a_refused_edit_is_reported_and_the_level_is_fetched_again() {
     let mut session = opened();
     // An edit against a revision the host no longer has.
-    if let Some(view) = session.level.as_mut() {
+    if let Some(view) = session.level_mut() {
         view.snapshot.revision = 99;
     }
     session.edit(LevelEdit::Remove { selection: Default::default(), name: "Delete".to_owned() });
     settle(&mut session);
     assert!(session.notice.as_ref().is_some_and(|n| n.error));
-    assert_eq!(session.level.as_ref().unwrap().snapshot.revision, 1, "the host's revision replaced ours");
+    assert_eq!(session.level().unwrap().snapshot.revision, 1, "the host's revision replaced ours");
 }
 
 #[test]
@@ -115,7 +115,7 @@ fn a_demo_host_answers_requests_it_does_not_know_with_an_error() {
 #[test]
 fn an_opened_level_fetches_its_graphics_actors_and_textures() {
     let session = opened();
-    let view = session.level.as_ref().unwrap();
+    let view = session.level().unwrap();
     let graphics = view.art.graphics.as_ref().expect("level graphics");
     assert_eq!(graphics.tilesets[0].blocks, 16);
     assert!(view.art.tilesets[0].is_some());
@@ -197,22 +197,22 @@ fn graphics_from_before_a_change_on_disk_are_dropped() {
     };
     answer(&script, first, Ok(Response::LevelGraphics(Box::new(graphics(1, 5)))));
     session.poll();
-    assert!(session.level.as_ref().unwrap().art.graphics.is_none(), "an answer from generation 1 is dropped");
+    assert!(session.level().unwrap().art.graphics.is_none(), "an answer from generation 1 is dropped");
     answer(&script, second, Ok(Response::LevelGraphics(Box::new(graphics(2, 7)))));
     session.poll();
-    assert_eq!(session.level.as_ref().unwrap().art.graphics.as_ref().map(|g| g.tilesets[0].blocks), Some(7));
+    assert_eq!(session.level().unwrap().art.graphics.as_ref().map(|g| g.tilesets[0].blocks), Some(7));
 
     // Draw lists from before the change are asked for again, and a stale answer does not land.
     let draws = last_request(&script, |r| matches!(r, Request::RenderActors { .. }));
     answer(&script, draws, Ok(Response::ActorDraws { generation: 1, draws: vec![Default::default(); 4] }));
     session.poll();
-    assert!(session.level.as_ref().unwrap().art.draws.is_empty());
+    assert!(session.level().unwrap().art.draws.is_empty());
     let again = last_request(&script, |r| matches!(r, Request::RenderActors { .. }));
     assert_ne!(again, draws);
     // A refused one leaves the sprites as markers rather than waiting forever.
     answer(&script, again, Err(bigstar_core::Error::new(bigstar_core::ErrorCode::Unsupported, "no")));
     session.poll();
-    let view = session.level.as_ref().unwrap();
+    let view = session.level().unwrap();
     assert_eq!(view.art.draws.len(), 4);
     assert!(view.art.draws.values().all(|d| !d.found));
     assert!(session.notice.is_none(), "graphics failures are logged, not put in front of the person");
@@ -233,7 +233,8 @@ fn textures_are_asked_for_once_and_kept() {
     let count = session.textures.len();
     assert!(count >= 2);
     // Reopening the level asks for nothing it already holds.
-    session.close_level();
+    let level = session.active.unwrap();
+    session.close_level(level);
     settle(&mut session);
     session.open_level("A01_1");
     settle(&mut session);
@@ -270,11 +271,11 @@ fn level_with(items: LevelEntityInsertions) -> Harness<'static, BigStarApp> {
 }
 
 fn view<'h>(harness: &'h Harness<'_, BigStarApp>) -> &'h LevelView {
-    harness.state().session().unwrap().level.as_ref().unwrap()
+    harness.state().session().unwrap().level().unwrap()
 }
 
 fn view_mut<'a>(harness: &'a mut Harness<'_, BigStarApp>) -> &'a mut LevelView {
-    harness.state_mut().session_mut().unwrap().level.as_mut().unwrap()
+    harness.state_mut().session_mut().unwrap().level_mut().unwrap()
 }
 
 fn screen(harness: &Harness<'_, BigStarApp>, world: Pos2) -> Pos2 {
@@ -319,22 +320,29 @@ fn view_at(x: u16, y: u16) -> NsmbLevelView {
 }
 
 #[test]
-fn the_screens_lead_from_projects_to_levels_to_the_canvas() {
+fn the_screens_lead_from_projects_to_the_preview_to_a_document() {
     let mut harness = harness();
     harness.run();
     harness.get_by_label("Demo").click();
     harness.run();
     harness.get_by_label("World 1").click();
     harness.run();
-    harness.get_by_label("Area 1").click();
+    // Picking an area shows it in the Preview tab; nothing is editable yet.
+    harness.get_all_by_label("Area 1").next().unwrap().click();
     harness.run();
     let session = harness.state().session().unwrap();
-    assert_eq!(session.level.as_ref().map(|v| v.snapshot.title.as_str()), Some("1-1"));
+    assert_eq!(session.active, None);
+    let previewed = harness.state().workspace.preview.unwrap();
+    assert_eq!(session.levels[&previewed].snapshot.title, "1-1");
+    harness.get_by_label("Objects 7   Sprites 4   Entrances 2   Views 1   Zones 1");
+    // Edit opens it as a document of its own, which is what the panels and menus act on.
+    harness.get_all_by_label("Edit").next().unwrap().click();
+    harness.run();
+    let session = harness.state().session().unwrap();
+    assert_eq!(session.active, Some(previewed), "the host hands back the same session");
+    assert!(harness.state().workspace.is_document(previewed));
     harness.get_by_label("Save");
     harness.get_by_label("Fit");
-    harness.get_by_label("Levels").click();
-    harness.run();
-    assert!(harness.state().session().unwrap().level.is_none());
 }
 
 #[test]
@@ -949,6 +957,8 @@ fn level_data_flags_are_set_from_the_tab() {
 #[test]
 fn the_picker_chooses_what_a_right_click_places() {
     let mut harness = walker_selected();
+    harness.get_by_label("Palette").click();
+    harness.run();
     harness.get_by_label("Object 0:2").click();
     harness.run();
     let placement = &view(&harness).placement;
@@ -985,4 +995,213 @@ fn the_picker_chooses_what_a_right_click_places() {
     harness.run();
     assert_eq!(harness.state().picker.search, "eraser");
     assert_eq!(harness.query_all_by_label_contains("Object 0:").count(), 1);
+}
+
+// --- the workspace and the level tools ------------------------------------------------------------------------------
+
+fn open_document(harness: &mut Harness<'_, BigStarApp>, area: &str) -> bigstar_protocol::LevelId {
+    harness.state_mut().session_mut().unwrap().open_level(area);
+    harness.run();
+    harness.state().session().unwrap().active.expect("the opened document is active")
+}
+
+#[test]
+fn each_level_is_a_document_and_the_focused_one_is_active() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let first = harness.state().session().unwrap().active.unwrap();
+    let second = open_document(&mut harness, "A01_2");
+    assert_ne!(first, second);
+    assert_eq!(harness.state().workspace.documents().len(), 2);
+    // The properties and the top bar follow the tab in front.
+    harness.get_by_label("1-1 Area 2 · 2 objects · 1 sprites · 1 entrances · revision 1");
+    // Bringing the first tab forward makes it the active document.
+    harness.state_mut().workspace.show_document(first);
+    harness.run();
+    assert_eq!(harness.state().session().unwrap().active, Some(first));
+    // An edit goes to the document it was made in.
+    let mut moved = view(&harness).clone();
+    moved.selection = vec![Item::new(Kind::Object, 0)];
+    harness.state_mut().session_mut().unwrap().edit(moved.move_edit(Vec2::new(16.0, 0.0)).unwrap());
+    harness.run();
+    let session = harness.state().session().unwrap();
+    assert!(session.levels[&first].snapshot.dirty && !session.levels[&second].snapshot.dirty);
+}
+
+#[test]
+fn closing_a_document_with_unsaved_edits_asks_first() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let level = harness.state().session().unwrap().active.unwrap();
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    harness.key_press(Key::Delete);
+    harness.run();
+    {
+        let app = harness.state_mut();
+        let (workspace, session) = (&mut app.workspace, app.session.as_mut().unwrap());
+        workspace.close_document(session, level);
+    }
+    harness.run();
+    harness.get_by_label("This level has changes that were not saved. Closing it drops them.");
+    harness.get_by_label("Stay").click();
+    harness.run();
+    assert!(harness.state().workspace.is_document(level), "staying keeps it");
+    {
+        let app = harness.state_mut();
+        let (workspace, session) = (&mut app.workspace, app.session.as_mut().unwrap());
+        workspace.close_document(session, level);
+    }
+    harness.run();
+    harness.get_by_label("Close without saving").click();
+    harness.run();
+    assert!(!harness.state().workspace.is_document(level));
+    assert!(!harness.state().session().unwrap().levels.contains_key(&level), "the host session is closed");
+}
+
+#[test]
+fn open_documents_and_their_cameras_are_remembered_per_host_and_project() {
+    let services = MemoryServices::default();
+    let later = services.sharing_values();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    open_document(&mut harness, "A01_1");
+    let second = open_document(&mut harness, "A01_2");
+    harness.state_mut().session_mut().unwrap().levels.get_mut(&second).unwrap().zoom_about(2.0, Pos2::new(700.0, 400.0));
+    let pan = harness.state().session().unwrap().levels[&second].pan;
+    harness.state_mut().workspace.detach(second);
+    harness.run();
+    drop(harness);
+
+    // A later run, against the same host and project, puts it all back.
+    let app = BigStarApp::with_connection(Box::new(later), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.run();
+    let app = harness.state();
+    let session = app.session().unwrap();
+    assert_eq!(app.workspace.documents().len(), 2);
+    let restored = session.levels.values().find(|v| v.snapshot.area == "A01_2").unwrap();
+    assert_eq!((restored.zoom, restored.pan, restored.zoom_pinned), (2.0, pan, true));
+    assert!(app.workspace.detached.contains(&restored.snapshot.level), "it reopens in its own window");
+}
+
+#[test]
+fn the_hex_editor_replaces_the_level_as_one_step() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("Level").click();
+    harness.run();
+    harness.get_by_label("Hex Editor…").click();
+    harness.run();
+    let objects = view(&harness).snapshot.objects.len();
+    {
+        let editor = harness.state_mut().tools.hex.as_mut().expect("the hex editor is open");
+        // One object fewer: each is ten bytes of the BGDat.
+        let bytes = crate::tools::unhex(&editor.bgdat).unwrap();
+        editor.bgdat = crate::tools::hex_text(&bytes[10..]);
+    }
+    // The editor's Save, not the level's: the window is drawn last.
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!((snapshot.objects.len(), snapshot.undo_names[0].as_str()), (objects - 1, "Hex edit level"));
+    assert!(harness.state().tools.hex.is_none());
+
+    // A half byte is refused and nothing changes.
+    harness.state_mut().session_mut().unwrap().request_level_bytes(crate::BytesFor::HexEditor);
+    harness.run();
+    harness.state_mut().tools.hex.as_mut().unwrap().course.push_str(" 1");
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    let notice = harness.state().session().unwrap().notice.clone().unwrap();
+    assert_eq!(notice.text, "Hex data contains an invalid or incomplete byte.");
+}
+
+#[test]
+fn a_level_exports_and_imports_as_nml() {
+    let services = MemoryServices::default();
+    let shelf = services.shelf.clone();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    open_document(&mut harness, "A01_2");
+    harness.state_mut().session_mut().unwrap().request_level_bytes(crate::BytesFor::Export);
+    harness.run();
+    let (name, bytes) = shelf.lock().unwrap().saved.pop().expect("exported");
+    assert_eq!(name, "1-1 Area 2.nml");
+    let package = bigstar_level::decode_nml(&bytes).unwrap();
+    assert_eq!((package.course_file_id, package.bgdat_file_id), (300, 301));
+
+    // Importing it into 1-1 makes 1-1 hold 1-1 Area 2.
+    open_document(&mut harness, "A01_1");
+    shelf.lock().unwrap().to_open.push_back(bytes);
+    harness.get_by_label("Level").click();
+    harness.run();
+    harness.get_by_label("Import Level (.nml)…").click();
+    harness.run();
+    let snapshot = &view(&harness).snapshot;
+    assert_eq!((snapshot.area.as_str(), snapshot.objects.len(), snapshot.undo_names[0].as_str()), ("A01_1", 2, "Import level"));
+}
+
+#[test]
+fn the_finder_opens_the_level_and_selects_what_it_found() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("Level").click();
+    harness.run();
+    harness.get_by_label("Find Sprite…").click();
+    harness.run();
+    harness.state_mut().tools.finder.as_mut().unwrap().id = 21;
+    harness.get_by_label("Find").click();
+    harness.run();
+    let found = harness.state().session().unwrap().found.clone().unwrap();
+    assert_eq!(found.entities.iter().map(|e| (e.area.as_str(), e.index)).collect::<Vec<_>>(), [("A01_1", 0), ("A01_1", 3), ("A01_2", 0)]);
+    // Picking the one in Area 2 opens it and selects the sprite.
+    harness.get_by_label("1-1 Area 2").click();
+    harness.run();
+    let view = view(&harness);
+    assert_eq!((view.snapshot.area.as_str(), view.selection.as_slice()), ("A01_2", &[Item::new(Kind::Sprite, 0)][..]));
+}
+
+#[test]
+fn the_sprite_event_viewer_lists_every_event_a_sprite_names() {
+    let items = LevelEntityInsertions {
+        sprites: vec![
+            SpriteInsertion { value: NsmbLevelStageObject { id: 21, events: [5, 0], ..Default::default() }, hash: None },
+            SpriteInsertion { value: NsmbLevelStageObject { id: 64, events: [2, 5], ..Default::default() }, hash: None },
+        ],
+        ..Default::default()
+    };
+    let mut harness = level_with(items);
+    harness.state_mut().tools.events = true;
+    harness.run();
+    harness.get_by_label("Sprite Event Viewer");
+    // Two rows name event 5 and one names event 2, which comes first.
+    assert_eq!(harness.query_all_by_label("5").count(), 2);
+    assert_eq!(harness.query_all_by_label("Coin").count(), 2, "one row for each event the coin names");
+    harness.get_all_by_label("1").next().unwrap().click();
+    harness.run();
+    assert_eq!(view(&harness).selection, [Item::new(Kind::Sprite, 1)]);
+}
+
+#[test]
+fn autosaves_an_interrupted_session_left_are_offered_back() {
+    let mut harness = harness_on(DemoConnection::new().with_recovery(), Vec2::new(1500.0, 800.0));
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.get_by_label("Big Star found 1 autosaved level(s) from an interrupted or unsaved session. Recover them?");
+    harness.get_by_label("Recover").click();
+    harness.run();
+    harness.run();
+    // The recovered level opens as a document holding the autosave, unsaved.
+    let view = view(&harness);
+    assert_eq!((view.snapshot.area.as_str(), view.snapshot.objects.len(), view.snapshot.dirty), ("A01_1", 6, true));
+    assert_eq!(view.snapshot.undo_names[0], "Recover autosave");
 }

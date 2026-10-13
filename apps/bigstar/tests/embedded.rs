@@ -101,12 +101,12 @@ fn import_open_drag_and_save_through_the_embedded_host() {
 
     harness.get_by_label("World 1").click();
     harness.run();
-    // Several levels have an "Area 1"; only 1-1's is in the ROM, so only its button is enabled.
-    harness.query_all_by_label("Area 1").find(|button| !button.accesskit_node().is_disabled()).unwrap().click();
-    until(&mut harness, "the level", |app| app.session().is_some_and(|s| s.level.is_some()));
+    // Several levels have an "Area 1"; only 1-1's is in the ROM, so only its Edit button is enabled.
+    harness.query_all_by_label("Edit").find(|button| !button.accesskit_node().is_disabled()).unwrap().click();
+    until(&mut harness, "the level", |app| app.session().is_some_and(|s| s.level().is_some()));
 
     let (grab, drop, x_before) = {
-        let view = harness.state().session().unwrap().level.as_ref().unwrap();
+        let view = harness.state().session().unwrap().level().unwrap();
         let to_screen = |p: egui::Pos2| view.canvas.min + (p.to_vec2() - view.pan) * view.zoom;
         let center = view.bounds(Item::new(Kind::Object, 0)).unwrap().center();
         (to_screen(center), to_screen(center + Vec2::new(64.0, 0.0)), view.snapshot.objects[0].x)
@@ -118,13 +118,13 @@ fn import_open_drag_and_save_through_the_embedded_host() {
     harness.hover_at(drop);
     harness.run();
     harness.drop_at(drop);
-    until(&mut harness, "the move to be answered", |app| app.session().and_then(|s| s.level.as_ref()).is_some_and(|v| v.snapshot.dirty));
-    let view = harness.state().session().unwrap().level.as_ref().unwrap();
+    until(&mut harness, "the move to be answered", |app| app.session().and_then(|s| s.level()).is_some_and(|v| v.snapshot.dirty));
+    let view = harness.state().session().unwrap().level().unwrap();
     assert_eq!(view.snapshot.objects[0].x, x_before + 4, "64 pixels is four tiles");
     assert_eq!(view.snapshot.undo_names, ["Move selection"]);
 
     harness.get_by_label("Save").click();
-    until(&mut harness, "the save", |app| app.session().and_then(|s| s.level.as_ref()).is_some_and(|v| !v.snapshot.dirty));
+    until(&mut harness, "the save", |app| app.session().and_then(|s| s.level()).is_some_and(|v| !v.snapshot.dirty));
 
     let saved = std::fs::read(workspace.path().join("roms/game/edits/course/A01_1.bin")).unwrap();
     let saved_bgdat = std::fs::read(workspace.path().join("roms/game/edits/course/A01_1_bgdat.bin")).unwrap();

@@ -63,4 +63,16 @@ impl Services for NativeServices {
     fn pick_folder(&self) -> Option<String> {
         rfd::FileDialog::new().set_title("Workspace folder").pick_folder().map(|path| path.to_string_lossy().into_owned())
     }
+
+    fn save_file(&self, title: &str, suggested: &str, extension: &str, bytes: &[u8]) -> Result<bool, String> {
+        let Some(path) = rfd::FileDialog::new().set_title(title).set_file_name(suggested).add_filter(extension, &[extension]).save_file() else {
+            return Ok(false);
+        };
+        bigstar_core::write_file_atomically(&path, bytes).map(|()| true).map_err(|e| e.message)
+    }
+
+    fn open_file(&self, title: &str, extension: &str) -> Option<Result<Vec<u8>, String>> {
+        let path = rfd::FileDialog::new().set_title(title).add_filter(extension, &[extension]).pick_file()?;
+        Some(std::fs::read(&path).map_err(|e| format!("could not read {}: {e}", path.display())))
+    }
 }

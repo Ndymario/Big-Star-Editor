@@ -112,6 +112,20 @@ fn graphics_messages_survive_the_wire() {
     client_round_trip(ClientFrame::Request { id: 10, request: Request::RenderActors { inputs: vec![input] } });
     client_round_trip(ClientFrame::Request { id: 11, request: Request::SetActiveVariant { variant: "en".into() } });
     client_round_trip(ClientFrame::Request { id: 12, request: Request::ProjectData });
+    for request in
+        [Request::LevelBytes { level: 2 }, Request::FindEntities { sprites: true, id: 21 }, Request::Recovery, Request::Recover { accept: false }]
+    {
+        client_round_trip(ClientFrame::Request { id: 14, request });
+    }
+    let edit = LevelEdit::ReplaceSerialized { course: vec![1, 2, 3], bgdat: vec![0xff, 0xff], name: "Hex edit level".into() };
+    client_round_trip(ClientFrame::Request { id: 15, request: Request::EditLevel { level: 1, base_revision: 3, edit } });
+    let bytes = crate::LevelBytes { course: vec![9; 40], bgdat: vec![0xff, 0xff], course_file_id: Some(300), bgdat_file_id: None };
+    server_round_trip(ServerFrame::Response { id: 6, result: Ok(Response::LevelBytes(Box::new(bytes))) });
+    let found = crate::FoundEntity { area: "A01_1".into(), title: "1-1".into(), index: 3, x: -2, y: 7, settings: Some(5) };
+    server_round_trip(ServerFrame::Response { id: 7, result: Ok(Response::Found(vec![found])) });
+    let offered = crate::RecoverableLevel { area: "A01_1".into(), title: "1-1".into() };
+    server_round_trip(ServerFrame::Response { id: 8, result: Ok(Response::Recovery(vec![offered])) });
+    server_round_trip(ServerFrame::Response { id: 9, result: Ok(Response::Recovered(vec!["A01_1".into()])) });
     let glue = bigstar_formats::GlueBlock { flags: vec![9], values: Vec::new() };
     let edit = LevelEdit::SetGlue { glue, name: "Edit level data".into() };
     client_round_trip(ClientFrame::Request { id: 13, request: Request::EditLevel { level: 1, base_revision: 2, edit } });
