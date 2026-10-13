@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use bigstar_formats::entrance_flags;
 use bigstar_level::{LEVEL_CHUNK_CELLS, LevelTilemap};
 use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, LevelEdit, TextureData, TextureId};
 use egui::{
@@ -21,6 +22,18 @@ use crate::properties::Tab;
 #[derive(Default)]
 pub struct TexturePool {
     uploaded: HashMap<TextureId, egui::TextureHandle>,
+    entrances: Option<egui::TextureHandle>,
+}
+
+/// NSMB Editor's entrance icons: a 16-pixel cell per type, and under each the same entrance as one that can be entered.
+const ENTRANCE_SHEET: &[u8] = include_bytes!("../assets/level/entrances.png");
+const ENTRANCE_SHEET_COLUMNS: u8 = 27;
+
+/// The cell of the sheet an entrance is drawn with, as NSMB Editor picks it: doors and pipes can be walked into, so
+/// one that is not exit-only wears the second row's arrow. Types past the last icon share it.
+fn entrance_cell(kind: u8, flags: u8) -> (u8, u8) {
+    let enterable = matches!(kind, 2..=6 | 16..=19 | 22..=25) && flags & entrance_flags::EXIT_ONLY == 0;
+    (kind.min(25), u8::from(enterable))
 }
 
 impl TexturePool {
@@ -39,6 +52,15 @@ impl TexturePool {
         let found = (handle.id(), handle.size_vec2());
         self.uploaded.insert(id.to_owned(), handle);
         Some(found)
+    }
+
+    fn entrance_sheet(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        if self.entrances.is_none() {
+            let sheet = image::load_from_memory_with_format(ENTRANCE_SHEET, image::ImageFormat::Png).ok()?.into_rgba8();
+            let image = egui::ColorImage::from_rgba_unmultiplied([sheet.width() as usize, sheet.height() as usize], sheet.as_raw());
+            self.entrances = Some(ctx.load_texture("bigstar:entrances", image, egui::TextureOptions::NEAREST));
+        }
+        self.entrances.as_ref().map(egui::TextureHandle::id)
     }
 }
 
@@ -727,13 +749,24 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
         }
     }
 
-    for index in 0..course.entrances.len() {
+    let sheet = art.pool.entrance_sheet(art.ctx);
+    for (index, entrance) in course.entrances.iter().enumerate() {
         let rect = frame.rect(placed(Kind::Entrance, index));
-        painter.add(Shape::ellipse_filled(rect.center(), rect.size() / 2.0, rgba(92, 190, 214, 190)));
-        painter.add(Shape::ellipse_stroke(rect.center(), rect.size() / 2.0, hairline(Color32::from_rgb(34, 94, 122))));
+        match sheet {
+            Some(sheet) => {
+                let (column, row) = entrance_cell(entrance.kind, entrance.flags);
+                let cell = Vec2::new(1.0 / f32::from(ENTRANCE_SHEET_COLUMNS), 0.5);
+                let corner = Pos2::new(f32::from(column) * cell.x, f32::from(row) * cell.y);
+                painter.image(sheet, rect, Rect::from_min_size(corner, cell), Color32::WHITE);
+            }
+            None => {
+                painter.add(Shape::ellipse_filled(rect.center(), rect.size() / 2.0, rgba(92, 190, 214, 190)));
+                painter.add(Shape::ellipse_stroke(rect.center(), rect.size() / 2.0, hairline(Color32::from_rgb(34, 94, 122))));
+            }
+        }
         if selected(Kind::Entrance, index, None) {
-            let ring = rect.expand(3.0 * frame.zoom);
-            painter.add(Shape::ellipse_stroke(ring.center(), ring.size() / 2.0, marker_stroke(colors)));
+            // A square on the icon's own edge, as NSMB Editor outlines whatever is selected.
+            painter.rect_stroke(rect, 0.0, marker_stroke(colors), StrokeKind::Middle);
         }
     }
 
@@ -975,6 +1008,15 @@ mod tests {
 
     fn area(rects: &[Rect]) -> f32 {
         rects.iter().map(Rect::area).sum()
+    }
+
+    #[test]
+    fn an_entrance_wears_its_type_and_whether_it_can_be_entered() {
+        let sheet = image::load_from_memory_with_format(ENTRANCE_SHEET, image::ImageFormat::Png).unwrap();
+        assert_eq!((sheet.width(), sheet.height()), (u32::from(ENTRANCE_SHEET_COLUMNS) * 16, 32));
+        assert_eq!(entrance_cell(0, 0), (0, 0), "nothing walks into a plain spawn point");
+        assert_eq!((entrance_cell(3, 0), entrance_cell(3, entrance_flags::EXIT_ONLY)), ((3, 1), (3, 0)));
+        assert_eq!((entrance_cell(24, 0), entrance_cell(99, 0)), ((24, 1), (25, 0)));
     }
 
     #[test]

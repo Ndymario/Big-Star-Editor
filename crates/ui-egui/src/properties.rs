@@ -188,8 +188,9 @@ fn paths(snapshot: &LevelSnapshot, kind: Kind) -> &Vec<NsmbLevelPath> {
     if kind == Kind::ProgressPath { &snapshot.course.progress_paths } else { &snapshot.course.paths }
 }
 
-/// What the game calls each entrance type, in the order it numbers them.
-const ENTRANCE_TYPES: [&str; 22] = [
+/// What the game calls each entrance type, in the order it numbers them. Its tables end at `Vine`; the four after it
+/// are in Nintendo's own levels all the same, and NSMB Editor names them.
+const ENTRANCE_TYPES: [&str; 26] = [
     "Normal",
     "Normal (overridden)",
     "Door",
@@ -212,6 +213,29 @@ const ENTRANCE_TYPES: [&str; 22] = [
     "Mini pipe right",
     "Jumping",
     "Vine",
+    "Connected mini pipe up",
+    "Connected mini pipe down",
+    "Connected mini pipe left",
+    "Connected mini pipe right",
+];
+
+/// The row an entrance's type is on, and the row its flags start at: one checkbox a bit, from the lowest.
+const ENTRANCE_TYPE_ROW: usize = 5;
+const ENTRANCE_FLAG_ROW: usize = 13;
+
+/// What each bit of an entrance's flags does, read off `Entrance::tryUseEntrance` and `Entrance::accessEntrance`.
+const ENTRANCE_FLAGS: [(&str, &str); 8] = [
+    ("Bottom screen", "The player arrives on the bottom screen, and the fade into it crosses screens."),
+    ("Closed to player 2", "The second player cannot enter this entrance."),
+    ("Closed to player 1", "The first player cannot enter this entrance."),
+    (
+        "Connected pipe",
+        "The player rides a path to the other end rather than warping. Target stage is then the path's ID, and Target area is kept for the ride: the game's headers call it travelling the path backwards.",
+    ),
+    ("Wipe fade", "Entering fades with a wipe from one screen to the other, in place of the character's own shape."),
+    ("Unknown 0x20", "Nothing in the game's entrance code reads this bit."),
+    ("Exact X", "The player arrives at the entrance's own X. Without it most types move the player half a tile right, onto the middle of it."),
+    ("Exit only", "The player can arrive here but cannot enter it."),
 ];
 
 /// The lines of the panel's list for `kind`: every item of it, and under each selected path its nodes. Kinds the
@@ -404,23 +428,69 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             let list = &course.entrances;
             let get = |f: fn(&NsmbLevelEntrance) -> i64| common(&indices, list, f);
             pair(rows, "Position", ("X", get(|e| i64::from(e.x))), ("Y", get(|e| i64::from(e.y))), 0, 65535);
-            pair(rows, "Camera", ("X", get(|e| i64::from(e.camera_x))), ("Y", get(|e| i64::from(e.camera_y))), 0, 65535);
-            let bytes: [(&str, EntranceByte); 12] = [
-                ("ID", |e| i64::from(e.id)),
-                ("Target area", |e| i64::from(e.target_stage_area)),
-                ("Target stage / pipe path", |e| i64::from(e.target_stage_index)),
-                ("Target group", |e| i64::from(e.target_stage_group)),
-                ("Target entrance", |e| i64::from(e.target_entrance)),
-                ("Camera zoom", |e| i64::from(e.camera_zoom)),
-                ("Type", |e| i64::from(e.kind)),
-                ("Flags", |e| i64::from(e.flags)),
-                ("Unknown 0x10", |e| i64::from(e.unknown_10)),
-                ("Unknown 0x11", |e| i64::from(e.unknown_11)),
-                ("View ID", |e| i64::from(e.view_id)),
-                ("World-map node", |e| i64::from(e.target_worldmap_node)),
+            pair(rows, "Camera offset", ("X", get(|e| i64::from(e.camera_x))), ("Y", get(|e| i64::from(e.camera_y))), 0, 65535);
+            let bytes: [(&str, EntranceByte, &str); 11] = [
+                ("ID", |e| i64::from(e.id), "The number other entrances and the level header name this one by."),
+                ("Type", |e| i64::from(e.kind), ""),
+                (
+                    "Target area",
+                    |e| i64::from(e.target_stage_area),
+                    "0 stays in this area, and the stage and group are then ignored. Otherwise the area's number plus one.",
+                ),
+                (
+                    "Target stage / pipe path",
+                    |e| i64::from(e.target_stage_index),
+                    "0 is this stage, otherwise the stage's number plus one. On a connected pipe, the ID of the path it follows.",
+                ),
+                ("Target group", |e| i64::from(e.target_stage_group), "0 is this world, otherwise the world's number plus one."),
+                ("Target entrance", |e| i64::from(e.target_entrance), "The ID of the entrance the player comes out of."),
+                (
+                    "Camera zoom",
+                    |e| i64::from(e.camera_zoom),
+                    "In sixteenths: 16 is the normal zoom, and so is 0. The game keeps it between 8 and 24; 255 leaves the zoom as it is.",
+                ),
+                ("View ID", |e| i64::from(e.view_id), "The view the player arrives in, which bounds the camera and picks the music. 255 is none."),
+                (
+                    "World-map node",
+                    |e| i64::from(e.target_worldmap_node),
+                    "0: a normal entrance. 1 to 254: entering it exits the level to the world map, with the player on map node (this number minus 1). 255: exits to the world map where the player already stood.",
+                ),
+                ("Unknown 0x10", |e| i64::from(e.unknown_10), "Nothing in the game's entrance code reads this byte."),
+                (
+                    "Unknown 0x11",
+                    |e| i64::from(e.unknown_11),
+                    "Anything but 0 replaces the warp: entering fades out and back in within this area, ignoring the target. One below this number, 0 to 7, is kept for something that has not been found.",
+                ),
             ];
-            for (label, read) in bytes {
+            let flag_rows = |rows: &mut Vec<Row>| {
+                for (bit, (label, note)) in ENTRANCE_FLAGS.into_iter().enumerate() {
+                    let value = common(&indices, list, |e| i64::from(e.flags >> bit & 1));
+                    rows.push(Row {
+                        label: label.to_owned(),
+                        value,
+                        editor: Editor::Boolean,
+                        span: Span::Full,
+                        group: String::new(),
+                        note: note.to_owned(),
+                        representable: true,
+                    });
+                }
+            };
+            for (label, read, note) in bytes {
+                // The flags sit between what the entrance does and the two bytes nobody has named.
+                if label == "Unknown 0x10" {
+                    flag_rows(rows);
+                }
                 full(rows, label, get(read), 0, 255);
+                if let Some(row) = rows.last_mut() {
+                    row.note = note.to_owned();
+                }
+            }
+            if let Some(row) = rows.get_mut(ENTRANCE_TYPE_ROW) {
+                let named = row.value.is_none_or(|v| usize::try_from(v).is_ok_and(|v| v < ENTRANCE_TYPES.len()));
+                row.editor = Editor::Choice((0i64..).zip(ENTRANCE_TYPES).map(|(value, name)| (value, name.to_owned())).collect());
+                row.representable = named;
+                row.note = "How the player arrives, and for doors and pipes how they leave. The game's tables stop at Vine: Nintendo's levels use the connected mini pipes after it, but the game reads past its tables for them.".to_owned();
             }
         }
         Tab::Entity(Kind::View) => {
@@ -640,20 +710,23 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
                     1 => e.y = narrow(value, e.y),
                     2 => e.camera_x = narrow(value, e.camera_x),
                     3 => e.camera_y = narrow(value, e.camera_y),
+                    row if (ENTRANCE_FLAG_ROW..ENTRANCE_FLAG_ROW + ENTRANCE_FLAGS.len()).contains(&row) => {
+                        let bit = 1u8 << (row - ENTRANCE_FLAG_ROW);
+                        e.flags = if value != 0 { e.flags | bit } else { e.flags & !bit };
+                    }
                     row => {
                         let byte = match row {
                             4 => &mut e.id,
-                            5 => &mut e.target_stage_area,
-                            6 => &mut e.target_stage_index,
-                            7 => &mut e.target_stage_group,
-                            8 => &mut e.target_entrance,
-                            9 => &mut e.camera_zoom,
-                            10 => &mut e.kind,
-                            11 => &mut e.flags,
-                            12 => &mut e.unknown_10,
-                            13 => &mut e.unknown_11,
-                            14 => &mut e.view_id,
-                            15 => &mut e.target_worldmap_node,
+                            ENTRANCE_TYPE_ROW => &mut e.kind,
+                            6 => &mut e.target_stage_area,
+                            7 => &mut e.target_stage_index,
+                            8 => &mut e.target_stage_group,
+                            9 => &mut e.target_entrance,
+                            10 => &mut e.camera_zoom,
+                            11 => &mut e.view_id,
+                            12 => &mut e.target_worldmap_node,
+                            21 => &mut e.unknown_10,
+                            22 => &mut e.unknown_11,
                             _ => return None,
                         };
                         *byte = narrow(value, *byte);
@@ -991,8 +1064,7 @@ mod tests {
         assert_eq!((rows.rows[5].value, rows.rows[5].representable), (Some(0), false));
         assert!(rows.rows[5].note.contains("does not name the value 0"));
         // A row that stops carrying a note carries none.
-        view.snapshot.course.entrances.push(Default::default());
-        view.panel_tab(Tab::Entity(Kind::Entrance));
+        view.panel_tab(Tab::Entity(Kind::Zone));
         assert!(shown(&view).rows.iter().all(|r| r.note.is_empty()));
     }
 
@@ -1136,6 +1208,41 @@ mod tests {
         assert_eq!(line_label(&view, Item::new(Kind::Object, 0)), "Object 0:1 (2, 3) 4×1");
         assert_eq!(line_label(&view, Item::new(Kind::Sprite, 0)), "Actor 1 (6, 4)");
         assert_eq!(line_label(&view, Item::new(Kind::Zone, 0)), "Zone 0 (0, 0) 400×200");
+    }
+
+    #[test]
+    fn an_entrance_names_its_type_and_ticks_its_flags() {
+        let mut level = snapshot();
+        level.course.entrances = vec![
+            NsmbLevelEntrance { kind: 4, flags: 0x88, unknown_11: 3, ..Default::default() },
+            NsmbLevelEntrance { kind: 30, flags: 0x08, ..Default::default() },
+        ];
+        let mut view = LevelView::new(level);
+        view.selection = vec![Item::new(Kind::Entrance, 0)];
+        view.sync_panel();
+        let rows = shown(&view);
+        let Editor::Choice(types) = &rows.rows[ENTRANCE_TYPE_ROW].editor else { panic!() };
+        assert_eq!((types.len(), types[4].1.as_str(), rows.rows[ENTRANCE_TYPE_ROW].value), (26, "Pipe down", Some(4)));
+        let flags: Vec<(&str, Option<i64>)> =
+            rows.rows[ENTRANCE_FLAG_ROW..ENTRANCE_FLAG_ROW + 8].iter().map(|r| (r.label.as_str(), r.value)).collect();
+        assert_eq!((flags[0], flags[3], flags[7]), (("Bottom screen", Some(0)), ("Connected pipe", Some(1)), ("Exit only", Some(1))));
+        assert!(rows.rows[ENTRANCE_FLAG_ROW..ENTRANCE_FLAG_ROW + 8].iter().all(|r| r.editor == Editor::Boolean));
+        assert_eq!((rows.rows[22].label.as_str(), rows.rows[22].value, rows.rows.len()), ("Unknown 0x11", Some(3), 23));
+        // A tick writes its own bit and nothing beside it.
+        assert_eq!(written(&view, ENTRANCE_FLAG_ROW + 7, 0).entrances[0].value.flags, 0x08);
+        assert_eq!(written(&view, ENTRANCE_FLAG_ROW, 1).entrances[0].value.flags, 0x89);
+        assert_eq!(written(&view, ENTRANCE_TYPE_ROW, 16).entrances[0].value.kind, 16);
+        assert_eq!(written(&view, 11, 255).entrances[0].value.view_id, 255);
+        // Across a selection a flag reads only where every entrance agrees, and a tick lands on each.
+        view.selection.push(Item::new(Kind::Entrance, 1));
+        view.sync_panel();
+        let rows = shown(&view);
+        assert_eq!((rows.rows[ENTRANCE_FLAG_ROW + 3].value, rows.rows[ENTRANCE_FLAG_ROW + 7].value), (Some(1), None));
+        assert_eq!(written(&view, ENTRANCE_FLAG_ROW + 7, 1).entrances.iter().map(|u| u.value.flags).collect::<Vec<_>>(), [0x88, 0x88]);
+        // A type past the last name is shown as what it is.
+        view.selection = vec![Item::new(Kind::Entrance, 1)];
+        view.sync_panel();
+        assert!(!shown(&view).rows[ENTRANCE_TYPE_ROW].representable);
     }
 
     #[test]
