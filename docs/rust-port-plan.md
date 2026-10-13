@@ -322,7 +322,7 @@ Paths under "Port" are relative to the repo root. Each phase lists its commit me
 |---|---|---|---|
 | 0 | Skeleton | yes | |
 | 1 | Core and nds | yes | `Command` and `CommandHistory` are generic over the edited target (commands are lent it per call). FNT paths are `/`-separated strings. JSON and logging are `serde_json` and `log`. |
-| 2 | Formats I (levels, archives, compression) | no | |
+| 2 | Formats I (levels, archives, compression) | yes | `identify_graphics_format` and `is_bmg` are ported here as small stand-ins so `identify_format` works; phases 7 and 8 add the codecs. `NsmbLevelEntrance.type` is `kind`. `NarcArchive::find` takes a `/`-separated `&str`. Compressor byte-equality with C++ is only asserted on the small reference cases; the phase 13 oracle covers whole ROMs. |
 | 3 | The level model | no | |
 | 4 | Project I and the CLI | no | |
 | 5 | Protocol, host, client | no | |

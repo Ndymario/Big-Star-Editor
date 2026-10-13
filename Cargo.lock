@@ -22,6 +22,11 @@ dependencies = [
 [[package]]
 name = "bigstar-formats"
 version = "0.1.0"
+dependencies = [
+ "bigstar-core",
+ "bigstar-nds",
+ "serde",
+]
 
 [[package]]
 name = "bigstar-host"

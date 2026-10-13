@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-formats"
-description = "Big Star Editor formats layer (stub)"
+description = "Big Star Editor formats layer"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,6 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-nds.workspace = true
+serde.workspace = true
