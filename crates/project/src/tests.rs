@@ -668,3 +668,11 @@ fn tile_overlays_replace_remap_and_draw_over() {
     overlay_map16_sheet(&mut sheet, 2, 2, 5, 257, &catalog);
     assert_eq!(sheet.pixels[3], 0, "block 257 remaps to 256, which is not on this sheet");
 }
+
+/// The host keeps catalogs on its worker thread, so they have to be able to move there.
+#[test]
+fn lua_catalogs_can_cross_threads() {
+    fn check<T: Send + Sync>() {}
+    check::<LuaActorCatalog>();
+    check::<TileOverlayCatalog>();
+}

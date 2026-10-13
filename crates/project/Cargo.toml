@@ -19,6 +19,7 @@ bigstar-nds.workspace = true
 bigstar-formats.workspace = true
 bigstar-level.workspace = true
 bigstar-patching.workspace = true
+mlua.workspace = true
 serde.workspace = true
 
 [dev-dependencies]

@@ -1,11 +1,14 @@
 //! Big Star Editor `project` layer: the manifest, the project model, the ROM read where it lies, the level
 //! catalog, the generated module data, the effective filesystem a plan and a ROM add up to, level graphics resolution
-//! and the transactional patch apply. Host-only: it touches the filesystem.
+//! the transactional patch apply, and the Lua actor and tile scripts. Host-only: it touches the filesystem and runs Lua.
 
 mod effective_filesystem;
 mod filesystem_view;
 mod graphics_resources;
 mod level_catalog;
+mod lua_actors;
+mod lua_sandbox;
+mod lua_tiles;
 mod manifest;
 mod module_data;
 mod patch_apply;
@@ -27,6 +30,12 @@ pub use graphics_resources::{
     TilesetResourceFiles, find_object_bank_overlays, load_background_graphics, load_level_tilesets, nsmb_graphics_profile, resolve_level_graphics,
 };
 pub use level_catalog::{LevelCatalogArea, LevelCatalogEntry, nsmb_level_catalog};
+pub use lua_actors::{
+    ActorImageDecoder, ActorResource, ActorResourceKind, ActorResourceResolver, LuaActorCatalog, LuaActorDefinition, LuaActorDrawCommand,
+    LuaActorDrawKind, LuaActorLayer, LuaActorProgram, LuaActorRender, LuaActorRenderInput, StageObjectIdentity, StageObjectNameResolver,
+    has_lua_renderer, load_lua_actor_layers, lua_actor_bounds, render_lua_actor,
+};
+pub use lua_tiles::{LuaTileLayer, load_lua_tile_layers};
 pub use manifest::{
     BUILT_ROM_FILE_NAME, INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, MANIFEST_VERSION, default_rom_path, index_rom_files, index_rom_files_from,
     load_manifest, make_project_relative, save_manifest,
