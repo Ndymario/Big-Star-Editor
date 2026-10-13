@@ -1,6 +1,7 @@
 //! bigstar-host: the headless host (`serve`) and the command line verbs.
 
 mod cli;
+mod oracle;
 mod server;
 
 fn main() {

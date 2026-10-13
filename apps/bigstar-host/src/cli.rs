@@ -17,7 +17,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
     );
 }
 
@@ -295,6 +295,7 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             2
         }
         ["patcher-info", dir] => patcher_info(NCPATCHER, Path::new(dir), out, err),
+        ["oracle", dir, data] => crate::oracle::oracle(Path::new(dir), Path::new(data), out, err),
         ["serve", rest @ ..] => serve(rest, out, err),
         _ => {
             usage(out);
@@ -350,6 +351,22 @@ mod tests {
         let mut err = Vec::new();
         assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", empty.path(), "", &mut err), 10);
         assert!(String::from_utf8_lossy(&err).contains("no ncpatcher.yaml"));
+    }
+
+    #[test]
+    fn oracle_reports_every_file_and_actor() {
+        let dir = TempDir::new("cli-oracle");
+        let rom = dir.path().join("source.nds");
+        write_bytes(&rom, &sample_rom());
+        let project = dir.path().join("Oracle");
+        assert_eq!(invoke(&["import-rom", &rom.to_string_lossy(), &project.to_string_lossy()]).0, 0);
+        let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let (code, out, err) = invoke(&["oracle", &project.to_string_lossy(), &data.to_string_lossy()]);
+        assert_eq!(code, 0, "{err}");
+        assert!(out.starts_with("rom A2DE files=3\n"), "{out}");
+        assert!(out.contains(" b/map.nscr graphics size=1\n"), "{out}");
+        assert_eq!(out.lines().filter(|line| line.starts_with("actor ")).count(), 305);
+        assert_eq!(invoke(&["oracle", &dir.path().join("none").to_string_lossy(), &data.to_string_lossy()]).0, 2);
     }
 
     #[test]
