@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-project"
-description = "Big Star Editor project layer (stub)"
+description = "Big Star Editor project layer: manifests, in-place ROM reading and the level catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,4 +9,13 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+# A hand-built `.nds` and a scratch directory, for tests in this crate and in the ones above it.
+test-support = []
+
 [dependencies]
+bigstar-core.workspace = true
+bigstar-nds.workspace = true
+bigstar-formats.workspace = true
+bigstar-level.workspace = true
+serde.workspace = true

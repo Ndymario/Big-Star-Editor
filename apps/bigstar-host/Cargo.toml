@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-host-app"
-description = "bigstar-host (stub)"
+description = "bigstar-host: the headless host and the command line verbs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,7 +10,14 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-nds.workspace = true
+bigstar-formats.workspace = true
+bigstar-project.workspace = true
+
+[dev-dependencies]
+bigstar-project = { workspace = true, features = ["test-support"] }
 
 [[bin]]
-name = "bigstar-host-app"
+name = "bigstar-host"
 path = "src/main.rs"

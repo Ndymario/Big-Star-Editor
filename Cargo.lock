@@ -35,6 +35,12 @@ version = "0.1.0"
 [[package]]
 name = "bigstar-host-app"
 version = "0.1.0"
+dependencies = [
+ "bigstar-core",
+ "bigstar-formats",
+ "bigstar-nds",
+ "bigstar-project",
+]
 
 [[package]]
 name = "bigstar-level"
@@ -61,6 +67,13 @@ version = "0.1.0"
 [[package]]
 name = "bigstar-project"
 version = "0.1.0"
+dependencies = [
+ "bigstar-core",
+ "bigstar-formats",
+ "bigstar-level",
+ "bigstar-nds",
+ "serde",
+]
 
 [[package]]
 name = "bigstar-protocol"
