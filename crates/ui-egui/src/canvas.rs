@@ -248,7 +248,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         controls::toggle(ui, &mut options.show_minimap, "Minimap");
         controls::toggle(ui, &mut options.show_ds_screen, "DS Screen");
         controls::toggle(ui, &mut options.layers_in_views, "BG in views")
-            .on_hover_text("Draw the background and foreground only inside the views, as the game shows them");
+            .on_hover_text("Draw the background layers only inside the views, as the game shows them");
         ui.separator();
         if Button::new("Fit").show(ui).clicked() {
             view.needs_fit = true;
@@ -619,9 +619,15 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     } else {
         vec![bounds.intersect(visible)]
     };
-    if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.background.texture.as_ref())) {
-        for area in &layer_areas {
-            tiled(painter, frame, texture, size, *area, Color32::WHITE.gamma_multiply(0.55));
+    // The far layer, then the near one (the game's "foreground", which is still behind the level), both under
+    // everything the level holds. Darkened rather than faded, so the near layer hides the far one where it is solid and
+    // the level stands out against both.
+    let shade = Color32::from_gray(140);
+    for layer in [graphics.and_then(|g| g.background.texture.as_ref()), graphics.and_then(|g| g.foreground.texture.as_ref())] {
+        if let Some((texture, size)) = art.texture(layer) {
+            for area in &layer_areas {
+                tiled(painter, frame, texture, size, *area, shade);
+            }
         }
     }
     // A coarse grid of screens over the level.
@@ -758,13 +764,7 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
         }
     }
 
-    if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.foreground.texture.as_ref())) {
-        for area in &layer_areas {
-            tiled(painter, frame, texture, size, *area, Color32::WHITE.gamma_multiply(0.35));
-        }
-    }
-
-    // Last, so nothing -- not even the foreground -- dims the edges a zone or a view is sized against.
+    // Last, so nothing dims the edges a zone or a view is sized against.
     for (kind, count, color, accent) in [
         (Kind::Zone, course.zones.len(), ZONE_COLOR, Color32::from_rgb(24, 111, 58)),
         (Kind::View, course.views.len(), VIEW_COLOR, Color32::from_rgb(35, 88, 145)),
