@@ -190,11 +190,14 @@ pub struct CanvasOptions {
     pub show_minimap: bool,
     pub show_grid: bool,
     pub show_ds_screen: bool,
+    /// The background and foreground drawn only inside the views, where the game shows them, rather than over the
+    /// whole level.
+    pub layers_in_views: bool,
 }
 
 impl Default for CanvasOptions {
     fn default() -> Self {
-        Self { snap: true, snap_size: TILE, show_minimap: true, show_grid: true, show_ds_screen: false }
+        Self { snap: true, snap_size: TILE, show_minimap: true, show_grid: true, show_ds_screen: false, layers_in_views: true }
     }
 }
 

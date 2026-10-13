@@ -247,6 +247,8 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         controls::toggle(ui, &mut options.show_grid, "Grid");
         controls::toggle(ui, &mut options.show_minimap, "Minimap");
         controls::toggle(ui, &mut options.show_ds_screen, "DS Screen");
+        controls::toggle(ui, &mut options.layers_in_views, "BG in views")
+            .on_hover_text("Draw the background and foreground only inside the views, as the game shows them");
         ui.separator();
         if Button::new("Fit").show(ui).clicked() {
             view.needs_fit = true;
@@ -545,6 +547,36 @@ fn scaled_font(zoom: f32, size: f32) -> Option<FontId> {
     (pixels >= 5.0).then(|| FontId::proportional(pixels.min(64.0)))
 }
 
+/// `rect` without the part `cut` covers, as up to four rectangles.
+fn subtract(rect: Rect, cut: Rect) -> Vec<Rect> {
+    let overlap = rect.intersect(cut);
+    if !overlap.is_positive() {
+        return vec![rect];
+    }
+    [
+        Rect::from_min_max(rect.min, Pos2::new(rect.max.x, overlap.min.y)),
+        Rect::from_min_max(Pos2::new(rect.min.x, overlap.max.y), rect.max),
+        Rect::from_min_max(Pos2::new(rect.min.x, overlap.min.y), Pos2::new(overlap.min.x, overlap.max.y)),
+        Rect::from_min_max(Pos2::new(overlap.max.x, overlap.min.y), Pos2::new(rect.max.x, overlap.max.y)),
+    ]
+    .into_iter()
+    .filter(|piece| piece.is_positive())
+    .collect()
+}
+
+/// The area the rectangles cover, as rectangles that do not overlap, so a layer drawn over each is drawn once.
+fn disjoint(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
+    let mut covered: Vec<Rect> = Vec::new();
+    for rect in rects {
+        let mut pieces = vec![rect];
+        for done in &covered {
+            pieces = pieces.into_iter().flat_map(|piece| subtract(piece, *done)).collect();
+        }
+        covered.extend(pieces);
+    }
+    covered
+}
+
 /// A background or foreground layer over `area` (level pixels), one image pixel to one level pixel, repeated from the
 /// level's origin as the layer repeats across a level wider or taller than it.
 fn tiled(painter: &Painter, frame: Frame, texture: egui::TextureId, size: Vec2, area: Rect, tint: Color32) {
@@ -580,8 +612,17 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     let hairline = |color: Color32| Stroke::new(1.0, color);
 
     let graphics = view.art.graphics.as_ref();
+    // Where the background and foreground show: inside the views, as in the game, following a view while it is dragged;
+    // a level without views, or with the option off, everywhere.
+    let layer_areas: Vec<Rect> = if view.options.layers_in_views && !course.views.is_empty() {
+        disjoint((0..course.views.len()).map(|index| placed(Kind::View, index))).into_iter().map(|area| area.intersect(visible)).collect()
+    } else {
+        vec![bounds.intersect(visible)]
+    };
     if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.background.texture.as_ref())) {
-        tiled(painter, frame, texture, size, bounds.intersect(visible), Color32::WHITE.gamma_multiply(0.55));
+        for area in &layer_areas {
+            tiled(painter, frame, texture, size, *area, Color32::WHITE.gamma_multiply(0.55));
+        }
     }
     // A coarse grid of screens over the level.
     let grid = 256.0;
@@ -718,7 +759,9 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     }
 
     if let Some((texture, size)) = art.texture(graphics.and_then(|g| g.foreground.texture.as_ref())) {
-        tiled(painter, frame, texture, size, bounds.intersect(visible), Color32::WHITE.gamma_multiply(0.35));
+        for area in &layer_areas {
+            tiled(painter, frame, texture, size, *area, Color32::WHITE.gamma_multiply(0.35));
+        }
     }
 
     // Last, so nothing -- not even the foreground -- dims the edges a zone or a view is sized against.
@@ -920,4 +963,33 @@ pub fn show_preview(ui: &mut Ui, view: &mut LevelView, store: &HashMap<TextureId
     let tilemap = view.tilemap();
     let mut art = Art { ctx: ui.ctx(), store, pool };
     draw_map(&painter, view, &tilemap, frame, &mut art, &colors, false);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(Pos2::new(x, y), Vec2::new(w, h))
+    }
+
+    fn area(rects: &[Rect]) -> f32 {
+        rects.iter().map(Rect::area).sum()
+    }
+
+    #[test]
+    fn overlapping_views_cover_their_union_once() {
+        // Two views sharing a 64×64 corner, and a third apart from both.
+        let views = [rect(0.0, 0.0, 256.0, 192.0), rect(192.0, 128.0, 256.0, 192.0), rect(1000.0, 0.0, 100.0, 100.0)];
+        let pieces = disjoint(views);
+        assert_eq!(area(&pieces), 256.0 * 192.0 * 2.0 - 64.0 * 64.0 + 100.0 * 100.0);
+        for (i, a) in pieces.iter().enumerate() {
+            for b in pieces.iter().skip(i + 1) {
+                assert!(!a.intersect(*b).is_positive(), "{a:?} overlaps {b:?}");
+            }
+        }
+        // A view inside another adds nothing; apart, a rectangle is itself.
+        assert_eq!(area(&disjoint([rect(0.0, 0.0, 100.0, 100.0), rect(10.0, 10.0, 20.0, 20.0)])), 10_000.0);
+        assert_eq!(subtract(rect(0.0, 0.0, 10.0, 10.0), rect(50.0, 50.0, 5.0, 5.0)), [rect(0.0, 0.0, 10.0, 10.0)]);
+    }
 }
