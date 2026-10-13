@@ -349,6 +349,33 @@ fn the_screens_lead_from_projects_to_the_preview_to_a_document() {
 }
 
 #[test]
+fn the_preview_keeps_the_level_before_until_the_next_one_is_drawn() {
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label("Demo").click();
+    harness.run();
+    harness.get_by_label("World 1").click();
+    harness.run();
+    harness.get_all_by_label("Area 1").next().unwrap().click();
+    harness.run();
+    let first = harness.state().workspace.preview.unwrap();
+    harness.get_all_by_label("Area 2").next().unwrap().click();
+    // Frame by frame: whatever the tab shows has its graphics and its actors' draw lists, never a level half arrived.
+    for _ in 0..8 {
+        harness.step();
+        let app = harness.state();
+        let session = app.session().unwrap();
+        let shown = &session.levels[&app.workspace.preview.unwrap()];
+        assert!(shown.art.graphics.is_some() && shown.art.requested.is_empty(), "{} shown half drawn", shown.snapshot.area);
+    }
+    let app = harness.state();
+    let session = app.session().unwrap();
+    let second = app.workspace.preview.unwrap();
+    assert_eq!(session.levels[&second].snapshot.area, "A01_2");
+    assert!(!session.levels.contains_key(&first), "the level before is closed once it is replaced");
+}
+
+#[test]
 fn dragging_a_sprite_moves_it_by_one_undoable_edit() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
     let (centre, x_before, zoom) = {

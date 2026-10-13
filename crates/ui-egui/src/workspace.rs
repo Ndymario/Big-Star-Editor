@@ -132,6 +132,9 @@ pub struct Workspace {
     pub dock: DockState<DocTab>,
     /// The level the Preview tab shows.
     pub preview: Option<LevelId>,
+    /// The level picked for the Preview tab that is not drawn yet; the one before it stays up until it is, so the tab
+    /// goes from one finished picture to the next.
+    preview_next: Option<LevelId>,
     /// Documents in windows of their own.
     pub detached: BTreeSet<LevelId>,
     /// The detached document whose window has the focus, if one does.
@@ -159,6 +162,7 @@ impl Default for Workspace {
         Self {
             dock: DockState::new(vec![DocTab::Preview]),
             preview: None,
+            preview_next: None,
             detached: BTreeSet::new(),
             detached_focus: None,
             restored_for: None,
@@ -213,6 +217,11 @@ impl Workspace {
             let _ = self.dock.set_active_tab(path);
             self.dock.set_focused_node_and_surface(path.node_path());
         }
+    }
+
+    /// The level the Preview tab is showing or about to show: what the level list marks as picked.
+    pub fn previewed(&self) -> Option<LevelId> {
+        self.preview_next.or(self.preview)
     }
 
     pub fn show_preview_tab(&mut self) {
@@ -365,7 +374,7 @@ impl Workspace {
     pub fn discard_document(&mut self, session: &mut Session, level: LevelId) {
         self.remove_document(level);
         // The Preview tab may still be showing the same level.
-        if self.preview != Some(level) {
+        if self.preview != Some(level) && self.preview_next != Some(level) {
             session.close_level(level);
         }
     }
@@ -390,6 +399,9 @@ impl Workspace {
             if self.preview == Some(old) {
                 self.preview = Some(new);
             }
+            if self.preview_next == Some(old) {
+                self.preview_next = Some(new);
+            }
             if self.detached.remove(&old) {
                 self.detached.insert(new);
             }
@@ -398,11 +410,12 @@ impl Workspace {
             match opening {
                 crate::session::Opening::Document => self.show_document(level),
                 crate::session::Opening::Preview => {
-                    if let Some(old) = self.preview.replace(level)
-                        && old != level
-                        && !self.is_document(old)
+                    if let Some(skipped) = self.preview_next.replace(level)
+                        && skipped != level
+                        && self.preview != Some(skipped)
+                        && !self.is_document(skipped)
                     {
-                        session.close_level(old);
+                        session.close_level(skipped);
                     }
                     self.show_preview_tab();
                 }
@@ -426,6 +439,18 @@ impl Workspace {
         self.detached.retain(|level| levels.contains_key(level));
         if self.preview.is_some_and(|level| !levels.contains_key(&level)) {
             self.preview = None;
+        }
+        if let Some(next) = self.preview_next
+            && (self.preview.is_none() || !session.level_arriving(next))
+        {
+            self.preview_next = None;
+            if session.levels.contains_key(&next)
+                && let Some(old) = self.preview.replace(next)
+                && old != next
+                && !self.is_document(old)
+            {
+                session.close_level(old);
+            }
         }
         // What was remembered or picked for levels that have now arrived.
         let documents = self.documents();

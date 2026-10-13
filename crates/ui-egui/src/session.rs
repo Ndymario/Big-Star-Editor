@@ -281,6 +281,15 @@ impl Session {
         self.pending.values().any(|kind| matches!(kind, Pending::Edit(_) | Pending::History(_) | Pending::Save(_)))
     }
 
+    /// Whether something a level is drawn from is still on its way: its graphics, its actors' draw lists, or textures.
+    pub fn level_arriving(&self, level: LevelId) -> bool {
+        self.pending.values().any(|kind| match kind {
+            Pending::LevelGraphics(of) | Pending::ActorDraws(of, _) => *of == level,
+            Pending::Textures | Pending::ActorCatalog => true,
+            _ => false,
+        })
+    }
+
     /// The active document.
     pub fn level(&self) -> Option<&LevelView> {
         self.levels.get(&self.active?)

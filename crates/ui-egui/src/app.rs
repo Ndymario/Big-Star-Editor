@@ -701,7 +701,7 @@ impl BigStarApp {
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
                 Left::Levels => {
-                    if let Some(path) = level_list(ui, session, self.workspace.preview) {
+                    if let Some(path) = level_list(ui, session, self.workspace.previewed()) {
                         // A level row hands the person over to its file.
                         self.left = Left::Filesystem;
                         if !self.files.reveal(session.filesystem.as_ref(), &path) {
