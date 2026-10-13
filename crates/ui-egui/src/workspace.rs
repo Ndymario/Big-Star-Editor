@@ -707,6 +707,13 @@ impl TabViewer for Viewer<'_, '_> {
         }
     }
 
+    fn on_tab_button(&mut self, _tab: &mut DocTab, response: &egui::Response) {
+        // The dock shows a grabbing hand over a tab; a tab is clicked far more often than it is dragged.
+        if response.hovered() && response.ctx.dragged_id().is_none() {
+            response.ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+    }
+
     fn on_close(&mut self, tab: &mut DocTab) -> OnCloseResponse {
         match *tab {
             // The workspace decides, after asking about unsaved edits.
