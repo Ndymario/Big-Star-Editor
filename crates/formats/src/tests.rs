@@ -640,3 +640,277 @@ fn tex0_compresses_and_renders_synthetic_textures() {
     assert!(parse_tex0(b"NOPE").is_err());
     assert!(write_tex0(&Tex0::default()).is_err());
 }
+
+fn bmg_sample() -> Bmg {
+    Bmg {
+        encoding: BmgEncoding::Utf16,
+        file_id: 7,
+        attribute_size: 4,
+        has_mid1: true,
+        messages: vec![
+            BmgMessage {
+                parts: vec![BmgPart::escape(255, vec![0, 0, 1, 0]), BmgPart::text(" Luigi has appeared!")],
+                attributes: vec![1, 2, 3, 4],
+                id: Some(100),
+            },
+            BmgMessage { parts: vec![BmgPart::text("Café ★")], attributes: vec![5, 6, 7, 8], id: Some(101) },
+            BmgMessage { parts: vec![], attributes: vec![0, 0, 0, 0], id: Some(102) },
+            BmgMessage { parts: vec![BmgPart::text("Café ★")], attributes: vec![9, 0, 0, 0], id: Some(103) },
+        ],
+        ..Bmg::default()
+    }
+}
+
+#[test]
+fn bmg_round_trips_and_shares_strings() {
+    let original = bmg_sample();
+    let bytes = write_bmg(&original).unwrap();
+    assert!(bytes.len().is_multiple_of(32), "every section is padded to the 32-byte alignment");
+    assert!(is_bmg(&bytes, ""));
+    assert!(is_bmg(&[], "script/course.bmg"));
+    assert!(!is_bmg(&[], "script/.bmg"));
+    assert_eq!(identify_format(&bytes, ""), FormatKind::MessageBundle);
+    assert_eq!(identify_format(&[], "script/course.bmg"), FormatKind::MessageBundle);
+
+    let parsed = parse_bmg(&bytes).unwrap();
+    assert_eq!(parsed.messages, original.messages);
+    assert_eq!(parsed.file_id, 7);
+    assert_eq!(parsed.attribute_size, 4);
+    assert_eq!(write_bmg(&parsed).unwrap(), bytes, "an untouched load/save cycle is byte-identical");
+
+    // Identical strings must share one DAT1 offset the way Nintendo's own files do, and the empty message must fall
+    // on the terminator the pool opens with.
+    let entry_offset = |index: usize| u32::from_le_bytes(bytes[0x30 + index * 8..0x34 + index * 8].try_into().unwrap());
+    assert_eq!(entry_offset(1), entry_offset(3));
+    assert_eq!(entry_offset(2), 0);
+
+    let first = &parsed.messages[0];
+    assert_eq!(bmg_message_text(first), "[255:00000100] Luigi has appeared!");
+    assert_eq!(bmg_message_plain_text(first), " Luigi has appeared!");
+    assert_eq!(parse_bmg_message_text(&bmg_message_text(first)), first.parts);
+    assert_eq!(parse_bmg_message_text("100% [not:anescape] [1:0z] done")[0].text, "100% [not:anescape] [1:0z] done");
+    assert_eq!(parse_bmg_message_text("[1:F]")[0].escape_data, [0x0f]);
+    assert_eq!(parse_bmg_message_text("[+1:F]")[0].text, "[+1:F]");
+
+    // Escape payloads the model does not understand still have to survive untouched.
+    let mut opaque = original.clone();
+    opaque.messages[0].parts = vec![BmgPart::escape(200, vec![0xde, 0xad, 0xbe, 0xef, 0x01])];
+    let opaque_parsed = parse_bmg(&write_bmg(&opaque).unwrap()).unwrap();
+    assert_eq!(opaque_parsed.messages[0].parts, opaque.messages[0].parts);
+
+    // The 8-bit encodings use a narrower escape header, and CP1252 has its own high range.
+    for encoding in [BmgEncoding::Cp1252, BmgEncoding::Utf8] {
+        let narrow = Bmg {
+            encoding,
+            attribute_size: 0,
+            messages: vec![BmgMessage { parts: vec![BmgPart::text("Café"), BmgPart::escape(3, vec![0x42])], attributes: vec![], id: None }],
+            ..Bmg::default()
+        };
+        assert_eq!(parse_bmg(&write_bmg(&narrow).unwrap()).unwrap().messages, narrow.messages, "{encoding:?}");
+    }
+
+    let unmappable = Bmg {
+        encoding: BmgEncoding::Cp1252,
+        messages: vec![BmgMessage { parts: vec![BmgPart::text("★")], ..BmgMessage::default() }],
+        ..Bmg::default()
+    };
+    assert!(write_bmg(&unmappable).is_err(), "a character CP1252 cannot hold is refused rather than mangled");
+
+    assert!(parse_bmg(b"NARC").is_err());
+    assert!(parse_bmg(&bytes[..0x30]).is_err(), "a file cut off inside its sections is refused");
+    let mut shift_jis = bytes.clone();
+    shift_jis[0x10] = 3;
+    assert!(parse_bmg(&shift_jis).is_err(), "Shift-JIS is refused rather than silently mangled");
+}
+
+fn tileset_resources() -> TilesetResourceData {
+    let mut character = IndexedTile8Bpp::default();
+    character.pixels[0] = 1;
+    let raw_graphics = encode_8bpp_tiles(&[character]).unwrap();
+    let colors = [Bgr555Color::new(0, 0, 0, true), Bgr555Color::new(255, 255, 255, false)];
+    TilesetResourceData {
+        graphics: compress_nitro_lz10(&raw_graphics).unwrap(),
+        palette: encode_bgr555_palette(&colors).unwrap(),
+        map16: encode_map16(&[Map16Tile::default()], 0, 0).unwrap(),
+        objects: vec![0, 0, 0, 0xff],
+        object_index: vec![0, 0, 7, 9],
+        behaviors: vec![0x34, 0x12, 0, 0],
+    }
+}
+
+#[test]
+fn tilesets_round_trip_untouched_and_edited() {
+    let resources = tileset_resources();
+    let mut parsed = parse_tileset(&resources, 0, 0, 0).unwrap();
+    assert_eq!(parsed.graphics.len(), 1);
+    assert_eq!(parsed.palette.len(), 2);
+    assert_eq!(parsed.map16.len(), 1);
+    assert_eq!(parsed.objects.len(), 1);
+    assert_eq!(parsed.objects[0].rows[0][0].tile, -1);
+    assert_eq!(parsed.behaviors, [0x1234]);
+
+    let untouched = write_tileset(&parsed).unwrap();
+    assert_eq!(untouched.graphics, resources.graphics);
+    assert_eq!(untouched.objects, resources.objects);
+    assert_eq!(untouched.object_index, resources.object_index);
+
+    // Most of a tileset's Map16 names jyotyu tiles, which sit below its own offsets. Opening a tileset and saving it
+    // without an edit has to give the file back unchanged, whatever those entries point at.
+    let mut offset_resources = resources.clone();
+    offset_resources.map16 = vec![0x05, 0x00, 0x00, 0x00, 0xc5, 0x20, 0x00, 0x0c];
+    let offset_parsed = parse_tileset(&offset_resources, 192, 2, 1).unwrap();
+    assert_eq!(offset_parsed.map16[0].tiles[0].tile, 5 - 192);
+    assert_eq!(offset_parsed.map16[0].tiles[2].palette, 0);
+    assert_eq!(offset_parsed.map16[0].tiles[2].tile, 5);
+    assert!(offset_parsed.map16[0].tiles[3].horizontal_flip && offset_parsed.map16[0].tiles[3].vertical_flip);
+    assert_eq!(write_tileset(&offset_parsed).unwrap().map16, offset_resources.map16);
+
+    // Composed against the tileset that supplies tile 5, the below-offset entry draws; alone, it cannot. jyotyu sits
+    // at offset 0 and carries the tile.
+    let jyotyu = EditableTileset {
+        graphics: vec![IndexedTile8Bpp { pixels: [1; 64] }; 6],
+        palette: vec![Bgr555Color::new(0, 0, 0, true), Bgr555Color::new(255, 255, 255, false)],
+        ..EditableTileset::default()
+    };
+    let memory = compose_tileset_memory(&[jyotyu, offset_parsed.clone()]);
+    assert_eq!(memory.graphics.len(), 193);
+    assert_eq!(memory.palette.len(), 2 * 256 + 2);
+    assert!(memory.palette[2 * 256].transparent, "the tileset's own block, at its offset");
+    assert!(!memory.palette[1].transparent && memory.graphics[5].pixels[0] == 1);
+
+    let alone = render_map16_sheet(&offset_parsed, 1).unwrap();
+    let together = render_composed_map16_sheet(&offset_parsed, &memory, 1).unwrap();
+    assert_eq!(alone.pixels[3], 0, "entry 0 names tile 5-192: not ours");
+    assert_eq!(together.pixels[3], 255, "...which is jyotyu's tile 5");
+
+    parsed.map16[0].tiles[0] = ScreenMapEntry::new(0, 0, true, true);
+    parsed.objects[0].rows[0][0] = ObjectLayoutTile::new(1, 0);
+    parsed.behaviors[0] = 0x89abcdef;
+    let changed = write_tileset(&parsed).unwrap();
+    let changed_round_trip = parse_tileset(&changed, 0, 0, 0).unwrap();
+    assert!(changed_round_trip.map16[0].tiles[0].horizontal_flip);
+    assert_eq!(changed_round_trip.objects[0].rows[0][0].tile, 1);
+    assert_eq!(changed_round_trip.behaviors[0], 0x89abcdef);
+
+    let bundle = write_tileset_bundle(&changed).unwrap();
+    let unbundled = parse_tileset_bundle(&bundle).unwrap();
+    assert_eq!(unbundled.graphics, changed.graphics);
+    assert_eq!(unbundled.behaviors, changed.behaviors);
+    let mut broken = bundle.clone();
+    broken[8] = 9;
+    assert!(parse_tileset_bundle(&broken).is_err());
+    let mut broken = bundle.clone();
+    broken.copy_within(12..16, 24);
+    assert!(parse_tileset_bundle(&broken).is_err());
+
+    let parts = TileBehaviorParts { flags: 0x10122, subtype: 5, parameter: 7 };
+    assert_eq!(decode_tile_behavior(encode_tile_behavior(parts)), parts);
+    assert_eq!(tile_behavior_parameter_kind(TileBehaviorParts { flags: 2, subtype: 0, parameter: 0 }), TileBehaviorParameterKind::Coin);
+    assert_eq!(tile_behavior_parameter_kind(TileBehaviorParts { flags: 2, subtype: 4, parameter: 0 }), TileBehaviorParameterKind::Conflict);
+    assert_eq!(tile_behavior_parameter_name(TileBehaviorParameterKind::Slope, 10), "Slope edge");
+    assert_eq!(tile_behavior_parameter_name(TileBehaviorParameterKind::PipeDoor, 31), "Pipe joint");
+
+    let mut png = RgbaImage { width: 16, height: 8, pixels: vec![0; 16 * 8 * 4] };
+    for i in 0..16 * 8 {
+        let left = i % 16 < 8;
+        png.pixels[i * 4] = if left { 255 } else { 0 };
+        png.pixels[i * 4 + 2] = if left { 0 } else { 255 };
+        png.pixels[i * 4 + 3] = 255;
+    }
+    let mut tilemap = EditableTilemap::default();
+    import_tilemap_image(&mut tilemap, &png).unwrap();
+    assert_eq!(tilemap.width_tiles, 2);
+    assert_eq!(tilemap.graphics.len(), 2);
+    assert_eq!(tilemap.screen.len(), 2);
+    let rendered = render_tilemap(&tilemap).unwrap();
+    assert_eq!((rendered.width, rendered.height), (16, 8));
+    let tilemap_files = write_tilemap(&tilemap).unwrap();
+    assert_eq!(parse_tilemap(&tilemap_files, 2).unwrap().screen.len(), 2);
+    let mut imported_tileset = parsed.clone();
+    import_tileset_graphics(&mut imported_tileset, &png).unwrap();
+    assert!(imported_tileset.palette[0].transparent);
+    assert_ne!(imported_tileset.graphics[0].pixels[0], 0);
+    assert!(render_tileset_graphics(&imported_tileset, 32).is_ok());
+}
+
+#[test]
+fn ui_resources_round_trip() {
+    let bnbl = vec![b'J', b'N', b'B', b'L', 0x34, 0x12, 1, 0xaa, 0x23, 0xd1, 0x56, 0x72, 8, 9, 0xee];
+    let mut touch = parse_bnbl(&bnbl).unwrap();
+    assert_eq!(touch.entries[0].x, 0x123);
+    assert_eq!(touch.entries[0].x_alignment, 1);
+    assert_eq!(touch.entries[0].x_reserved, 3);
+    assert_eq!(write_bnbl(&touch).unwrap(), bnbl, "BNBL untouched round trip is byte-identical");
+    touch.entries.push(BnblEntry { x: 1, y: 2, width: 3, height: 4, ..BnblEntry::default() });
+    let changed = write_bnbl(&touch).unwrap();
+    assert_eq!(changed[6], 2);
+    assert_eq!(*changed.last().unwrap(), 0xee, "BNBL add preserves trailing bytes");
+    assert!(parse_bnbl(&[b'J', b'N', b'B', b'L', 0, 0, 1, 0]).is_err());
+    touch.entries[0].x = 0x1000;
+    assert!(write_bnbl(&touch).is_err());
+
+    let bncl = vec![b'J', b'N', b'C', b'L', 0, 0, 1, 0x99, 1, 0x20, 2, 0x10, 7, 8, 9, 10, 0xfe];
+    let layout = parse_bncl(&bncl).unwrap();
+    assert_eq!(write_bncl(&layout).unwrap(), bncl);
+    assert!(parse_bncl(&[b'J', b'N', b'B', b'L', 0, 0, 0, 0]).is_err());
+
+    let mut bncd = vec![0u8; 0x40];
+    bncd[..4].copy_from_slice(b"JNCD");
+    put_u16(&mut bncd, 4, 0x101);
+    put_u16(&mut bncd, 6, 1);
+    put_u32(&mut bncd, 8, 0x1c);
+    put_u32(&mut bncd, 12, 0x24);
+    put_u32(&mut bncd, 16, 0x30);
+    put_u32(&mut bncd, 20, 0x10);
+    bncd[0x1c] = 16;
+    bncd[0x1d] = 8;
+    put_u16(&mut bncd, 0x20, 1);
+    put_u16(&mut bncd, 0x24, 0x4000);
+    put_u16(&mut bncd, 0x26, 0x8000);
+    put_u32(&mut bncd, 0x28, 0x11223344);
+    put_u16(&mut bncd, 0x2c, 2);
+    put_u16(&mut bncd, 0x2e, 1);
+    let mut cells = parse_bncd(&bncd).unwrap();
+    assert_eq!(write_bncd(&cells).unwrap(), bncd);
+    assert_eq!(cells.subentries.len(), 1);
+    cells.entries[0].subentry_count = 2;
+    assert!(write_bncd(&cells).is_err(), "BNCD rejects references outside subentry table");
+    cells.texture_offset = 0xffffffff;
+    assert!(write_bncd(&cells).is_err(), "BNCD refuses overflowing mutable offsets");
+
+    let enpg: Vec<u8> = (0..0x10203).map(|i| i as u8).collect();
+    let image = parse_enpg(&enpg).unwrap();
+    assert_eq!(write_enpg(&image).unwrap(), enpg);
+    assert!(parse_enpg(&vec![0; 0x101ff]).is_err());
+    assert_eq!(identify_ui_resource(&enpg, "a/B.ENPG"), UiResourceKind::Enpg);
+
+    let mut banner = vec![0u8; 0xa00];
+    put_u16(&mut banner, 0, 1);
+    banner[0x20] = 0x21;
+    put_u16(&mut banner, 0x220, 0x7fff);
+    for (i, c) in "Test".encode_utf16().enumerate() {
+        put_u16(&mut banner, 0x240 + i * 2, c);
+    }
+    let crc = bigstar_nds::crc16(&banner[0x20..0x840], 0xFFFF);
+    put_u16(&mut banner, 2, crc);
+    assert_eq!(identify_ui_resource(&banner, "banner.bin"), UiResourceKind::Banner);
+    let mut parsed_banner = parse_ds_banner(&banner).unwrap();
+    assert_eq!(banner_title(&parsed_banner, 0), "Test".encode_utf16().collect::<Vec<_>>());
+    set_banner_title(&mut parsed_banner, 1, &"English".encode_utf16().collect::<Vec<_>>()).unwrap();
+    assert!(set_banner_title(&mut parsed_banner, 6, &[]).is_err());
+    let output = write_ds_banner(&parsed_banner).unwrap();
+    assert_eq!(output.len(), banner.len());
+    assert_eq!(output[0x840], 0, "banner preserves padded size");
+    assert_eq!(u16::from_le_bytes([output[2], output[3]]), bigstar_nds::crc16(&output[0x20..0x840], 0xFFFF), "banner CRC updates");
+    assert!(parse_ds_banner(&[9, 0]).is_err());
+
+    let metadata = "[Music]\r\n0=Overworld\r\n[65535]\r\n1=Breakable block\r\n";
+    let mut user = parse_rom_user_metadata(metadata.as_bytes()).unwrap();
+    assert_eq!(write_rom_user_metadata(&user).unwrap(), metadata.as_bytes(), "metadata untouched round trip preserves line endings");
+    user.sections[0].entries[0].value = "Ground".into();
+    assert!(String::from_utf8(write_rom_user_metadata(&user).unwrap()).unwrap().contains("0=Ground"));
+    assert!(parse_rom_user_metadata(b"[A]\n0=x\n0=y\n").is_err(), "metadata duplicate key rejected");
+    assert!(parse_rom_user_metadata(b"0=x\n").is_err(), "metadata refuses entries before a section");
+    assert!(parse_rom_user_metadata(b"[A]\n+1=x\n").is_err());
+    assert!(parse_rom_user_metadata(b"[A]\n-0=x\n").is_ok());
+}

@@ -1,7 +1,8 @@
 //! Big Star Editor `formats` layer: parsers and writers for the file formats inside an NSMB ROM.
 //!
 //! Port of `libs/nsmb-formats`, in the order of docs/rust-port-plan.md. Compression, NARC, glue blocks, courses,
-//! format identification and the graphics codecs (tiles, palettes, screen maps, Nitro 2D, TEX0) live here so far.
+//! format identification, the graphics codecs (tiles, palettes, screen maps, Nitro 2D, TEX0), BMG messages, tilesets and
+//! UI resources live here.
 
 mod compression;
 mod g2d;
@@ -12,6 +13,8 @@ mod level;
 mod message;
 mod narc;
 mod tex0;
+mod tileset;
+mod ui_resources;
 
 pub use compression::*;
 pub use g2d::{
@@ -23,9 +26,11 @@ pub use glue::*;
 pub use graphics::*;
 pub use identify::*;
 pub use level::*;
-pub use message::is_bmg;
+pub use message::*;
 pub use narc::*;
 pub use tex0::*;
+pub use tileset::*;
+pub use ui_resources::*;
 
 #[cfg(test)]
 mod tests;
