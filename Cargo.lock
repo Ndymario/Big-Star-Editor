@@ -39,6 +39,12 @@ version = "0.1.0"
 [[package]]
 name = "bigstar-level"
 version = "0.1.0"
+dependencies = [
+ "bigstar-core",
+ "bigstar-formats",
+ "serde",
+ "serde_json",
+]
 
 [[package]]
 name = "bigstar-nds"

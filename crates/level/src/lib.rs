@@ -1,12 +1,19 @@
-//! Big Star Editor `level` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `level` layer: the editable level with its undo history, and the module data catalogs.
+//! Pure: no filesystem, safe for the browser.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-level";
+mod commands;
+mod editable_level;
+mod module_data;
+mod state;
+
+pub use editable_level::{
+    EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, ReorderKind, SpriteInsertion,
+};
+pub use module_data::{
+    DEFAULT_STAGE_OBJECT_ID_BASE, LevelDataDeclaration, LevelDataKind, ModuleDataCatalog, StageObjectDeclaration, parse_level_data_catalog,
+    parse_stage_object_catalog,
+};
+pub use state::LevelTilesetReferences;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-level");
-    }
-}
+mod tests;

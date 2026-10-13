@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-level"
-description = "Big Star Editor level layer (stub)"
+description = "Big Star Editor level layer: the editable level, its history and module data catalogs"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,7 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-formats.workspace = true
+serde.workspace = true
+serde_json.workspace = true
