@@ -329,3 +329,160 @@ fn every_connection_hears_about_changes() {
 fn first_shared(session: &HostSession) -> std::sync::Arc<crate::host::Shared> {
     session.shared()
 }
+
+mod graphics {
+    use std::time::{Duration, Instant};
+
+    use bigstar_protocol::{ActorInput, DrawKind, Event, Request, Response, Service};
+
+    use super::{Fixture, open_level};
+    use crate::HostSession;
+
+    fn write(path: &std::path::Path, text: impl AsRef<[u8]>) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, text).unwrap();
+    }
+
+    /// A 3x2 PNG the actor's `init` loads beside its script.
+    fn png() -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let image = image::RgbaImage::from_pixel(3, 2, image::Rgba([10, 20, 30, 255]));
+        image.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).unwrap();
+        bytes
+    }
+
+    const ACTOR: &str = r##"
+local still
+return {
+    hash = 0x1234,
+    name = "Project Actor",
+    category = "Tests",
+    fields = { { key = "size", label = "Size", bitOffset = 0, bitWidth = 4 } },
+    init = function(ctx) still = ctx.loadImage("images/still.png") end,
+    grabBounds = function(actor) return { x = actor.pixelX, y = actor.pixelY, width = 16 + actor.fields.size, height = 16 } end,
+    render = function(actor, renderer)
+        renderer:draw(still, { x = actor.pixelX, y = actor.pixelY })
+        renderer:fillRect({ x = actor.pixelX, y = actor.pixelY, width = 4, height = 4, color = "#ff000080" })
+        return true
+    end,
+}"##;
+
+    fn wait_for(session: &mut HostSession, wanted: impl Fn(&Event) -> bool) -> Vec<Event> {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut seen = Vec::new();
+        while Instant::now() < deadline {
+            seen.extend(session.drain_events());
+            if seen.iter().any(&wanted) {
+                return seen;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        panic!("the event never came; saw {seen:?}");
+    }
+
+    #[test]
+    fn actors_render_through_the_host_and_their_stills_arrive_by_hash() {
+        let (fixture, mut session) = Fixture::with_project("host-actors");
+        let project = fixture.root.path().join("proj");
+        write(&project.join("bigstar/actors/custom.lua"), ACTOR);
+        write(&project.join("bigstar/actors/images/still.png"), png());
+
+        let Response::ActorCatalog(catalog) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+        // Every shipped actor, and the project's own in front of them.
+        assert_eq!(catalog.actors.len(), 306);
+        let custom = catalog.actors.iter().find(|actor| actor.definition.hash == Some(0x1234)).unwrap();
+        assert!(custom.has_renderer && custom.init_error.is_none(), "{:?}", custom.init_error);
+        assert_eq!(custom.definition.category, "Tests");
+        // The synthetic ROM has no class table, so vanilla sprites have nothing to map to.
+        assert!(catalog.sprite_object_ids.is_empty());
+
+        let input = ActorInput { sprite_type: 0, hash: Some(0x1234), x: 2, y: 3, pixel_x: 32.0, pixel_y: 48.0, settings: 5, events: [0, 0] };
+        let missing = ActorInput { hash: None, ..input.clone() };
+        let Response::ActorDraws { generation, draws } = session.handle(Request::RenderActors { inputs: vec![input, missing] }).unwrap() else {
+            panic!("not draws")
+        };
+        assert!(generation >= 1);
+        assert_eq!(draws.len(), 2);
+        let draw = &draws[0];
+        assert!(draw.found && draw.custom_rendered && draw.error.is_none(), "{:?}", draw.error);
+        assert_eq!(draw.grab.unwrap().width, 21, "the declared field reaches the bounds function");
+        assert_eq!(draw.commands.len(), 2);
+        assert_eq!(draw.commands[1].kind, DrawKind::FillRect);
+        assert_eq!(draw.commands[1].color, 0xff00_0080);
+        assert!(!draws[1].found, "a vanilla sprite with no class table has no actor");
+
+        // The still travels by content hash, once.
+        let texture = draw.commands[0].texture.clone().unwrap();
+        let Response::Textures(textures) = session.handle(Request::GetTextures { ids: vec![texture.clone(), "nonsense".into()] }).unwrap() else {
+            panic!("not textures")
+        };
+        assert_eq!(textures.len(), 1);
+        assert_eq!((textures[0].width, textures[0].height), (3, 2));
+        assert_eq!(&textures[0].rgba[..4], &[10, 20, 30, 255]);
+        assert_eq!(textures[0].id, texture);
+    }
+
+    #[test]
+    fn level_graphics_report_what_could_not_be_resolved() {
+        let (_fixture, mut session) = Fixture::with_project("host-level-graphics");
+        let snapshot = open_level(&mut session, "A01_1");
+        assert_eq!(snapshot.sprite_hashes.len(), snapshot.course.sprites.len());
+        let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else {
+            panic!("not graphics")
+        };
+        // The synthetic ROM is not NSMB: the overlay holds no resource tables, which is an answer, not a failure.
+        assert_eq!(graphics.level, snapshot.level);
+        assert!(graphics.error.is_some());
+        assert!(session.handle(Request::LevelGraphics { level: 999 }).is_err());
+    }
+
+    #[test]
+    fn the_variant_persists_and_closes_level_sessions() {
+        let (fixture, mut session) = Fixture::with_project("host-variant");
+        let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!("not settings") };
+        assert!(settings.active_variant.is_empty());
+        assert_eq!(settings.generated_path, "build/generated");
+        assert!(settings.patcher_error.is_some(), "this project has no ncpatcher.yaml for NCPatcher to read");
+
+        let snapshot = open_level(&mut session, "A01_1");
+        session.drain_events();
+        let Response::Settings(switched) = session.handle(Request::SetActiveVariant { variant: "fr".into() }).unwrap() else {
+            panic!("not settings")
+        };
+        assert_eq!(switched.active_variant, "fr");
+        let events = session.drain_events();
+        assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(settings) if settings.active_variant == "fr")));
+        assert!(events.iter().any(|event| matches!(event, Event::GraphicsChanged { .. })));
+        // The old session read through the old variant's layers, so it is gone.
+        assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
+        session.handle(Request::SetActiveModule { module: "coop".into() }).unwrap();
+
+        // Another host on the same workspace finds the choice where it was left.
+        let mut again = fixture.session();
+        again.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+        let Response::Settings(restored) = again.handle(Request::ProjectSettings).unwrap() else { panic!("not settings") };
+        assert_eq!((restored.active_variant.as_str(), restored.active_module.as_str()), ("fr", "coop"));
+    }
+
+    #[test]
+    fn a_changed_script_makes_the_graphics_stale() {
+        let (fixture, mut session) = Fixture::with_project("host-watch");
+        let project = fixture.root.path().join("proj");
+        let Response::ActorCatalog(before) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+        // Let the watcher settle so the import's own writes are not mistaken for this change.
+        std::thread::sleep(Duration::from_millis(600));
+        session.drain_events();
+
+        write(&project.join("bigstar/actors/late.lua"), r#"return { hash = 0x99, name = "Late" }"#);
+        let events = wait_for(&mut session, |event| matches!(event, Event::GraphicsChanged { .. }));
+        assert!(events.iter().any(|event| matches!(event, Event::FilesChanged { paths } if paths.iter().any(|p| p.ends_with("late.lua")))));
+        let generation =
+            events.iter().find_map(|event| if let Event::GraphicsChanged { generation } = event { Some(*generation) } else { None }).unwrap();
+        assert!(generation > before.generation);
+
+        // The next answer is rebuilt from disk and carries the new generation.
+        let Response::ActorCatalog(after) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+        assert!(after.generation >= generation);
+        assert_eq!(after.actors.len(), before.actors.len() + 1);
+    }
+}

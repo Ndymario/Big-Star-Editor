@@ -60,10 +60,49 @@ fn snapshot() -> Box<crate::LevelSnapshot> {
         objects: vec![NsmbLevelObject::default()],
         tileset_references: bigstar_level::LevelTilesetReferences::default(),
         glue_error: None,
+        sprite_hashes: vec![None, Some(7)],
         dirty: true,
         can_undo: true,
         can_redo: false,
         undo_names: vec!["Move".to_owned()],
         redo_names: Vec::new(),
     })
+}
+
+#[test]
+fn graphics_messages_survive_the_wire() {
+    use crate::{ActorDraw, ActorInput, DrawCommand, DrawKind, LevelGraphics, ProjectSettings, TextureData, TilesetGraphics};
+
+    let texture = TextureData { id: "ab12".into(), width: 16, height: 16, rgba: (0..1024u32).map(|i| (i * 7) as u8).collect() };
+    let bytes = encode_server_frame(&ServerFrame::Response { id: 1, result: Ok(Response::Textures(vec![texture.clone()])) }).unwrap();
+    // Pixels travel as one binary blob, not as an array of small integers.
+    assert!(bytes.len() < 1024 + 128, "{} bytes for 1024 bytes of pixels", bytes.len());
+    server_round_trip(ServerFrame::Response { id: 1, result: Ok(Response::Textures(vec![texture])) });
+
+    let graphics = LevelGraphics {
+        level: 3,
+        generation: 9,
+        tilesets: [
+            TilesetGraphics { atlas: Some("a".into()), blocks: 256, objects: vec![bigstar_formats::ObjectLayout::default()], error: None },
+            TilesetGraphics::default(),
+            TilesetGraphics { error: Some("no".into()), ..TilesetGraphics::default() },
+        ],
+        ..LevelGraphics::default()
+    };
+    server_round_trip(ServerFrame::Response { id: 2, result: Ok(Response::LevelGraphics(Box::new(graphics))) });
+    let draw = ActorDraw {
+        found: true,
+        commands: vec![DrawCommand { kind: DrawKind::Line, texture: None, x: 1.5, y2: -3.0, color: 0xff00_00ff, ..DrawCommand::default() }],
+        custom_rendered: true,
+        grab: Some(bigstar_level::SpriteBounds { x: -8, y: 4, width: 16, height: 32 }),
+        render: None,
+        error: None,
+    };
+    server_round_trip(ServerFrame::Response { id: 3, result: Ok(Response::ActorDraws { generation: 4, draws: vec![draw] }) });
+    server_round_trip(ServerFrame::Event(Event::GraphicsChanged { generation: 5 }));
+    server_round_trip(ServerFrame::Event(Event::FilesChanged { paths: vec!["proj/a.lua".into()] }));
+    server_round_trip(ServerFrame::Event(Event::SettingsChanged(ProjectSettings { active_variant: "fr".into(), ..ProjectSettings::default() })));
+    let input = ActorInput { sprite_type: 83, hash: None, x: 1, y: 2, pixel_x: 16.0, pixel_y: 32.0, settings: 0x10, events: [1, 2] };
+    client_round_trip(ClientFrame::Request { id: 10, request: Request::RenderActors { inputs: vec![input] } });
+    client_round_trip(ClientFrame::Request { id: 11, request: Request::SetActiveVariant { variant: "en".into() } });
 }

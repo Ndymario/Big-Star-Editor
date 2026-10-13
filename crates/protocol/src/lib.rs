@@ -5,10 +5,15 @@
 //! `Refused`. After that the frontend sends `Request`s with ids of its own choosing, the host answers each with one
 //! `Response` carrying the same id, and sends `Event`s whenever something happens that nobody asked about.
 
+mod graphics;
 mod message;
 mod service;
 mod wire;
 
+pub use graphics::{
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LevelGraphics, ProjectSettings, TextureData,
+    TextureId, TilesetGraphics,
+};
 pub use message::{
     AreaSummary, ClientFrame, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
     LevelSummary, LevelWorld, LogLevel, PROTOCOL_VERSION, ProjectInfo, ProjectSummary, Request, RequestId, Response, ResponseResult, ServerFrame,

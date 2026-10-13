@@ -3,8 +3,10 @@ use bigstar_formats::{NsmbLevelCourse, NsmbLevelObject};
 use bigstar_level::{LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ReorderKind};
 use serde::{Deserialize, Serialize};
 
+use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
+
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub type RequestId = u64;
 
@@ -74,6 +76,30 @@ pub enum Request {
     CloseLevel {
         level: LevelId,
     },
+    /// The pixels behind texture ids the frontend does not hold yet. Ids the host no longer has are left out.
+    GetTextures {
+        ids: Vec<TextureId>,
+    },
+    /// The open level's tileset atlases, object layouts and background images.
+    LevelGraphics {
+        level: LevelId,
+    },
+    /// The actors the open project knows, for the picker and the properties panel.
+    ActorCatalog,
+    /// What each sprite draws and where it can be grabbed, in the order asked.
+    RenderActors {
+        inputs: Vec<ActorInput>,
+    },
+    /// The active variant and module, and what NCPatcher says the project configures.
+    ProjectSettings,
+    /// Switches the variant whose module layers the editor reads. Closes every level session, so it is refused while
+    /// one has unsaved edits.
+    SetActiveVariant {
+        variant: String,
+    },
+    SetActiveModule {
+        module: String,
+    },
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
@@ -95,6 +121,11 @@ pub enum Response {
     Levels(Vec<LevelWorld>),
     Level(Box<LevelSnapshot>),
     Edited { snapshot: Box<LevelSnapshot>, outcome: EditOutcome },
+    Textures(Vec<TextureData>),
+    LevelGraphics(Box<LevelGraphics>),
+    ActorCatalog(Box<ActorCatalog>),
+    ActorDraws { generation: u64, draws: Vec<ActorDraw> },
+    Settings(ProjectSettings),
     Done,
 }
 
@@ -110,9 +141,26 @@ pub enum EditOutcome {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
-    Log { level: LogLevel, message: String },
-    LevelChanged { level: LevelId, revision: u64, dirty: bool },
+    Log {
+        level: LogLevel,
+        message: String,
+    },
+    LevelChanged {
+        level: LevelId,
+        revision: u64,
+        dirty: bool,
+    },
     ProjectClosed,
+    /// Files under the workspace changed on disk, debounced, relative to the root.
+    FilesChanged {
+        paths: Vec<String>,
+    },
+    /// Something the graphics were read from changed. Everything served for an older generation is stale.
+    GraphicsChanged {
+        generation: u64,
+    },
+    /// The project's settings changed, from this connection or another. A variant switch closes every level session.
+    SettingsChanged(ProjectSettings),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -190,6 +238,8 @@ pub struct LevelSnapshot {
     pub objects: Vec<NsmbLevelObject>,
     pub tileset_references: LevelTilesetReferences,
     pub glue_error: Option<String>,
+    /// Per sprite, the hash a module sprite is registered under in the level's glue block; `None` for a vanilla one.
+    pub sprite_hashes: Vec<Option<u32>>,
     pub dirty: bool,
     pub can_undo: bool,
     pub can_redo: bool,

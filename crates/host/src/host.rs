@@ -1,22 +1,58 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use bigstar_core::{Error, ErrorCode, Result, read_file_prefix, write_file_atomically};
 use bigstar_level::{EditableLevel, LevelEntityInsertions, ModuleDataCatalog};
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
+use bigstar_patching::{FileManifest, ModuleGraph, NCPatcherClient};
 use bigstar_project::{
     DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project, default_rom_path, index_rom_files_from,
     load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
 };
 use bigstar_protocol::{
-    AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot, LevelSummary,
-    LevelWorld, LogLevel, ProjectInfo, ProjectSummary, Request, Response, Service,
+    ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, LevelEdit, LevelId, LevelSnapshot,
+    LevelSummary, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary, Request, Response, Service, TextureId,
 };
 
+use crate::graphics::ProjectGraphics;
 use crate::levels::{LevelFiles, RomIndex, edit_path, locate, read_source};
+use crate::settings::{load_settings, save_settings};
+use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
+
+/// What a host needs besides its root: where the shipped actor and tile scripts are, and which NCPatcher to ask.
+#[derive(Debug, Clone)]
+pub struct HostOptions {
+    pub data_dir: PathBuf,
+    pub ncpatcher: PathBuf,
+}
+
+impl Default for HostOptions {
+    fn default() -> Self {
+        Self { data_dir: default_data_dir(), ncpatcher: PathBuf::from("ncpatcher") }
+    }
+}
+
+/// `BIGSTAR_DATA` when set; otherwise a `data` directory beside the executable or one level up (an installed layout);
+/// otherwise the repository's own, for builds run from the source tree.
+pub fn default_data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("BIGSTAR_DATA") {
+        return PathBuf::from(dir);
+    }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        for candidate in [dir.join("data"), dir.join("../share/bigstar/data")] {
+            if candidate.join("actors").is_dir() {
+                return candidate;
+            }
+        }
+    }
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data")
+}
 
 /// How deep `ListProjects` looks below the root, and how many projects it reports.
 const PROJECT_SEARCH_DEPTH: usize = 4;
@@ -41,10 +77,16 @@ struct LevelSession {
 struct OpenProject {
     directory: PathBuf,
     rom: Option<RomReader>,
+    rom_file: Option<PathBuf>,
     index: RomIndex,
     catalog: ModuleDataCatalog,
     levels: BTreeMap<LevelId, LevelSession>,
     next_level: LevelId,
+    settings: ProjectSettings,
+    /// What NCPatcher said, asked once per project open and variant: the module graph and the file plan.
+    patcher: Option<(ModuleGraph, Option<FileManifest>)>,
+    graphics: Option<ProjectGraphics>,
+    _watcher: Option<ProjectWatcher>,
 }
 
 #[derive(Default)]
@@ -54,8 +96,11 @@ struct State {
 
 pub(crate) struct Shared {
     workspace: Workspace,
+    options: HostOptions,
     state: Mutex<State>,
     subscribers: Mutex<Vec<Sender<Event>>>,
+    /// Grows whenever a watched file changes or the variant switches; graphics answers carry it.
+    generation: AtomicU64,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -70,8 +115,18 @@ pub struct Host {
 
 impl Host {
     pub fn new(root: &Path) -> Result<Self> {
+        Self::with_options(root, HostOptions::default())
+    }
+
+    pub fn with_options(root: &Path, options: HostOptions) -> Result<Self> {
         Ok(Self {
-            shared: Arc::new(Shared { workspace: Workspace::new(root)?, state: Mutex::new(State::default()), subscribers: Mutex::new(Vec::new()) }),
+            shared: Arc::new(Shared {
+                workspace: Workspace::new(root)?,
+                options,
+                state: Mutex::new(State::default()),
+                subscribers: Mutex::new(Vec::new()),
+                generation: AtomicU64::new(1),
+            }),
         })
     }
 
@@ -101,7 +156,7 @@ impl HostSession {
 
 impl Service for HostSession {
     fn handle(&mut self, request: Request) -> Result<Response> {
-        self.shared.handle(request)
+        Shared::handle(&self.shared, request)
     }
 
     fn drain_events(&mut self) -> Vec<Event> {
@@ -118,7 +173,7 @@ impl Shared {
         self.emit(Event::Log { level, message: message.into() });
     }
 
-    fn handle(&self, request: Request) -> Result<Response> {
+    fn handle(self: &Arc<Self>, request: Request) -> Result<Response> {
         match request {
             Request::ListProjects => self.list_projects(),
             Request::BrowseDirectory { path } => self.browse(&path),
@@ -133,6 +188,13 @@ impl Shared {
             Request::RedoLevel { level } => self.step_history(level, false),
             Request::SaveLevel { level } => self.save_level(level),
             Request::CloseLevel { level } => self.close_level(level),
+            Request::GetTextures { ids } => self.textures(&ids),
+            Request::LevelGraphics { level } => self.level_graphics(level),
+            Request::ActorCatalog => self.actor_catalog(),
+            Request::RenderActors { inputs } => self.render_actors(&inputs),
+            Request::ProjectSettings => self.project_settings(),
+            Request::SetActiveVariant { variant } => self.set_active_variant(variant),
+            Request::SetActiveModule { module } => self.set_active_module(module),
         }
     }
 
@@ -248,7 +310,7 @@ impl Shared {
         Ok(Response::Project(project_info(&self.workspace, &directory, &project, Some(INPUT_ROM_FILE_NAME.to_owned()), reader.files().len())))
     }
 
-    fn open_project(&self, path: &str) -> Result<Response> {
+    fn open_project(self: &Arc<Self>, path: &str) -> Result<Response> {
         let directory = self.workspace.resolve(path)?;
         let mut state = lock(&self.state);
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
@@ -262,12 +324,31 @@ impl Shared {
         } else {
             (None, None)
         };
-        let catalog = load_module_data_catalog(&directory, Path::new(DEFAULT_GENERATED_DIR))?;
+        let mut settings = load_settings(&directory);
+        if settings.generated_path.is_empty() {
+            settings.generated_path = DEFAULT_GENERATED_DIR.to_owned();
+        }
+        let catalog = load_module_data_catalog(&directory, Path::new(&settings.generated_path))?;
         let index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
         let file_count = rom.as_ref().map_or(0, |rom| rom.files().len());
         let info = project_info(&self.workspace, &directory, &project, rom_path.clone(), file_count);
         let had_project = state.open.is_some();
-        state.open = Some(OpenProject { directory, rom, index, catalog, levels: BTreeMap::new(), next_level: 1 });
+        // A watcher that cannot start costs live refreshes, not the project.
+        let watcher =
+            ProjectWatcher::start(&directory, Arc::downgrade(self)).map_err(|e| log::warn!("not watching {}: {e}", directory.display())).ok();
+        state.open = Some(OpenProject {
+            directory,
+            rom,
+            rom_file: rom_file.is_file().then_some(rom_file),
+            index,
+            catalog,
+            levels: BTreeMap::new(),
+            next_level: 1,
+            settings,
+            patcher: None,
+            graphics: None,
+            _watcher: watcher,
+        });
         drop(state);
         if had_project {
             self.emit(Event::ProjectClosed);
@@ -396,6 +477,142 @@ impl Shared {
         Ok(Response::Edited { snapshot: Box::new(snapshot), outcome: EditOutcome::None })
     }
 
+    fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    /// Asks NCPatcher about the open project once: the configured variants, the module graph, and the plan for the
+    /// active variant. Without NCPatcher the editor reads the ROM alone, and says why.
+    fn ensure_patcher(&self, open: &mut OpenProject) {
+        if open.patcher.is_some() {
+            return;
+        }
+        let client = NCPatcherClient::new(&self.options.ncpatcher);
+        let mut errors = Vec::new();
+        let config = client.dump_config(&open.directory).map_err(|e| errors.push(e.message)).ok();
+        let modules = client.dump_modules(&open.directory).map_err(|e| errors.push(e.message)).ok();
+        let plan = if config.is_some() {
+            client.plan_files(&open.directory, &open.settings.active_variant).map_err(|e| errors.push(e.message)).ok()
+        } else {
+            None
+        };
+        open.settings.variants = config.map(|config| config.variants.into_iter().map(|variant| variant.name).collect()).unwrap_or_default();
+        let modules = modules.unwrap_or_default();
+        open.settings.modules = modules.modules.iter().filter(|module| module.enabled).map(|module| module.key.clone()).collect();
+        open.settings.patcher_error = errors.into_iter().next();
+        open.patcher = Some((modules, plan));
+    }
+
+    fn ensure_graphics<'a>(&self, open: &'a mut OpenProject) -> Result<&'a mut ProjectGraphics> {
+        if open.graphics.is_none() {
+            self.ensure_patcher(open);
+            let (modules, plan) = open.patcher.clone().unwrap_or_default();
+            let graphics =
+                ProjectGraphics::new(&open.directory, &self.options.data_dir, open.rom_file.as_deref(), plan, modules, open.catalog.clone())?;
+            open.graphics = Some(graphics);
+        }
+        open.graphics.as_mut().ok_or_else(no_project)
+    }
+
+    fn textures(&self, ids: &[TextureId]) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let graphics = self.ensure_graphics(open)?;
+        Ok(Response::Textures(ids.iter().filter_map(|id| graphics.textures.get(id)).collect()))
+    }
+
+    fn level_graphics(&self, id: LevelId) -> Result<Response> {
+        let generation = self.generation();
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let references = open.levels.get(&id).ok_or_else(unknown_level)?.level.tileset_references();
+        let graphics = self.ensure_graphics(open)?;
+        Ok(Response::LevelGraphics(Box::new(graphics.level_graphics(id, generation, references))))
+    }
+
+    fn actor_catalog(&self) -> Result<Response> {
+        let generation = self.generation();
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let graphics = self.ensure_graphics(open)?;
+        Ok(Response::ActorCatalog(Box::new(graphics.actor_catalog(generation))))
+    }
+
+    fn render_actors(&self, inputs: &[ActorInput]) -> Result<Response> {
+        let generation = self.generation();
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let graphics = self.ensure_graphics(open)?;
+        Ok(Response::ActorDraws { generation, draws: graphics.render_actors(inputs) })
+    }
+
+    fn project_settings(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        self.ensure_patcher(open);
+        Ok(Response::Settings(open.settings.clone()))
+    }
+
+    fn set_active_variant(&self, variant: String) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        if open.levels.values().any(|session| session.level.dirty()) {
+            return Err(invalid("save or close the open levels before switching the variant"));
+        }
+        // Everything read through the old variant's layers is now wrong: the level sessions and the graphics.
+        open.settings.active_variant = variant;
+        open.levels.clear();
+        open.patcher = None;
+        open.graphics = None;
+        save_settings(&open.directory, &open.settings)?;
+        self.ensure_patcher(open);
+        let settings = open.settings.clone();
+        drop(state);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.emit(Event::SettingsChanged(settings.clone()));
+        self.emit(Event::GraphicsChanged { generation });
+        Ok(Response::Settings(settings))
+    }
+
+    fn set_active_module(&self, module: String) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        open.settings.active_module = module;
+        save_settings(&open.directory, &open.settings)?;
+        let settings = open.settings.clone();
+        drop(state);
+        self.emit(Event::SettingsChanged(settings.clone()));
+        Ok(Response::Settings(settings))
+    }
+
+    /// The watcher's debounced report. Every change is announced; one that is not the host's own saving makes the
+    /// graphics stale, so they are dropped and rebuilt on the next request.
+    pub(crate) fn files_changed(&self, paths: Vec<PathBuf>) {
+        let mut state = lock(&self.state);
+        let Some(open) = state.open.as_mut() else { return };
+        let own = |path: &Path| {
+            path.strip_prefix(&open.directory).is_ok_and(|relative| {
+                relative.starts_with(crate::levels::EDITS_DIR)
+                    || relative.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with(".big-star"))
+            })
+        };
+        let stale = paths.iter().any(|path| !own(path));
+        if stale {
+            open.graphics = None;
+        }
+        drop(state);
+        let mut relative: Vec<String> = paths.iter().filter_map(|path| self.workspace.relative(path)).collect();
+        relative.sort();
+        relative.dedup();
+        if !relative.is_empty() {
+            self.emit(Event::FilesChanged { paths: relative });
+        }
+        if stale {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.emit(Event::GraphicsChanged { generation });
+        }
+    }
+
     fn close_level(&self, id: LevelId) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -430,6 +647,7 @@ fn snapshot(id: LevelId, session: &LevelSession) -> LevelSnapshot {
         objects: session.level.objects().to_vec(),
         tileset_references: session.level.tileset_references(),
         glue_error: session.level.glue_error().map(str::to_owned),
+        sprite_hashes: (0..session.level.course().sprites.len()).map(|index| session.level.sprite_hash(index)).collect(),
         dirty: session.level.dirty(),
         can_undo: session.level.can_undo(),
         can_redo: session.level.can_redo(),

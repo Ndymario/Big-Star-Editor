@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use bigstar_core::read_file_prefix;
 use bigstar_formats::{GraphicsFormatKind, identify_graphics_format};
-use bigstar_host::Host;
+use bigstar_host::{Host, HostOptions};
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, RomHeader, parse_rom_header};
 use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, describe_stage};
 use bigstar_project::{INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, create_empty_project, index_rom_files, save_manifest};
@@ -17,7 +17,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]\n"
     );
 }
 
@@ -198,18 +198,22 @@ fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: 
     0
 }
 
-/// `serve <root> [--bind <address>] [--port <port>]`: hosts a workspace until interrupted.
+/// `serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]`: hosts a workspace until interrupted. `--data` is where
+/// the shipped actor and tile scripts are, `--ncpatcher` which NCPatcher to ask about variants, modules and plans.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some((root, flags)) = args.split_first() else {
         usage(err);
         return 1;
     };
     let (mut bind, mut port) = ("127.0.0.1".to_owned(), DEFAULT_PORT);
+    let mut options = HostOptions::default();
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
         let value = flags.next();
         match (*flag, value) {
             ("--bind", Some(value)) => bind = (*value).to_owned(),
+            ("--data", Some(value)) => options.data_dir = PathBuf::from(value),
+            ("--ncpatcher", Some(value)) => options.ncpatcher = PathBuf::from(value),
             ("--port", Some(value)) => match value.parse::<u16>() {
                 Ok(parsed) => port = parsed,
                 Err(_) => {
@@ -230,7 +234,7 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             return 1;
         }
     };
-    let host = match Host::new(Path::new(root)) {
+    let host = match Host::with_options(Path::new(root), options) {
         Ok(host) => host,
         Err(e) => {
             let _ = writeln!(err, "{}", e.message);

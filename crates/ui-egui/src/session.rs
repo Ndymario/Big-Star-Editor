@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    DirectoryListing, Event, LevelEdit, LevelSnapshot, LevelWorld, LogLevel, ProjectInfo, ProjectSummary, Request, RequestId, Response,
-    ResponseResult,
+    DirectoryListing, Event, LevelEdit, LevelSnapshot, LevelWorld, LogLevel, ProjectInfo, ProjectSettings, ProjectSummary, Request, RequestId,
+    Response, ResponseResult,
 };
 
 use crate::level_view::LevelView;
@@ -66,6 +66,9 @@ pub struct Session {
     pub ended: Option<String>,
     /// `ProjectClosed` events still to come that this frontend caused itself and has already acted on.
     own_closes: u32,
+    /// The newest graphics generation the host has announced; anything older is stale.
+    pub graphics_generation: u64,
+    pub settings: Option<ProjectSettings>,
 }
 
 impl Session {
@@ -83,6 +86,8 @@ impl Session {
             browser: None,
             ended: None,
             own_closes: 0,
+            graphics_generation: 0,
+            settings: None,
         };
         session.note_state();
         session
@@ -289,6 +294,13 @@ impl Session {
                 if stale && !self.busy() {
                     self.refresh_level();
                 }
+            }
+            Event::FilesChanged { .. } => {}
+            Event::GraphicsChanged { generation } => self.graphics_generation = self.graphics_generation.max(generation),
+            // A variant switch closes every level session on the host, so the open level is fetched again.
+            Event::SettingsChanged(settings) => {
+                self.settings = Some(settings);
+                self.refresh_level();
             }
             Event::ProjectClosed if self.own_closes > 0 => self.own_closes -= 1,
             Event::ProjectClosed => {

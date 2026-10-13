@@ -343,6 +343,7 @@ mod tests {
             objects: vec![NsmbLevelObject { object_id: 1, tileset_slot: 0, x: 2, y: 3, width: 4, height: 1 }],
             tileset_references: Default::default(),
             glue_error: None,
+            sprite_hashes: Vec::new(),
             dirty: false,
             can_undo: false,
             can_redo: false,

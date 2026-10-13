@@ -96,6 +96,7 @@ impl DemoConnection {
             objects: state.objects,
             tileset_references: Default::default(),
             glue_error: None,
+            sprite_hashes: Vec::new(),
             dirty: self.position != self.clean,
             can_undo: self.position > 0,
             can_redo: self.position + 1 < self.history.len(),
