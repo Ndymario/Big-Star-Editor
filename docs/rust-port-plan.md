@@ -321,7 +321,7 @@ Paths under "Port" are relative to the repo root. Each phase lists its commit me
 | Phase | Title | Done | Notes |
 |---|---|---|---|
 | 0 | Skeleton | yes | |
-| 1 | Core and nds | no | |
+| 1 | Core and nds | yes | `Command` and `CommandHistory` are generic over the edited target (commands are lent it per call). FNT paths are `/`-separated strings. JSON and logging are `serde_json` and `log`. |
 | 2 | Formats I (levels, archives, compression) | no | |
 | 3 | The level model | no | |
 | 4 | Project I and the CLI | no | |

@@ -1,12 +1,11 @@
-//! Big Star Editor `nds` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `nds` layer: parsers for the structures of a Nintendo DS cartridge image.
+//!
+//! Port of `libs/nsmb-nds`. Paths from the FNT are `/`-separated strings rather than platform paths, so they mean
+//! the same thing on every host and cross the protocol unchanged.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-nds";
+mod rom;
+
+pub use rom::*;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-nds");
-    }
-}
+mod tests;

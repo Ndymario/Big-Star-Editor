@@ -20,6 +20,9 @@ bigstar-host = { path = "crates/host" }
 bigstar-client = { path = "crates/client" }
 bigstar-ui-egui = { path = "crates/ui-egui" }
 
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+log = "0.4"
 serde_json = { version = "1", features = ["preserve_order"] }
 
 [workspace.lints.rust]

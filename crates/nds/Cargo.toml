@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-nds"
-description = "Big Star Editor nds layer (stub)"
+description = "Big Star Editor nds layer: ROM header, FAT, FNT, overlay table, banner sizing"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,5 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+serde.workspace = true

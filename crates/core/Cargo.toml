@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-core"
-description = "Big Star Editor core layer (stub)"
+description = "Big Star Editor core layer: errors, byte access, atomic file I/O, command history"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,8 @@ publish = false
 workspace = true
 
 [dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
