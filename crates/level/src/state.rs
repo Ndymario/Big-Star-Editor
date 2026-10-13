@@ -224,6 +224,20 @@ impl LevelState {
             header.extend_from_slice(&tail);
             blocks[0] = header;
         }
+        // The camera settings are written from what the level holds; bytes after the last whole record are kept while
+        // the records before them are unchanged.
+        let mut cameras = Vec::with_capacity(self.course.cameras.len() * 24);
+        for c in &self.course.cameras {
+            for value in [c.top_offset, c.bottom_offset, c.top_offset_special, c.bottom_offset_special] {
+                put32(&mut cameras, value as u32);
+            }
+            put16(&mut cameras, c.id);
+            put16(&mut cameras, c.scroll_height);
+            put32(&mut cameras, c.unknown);
+        }
+        if blocks[1].len() / 24 != self.course.cameras.len() || !blocks[1].starts_with(&cameras) {
+            blocks[1] = cameras;
+        }
         if let Some(screen) = self.course.backgrounds.first() {
             patch_screen_ids(&mut blocks[2], screen)?;
         }

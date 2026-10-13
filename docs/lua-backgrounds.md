@@ -199,6 +199,11 @@ the screen: 64 pixels plus the *top offset* of the view's camera settings, and
 at the top of the map, so the player ends up on the lower line; the view's
 floor and then its ceiling have the last word.
 
+A view's rows in the properties panel end with the camera settings it names,
+so both offsets can be changed there. Views naming the same settings share
+them; a view naming settings that do not exist reads the level's first, as the
+game does, and gets its own the first time one is changed.
+
 **DS Screen** in the canvas toolbar shows all of this. A hollow 256 by 192
 rectangle follows the pointer, and inside it both layers are drawn as the game
 scrolls them with its camera there, in the view the pointer is over. Select

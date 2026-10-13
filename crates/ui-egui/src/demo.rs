@@ -789,6 +789,7 @@ impl DemoConnection {
             LevelEdit::Reorder { kind, index, forward } => level.reorder_entity(kind, index, forward).map(EditOutcome::Moved),
             LevelEdit::SetObjectBank { slot, value } => level.set_object_bank(slot, value).map(|()| EditOutcome::None),
             LevelEdit::SetTilesetReferences { references } => level.set_tileset_references(references).map(|()| EditOutcome::None),
+            LevelEdit::SetCameras { cameras, name } => level.set_cameras(cameras, &name).map(|()| EditOutcome::None),
             LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
             LevelEdit::ReplaceSerialized { course, bgdat, name } => {
                 level.replace_serialized(&course, &bgdat, None, &name).map(|()| EditOutcome::None)

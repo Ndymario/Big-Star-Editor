@@ -4,7 +4,8 @@
 
 use bigstar_core::Fx32;
 use bigstar_formats::{
-    NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelScreen, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone,
+    NsmbLevelCamera, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelScreen, NsmbLevelSprite, NsmbLevelView,
+    NsmbLevelZone,
 };
 use bigstar_level::{
     BackgroundLayer, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences,
@@ -314,6 +315,9 @@ impl Rows {
     }
 }
 
+/// The first of a view's rows that reads its camera settings rather than the view.
+const VIEW_CAMERA_ROW: usize = 12;
+
 /// What a view's background or foreground number means: the block of that layer it names, and what the block shows.
 fn layer_note(view: &LevelView, layer: BackgroundLayer, blocks: &[NsmbLevelScreen], block_id: u8) -> String {
     let what = layer.name();
@@ -580,6 +584,46 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.note = layer_note(view, layer, blocks, value);
                     }
                 }
+                // The camera settings the view names, which every view naming them shares.
+                let found = bigstar_level::camera_block(&course.cameras, v.camera_settings_id);
+                let own = found.is_some_and(|camera| camera.id & 0xff == u16::from(v.camera_settings_id));
+                let camera = found.cloned().unwrap_or_default();
+                let shared = course.views.iter().filter(|other| other.camera_settings_id == v.camera_settings_id).count();
+                let state = match (found.is_some(), own) {
+                    (_, true) if shared > 1 => format!(" Shared by the {shared} views that name camera settings {}.", v.camera_settings_id),
+                    (_, true) => String::new(),
+                    (true, false) => format!(
+                        " No camera settings have ID {}, so the game uses the level's first ({}); changing this gives the view its own.",
+                        v.camera_settings_id, camera.id
+                    ),
+                    (false, _) => " The level has no camera settings; changing this adds some.".to_owned(),
+                };
+                let lines = "The game moves the camera up or down only as far as keeps the player between two lines down the screen.";
+                for (label, value, min, max, note) in [
+                    ("Camera top offset", i64::from(camera.top_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The upper is 64 pixels down plus this.")),
+                    ("Camera bottom offset", i64::from(camera.bottom_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The lower is 128 pixels down plus this.")),
+                    (
+                        "Camera top offset (special)",
+                        i64::from(camera.top_offset_special),
+                        i64::from(i32::MIN),
+                        i64::from(i32::MAX),
+                        "The upper line in the game's second camera mode. Which of the player's moves switch to it has not been traced.".to_owned(),
+                    ),
+                    (
+                        "Camera bottom offset (special)",
+                        i64::from(camera.bottom_offset_special),
+                        i64::from(i32::MIN),
+                        i64::from(i32::MAX),
+                        "The lower line in that second mode.".to_owned(),
+                    ),
+                    ("Camera scroll height", i64::from(camera.scroll_height), 0, 65535, "15 is none. Anything else has the game note a camera height this many tiles above where it rests on the view's floor; what reads it has not been traced.".to_owned()),
+                    ("Camera unknown", i64::from(camera.unknown), 0, i64::from(u32::MAX), String::new()),
+                ] {
+                    full(rows, label, Some(value), min, max);
+                    if let Some(row) = rows.last_mut() {
+                        row.note = format!("{note}{state}");
+                    }
+                }
             }
         }
         Tab::Entity(Kind::Zone) => {
@@ -814,6 +858,31 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             }
             let index = *rows.indices.first()?;
             let mut v: NsmbLevelView = course.views.get(index)?.clone();
+            // The rows after the view's own are its camera settings: a block of their own, made for this view's ID
+            // from the one the game falls back to when none has it yet.
+            if changed >= VIEW_CAMERA_ROW {
+                let mut cameras = course.cameras.clone();
+                let id = u16::from(v.camera_settings_id);
+                let at = match cameras.iter().position(|camera| camera.id & 0xff == id) {
+                    Some(at) => at,
+                    None => {
+                        let fresh = NsmbLevelCamera { id, ..cameras.first().cloned().unwrap_or_default() };
+                        cameras.push(fresh);
+                        cameras.len() - 1
+                    }
+                };
+                let camera = cameras.get_mut(at)?;
+                match changed - VIEW_CAMERA_ROW {
+                    0 => camera.top_offset = narrow(value, camera.top_offset),
+                    1 => camera.bottom_offset = narrow(value, camera.bottom_offset),
+                    2 => camera.top_offset_special = narrow(value, camera.top_offset_special),
+                    3 => camera.bottom_offset_special = narrow(value, camera.bottom_offset_special),
+                    4 => camera.scroll_height = narrow(value, camera.scroll_height),
+                    5 => camera.unknown = narrow(value, camera.unknown),
+                    _ => return None,
+                }
+                return Some(LevelEdit::SetCameras { cameras, name: "Edit camera settings".to_owned() });
+            }
             match changed {
                 0 => v.x = narrow(value, v.x),
                 1 => v.y = narrow(value, v.y),
@@ -1119,6 +1188,39 @@ mod tests {
         let rows = shown(&view);
         assert_eq!((rows.rows[3].label.as_str(), rows.rows[3].value), ("Target event", Some(0xab)));
         assert_eq!((rows.rows[4].label.as_str(), rows.rows[4].value), ("Trigger event", Some(0xcd)));
+    }
+
+    #[test]
+    fn a_view_shows_and_edits_the_camera_settings_it_names() {
+        let mut level = snapshot();
+        level.course.views =
+            vec![NsmbLevelView { camera_settings_id: 2, ..Default::default() }, NsmbLevelView { id: 1, camera_settings_id: 5, ..Default::default() }];
+        level.course.cameras = vec![NsmbLevelCamera { id: 2, top_offset: -8, bottom_offset: 16, ..Default::default() }];
+        let mut view = LevelView::new(level);
+        view.panel.tab = Tab::Entity(Kind::View);
+        let shown = rows(&view, &view.panel, None);
+        let row = |label: &str| shown.rows.iter().position(|row| row.label == label).unwrap();
+        assert_eq!(row("Camera top offset"), VIEW_CAMERA_ROW);
+        assert_eq!(shown.rows[row("Camera bottom offset")].value, Some(16));
+        // Changing one writes the block the view names and leaves the view alone.
+        match apply(&view, &view.panel, &shown, row("Camera bottom offset"), -32) {
+            Some(LevelEdit::SetCameras { cameras, .. }) => {
+                assert_eq!(cameras, [NsmbLevelCamera { id: 2, top_offset: -8, bottom_offset: -32, ..Default::default() }])
+            }
+            other => panic!("no camera edit: {other:?}"),
+        }
+        // A view naming settings that do not exist reads the first, as the game does, and gets its own on an edit.
+        view.panel.item = 1;
+        let shown = rows(&view, &view.panel, None);
+        assert_eq!(shown.rows[VIEW_CAMERA_ROW].value, Some(-8));
+        assert!(shown.rows[VIEW_CAMERA_ROW].note.contains("gives the view its own"));
+        match apply(&view, &view.panel, &shown, VIEW_CAMERA_ROW, 4) {
+            Some(LevelEdit::SetCameras { cameras, .. }) => {
+                assert_eq!(cameras.len(), 2);
+                assert_eq!(cameras[1], NsmbLevelCamera { id: 5, top_offset: 4, bottom_offset: 16, ..Default::default() });
+            }
+            other => panic!("no camera edit: {other:?}"),
+        }
     }
 
     #[test]

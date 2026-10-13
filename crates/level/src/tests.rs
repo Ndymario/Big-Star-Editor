@@ -692,3 +692,30 @@ fn a_layer_scrolls_with_the_camera_as_the_game_scrolls_it() {
     // A block with no screen shows nothing.
     assert!(layer_scroll(back, &[block(u16::MAX, 0, 0, 0)], 0, view, (100, 608), true).is_none());
 }
+
+#[test]
+fn camera_settings_are_edited_saved_and_undone() {
+    let mut level = EditableLevel::load(&empty_course(), &[], None).unwrap();
+    let cameras = vec![
+        NsmbLevelCamera {
+            top_offset: -16,
+            bottom_offset: 32,
+            top_offset_special: 1,
+            bottom_offset_special: -2,
+            id: 3,
+            scroll_height: 15,
+            unknown: 7,
+        },
+        NsmbLevelCamera { id: 4, ..Default::default() },
+    ];
+    level.set_cameras(cameras.clone(), "Edit camera settings").unwrap();
+    assert_eq!(level.course().cameras, cameras);
+    let course = level.serialize_course().unwrap();
+    let again = EditableLevel::load(&course, &[], None).unwrap();
+    assert_eq!(again.course().cameras, cameras);
+    // Untouched, a level's camera block is written back byte for byte.
+    assert_eq!(again.serialize_course().unwrap(), course);
+    level.undo().unwrap();
+    assert!(level.course().cameras.is_empty());
+    assert!(level.set_cameras(vec![NsmbLevelCamera::default(); 256], "x").is_err());
+}

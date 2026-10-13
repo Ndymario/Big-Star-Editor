@@ -1,7 +1,7 @@
 use bigstar_core::{CommandHistory, Error, ErrorCode, Result};
 use bigstar_formats::{
-    GlueBlock, NSMB_HEADER_SIZE, NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone,
-    parse_glue_block, parse_nsmb_bgdat_objects, parse_nsmb_level_course, write_glue_block,
+    GlueBlock, NSMB_HEADER_SIZE, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelSprite, NsmbLevelView,
+    NsmbLevelZone, parse_glue_block, parse_nsmb_bgdat_objects, parse_nsmb_level_course, write_glue_block,
 };
 use serde::{Deserialize, Serialize};
 
@@ -387,6 +387,15 @@ impl EditableLevel {
 
     pub fn remove_view(&mut self, index: usize) -> Result<()> {
         self.erase_at(views, index, "Delete view")
+    }
+
+    /// Replaces the level's camera settings, the blocks its views name by id.
+    pub fn set_cameras(&mut self, cameras: Vec<NsmbLevelCamera>, name: &str) -> Result<()> {
+        if cameras.len() > 255 {
+            return Err(invalid("a level holds at most 255 camera settings"));
+        }
+        let command = Value::new(&mut self.state, |s| &mut s.course.cameras, cameras, name);
+        self.run(Box::new(command))
     }
 
     pub fn set_object_bank(&mut self, slot: usize, value: u8) -> Result<()> {
