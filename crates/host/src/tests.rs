@@ -665,6 +665,27 @@ mod graphics {
         std::fs::write(path, text).unwrap();
     }
 
+    /// An image already held frees its duplicate, and the allocator hands that address to the next image.
+    #[test]
+    fn a_texture_is_never_named_by_a_freed_images_address() {
+        use std::sync::Arc;
+
+        use bigstar_formats::RgbaImage;
+
+        let image = |shade: u8| RgbaImage { width: 1, height: 1, pixels: vec![shade; 4] };
+        let mut store = crate::graphics::TextureStore::default();
+        let first = store.add_owned(image(1));
+        for shade in 2..=64 {
+            assert_eq!(store.add_owned(image(1)), first);
+            assert_eq!(store.add(Arc::new(image(1))), first);
+            let id = store.add_owned(image(shade));
+            assert_ne!(id, first);
+            assert_eq!(store.get(&id).unwrap().rgba, vec![shade; 4]);
+            let id = store.add(Arc::new(image(shade)));
+            assert_eq!(store.get(&id).unwrap().rgba, vec![shade; 4]);
+        }
+    }
+
     /// A 3x2 PNG the actor's `init` loads beside its script.
     fn png() -> Vec<u8> {
         let mut bytes = Vec::new();

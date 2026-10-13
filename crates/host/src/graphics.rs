@@ -25,22 +25,35 @@ use sha2::{Digest, Sha256};
 #[derive(Default)]
 pub(crate) struct TextureStore {
     images: HashMap<TextureId, Arc<RgbaImage>>,
-    by_address: HashMap<usize, TextureId>,
+    /// Each entry holds its image, so the address it is keyed by is never freed and handed to another image.
+    by_address: HashMap<usize, (TextureId, Arc<RgbaImage>)>,
 }
 
 impl TextureStore {
-    pub fn add(&mut self, image: Arc<RgbaImage>) -> TextureId {
-        let address = Arc::as_ptr(&image) as usize;
-        if let Some(id) = self.by_address.get(&address) {
-            return id.clone();
-        }
+    fn id(image: &RgbaImage) -> TextureId {
         let mut hash = Sha256::new();
         hash.update((image.width as u32).to_le_bytes());
         hash.update((image.height as u32).to_le_bytes());
         hash.update(&image.pixels);
-        let id: TextureId = hash.finalize().iter().take(16).map(|byte| format!("{byte:02x}")).collect();
-        self.by_address.insert(address, id.clone());
+        hash.finalize().iter().take(16).map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// An image someone else keeps: hashed once, then found by address.
+    pub fn add(&mut self, image: Arc<RgbaImage>) -> TextureId {
+        let address = Arc::as_ptr(&image) as usize;
+        if let Some((id, _)) = self.by_address.get(&address) {
+            return id.clone();
+        }
+        let id = Self::id(&image);
+        self.by_address.insert(address, (id.clone(), Arc::clone(&image)));
         self.images.entry(id.clone()).or_insert(image);
+        id
+    }
+
+    /// An image decoded for this call alone, which nothing would find by address again.
+    pub fn add_owned(&mut self, image: RgbaImage) -> TextureId {
+        let id = Self::id(&image);
+        self.images.entry(id.clone()).or_insert_with(|| Arc::new(image));
         id
     }
 
@@ -244,14 +257,14 @@ impl ProjectGraphics {
         let tilesets = load_level_tilesets(&resources.tilesets, references.tileset_id, overlays);
         for ((target, decoded), error) in result.tilesets.iter_mut().zip(tilesets.tilesets).zip(tilesets.errors) {
             *target = TilesetGraphics {
-                atlas: atlas(&decoded.map16_tiles).map(|image| self.textures.add(Arc::new(image))),
+                atlas: atlas(&decoded.map16_tiles).map(|image| self.textures.add_owned(image)),
                 blocks: decoded.map16_tiles.len() as u32,
                 objects: decoded.objects,
                 error: (!error.is_empty()).then_some(error),
             };
         }
         let mut image = |files| match load_background_graphics(files) {
-            Ok(image) => ImageGraphics { texture: Some(self.textures.add(Arc::new(image))), error: None },
+            Ok(image) => ImageGraphics { texture: Some(self.textures.add_owned(image)), error: None },
             Err(error) => ImageGraphics { texture: None, error: Some(error.message) },
         };
         result.background = image(&resources.background);
