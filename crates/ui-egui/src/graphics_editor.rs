@@ -637,6 +637,10 @@ pub(crate) fn picture(
     texture: &mut Option<(u64, egui::TextureHandle)>,
     max_height: f32,
 ) -> Option<(usize, usize)> {
+    if image.width == 0 || image.height == 0 || image.pixels.len() < image.width * image.height * 4 {
+        ui.weak("Nothing to draw.");
+        return None;
+    }
     let longest = image.width.max(image.height).max(1);
     let zoom = (512 / longest).clamp(1, 16) as f32;
     if texture.as_ref().is_none_or(|(shown, _)| *shown != version) {

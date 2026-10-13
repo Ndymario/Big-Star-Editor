@@ -7,9 +7,9 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel,
-    ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
-    TextureId,
+    ActorCatalog, DirectoryListing, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld,
+    LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
+    TextureId, TilesetResources,
 };
 
 use crate::level_view::{ActorIndex, ActorKey, LevelView};
@@ -49,6 +49,7 @@ enum Pending {
     Settings,
     Banner,
     BannerWrite,
+    TilesetResources,
 }
 
 /// What a file's bytes were asked for.
@@ -154,6 +155,8 @@ pub struct Session {
     pub file_targets: Option<(String, Vec<String>)>,
     /// The ROM banner, once asked for: its bytes and the configured file an edit goes to.
     pub banner: Option<(Vec<u8>, String)>,
+    /// A level's tilesets and backgrounds as files, once asked for.
+    pub tileset_resources: Option<TilesetResources>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -199,6 +202,7 @@ impl Session {
             file_reads: Vec::new(),
             file_targets: None,
             banner: None,
+            tileset_resources: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -409,6 +413,16 @@ impl Session {
         self.request(Request::Banner, Pending::Banner);
     }
 
+    /// Asks for the files behind a level's tilesets and backgrounds; they arrive in `tileset_resources`.
+    pub fn request_tileset_resources(&mut self, level: LevelId) {
+        self.request(Request::TilesetResources { level }, Pending::TilesetResources);
+    }
+
+    /// Writes several files into their modules in one request.
+    pub fn write_files(&mut self, files: Vec<FileWrite>) {
+        self.request(Request::WriteFiles { files }, Pending::FileChange);
+    }
+
     pub fn write_banner(&mut self, bytes: Vec<u8>) {
         self.request(Request::WriteBanner { bytes }, Pending::BannerWrite);
     }
@@ -580,6 +594,7 @@ impl Session {
             (Pending::FileTargets(path), Response::FileTargets(holding)) => self.file_targets = Some((path, holding)),
             (Pending::Banner, Response::Banner { bytes, target }) => self.banner = Some((bytes, target)),
             (Pending::BannerWrite, Response::Done) => {}
+            (Pending::TilesetResources, Response::TilesetResources(resources)) => self.tileset_resources = Some(*resources),
             (Pending::Settings, Response::Settings(settings)) => {
                 self.settings = Some(settings);
                 self.refresh_filesystem();

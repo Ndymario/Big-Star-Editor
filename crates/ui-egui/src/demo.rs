@@ -88,6 +88,32 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
     let palette = [[0, 0], 0x001fu16.to_le_bytes(), 0x03e0u16.to_le_bytes()].into_iter().flatten().chain(std::iter::repeat_n(0, 26)).collect();
     files.insert("BG_ncg/demo_ncl.bin".to_owned(), file(21, palette));
     files.insert("dat/demo.narc".to_owned(), file(50, [b"NARC\xfe\xff".to_vec(), vec![0; 26]].concat()));
+    // The files behind the levels' tilesets and backgrounds, for the tileset workspace.
+    let mut id = 70;
+    for (slot, page) in [(0usize, 0u8), (1, 1), (2, 4)] {
+        if let Ok(data) = demo_tileset_files(page) {
+            let names = [
+                "BG_ncg/demo_t{}_ncg.bin",
+                "BG_ncl/demo_t{}_ncl.bin",
+                "BG_pnl/demo_t{}_pnl.bin",
+                "BG_unt/demo_t{}.bin",
+                "BG_unt/demo_t{}_hd.bin",
+                "BG_chk/demo_t{}_chk.bin",
+            ];
+            let parts = [data.graphics, data.palette, data.map16, data.objects, data.object_index, data.behaviors];
+            for (name, bytes) in names.into_iter().zip(parts) {
+                files.insert(name.replace("{}", &slot.to_string()), file(id, bytes));
+                id += 1;
+            }
+        }
+    }
+    for (name, data) in [("bg", demo_tilemap_files(false)), ("fg", demo_tilemap_files(true))] {
+        let Ok(data) = data else { continue };
+        for (kind, bytes) in [("ncg", data.graphics), ("ncl", data.palette), ("nsc", data.screen)] {
+            files.insert(format!("BG_{kind}/demo_{name}_{kind}.bin"), file(id, bytes));
+            id += 1;
+        }
+    }
     files.insert("dat/demo.narc!a.bin".to_owned(), member(0, vec![1, 2, 3, 4]));
     files.insert("dat/demo.narc!b.bin".to_owned(), member(1, vec![5, 6]));
     files
@@ -144,6 +170,76 @@ fn demo_banner() -> Vec<u8> {
         }
     }
     banner
+}
+
+/// The sample tileset's blocks as the game stores a tileset: each block four 8×8 tiles of an 8bpp sheet, its colours
+/// gathered into one palette, a Map16 entry per block, the sample objects, and solid behaviour for the solid blocks.
+fn demo_tileset_files(page: u8) -> Result<bigstar_formats::TilesetResourceData, Error> {
+    use bigstar_formats::{Bgr555Color, EditableTileset, IndexedTile8Bpp, Map16Tile, ScreenMapEntry, write_tileset};
+    let art = sample_tileset();
+    let mut palette = vec![Bgr555Color::new(0, 0, 0, true)];
+    let mut index_of = |[r, g, b, a]: [u8; 4]| -> u8 {
+        if a == 0 {
+            return 0;
+        }
+        let colour = Bgr555Color::new(r & 0xf8, g & 0xf8, b & 0xf8, false);
+        match palette.iter().position(|c| *c == colour) {
+            Some(i) => u8::try_from(i).unwrap_or(u8::MAX),
+            None if palette.len() < 256 => {
+                palette.push(colour);
+                u8::try_from(palette.len() - 1).unwrap_or(u8::MAX)
+            }
+            None => u8::try_from(palette.len() - 1).unwrap_or(u8::MAX),
+        }
+    };
+    let mut graphics = Vec::new();
+    let mut map16 = Vec::new();
+    for block in &art.blocks {
+        let mut tiles = [ScreenMapEntry::default(); 4];
+        for (quadrant, entry) in tiles.iter_mut().enumerate() {
+            let mut tile = IndexedTile8Bpp::default();
+            for (i, pixel) in tile.pixels.iter_mut().enumerate() {
+                let (x, y) = ((quadrant % 2) * 8 + i % 8, (quadrant / 2) * 8 + i / 8);
+                let at = (y * block.width + x) * 4;
+                let rgba = block.pixels.get(at..at + 4).and_then(|p| <[u8; 4]>::try_from(p).ok()).unwrap_or_default();
+                *pixel = index_of(rgba);
+            }
+            *entry = ScreenMapEntry::new(i32::try_from(graphics.len()).unwrap_or(0), 0, false, false);
+            graphics.push(tile);
+        }
+        map16.push(Map16Tile { tiles });
+    }
+    palette.resize(256, Bgr555Color::new(0, 0, 0, false));
+    let behaviors = (0..map16.len()).map(|i| if i >= 7 { 0x0001_0000 } else { 0 }).collect();
+    let tileset = EditableTileset { tile_page_offset: page, graphics, palette, map16, objects: art.objects, behaviors, ..EditableTileset::default() };
+    write_tileset(&tileset)
+}
+
+/// A background of sky and distant hills, or a foreground of bushes over clear tiles, quantised the way an imported
+/// PNG is.
+fn demo_tilemap_files(foreground: bool) -> Result<bigstar_formats::TilemapResourceData, Error> {
+    use bigstar_formats::{EditableTilemap, RgbaImage, import_tilemap_image, write_tilemap};
+    // 64×16 tiles: the 1024 a screen holds, 64 across as the game lays backgrounds out.
+    let (width, height) = (512usize, 128usize);
+    let mut image = RgbaImage { width, height, pixels: Vec::with_capacity(width * height * 4) };
+    for y in 0..height {
+        for x in 0..width {
+            let hill = 80.0 + 22.0 * ((x as f32) / 50.0).sin() + 10.0 * ((x as f32) / 23.0).cos();
+            let bush = 104.0 + 12.0 * ((x as f32) / 9.0).sin().abs();
+            let pixel = if foreground {
+                if (y as f32) > bush { [40, 140, 56, 255] } else { [0, 0, 0, 0] }
+            } else if (y as f32) > hill {
+                [96, 176, 120, 255]
+            } else {
+                let band = (y / 16) as u8;
+                [96 + band * 12, 160 + band * 9, 232, 255]
+            };
+            image.pixels.extend(pixel);
+        }
+    }
+    let mut map = EditableTilemap::default();
+    import_tilemap_image(&mut map, &image)?;
+    write_tilemap(&map)
 }
 
 fn put_u16(data: &mut [u8], offset: usize, value: u16) {
@@ -807,6 +903,46 @@ impl DemoConnection {
                 }
                 _ => Err(Error::new(ErrorCode::InvalidArgument, "only a file a module supplies can be removed")),
             },
+            Request::TilesetResources { level } => {
+                let references = self.entry(level)?.level.tileset_references();
+                let get = |path: String| bigstar_protocol::ResourceBytes {
+                    bytes: self.files.get(&path).map(|f| f.bytes.clone()).unwrap_or_default(),
+                    rom_path: path,
+                };
+                let tilesets = [(0u8, 0usize), (1, 1), (4, 2)]
+                    .into_iter()
+                    .map(|(page, slot)| bigstar_protocol::TilesetSlot {
+                        graphics: get(format!("BG_ncg/demo_t{slot}_ncg.bin")),
+                        palette: get(format!("BG_ncl/demo_t{slot}_ncl.bin")),
+                        map16: get(format!("BG_pnl/demo_t{slot}_pnl.bin")),
+                        objects: get(format!("BG_unt/demo_t{slot}.bin")),
+                        object_index: get(format!("BG_unt/demo_t{slot}_hd.bin")),
+                        behaviors: get(format!("BG_chk/demo_t{slot}_chk.bin")),
+                        tile_page_offset: page,
+                        ..Default::default()
+                    })
+                    .collect();
+                let map = |name: &str| bigstar_protocol::TilemapSlot {
+                    graphics: get(format!("BG_ncg/demo_{name}_ncg.bin")),
+                    palette: get(format!("BG_ncl/demo_{name}_ncl.bin")),
+                    screen: get(format!("BG_nsc/demo_{name}_nsc.bin")),
+                };
+                let resources = bigstar_protocol::TilesetResources {
+                    level,
+                    tilesets,
+                    background: map("bg"),
+                    foreground: map("fg"),
+                    references,
+                    overlays: Vec::new(),
+                };
+                Ok(Response::TilesetResources(Box::new(resources)))
+            }
+            Request::WriteFiles { files } => {
+                for write in files {
+                    self.answer(Request::WriteFile { path: write.path, bytes: write.bytes })?;
+                }
+                Ok(Response::Done)
+            }
             Request::Banner => Ok(Response::Banner { bytes: self.banner.clone(), target: "assets/banner.bin".to_owned() }),
             Request::WriteBanner { bytes } => {
                 self.banner = bytes;
@@ -840,5 +976,21 @@ impl Connection for DemoConnection {
 
     fn state(&self) -> &ConnectionState {
         &self.state
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn the_demo_tilesets_and_backgrounds_parse() {
+        for page in [0, 1, 4] {
+            let data = super::demo_tileset_files(page).unwrap();
+            let tileset = bigstar_formats::parse_tileset(&data, 0, 0, page).unwrap();
+            assert_eq!(tileset.map16.len(), super::sample_tileset().blocks.len());
+        }
+        for foreground in [false, true] {
+            let map = bigstar_formats::parse_tilemap(&super::demo_tilemap_files(foreground).unwrap(), 0).unwrap();
+            assert_eq!((map.width_tiles, map.screen.len()), (64, 1024));
+        }
     }
 }

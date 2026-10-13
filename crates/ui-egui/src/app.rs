@@ -190,6 +190,24 @@ impl BigStarApp {
         }
     }
 
+    /// Asks for the tileset workspace of an open level, by area (screenshots).
+    pub fn open_tilesets_for_screenshot(&mut self, area: &str) {
+        if let Some(session) = &mut self.session
+            && let Some(level) = session.levels.values().find(|view| view.snapshot.area == area).map(|view| view.snapshot.level)
+        {
+            session.request_tileset_resources(level);
+        }
+    }
+
+    /// Brings a tab of every open tileset workspace forward: 0 Slots … 6 Foreground (screenshots).
+    pub fn tileset_tab_for_screenshot(&mut self, index: usize) {
+        for (doc, _) in self.workspace.tilesets.values_mut() {
+            if let Some((tab, _)) = crate::tileset_editor::TABS.get(index) {
+                doc.tab = *tab;
+            }
+        }
+    }
+
     /// Pairs an open graphics document with a palette from anywhere, as its combo box would from its folder
     /// (screenshots).
     pub fn pair_for_screenshot(&mut self, path: &str, palette: &str) {
@@ -276,6 +294,13 @@ impl BigStarApp {
         self.tools.open_metadata(session);
         if let Some((bytes, target)) = session.banner.take() {
             self.workspace.open_banner(&bytes, &target);
+        }
+        if let Some(resources) = session.tileset_resources.take() {
+            let title = session.levels.get(&resources.level).map_or_else(String::new, |view| view.snapshot.title.clone());
+            match crate::tileset_editor::TilesetDoc::open(resources, &title) {
+                Ok(doc) => self.workspace.open_tileset(doc),
+                Err(error) => session.report(error),
+            }
         }
         for request in self.files.follow(session, &*self.services) {
             let reads = match request {

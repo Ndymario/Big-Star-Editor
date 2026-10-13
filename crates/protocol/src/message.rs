@@ -1,12 +1,12 @@
 use bigstar_core::Error;
-use bigstar_formats::{GlueBlock, NsmbLevelCourse, NsmbLevelObject};
+use bigstar_formats::{GlueBlock, NsmbLevelCourse, NsmbLevelObject, RgbaImage};
 use bigstar_level::{LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind};
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 pub type RequestId = u64;
 
@@ -150,6 +150,72 @@ pub enum Request {
         #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
+    /// The tilesets and backgrounds a level loads, as the files that hold them, for the tileset workspace.
+    TilesetResources {
+        level: LevelId,
+    },
+    /// Writes several files into their modules at once, the way `WriteFile` writes one; the listing and graphics
+    /// change once.
+    WriteFiles {
+        files: Vec<FileWrite>,
+    },
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileWrite {
+    pub path: String,
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+/// One file a tileset or background is built from: the ROM path an edit is saved to (empty when the level names none)
+/// and the bytes as the active variant has them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceBytes {
+    pub rom_path: String,
+    #[serde(with = "serde_bytes")]
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilesetSlot {
+    pub graphics: ResourceBytes,
+    pub palette: ResourceBytes,
+    pub map16: ResourceBytes,
+    pub objects: ResourceBytes,
+    pub object_index: ResourceBytes,
+    pub behaviors: ResourceBytes,
+    pub tile_offset: u16,
+    pub palette_offset: u8,
+    pub tile_page_offset: u8,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilemapSlot {
+    pub graphics: ResourceBytes,
+    pub palette: ResourceBytes,
+    pub screen: ResourceBytes,
+}
+
+/// What the game draws in place of one absolute Map16 block of the level's tileset: a texture, nothing, or another
+/// block. See `bigstar_formats::TileOverlay`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Map16Overlay {
+    pub block: u16,
+    pub image: Option<RgbaImage>,
+    pub remap: Option<u16>,
+    pub replaces: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilesetResources {
+    pub level: LevelId,
+    /// Slots 0 (shared), 1 (the level's) and 2 (sub-unit).
+    pub tilesets: Vec<TilesetSlot>,
+    pub background: TilemapSlot,
+    pub foreground: TilemapSlot,
+    pub references: LevelTilesetReferences,
+    pub overlays: Vec<Map16Overlay>,
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
@@ -234,6 +300,7 @@ pub enum Response {
         bytes: Vec<u8>,
         target: String,
     },
+    TilesetResources(Box<TilesetResources>),
     Done,
 }
 

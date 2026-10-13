@@ -15,8 +15,8 @@ use bigstar_project::{
     load_lua_tile_layers, lua_actor_bounds, render_lua_actor, resolve_level_graphics,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LevelGraphics, LevelId, TextureData,
-    TextureId, TilesetGraphics,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LevelGraphics, LevelId, Map16Overlay,
+    ResourceBytes, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -182,6 +182,46 @@ impl ProjectGraphics {
     /// A file as the active variant has it: the module's copy when there is one, else the ROM's.
     pub fn read_file(&mut self, address: &str) -> Result<Vec<u8>> {
         self.files.read(address)
+    }
+
+    /// The files behind a level's three tilesets and its backgrounds, and what its tileset's tile scripts draw in place
+    /// of blocks, for the tileset workspace. A port of `MainWindow::openTilesetEditor`'s loading.
+    pub fn tileset_resources(&mut self, level: LevelId, references: LevelTilesetReferences) -> Result<TilesetResources> {
+        let resources = resolve_level_graphics(&mut self.files, references)?;
+        let bytes = |file: &bigstar_project::ResourceFile| ResourceBytes { rom_path: file.rom_path.clone(), bytes: file.data.clone() };
+        let tilesets = resources
+            .tilesets
+            .iter()
+            .map(|files| TilesetSlot {
+                graphics: bytes(&files.graphics),
+                palette: bytes(&files.palette),
+                map16: bytes(&files.map16),
+                objects: bytes(&files.objects),
+                object_index: bytes(&files.object_index),
+                behaviors: bytes(&files.behaviors),
+                tile_offset: files.tile_offset,
+                palette_offset: files.palette_offset,
+                tile_page_offset: files.tile_page_offset,
+            })
+            .collect();
+        let map = |files: &bigstar_project::BackgroundResourceFiles| TilemapSlot {
+            graphics: bytes(&files.graphics),
+            palette: bytes(&files.palette),
+            screen: bytes(&files.screen),
+        };
+        let (background, foreground) = (map(&resources.background), map(&resources.foreground));
+        let overlays = self
+            .overlays()
+            .blocks(references.tileset_id)
+            .into_iter()
+            .map(|(block, overlay)| Map16Overlay {
+                block,
+                image: overlay.image.as_deref().cloned(),
+                remap: overlay.remap,
+                replaces: overlay.replaces,
+            })
+            .collect();
+        Ok(TilesetResources { level, tilesets, background, foreground, references, overlays })
     }
 
     pub fn level_graphics(&mut self, level: LevelId, generation: u64, references: LevelTilesetReferences) -> LevelGraphics {

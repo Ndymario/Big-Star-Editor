@@ -17,6 +17,7 @@ mod properties_ui;
 mod resource_editor;
 mod services;
 mod session;
+mod tileset_editor;
 mod tools;
 mod workspace;
 

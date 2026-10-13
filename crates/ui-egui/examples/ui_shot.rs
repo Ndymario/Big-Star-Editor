@@ -126,7 +126,13 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         }
         shot(&mut harness, dir, name)?;
     }
-    Ok(())
+    // A01_1's tilesets and backgrounds.
+    harness.state_mut().open_tilesets_for_screenshot("A01_1");
+    for _ in 0..30 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    tileset_tabs(&mut harness, dir, "remote-tilesets")
 }
 
 fn main() -> Result<(), String> {
@@ -199,5 +205,21 @@ fn main() -> Result<(), String> {
     if let Some(tab) = harness.query_by_label("Titles") {
         tab.click();
     }
-    shot(&mut harness, &dir, "banner-titles.png")
+    shot(&mut harness, &dir, "banner-titles.png")?;
+    // The tileset workspace of the open level, a tab at a time.
+    harness.state_mut().open_tilesets_for_screenshot("A01_2");
+    harness.run();
+    tileset_tabs(&mut harness, &dir, "tilesets")
+}
+
+/// Each tab of the open tileset workspace but Slots: graphics, Map16, objects, behaviours and both backgrounds.
+fn tileset_tabs(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
+    for (index, name) in [(1, "graphics"), (2, "map16"), (3, "objects"), (4, "behaviors"), (5, "background"), (6, "foreground")] {
+        harness.state_mut().tileset_tab_for_screenshot(index);
+        for _ in 0..3 {
+            harness.step();
+        }
+        shot(harness, dir, &format!("{prefix}-{name}.png"))?;
+    }
+    Ok(())
 }

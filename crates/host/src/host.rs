@@ -238,6 +238,8 @@ impl Shared {
             Request::RemoveFile { path } => self.remove_file(&path),
             Request::Banner => self.banner(),
             Request::WriteBanner { bytes } => self.write_banner(&bytes),
+            Request::TilesetResources { level } => self.tileset_resources(level),
+            Request::WriteFiles { files } => self.write_files(&files),
         }
     }
 
@@ -892,9 +894,48 @@ impl Shared {
     }
 
     fn write_file(&self, path: &str, bytes: &[u8]) -> Result<Response> {
+        self.write_files(&[bigstar_protocol::FileWrite { path: path.to_owned(), bytes: bytes.to_vec() }])
+    }
+
+    /// Writes each file into the module that supplies it, or the active one, then drops what was built from the old
+    /// files once.
+    fn write_files(&self, files: &[bigstar_protocol::FileWrite]) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
-        let known = self.ensure_filesystem(open)?.find(path).is_some();
+        self.ensure_filesystem(open)?;
+        let mut written = Vec::new();
+        let mut failure = None;
+        for file in files {
+            let known = open.filesystem.as_ref().is_some_and(|view| view.find(&file.path).is_some());
+            match Self::write_one(known, open, &file.path, &file.bytes) {
+                Ok(module) => written.push((file.path.clone(), module)),
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        if !written.is_empty() {
+            // What the dock shows and what graphics read from have both changed.
+            open.filesystem = None;
+            open.patcher = None;
+            open.graphics = None;
+        }
+        drop(state);
+        if !written.is_empty() {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.emit(Event::GraphicsChanged { generation });
+            for (path, module) in &written {
+                self.log(LogLevel::Info, format!("Wrote {path} to module {module}"));
+            }
+        }
+        match failure {
+            Some(error) => Err(error),
+            None => Ok(Response::Done),
+        }
+    }
+
+    fn write_one(known: bool, open: &OpenProject, path: &str, bytes: &[u8]) -> Result<String> {
         if !known && !path.starts_with("z_new/") {
             return Err(invalid("New NitroFS files must be under z_new/."));
         }
@@ -904,15 +945,15 @@ impl Shared {
             std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create module target directory"))?;
         }
         write_file_atomically(&target, bytes)?;
-        // What the dock shows and what graphics read from have both changed.
-        open.filesystem = None;
-        open.patcher = None;
-        open.graphics = None;
-        drop(state);
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.emit(Event::GraphicsChanged { generation });
-        self.log(LogLevel::Info, format!("Wrote {path} to module {}", module.key));
-        Ok(Response::Done)
+        Ok(module.key)
+    }
+
+    fn tileset_resources(&self, level: LevelId) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let references = open.levels.get(&level).ok_or_else(unknown_level)?.level.tileset_references();
+        let resources = self.ensure_graphics(open)?.tileset_resources(level, references)?;
+        Ok(Response::TilesetResources(Box::new(resources)))
     }
 
     fn file_targets(&self, path: &str) -> Result<Response> {

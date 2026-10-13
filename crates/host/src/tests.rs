@@ -334,6 +334,26 @@ fn a_real_rom_names_the_overlay_of_every_object_bank() {
 }
 
 #[test]
+fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-tilesets");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.session();
+    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let snapshot = open_level(&mut session, "A01_1");
+    let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
+    assert_eq!(resources.tilesets.len(), 3);
+    // Slot 0 is jyotyu, shared by every level; the level's own is in slot 1.
+    assert_eq!(resources.tilesets[0].graphics.rom_path, "BG_ncg/d_2d_A_J_jyotyu_ncg.bin");
+    assert!(resources.tilesets.iter().all(|slot| !slot.map16.bytes.is_empty()));
+    assert!(!resources.background.screen.bytes.is_empty());
+    assert_eq!(resources.references, snapshot.tileset_references);
+    assert_eq!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_yakata.bin", "1-1's tileset id 1");
+}
+
+#[test]
 fn a_level_round_trips_through_its_bytes_as_one_step() {
     let (_fixture, mut session) = Fixture::with_project("host-bytes");
     let opened = open_level(&mut session, "A01_1");
@@ -473,6 +493,31 @@ fn writes_go_to_the_module_and_new_files_under_z_new() {
     assert_eq!(error.message, "New NitroFS files must be under z_new/.");
     session.handle(Request::WriteFile { path: "z_new/new.bin".into(), bytes: vec![9] }).unwrap();
     assert!(project.join("modules/mine/nitrofs/z_new/new.bin").is_file());
+}
+
+#[test]
+fn several_files_are_written_at_once() {
+    let (fixture, mut session) = with_module("host-fs-write-many");
+    let project = fixture.root.path().join("proj");
+    listing(&mut session);
+    session.drain_events();
+    let files = vec![
+        bigstar_protocol::FileWrite { path: "course/A01_1.bin".into(), bytes: vec![1] },
+        bigstar_protocol::FileWrite { path: "z_new/b.bin".into(), bytes: vec![2] },
+    ];
+    assert_eq!(session.handle(Request::WriteFiles { files }).unwrap(), Response::Done);
+    assert_eq!(std::fs::read(project.join("modules/mine/nitrofs/course/A01_1.bin")).unwrap(), [1]);
+    assert_eq!(std::fs::read(project.join("modules/mine/nitrofs/z_new/b.bin")).unwrap(), [2]);
+    // The write announces the change itself; the project watcher may announce the new files again, later.
+    assert!(session.drain_events().iter().any(|event| matches!(event, Event::GraphicsChanged { .. })));
+
+    // The first file that cannot be written stops the rest, and says why.
+    let files = vec![
+        bigstar_protocol::FileWrite { path: "elsewhere/new.bin".into(), bytes: vec![1] },
+        bigstar_protocol::FileWrite { path: "z_new/c.bin".into(), bytes: vec![3] },
+    ];
+    assert_eq!(session.handle(Request::WriteFiles { files }).unwrap_err().message, "New NitroFS files must be under z_new/.");
+    assert!(!project.join("modules/mine/nitrofs/z_new/c.bin").exists());
 }
 
 #[test]

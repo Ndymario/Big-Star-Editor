@@ -266,6 +266,13 @@ impl Tools {
 pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services) {
     let editing = session.active.is_some();
     let project = session.project.is_some();
+    if ui.add_enabled(editing, egui::Button::new("Tilesets and Backgrounds…")).clicked() {
+        if let Some(level) = session.active {
+            session.request_tileset_resources(level);
+        }
+        ui.close();
+    }
+    ui.separator();
     if ui.add_enabled(editing, egui::Button::new("Hex Editor…")).clicked() {
         session.request_level_bytes(BytesFor::HexEditor);
         ui.close();

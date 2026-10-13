@@ -13,6 +13,7 @@ mod level;
 mod message;
 mod narc;
 mod tex0;
+mod tile_overlay;
 mod tileset;
 mod ui_resources;
 
@@ -29,6 +30,7 @@ pub use level::*;
 pub use message::*;
 pub use narc::*;
 pub use tex0::*;
+pub use tile_overlay::*;
 pub use tileset::*;
 pub use ui_resources::*;
 

@@ -135,6 +135,8 @@ fn graphics_messages_survive_the_wire() {
         Request::RemoveFile { path: "z_new/x".into() },
         Request::Banner,
         Request::WriteBanner { bytes: vec![1, 0, 0xff] },
+        Request::TilesetResources { level: 3 },
+        Request::WriteFiles { files: vec![crate::FileWrite { path: "BG_ncg/a.bin".into(), bytes: vec![9] }] },
     ] {
         client_round_trip(ClientFrame::Request { id: 16, request });
     }

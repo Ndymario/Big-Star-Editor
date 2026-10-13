@@ -1482,3 +1482,44 @@ fn the_rom_banner_opens_from_the_tools_menu_and_saves_to_the_configured_file() {
     assert_eq!(doc.titles[1], "Edited");
     assert!(!doc.dirty);
 }
+
+#[test]
+fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let level = view(&harness).snapshot.level;
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.run();
+    harness.run();
+    assert!(harness.state().workspace.tilesets.contains_key(&level));
+    for tab in ["Slots", "Graphics", "Map16", "Objects", "Behaviors", "Background", "Foreground"] {
+        harness.get_by_label(tab);
+    }
+    harness.get_by_label("Map16").click();
+    harness.run();
+    harness.get_by_label("Show 3D tiles");
+    harness.get_by_label("GraphicsCanvas");
+
+    // A Map16 quadrant and the level tileset id change; Save writes the one file and edits the level.
+    {
+        let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+        doc.map16_entry = 8;
+        let mut value = doc.map16_value().unwrap();
+        value.horizontal_flip = true;
+        doc.set_map16_value(value);
+        doc.references.tileset_id = 9;
+    }
+    harness.run();
+    // The workspace's Save, drawn after the level's toolbar.
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    harness.run();
+    assert!(!harness.state().workspace.tilesets.contains_key(&level), "a saved workspace closes, as the dialog did");
+    assert_eq!(view(&harness).snapshot.tileset_references.tileset_id, 9);
+    let listing = harness.state().session().unwrap().filesystem.clone().expect("a write fetches the listing again");
+    assert!(listing.entries.iter().any(|e| e.path == "BG_pnl/demo_t1_pnl.bin" && e.from_module));
+    assert!(listing.entries.iter().all(|e| e.path != "BG_ncg/demo_t1_ncg.bin" || !e.from_module), "untouched files stay the ROM's");
+    let log = &harness.state().session().unwrap().log;
+    assert!(log.iter().any(|line| line.text == "Saved 1 edited graphics resource(s) to module targets."));
+}
