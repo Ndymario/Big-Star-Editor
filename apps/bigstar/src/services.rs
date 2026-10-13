@@ -11,6 +11,7 @@ use bigstar_ui_egui::Services;
 pub struct NativeServices {
     file: Option<PathBuf>,
     values: Mutex<BTreeMap<String, String>>,
+    accent: crate::accent::Accent,
 }
 
 /// `$XDG_CONFIG_HOME/bigstar/settings.json`, `%APPDATA%\bigstar\settings.json`, or the like.
@@ -27,7 +28,7 @@ impl NativeServices {
         let file = settings_path();
         let values =
             file.as_ref().and_then(|path| std::fs::read(path).ok()).and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
-        Self { file, values: Mutex::new(values) }
+        Self { file, values: Mutex::new(values), accent: crate::accent::Accent::watch() }
     }
 }
 
@@ -52,6 +53,10 @@ impl Services for NativeServices {
 
     fn can_embed(&self) -> bool {
         true
+    }
+
+    fn accent_color(&self) -> Option<[u8; 3]> {
+        self.accent.color()
     }
 
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {

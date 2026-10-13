@@ -134,7 +134,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     }
     tileset_tabs(&mut harness, dir, "remote-tilesets")?;
     // Run Patcher on a project without NCPatcher's configuration says why there is nothing to build.
-    if let Some(button) = harness.query_by_label("▶ Run Patcher") {
+    if let Some(button) = harness.query_by_label("Run Patcher") {
         button.click();
     }
     for _ in 0..20 {
@@ -155,7 +155,7 @@ fn main() -> Result<(), String> {
     let mut connect = build(BigStarApp::new(Box::new(MemoryServices::default())));
     shot(&mut connect, &dir, "connect.png")?;
 
-    let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(DemoConnection::new()));
+    let app = BigStarApp::with_connection(Box::new(MemoryServices::with_accent([111, 86, 168])), Box::new(DemoConnection::new()));
     let mut harness = build(app);
     shot(&mut harness, &dir, "projects.png")?;
     harness.get_by_label("Demo").click();
@@ -197,6 +197,42 @@ fn main() -> Result<(), String> {
         node.click();
     }
     shot(&mut harness, &dir, "level-data.png")?;
+    // The Filesystem dock, and the same window in the light palette.
+    if let Some(tab) = harness.query_by_label("Filesystem") {
+        tab.click();
+    }
+    harness.run();
+    shot(&mut harness, &dir, "files.png")?;
+    harness.state_mut().set_dark(false);
+    shot(&mut harness, &dir, "files-light.png")?;
+    harness.state_mut().set_dark(true);
+    // Preferences, with its themes, and the window in one of them with a system accent.
+    for label in ["View", "Preferences…"] {
+        if let Some(node) = harness.query_by_label(label) {
+            node.click();
+        }
+        harness.run();
+    }
+    shot(&mut harness, &dir, "preferences.png")?;
+    // The system's accent is on from the start; here the theme's own is asked for.
+    for label in ["Midnight", "Use the system's accent colour"] {
+        if let Some(node) = harness.query_by_label(label) {
+            node.click();
+        }
+        harness.run();
+    }
+    shot(&mut harness, &dir, "preferences-midnight.png")?;
+    for label in ["Lavender", "Light"] {
+        if let Some(node) = harness.query_by_label(label) {
+            node.click();
+        }
+        harness.run();
+    }
+    shot(&mut harness, &dir, "preferences-lavender-light.png")?;
+    if let Some(node) = harness.query_by_label("Cancel") {
+        node.click();
+    }
+    harness.run();
     // The message editor, the uiStudio and metadata pages and the banner, each a document.
     for (path, name) in [("message/msg.bmg", "messages.png"), ("uiStudio/demo.bnbl", "resource-bnbl.png"), ("NSMBeUD", "metadata.png")] {
         if let Some(session) = harness.state_mut().session_mut() {
@@ -220,7 +256,7 @@ fn main() -> Result<(), String> {
     harness.run();
     tileset_tabs(&mut harness, &dir, "tilesets")?;
     // A build of the demo project, reported into the Output panel.
-    if let Some(button) = harness.query_by_label("▶ Run Patcher") {
+    if let Some(button) = harness.query_by_label("Run Patcher") {
         button.click();
     }
     harness.run();

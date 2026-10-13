@@ -1,13 +1,15 @@
 //! Draws the properties panel from `properties`' rows and turns what the person does into edits.
 
 use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
-use egui::{Color32, ComboBox, DragValue, RichText, Ui};
+use egui::{RichText, Ui};
 
+use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::level_view::{Kind, LevelView};
 use crate::properties::{
     Editor, PanelState, Row, Rows, Span, TABS, Tab, add_edit, add_node_edit, apply, apply_settings, common_settings, delete_edit, delete_node_edit,
     format_settings, format_value, item_count, parse_settings, parse_value, rows, sprite_types,
 };
+use crate::{dialogs, icons};
 
 const LABEL_WIDTH: f32 = 112.0;
 
@@ -21,7 +23,7 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             let shown = panel.dragging.filter(|(i, _)| *i == index).map(|(_, v)| v).or(row.value).unwrap_or(unset);
             let mut value = shown;
             let response = ui.add(
-                DragValue::new(&mut value)
+                controls::number(&mut value)
                     .range(unset..=*max)
                     .speed(0.25)
                     .update_while_editing(false)
@@ -43,13 +45,13 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
                 None => format!("{} — not listed", format_value(value, hex)),
             };
             let mut picked = None;
-            ComboBox::from_id_salt(("property-choice", index))
+            controls::drop_down(("property-choice", index))
                 .width(ui.available_width().max(80.0))
                 .selected_text(row.value.map_or("—".to_owned(), label))
                 .show_ui(ui, |ui| {
                     for (value, text) in choices {
                         let entry = format!("{} — {text}", format_value(*value, hex));
-                        if ui.selectable_label(row.value == Some(*value), entry).on_hover_text(text).clicked() {
+                        if ui.choice(row.value == Some(*value), entry).on_hover_text(text).clicked() {
                             picked = Some(*value);
                         }
                     }
@@ -61,7 +63,7 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             // Undecided is something the data says -- a disagreeing selection, or bits that are neither off nor on --
             // not something the person can click back to.
             let undecided = !matches!(row.value, Some(0 | 1));
-            let response = ui.add(egui::Checkbox::new(&mut on, &row.label).indeterminate(undecided));
+            let response = controls::checkbox_undecided(ui, &mut on, undecided, &row.label);
             response.clicked().then(|| if row.value == Some(1) { 0 } else { 1 })
         }
     }
@@ -75,7 +77,7 @@ fn row_ui(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row, label_wi
         }
         let written = editor(ui, panel, index, row);
         if !row.note.is_empty() {
-            ui.add(egui::Button::new("ℹ").small().frame(false)).on_hover_text(&row.note);
+            controls::hint(ui, &row.note);
         }
         written
     })
@@ -92,7 +94,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
     let mut edit = None;
     ui.horizontal_wrapped(|ui| {
         for (tab, name) in TABS {
-            if ui.selectable_label(view.panel.tab == tab, name).clicked() && view.panel.tab != tab {
+            if ui.choice(view.panel.tab == tab, name).clicked() && view.panel.tab != tab {
                 view.panel_tab(tab);
             }
         }
@@ -107,14 +109,12 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
             sprite_header(ui, view, &shown, busy, &mut edit);
         }
 
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Selection").strong());
+        controls::section(ui, "Selection", |ui| {
             ui.add_enabled_ui(tab != Tab::Course && count != 0 && !shown.multi(), |ui| {
                 ui.horizontal(|ui| {
                     ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Item"));
                     let mut item = view.panel.item.min(count.saturating_sub(1));
-                    if ui.add(DragValue::new(&mut item).range(0..=count.saturating_sub(1))).changed() {
+                    if ui.add(controls::number(&mut item).range(0..=count.saturating_sub(1))).changed() {
                         view.panel_item(item);
                     }
                     if shown.multi() {
@@ -130,7 +130,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
                     ui.horizontal(|ui| {
                         ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Node"));
                         let mut node = shown.node;
-                        if ui.add(DragValue::new(&mut node).range(0..=nodes.saturating_sub(1))).changed() {
+                        if ui.add(controls::number(&mut node).range(0..=nodes.saturating_sub(1))).changed() {
                             view.panel_node(node);
                         }
                     });
@@ -138,9 +138,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
             }
         });
 
-        ui.group(|ui| {
-            ui.set_width(ui.available_width());
-            ui.label(RichText::new("Properties").strong());
+        controls::section(ui, "Properties", |ui| {
             if shown.rows.is_empty() {
                 ui.weak(if count == 0 { "Nothing of this kind in the level." } else { "Nothing to edit here." });
             }
@@ -172,7 +170,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
                     }
                 }
             });
-            ui.checkbox(&mut view.panel.hex, "Display as hex");
+            controls::checkbox(ui, &mut view.panel.hex, "Display as hex");
             if let Some((row, value)) = written {
                 edit = apply(view, &view.panel, &shown, row, value);
             }
@@ -180,13 +178,11 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
 
         // The raw value is the sprite; the declared fields are only a reading of it.
         if tab == Tab::Entity(Kind::Sprite) && count != 0 {
-            ui.group(|ui| {
-                ui.set_width(ui.available_width());
-                ui.label(RichText::new("Raw Fields").strong());
+            controls::section(ui, "Raw Fields", |ui| {
                 let current = common_settings(view, &shown).map(format_settings).unwrap_or_default();
                 let mut text = view.panel.settings_text.clone().unwrap_or_else(|| current.clone());
                 let response = ui
-                    .add_enabled(!busy, egui::TextEdit::singleline(&mut text).font(egui::TextStyle::Monospace).desired_width(140.0).hint_text("—"))
+                    .add_enabled(!busy, TextField::new(&mut text).code().width(Width::Px(140.0)).hint("—"))
                     .on_hover_text("The settings word from its high byte down.");
                 if response.changed() {
                     // A half-typed value is not a value: the box keeps it until it is whole.
@@ -203,22 +199,22 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
         if let Tab::Entity(kind) = tab {
             ui.add_enabled_ui(!busy, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.button("Add").clicked() {
+                    if Button::new("Add").show(ui).clicked() {
                         view.expect_placement();
                         edit = add_edit(&view.snapshot, tab);
                     }
-                    if ui.add_enabled(count != 0, egui::Button::new("Delete")).clicked() {
+                    if Button::new("Delete").enabled(count != 0).show(ui).clicked() {
                         edit = delete_edit(tab, &shown);
                     }
                 });
                 if kind.path() && !shown.multi() && count != 0 {
                     ui.horizontal(|ui| {
                         let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
-                        if ui.button("Add Node").clicked() {
+                        if Button::new("Add Node").show(ui).clicked() {
                             edit = add_node_edit(&view.snapshot, tab, &shown);
                             view.panel_node(nodes);
                         }
-                        if ui.add_enabled(nodes != 0, egui::Button::new("Delete Node")).clicked() {
+                        if Button::new("Delete Node").enabled(nodes != 0).show(ui).clicked() {
                             edit = delete_node_edit(&view.snapshot, tab, &shown);
                         }
                     });
@@ -248,7 +244,7 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, ed
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add_enabled(shown.actor.is_some(), egui::Button::new("ℹ"))
+                .add(Button::icon(icons::INFO).ghost().name("About this actor").enabled(shown.actor.is_some()))
                 .on_hover_text("What this actor is, and what each of its fields does")
                 .clicked()
             {
@@ -266,10 +262,10 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, ed
     };
     let filter_id = ui.id().with("sprite-picker-filter");
     ui.add_enabled_ui(enabled, |ui| {
-        ComboBox::from_id_salt("sprite-picker").width(ui.available_width()).selected_text(selected).height(320.0).show_ui(ui, |ui| {
+        controls::drop_down("sprite-picker").width(ui.available_width()).selected_text(selected).height(320.0).show_ui(ui, |ui| {
             // 300 actors are too many to address by number, so the list filters by what is typed.
             let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-            ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Filter actors…"));
+            ui.add(TextField::new(&mut filter).hint("Filter actors…"));
             ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
             let needle = filter.to_lowercase();
             for (t, name) in &entries {
@@ -277,7 +273,7 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows, busy: bool, ed
                 if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
                     continue;
                 }
-                if ui.selectable_label(Some(*t) == sprite_type, entry).clicked() && Some(*t) != sprite_type {
+                if ui.choice(Some(*t) == sprite_type, entry).clicked() && Some(*t) != sprite_type {
                     // The picker turns the Object ID row, so there is one way the type is written.
                     *edit = apply(view, &view.panel, shown, 0, i64::from(*t));
                 }
@@ -292,11 +288,11 @@ fn actor_info(ctx: &egui::Context, view: &mut LevelView, shown: &Rows) {
     let Some(actor) = shown.actor.as_ref().filter(|_| view.panel.show_actor_info) else { return };
     let definition = &actor.definition;
     let mut open = true;
-    egui::Window::new(&definition.name).open(&mut open).default_size([520.0, 420.0]).show(ctx, |ui| {
+    dialogs::window(&definition.name).open(&mut open).default_size([520.0, 420.0]).show(ctx, |ui| {
         ui.weak(format!("{} · object {}", definition.category, definition.object_id));
         ui.label(if definition.notes.is_empty() { "This actor documents nothing about itself." } else { &definition.notes });
         if let Some(error) = &actor.init_error {
-            ui.colored_label(Color32::from_rgb(210, 140, 40), format!("Its script failed to start: {error}"));
+            controls::warning_text(ui, format!("Its script failed to start: {error}"));
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {

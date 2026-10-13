@@ -2,6 +2,8 @@
 //! sprite-event viewer. Ports of `MainWindow::editLevelHex`, `exportLevelPackage`, `importLevelPackage`, `findEntity`
 //! and `showSpriteEvents`.
 
+use crate::controls::{self, Button, TextField};
+use crate::{dialogs, icons};
 use bigstar_level::{LevelPackage, decode_nml, encode_nml};
 use bigstar_protocol::{LevelBytes, LevelEdit, LevelId};
 use egui::{RichText, Ui};
@@ -127,20 +129,17 @@ impl Tools {
         let Some(editor) = &mut self.hex else { return };
         let mut open = true;
         let mut done = false;
-        egui::Window::new(format!("Level Hex Editor — {}", editor.title)).open(&mut open).default_size([900.0, 600.0]).show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut editor.page, HexPage::Course, "Course");
-                ui.selectable_value(&mut editor.page, HexPage::Bgdat, "BGDat");
-            });
+        dialogs::window(format!("Level Hex Editor — {}", editor.title)).open(&mut open).default_size([900.0, 600.0]).show(ctx, |ui| {
+            controls::tabs(ui, "hex-page", &mut editor.page, &[(HexPage::Course, "Course"), (HexPage::Bgdat, "BGDat")]);
             let text = match editor.page {
                 HexPage::Course => &mut editor.course,
                 HexPage::Bgdat => &mut editor.bgdat,
             };
-            egui::ScrollArea::both().max_height(ui.available_height() - 36.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(text).code_editor().desired_width(f32::INFINITY));
+            egui::ScrollArea::both().max_height(ui.available_height() - 48.0).auto_shrink([false, false]).show(ui, |ui| {
+                ui.add(TextField::multiline(text).code().lock_focus());
             });
-            ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
+            dialogs::actions(ui, |ui| {
+                if Button::new("Save").primary().show(ui).clicked() {
                     match (unhex(&editor.course), unhex(&editor.bgdat)) {
                         (Some(course), Some(bgdat)) => {
                             session.edit_level(editor.level, LevelEdit::ReplaceSerialized { course, bgdat, name: "Hex edit level".to_owned() });
@@ -149,7 +148,7 @@ impl Tools {
                         _ => session.report("Hex data contains an invalid or incomplete byte.".to_owned()),
                     }
                 }
-                if ui.button("Cancel").clicked() {
+                if Button::new("Cancel").show(ui).clicked() {
                     done = true;
                 }
             });
@@ -163,12 +162,12 @@ impl Tools {
         let Some(finder) = &mut self.finder else { return };
         let mut open = true;
         let title = if finder.sprites { "Sprite Finder" } else { "Object Finder" };
-        egui::Window::new(title).open(&mut open).default_size([640.0, 420.0]).show(ctx, |ui| {
+        dialogs::window(title).open(&mut open).default_size([640.0, 420.0]).show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(if finder.sprites { "Placement type" } else { "Object ID" });
                 let maximum = if finder.sprites { u16::MAX } else { 4095 };
-                ui.add(egui::DragValue::new(&mut finder.id).range(0..=maximum));
-                if ui.button("Find").clicked() {
+                ui.add(controls::number(&mut finder.id).range(0..=maximum));
+                if Button::new("Find").with_icon(icons::SEARCH).primary().show(ui).clicked() {
                     session.find(finder.sprites, finder.id);
                 }
             });
@@ -189,7 +188,7 @@ impl Tools {
                     ui.end_row();
                     for entity in &found.entities {
                         // Picking a row opens its level and selects what was found.
-                        if ui.link(&entity.title).on_hover_text(&entity.area).clicked() {
+                        if controls::link(ui, &entity.title).on_hover_text(&entity.area).clicked() {
                             let kind = if found.sprites { Kind::Sprite } else { Kind::Object };
                             workspace.to_select = Some((entity.area.clone(), kind, entity.index));
                             session.open_level(&entity.area);
@@ -214,7 +213,7 @@ impl Tools {
             return;
         }
         let mut open = true;
-        egui::Window::new("Sprite Event Viewer").open(&mut open).default_size([520.0, 380.0]).show(ctx, |ui| {
+        dialogs::window("Sprite Event Viewer").open(&mut open).default_size([520.0, 380.0]).show(ctx, |ui| {
             let Some(view) = session.level_mut() else {
                 ui.weak("Open an editable level first.");
                 return;
@@ -243,7 +242,7 @@ impl Tools {
                     ui.end_row();
                     for (event, index, sprite_type, name) in &rows {
                         ui.label(event.to_string());
-                        if ui.link(index.to_string()).clicked() {
+                        if controls::link(ui, index.to_string()).clicked() {
                             picked = Some(*index);
                         }
                         ui.label(sprite_type.to_string());
@@ -266,46 +265,46 @@ impl Tools {
 pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services, language: crate::i18n::Language) {
     let editing = session.active.is_some();
     let project = session.project.is_some();
-    if ui.add_enabled(editing, egui::Button::new("Tilesets and Backgrounds…")).clicked() {
+    if Button::menu("Tilesets and Backgrounds…").enabled(editing).show(ui).clicked() {
         if let Some(level) = session.active {
             session.request_tileset_resources(level);
         }
         ui.close();
     }
     ui.separator();
-    if ui.add_enabled(editing, egui::Button::new(format!("{}…", language.tr("Hex Editor")))).clicked() {
+    if Button::menu(format!("{}…", language.tr("Hex Editor"))).enabled(editing).show(ui).clicked() {
         session.request_level_bytes(BytesFor::HexEditor);
         ui.close();
     }
-    if ui.add_enabled(editing, egui::Button::new("Export Level (.nml)…")).clicked() {
+    if Button::menu("Export Level (.nml)…").enabled(editing).show(ui).clicked() {
         session.request_level_bytes(BytesFor::Export);
         ui.close();
     }
-    if ui.add_enabled(editing, egui::Button::new("Import Level (.nml)…")).clicked() {
+    if Button::menu("Import Level (.nml)…").enabled(editing).show(ui).clicked() {
         tools.import(session, services);
         ui.close();
     }
     ui.separator();
-    if ui.add_enabled(project, egui::Button::new("Find Object…")).clicked() {
+    if Button::menu("Find Object…").enabled(project).show(ui).clicked() {
         tools.finder = Some(Finder { sprites: false, id: 0 });
         session.found = None;
         ui.close();
     }
-    if ui.add_enabled(project, egui::Button::new("Find Sprite…")).clicked() {
+    if Button::menu("Find Sprite…").enabled(project).show(ui).clicked() {
         tools.finder = Some(Finder { sprites: true, id: 0 });
         session.found = None;
         ui.close();
     }
-    if ui.add_enabled(editing, egui::Button::new("Sprite Events…")).clicked() {
+    if Button::menu("Sprite Events…").enabled(editing).show(ui).clicked() {
         tools.events = true;
         ui.close();
     }
     ui.separator();
-    if ui.add_enabled(project, egui::Button::new("ROM Banner…")).clicked() {
+    if Button::menu("ROM Banner…").enabled(project).show(ui).clicked() {
         session.request_banner();
         ui.close();
     }
-    if ui.add_enabled(project, egui::Button::new("ROM User Metadata…")).clicked() {
+    if Button::menu("ROM User Metadata…").enabled(project).show(ui).clicked() {
         tools.metadata = true;
         session.refresh_filesystem_once();
         ui.close();

@@ -10,6 +10,7 @@ use bigstar_protocol::{ATLAS_COLUMNS, TilesetGraphics};
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::canvas::{Art, Frame, paint_command};
+use crate::controls::{self, Choice as _, Row, Width};
 use crate::level_view::{ActorKey, Kind, LevelView, TILE};
 
 /// Repeat-marked rows would tile forever, so a preview stops at a size that still fits a button.
@@ -124,13 +125,14 @@ fn matches(filter: &str, texts: &[&str]) -> bool {
 
 /// The picker. Choosing an entry changes what a right-click places, and with it which kind the properties show.
 pub fn show(ui: &mut Ui, view: &mut LevelView, state: &mut PickerState, modules: Option<&ModuleDataCatalog>, art: &mut Art<'_>) {
-    ui.add(egui::TextEdit::singleline(&mut state.search).hint_text("Filter palette…").desired_width(f32::INFINITY));
-    ui.horizontal(|ui| {
-        for (tab, name) in [(PickerTab::Objects, "Objects"), (PickerTab::Sprites, "Sprites"), (PickerTab::Custom, "Custom actors")] {
-            ui.selectable_value(&mut state.tab, tab, name);
-        }
-    });
-    ui.separator();
+    controls::search(ui, &mut state.search, "Filter palette…", Width::Fill);
+    controls::tabs(
+        ui,
+        "picker",
+        &mut state.tab,
+        &[(PickerTab::Objects, "Objects"), (PickerTab::Sprites, "Sprites"), (PickerTab::Custom, "Custom actors")],
+    );
+    ui.add_space(2.0);
     let filter = state.search.to_lowercase();
     match state.tab {
         PickerTab::Objects => objects(ui, view, state, &filter, art),
@@ -181,7 +183,7 @@ fn objects(ui: &mut Ui, view: &mut LevelView, state: &mut PickerState, filter: &
     }
     ui.horizontal(|ui| {
         for (slot, _) in &pages {
-            ui.selectable_value(&mut state.slot, usize::from(*slot), format!("Tileset {slot}"));
+            ui.choice_value(&mut state.slot, usize::from(*slot), format!("Tileset {slot}"));
         }
     });
     let Some((slot, entries)) = pages.into_iter().find(|(slot, _)| usize::from(*slot) == state.slot) else { return };
@@ -279,22 +281,19 @@ fn sprites(ui: &mut Ui, view: &mut LevelView, filter: &str, art: &mut Art<'_>) {
             if shown.is_empty() {
                 continue;
             }
-            egui::CollapsingHeader::new(format!("{category} ({})", shown.len()))
-                .id_salt(("sprites", &category))
-                .default_open(!filter.is_empty())
-                .show(ui, |ui| {
-                    // Stills are asked for only once their category is open.
-                    view.art.wanted.extend(shown.iter().filter(|e| e.has_renderer).map(|e| still(e.sprite_type, None)));
-                    let placement = view.placement.clone();
-                    let clicked = grid(ui, &shown, |ui, entry| {
-                        let chosen = placement.kind == Kind::Sprite && placement.sprite_hash.is_none() && placement.sprite_type == entry.sprite_type;
-                        let key = still(entry.sprite_type, None);
-                        preview_button(ui, &entry.label, &entry.label, chosen, |painter, icon| actor_still(painter, icon, view, &key, art))
-                    });
-                    if let Some(entry) = clicked.and_then(|i| shown.get(i)) {
-                        view.placement.set_sprite(entry.sprite_type);
-                    }
+            controls::group(ui, ("sprites", &category), format!("{category} ({})", shown.len()), !filter.is_empty(), |ui| {
+                // Stills are asked for only once their category is open.
+                view.art.wanted.extend(shown.iter().filter(|e| e.has_renderer).map(|e| still(e.sprite_type, None)));
+                let placement = view.placement.clone();
+                let clicked = grid(ui, &shown, |ui, entry| {
+                    let chosen = placement.kind == Kind::Sprite && placement.sprite_hash.is_none() && placement.sprite_type == entry.sprite_type;
+                    let key = still(entry.sprite_type, None);
+                    preview_button(ui, &entry.label, &entry.label, chosen, |painter, icon| actor_still(painter, icon, view, &key, art))
                 });
+                if let Some(entry) = clicked.and_then(|i| shown.get(i)) {
+                    view.placement.set_sprite(entry.sprite_type);
+                }
+            });
         }
     });
 }
@@ -311,13 +310,13 @@ fn custom(ui: &mut Ui, view: &mut LevelView, modules: Option<&ModuleDataCatalog>
             if !visible {
                 continue;
             }
-            egui::CollapsingHeader::new(module).id_salt(("custom", module)).default_open(true).show(ui, |ui| {
+            controls::group(ui, ("custom", module), module, true, |ui| {
                 for (component, actors) in components {
                     let shown: Vec<&(u32, String)> = actors.iter().filter(|(_, label)| matches(filter, &[label])).collect();
                     if shown.is_empty() {
                         continue;
                     }
-                    egui::CollapsingHeader::new(component).id_salt(("custom", module, component)).default_open(true).show(ui, |ui| {
+                    controls::group(ui, ("custom", module, component), component, true, |ui| {
                         for (hash, label) in shown {
                             let key = still(0, Some(*hash));
                             view.art.wanted.push(key);
@@ -325,7 +324,7 @@ fn custom(ui: &mut Ui, view: &mut LevelView, modules: Option<&ModuleDataCatalog>
                             ui.horizontal(|ui| {
                                 let (icon, _) = ui.allocate_exact_size(Vec2::splat(24.0), Sense::hover());
                                 actor_still(&ui.painter_at(icon), icon, view, &key, art);
-                                if ui.selectable_label(chosen, label).clicked() {
+                                if Row::new(label).selected(chosen).show(ui).clicked() {
                                     view.placement.set_custom_sprite(*hash);
                                 }
                             });

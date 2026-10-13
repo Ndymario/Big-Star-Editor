@@ -2,6 +2,8 @@
 //! foreground, edited together and saved as only the files that changed. A port of `TilesetEditorDialog` and of
 //! `MainWindow::openTilesetEditor`'s saving; the document is pure and `show` draws it as a tab.
 
+use crate::controls::{self, Button, Choice as _, TextField, Width};
+use crate::icons;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -454,43 +456,45 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
         ui.label(RichText::new(format!("Tilesets and backgrounds — {}", doc.title)).strong());
         ui.label("Tileset slot");
         let mut slot = doc.slot;
-        egui::ComboBox::from_id_salt("tileset-slot").selected_text(SLOT_NAMES.get(slot).copied().unwrap_or_default()).show_ui(ui, |ui| {
+        controls::drop_down("tileset-slot").selected_text(SLOT_NAMES.get(slot).copied().unwrap_or_default()).show_ui(ui, |ui| {
             for (i, name) in SLOT_NAMES.iter().enumerate() {
-                ui.selectable_value(&mut slot, i, *name);
+                ui.choice_value(&mut slot, i, *name);
             }
         });
         if slot != doc.slot {
             doc.set_slot(slot);
         }
-        if ui.button("Import tileset…").clicked() {
+        if Button::new("Import tileset…").show(ui).clicked() {
             match services.open_file("Import tileset", Some("bstileset")) {
                 Some(Ok((_, bytes))) => view.notice = doc.import_bundle(&bytes).err(),
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
             }
         }
-        if ui.button("Export tileset…").clicked() {
+        if Button::new("Export tileset…").show(ui).clicked() {
             let written = doc.export_bundle().and_then(|bytes| services.save_file("Export tileset", "tileset.bstileset", "bstileset", &bytes));
             view.notice = written.err();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("Cancel").clicked() {
+            if Button::new("Cancel").show(ui).clicked() {
                 action = Some(TilesetAction::Close);
             }
-            if ui.button("Save").on_hover_text("Writes the files the edits changed into their modules").clicked() {
+            if Button::new("Save")
+                .with_icon(icons::SAVE)
+                .primary()
+                .show(ui)
+                .on_hover_text("Writes the files the edits changed into their modules")
+                .clicked()
+            {
                 action = Some(TilesetAction::Save);
             }
         });
     });
-    ui.horizontal(|ui| {
-        for (tab, name) in TABS {
-            ui.selectable_value(&mut doc.tab, tab, name);
-        }
-    });
+    controls::tabs(ui, "tileset", &mut doc.tab, &TABS);
     if let Some(notice) = &view.notice {
-        ui.colored_label(ui.visuals().warn_fg_color, notice);
+        controls::warning_text(ui, notice);
     }
-    ui.separator();
+    ui.add_space(2.0);
     match doc.tab {
         Tab::Slots => slots(ui, doc),
         Tab::Graphics => graphics(ui, doc, view, services),
@@ -521,7 +525,7 @@ fn sheet(
             clicked
         }
         Err(error) => {
-            ui.colored_label(ui.visuals().error_fg_color, error);
+            controls::error_text(ui, error);
             None
         }
     }
@@ -538,7 +542,7 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
             ("Foreground screen", &mut references.foreground_screen_id),
         ] {
             ui.label(label);
-            ui.add(egui::DragValue::new(value).range(0..=255));
+            ui.add(controls::number(value).range(0..=255));
             ui.end_row();
         }
     });
@@ -554,14 +558,14 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     let height = (ui.available_height() - 40.0).max(120.0);
     sheet(ui, view, "tileset-graphics", doc.version, doc.graphics_sheet(), height);
     ui.horizontal(|ui| {
-        if ui.button("Import PNG…").clicked() {
+        if Button::new("Import PNG…").show(ui).clicked() {
             match services.open_file("Import tileset graphics", Some("png")) {
                 Some(Ok((_, bytes))) => view.notice = decode_png(&bytes).and_then(|image| doc.import_graphics(&image)).err(),
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
             }
         }
-        if ui.button("Export PNG…").clicked() {
+        if Button::new("Export PNG…").show(ui).clicked() {
             let written = doc
                 .graphics_sheet()
                 .and_then(|image| encode_png(&image))
@@ -580,16 +584,16 @@ fn entry_fields(
     let mut edited = value;
     egui::Grid::new(ui.next_auto_id()).num_columns(2).show(ui, |ui| {
         ui.label("Tile");
-        ui.add(egui::DragValue::new(&mut edited.tile).range(tiles));
+        ui.add(controls::number(&mut edited.tile).range(tiles));
         ui.end_row();
         ui.label("Palette");
-        ui.add(egui::DragValue::new(&mut edited.palette).range(palettes));
+        ui.add(controls::number(&mut edited.palette).range(palettes));
         ui.end_row();
         ui.label("Horizontal flip");
-        ui.checkbox(&mut edited.horizontal_flip, "");
+        controls::checkbox(ui, &mut edited.horizontal_flip, "");
         ui.end_row();
         ui.label("Vertical flip");
-        ui.checkbox(&mut edited.vertical_flip, "");
+        controls::checkbox(ui, &mut edited.vertical_flip, "");
         ui.end_row();
     });
     (edited != value).then_some(edited)
@@ -606,12 +610,12 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     egui::Grid::new("map16-choice").num_columns(2).show(ui, |ui| {
         ui.label("Map16 tile");
         let last = doc.map16_count().saturating_sub(1);
-        ui.add(egui::DragValue::new(&mut doc.map16_entry).range(0..=last));
+        ui.add(controls::number(&mut doc.map16_entry).range(0..=last));
         ui.end_row();
         ui.label("Quadrant");
-        egui::ComboBox::from_id_salt("map16-quadrant").selected_text(QUADRANTS.get(doc.quadrant).copied().unwrap_or_default()).show_ui(ui, |ui| {
+        controls::drop_down("map16-quadrant").selected_text(QUADRANTS.get(doc.quadrant).copied().unwrap_or_default()).show_ui(ui, |ui| {
             for (i, name) in QUADRANTS.iter().enumerate() {
-                ui.selectable_value(&mut doc.quadrant, i, *name);
+                ui.choice_value(&mut doc.quadrant, i, *name);
             }
         });
         ui.end_row();
@@ -622,10 +626,10 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         doc.set_map16_value(edited);
     }
     let before = (doc.composed, doc.solid3d);
-    ui.checkbox(&mut doc.composed, "Show the other tilesets’ graphics").on_hover_text(
+    controls::checkbox(ui, &mut doc.composed, "Show the other tilesets’ graphics").on_hover_text(
         "A Map16 entry can name a tile another tileset supplies. Checked, the sheet draws those against all three tilesets, the way the game loads them; unchecked, it shows only what this tileset carries.",
     );
-    ui.checkbox(&mut doc.solid3d, "Show 3D tiles").on_hover_text(
+    controls::checkbox(ui, &mut doc.solid3d, "Show 3D tiles").on_hover_text(
         "The game hands some blocks to the 3D engine and draws nothing from their Map16. Checked, the sheet shows the texture the game shows; unchecked, it shows the bytes the file holds, which is what you want when editing them.",
     );
     if before != (doc.composed, doc.solid3d) {
@@ -637,18 +641,18 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     ui.horizontal(|ui| {
         ui.label("Object");
         let count = doc.objects().len();
-        egui::ComboBox::from_id_salt("tileset-object").selected_text(format!("Object {}", doc.object)).show_ui(ui, |ui| {
+        controls::drop_down("tileset-object").selected_text(format!("Object {}", doc.object)).show_ui(ui, |ui| {
             for i in 0..count {
-                if ui.selectable_label(doc.object == i, format!("Object {i}")).clicked() {
+                if ui.choice(doc.object == i, format!("Object {i}")).clicked() {
                     doc.object = i;
                     doc.object_cell = None;
                 }
             }
         });
-        if ui.button("Add").clicked() {
+        if Button::new("Add").show(ui).clicked() {
             doc.add_object();
         }
-        if ui.button("Delete").clicked() {
+        if Button::new("Delete").show(ui).clicked() {
             doc.delete_object();
         }
     });
@@ -665,7 +669,7 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                         _ => cell.tile.to_string(),
                     };
                     let selected = doc.object_cell == Some((y, x));
-                    let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(44.0).background_color(if selected {
+                    let response = ui.add(TextField::new(&mut text).width(Width::Px(44.0)).fill(if selected {
                         ui.visuals().selection.bg_fill
                     } else {
                         ui.visuals().extreme_bg_color
@@ -686,18 +690,18 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         });
     });
     ui.horizontal(|ui| {
-        if ui.button("Add row").clicked() {
+        if Button::new("Add row").show(ui).clicked() {
             doc.add_object_row();
         }
-        if ui.button("Add tile").clicked() {
+        if Button::new("Add tile").show(ui).clicked() {
             doc.add_object_tile();
         }
-        if ui.button("Remove tile").clicked() {
+        if Button::new("Remove tile").show(ui).clicked() {
             doc.remove_object_tile();
         }
         ui.label("Selected control");
         let mut control = doc.object_control();
-        if ui.add_enabled(doc.object_cell.is_some(), egui::DragValue::new(&mut control).range(0..=127)).changed() {
+        if ui.add_enabled(doc.object_cell.is_some(), controls::number(&mut control).range(0..=127)).changed() {
             doc.set_object_control(control);
         }
     });
@@ -722,31 +726,31 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
             ui.horizontal(|ui| {
                 ui.label("Map16 tile");
                 let last = doc.map16_count().saturating_sub(1);
-                ui.add(egui::DragValue::new(&mut doc.behavior_entry).range(0..=last));
+                ui.add(controls::number(&mut doc.behavior_entry).range(0..=last));
             });
             ui.label("Flags");
             egui::ScrollArea::vertical().id_salt("behavior-flags").max_height(260.0).show(ui, |ui| {
                 for (i, name) in TILE_BEHAVIOR_FLAG_NAMES.iter().enumerate() {
                     let bit = 1u32 << i;
                     let mut on = edited.flags & bit != 0;
-                    if ui.checkbox(&mut on, *name).changed() {
+                    if controls::checkbox(ui, &mut on, *name).changed() {
                         edited.flags ^= bit;
                     }
                 }
             });
             ui.horizontal(|ui| {
                 ui.label("Subtype");
-                egui::ComboBox::from_id_salt("behavior-subtype")
+                controls::drop_down("behavior-subtype")
                     .selected_text(TILE_BEHAVIOR_SUBTYPE_NAMES.get(usize::from(edited.subtype)).copied().unwrap_or_default())
                     .show_ui(ui, |ui| {
                         for (i, name) in TILE_BEHAVIOR_SUBTYPE_NAMES.iter().enumerate() {
-                            ui.selectable_value(&mut edited.subtype, u8::try_from(i).unwrap_or(0), *name);
+                            ui.choice_value(&mut edited.subtype, u8::try_from(i).unwrap_or(0), *name);
                         }
                     });
             });
             ui.horizontal(|ui| {
                 ui.label("Parameter");
-                ui.add(egui::DragValue::new(&mut edited.parameter));
+                ui.add(controls::number(&mut edited.parameter));
             });
             ui.horizontal(|ui| {
                 ui.label("Meaning");
@@ -759,7 +763,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                 ui.label("Raw hex");
                 let id = egui::Id::new(("behavior-raw", doc.slot, doc.behavior_entry));
                 let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| format!("{raw:08x}"));
-                let response = ui.add(egui::TextEdit::singleline(&mut text).desired_width(90.0).font(egui::TextStyle::Monospace));
+                let response = ui.add(TextField::new(&mut text).width(Width::Px(90.0)).code());
                 if response.lost_focus() {
                     if let Ok(value) = u32::from_str_radix(text.trim(), 16) {
                         doc.set_behavior(value);
@@ -791,7 +795,7 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
     if let Some(slot) = doc.map_entries.get_mut(which) {
         ui.horizontal(|ui| {
             ui.label("Screen entry");
-            ui.add(egui::DragValue::new(slot).range(0..=count.saturating_sub(1)));
+            ui.add(controls::number(slot).range(0..=count.saturating_sub(1)));
         });
     }
     if let Some(value) = doc.map_value(which)
@@ -800,14 +804,14 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
         doc.set_map_value(which, edited);
     }
     ui.horizontal(|ui| {
-        if ui.button("Import PNG…").clicked() {
+        if Button::new("Import PNG…").show(ui).clicked() {
             match services.open_file(&format!("Import {name}"), Some("png")) {
                 Some(Ok((_, bytes))) => view.notice = decode_png(&bytes).and_then(|image| doc.import_tilemap(which, &image)).err(),
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
             }
         }
-        if ui.button("Export PNG…").clicked() {
+        if Button::new("Export PNG…").show(ui).clicked() {
             let written = doc
                 .tilemap_image(which)
                 .and_then(|image| encode_png(&image))

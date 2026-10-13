@@ -10,6 +10,12 @@ Three things are taken from it. The `data/actors/*.lua` catalog is adapted from 
 
 Copying those stills reverses an earlier decision to exclude them. Most NSMB actors are 3D models that neither editor renders as geometry, so the stills are the only way to draw them at all; they are NSMBe's own artwork under the same license, not Nintendo ROM data. No ROM data is vendored here.
 
+## Interface font, icons and controls
+
+`crates/ui-egui/assets/fonts/NotoSans-Regular.ttf` is Noto Sans, under the SIL Open Font License 1.1; its text is beside it as `OFL.txt`. The icons in `crates/ui-egui/src/icons.rs` are the SVG path data of Heroicons and Feather, both MIT.
+
+The theme, the control set and the motion helpers (`theme.rs`, `controls.rs`, `dialogs.rs`, `motion.rs`, `icons.rs`) are adapted from the Rust frontend of Benkie, by the same author, who licenses that code here under this repository's GPL-3.0.
+
 ## NCPatcher
 
 NCPatcher is an external C++ tool. M0 does not vendor it. The integration is a narrow external-process boundary that expects a user-installed `ncpatcher` executable and a project-local `ncpatcher.json`.

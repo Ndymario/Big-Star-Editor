@@ -13,6 +13,7 @@ use egui::{
 };
 
 use crate::clipboard;
+use crate::controls::{self, Button, Choice as _};
 use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
@@ -204,7 +205,10 @@ fn toolbar(ui: &mut Ui, view: &mut LevelView) {
     egui::ScrollArea::horizontal().id_salt("canvas-toolbar").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
         ui,
         |ui| {
-            ui.horizontal(|ui| toolbar_items(ui, view));
+            ui.horizontal(|ui| {
+                controls::compact(ui);
+                toolbar_items(ui, view);
+            });
         },
     );
 }
@@ -213,48 +217,48 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
     {
         // What right-click creates. Choosing it never touches the selection.
         ui.label("Create");
-        egui::ComboBox::from_id_salt("create-kind").selected_text(view.placement.kind.name()).show_ui(ui, |ui| {
+        controls::drop_down("create-kind").selected_text(view.placement.kind.name()).show_ui(ui, |ui| {
             for kind in Kind::ALL {
-                ui.selectable_value(&mut view.placement.kind, kind, kind.name());
+                ui.choice_value(&mut view.placement.kind, kind, kind.name());
             }
         });
         match view.placement.kind {
             Kind::Object => {
-                ui.add(egui::DragValue::new(&mut view.placement.object_slot).range(0..=2).prefix("slot "));
-                ui.add(egui::DragValue::new(&mut view.placement.object_id).range(0..=4095).prefix("object "));
+                ui.add(controls::number(&mut view.placement.object_slot).range(0..=2).prefix("slot "));
+                ui.add(controls::number(&mut view.placement.object_id).range(0..=4095).prefix("object "));
             }
             Kind::Sprite => match view.placement.sprite_hash {
                 Some(hash) => {
                     ui.weak(format!("module actor {hash:08x}"));
                 }
                 None => {
-                    ui.add(egui::DragValue::new(&mut view.placement.sprite_type).prefix("type "));
+                    ui.add(controls::number(&mut view.placement.sprite_type).prefix("type "));
                 }
             },
             _ => {}
         }
         ui.separator();
         let options = &mut view.options;
-        ui.toggle_value(&mut options.snap, "Snap");
+        controls::toggle(ui, &mut options.snap, "Snap");
         let mut eight = options.snap_size < TILE;
-        if ui.toggle_value(&mut eight, "8 px").changed() {
+        if controls::toggle(ui, &mut eight, "8 px").changed() {
             options.snap_size = if eight { 8.0 } else { TILE };
         }
-        ui.toggle_value(&mut options.show_grid, "Grid");
-        ui.toggle_value(&mut options.show_minimap, "Minimap");
-        ui.toggle_value(&mut options.show_ds_screen, "DS Screen");
+        controls::toggle(ui, &mut options.show_grid, "Grid");
+        controls::toggle(ui, &mut options.show_minimap, "Minimap");
+        controls::toggle(ui, &mut options.show_ds_screen, "DS Screen");
         ui.separator();
-        if ui.button("Fit").clicked() {
+        if Button::new("Fit").show(ui).clicked() {
             view.needs_fit = true;
             view.zoom_pinned = false;
         }
         for (label, zoom) in [("50%", 0.5), ("100%", 1.0), ("200%", 2.0)] {
-            if ui.button(label).clicked() {
+            if Button::new(label).show(ui).clicked() {
                 view.zoom_about(zoom, view.canvas.center());
             }
         }
         ui.weak(format!("{:.0}%", view.zoom * 100.0));
-        if ui.button("Fullscreen").clicked() {
+        if Button::new("Fullscreen").show(ui).clicked() {
             let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
         }

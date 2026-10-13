@@ -19,6 +19,12 @@ pub trait Services {
         Err("this build cannot run a host of its own".to_owned())
     }
 
+    /// The accent colour the person chose for their system, as red, green and blue, where the system has one. Asked
+    /// every frame, so it has to be cheap.
+    fn accent_color(&self) -> Option<[u8; 3]> {
+        None
+    }
+
     /// Asks the person for a folder, or `None` when they cancel or there is no dialog.
     fn pick_folder(&self) -> Option<String> {
         None
@@ -62,12 +68,18 @@ pub struct FileShelf {
 pub struct MemoryServices {
     values: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub shelf: std::sync::Arc<std::sync::Mutex<FileShelf>>,
+    accent: Option<[u8; 3]>,
 }
 
 impl MemoryServices {
+    /// Services on a system whose accent colour is `accent`.
+    pub fn with_accent(accent: [u8; 3]) -> Self {
+        Self { accent: Some(accent), ..Self::default() }
+    }
+
     /// Services sharing this one's stored values, as a later run of the program would find them.
     pub fn sharing_values(&self) -> Self {
-        Self { values: self.values.clone(), shelf: std::sync::Arc::default() }
+        Self { values: self.values.clone(), shelf: std::sync::Arc::default(), accent: self.accent }
     }
 }
 
@@ -80,6 +92,10 @@ impl Services for MemoryServices {
         if let Ok(mut values) = self.values.lock() {
             values.insert(key.to_owned(), value.to_owned());
         }
+    }
+
+    fn accent_color(&self) -> Option<[u8; 3]> {
+        self.accent
     }
 
     fn save_file(&self, _title: &str, suggested: &str, _extension: &str, bytes: &[u8]) -> Result<bool, String> {

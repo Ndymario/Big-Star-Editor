@@ -6,7 +6,34 @@ use wasm_bindgen::JsCast as _;
 const CANVAS_ID: &str = "bigstar_canvas";
 const LOADING_ID: &str = "bigstar_loading";
 
-struct WebServices;
+struct WebServices {
+    /// The system's accent colour, as the browser gave it when the page loaded.
+    accent: Option<[u8; 3]>,
+}
+
+/// CSS's `AccentColor`, where the browser knows it: the colour an element given it comes out in.
+fn accent_color() -> Option<[u8; 3]> {
+    if !web_sys::css::supports_with_value("color", "AccentColor").unwrap_or(false) {
+        return None;
+    }
+    let window = web_sys::window()?;
+    let document = window.document()?;
+    let probe = document.create_element("span").ok()?;
+    probe.set_attribute("style", "color: AccentColor; display: none").ok()?;
+    let body = document.body()?;
+    body.append_child(&probe).ok()?;
+    let color = window.get_computed_style(&probe).ok().flatten().and_then(|style| style.get_property_value("color").ok());
+    body.remove_child(&probe).ok()?;
+    parse_rgb(&color?)
+}
+
+/// `rgb(1, 2, 3)` or `rgba(1, 2, 3, 1)`, which is how a computed colour is written.
+fn parse_rgb(text: &str) -> Option<[u8; 3]> {
+    let inside = text.trim().strip_prefix("rgb")?.trim_start_matches('a').strip_prefix('(')?.strip_suffix(')')?;
+    let mut channels = inside.split([',', ' ', '/']).filter(|part| !part.is_empty()).map(|part| part.parse::<f32>().ok());
+    let mut next = || channels.next().flatten().map(|channel| channel.round().clamp(0.0, 255.0) as u8);
+    Some([next()?, next()?, next()?])
+}
 
 fn storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
@@ -23,6 +50,10 @@ impl Services for WebServices {
         {
             log::warn!("could not save {key}");
         }
+    }
+
+    fn accent_color(&self) -> Option<[u8; 3]> {
+        self.accent
     }
 
     /// `?token=…` in the page's address, which is how `bigstar-host serve` prints its link.
@@ -62,7 +93,11 @@ pub fn start() {
             return;
         };
         let result = eframe::WebRunner::new()
-            .start(canvas, eframe::WebOptions::default(), Box::new(|_cc| Ok(Box::new(Shell(BigStarApp::new(Box::new(WebServices)))))))
+            .start(
+                canvas,
+                eframe::WebOptions::default(),
+                Box::new(|_cc| Ok(Box::new(Shell(BigStarApp::new(Box::new(WebServices { accent: accent_color() })))))),
+            )
             .await;
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {

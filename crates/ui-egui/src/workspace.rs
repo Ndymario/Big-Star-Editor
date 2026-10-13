@@ -2,6 +2,7 @@
 //! moved out to windows of their own, and what is open remembered per host and project. A port of `MainWindow`'s tab
 //! and document handling (`openLevelEditor`, `detachEditor`, `saveWorkspaceState`, `restoreWorkspaceState`).
 
+use crate::controls::{self, Button, TextField};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use bigstar_protocol::LevelId;
@@ -544,7 +545,11 @@ impl Workspace {
             closed_tilesets: Vec::new(),
             language: self.language,
         };
-        DockArea::new(&mut self.dock).show_close_buttons(true).show_leaf_collapse_buttons(false).show_inside(ui, &mut viewer);
+        DockArea::new(&mut self.dock)
+            .style(crate::theme::dock_style(ui))
+            .show_close_buttons(true)
+            .show_leaf_collapse_buttons(false)
+            .show_inside(ui, &mut viewer);
         let Viewer { close, detach, session, closed_files, closed_tilesets, .. } = viewer;
         for key in closed_files {
             files.remove(&key);
@@ -578,7 +583,7 @@ impl Workspace {
                 let ctx = ui.ctx().clone();
                 egui::Panel::top(Id::new(("detached-menu", level))).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if ui.button("Move Back to Main Window").clicked() {
+                        if Button::new("Move Back to Main Window").show(ui).clicked() {
                             reattach.push(level);
                         }
                         let dirty = session.levels.get(&level).is_some_and(|v| v.snapshot.dirty);
@@ -723,11 +728,11 @@ impl TabViewer for Viewer<'_, '_> {
 
     fn context_menu(&mut self, ui: &mut Ui, tab: &mut DocTab, _path: egui_dock::NodePath) {
         if let DocTab::Level(level) = *tab {
-            if ui.button("Move to New Window").clicked() {
+            if Button::menu("Move to New Window").show(ui).clicked() {
                 self.detach.push(level);
                 ui.close();
             }
-            if ui.button("Close").clicked() {
+            if Button::menu("Close").show(ui).clicked() {
                 self.close.push(level);
                 ui.close();
             }
@@ -843,29 +848,22 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
         }
     };
     let (path, kind) = (&*path, *kind);
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(path).strong());
-        if kind != EditorKind::None {
-            ui.weak(format!("· a {} file, shown as its bytes", crate::editors::editor_name(kind).to_lowercase()));
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(text != saved, egui::Button::new("Save"))
-                .on_hover_text("Writes the bytes into the module the file comes from, or the active one")
-                .clicked()
-            {
-                match crate::editors::hex_bytes(text) {
-                    Ok(bytes) => {
-                        session.write_file(path, bytes);
-                        saved.clone_from(text);
-                    }
-                    Err(error) => session.report(error),
-                }
+    let remark = if kind == EditorKind::None {
+        String::new()
+    } else {
+        format!("· a {} file, shown as its bytes", crate::editors::editor_name(kind).to_lowercase())
+    };
+    if controls::document_header(ui, path, &remark, text != saved) {
+        match crate::editors::hex_bytes(text) {
+            Ok(bytes) => {
+                session.write_file(path, bytes);
+                saved.clone_from(text);
             }
-        });
-    });
+            Err(error) => session.report(error),
+        }
+    }
     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-        ui.add(egui::TextEdit::multiline(text).code_editor().desired_width(f32::INFINITY));
+        ui.add(TextField::multiline(text).code().lock_focus());
     });
 }
 

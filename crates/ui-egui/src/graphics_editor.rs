@@ -2,12 +2,13 @@
 //! graphics it colours and a screen map in a third, so the editor pairs a file with its siblings, and remembers the
 //! pairing per file. A port of `GraphicsEditorPanel` and `GraphicsCanvas`; the model here is pure, `show` draws it.
 
+use crate::controls::{self, Choice as _};
 use bigstar_formats::{
     GraphicsFormatKind, Nanr, Ncer, Ncgr, Nclr, Nscr, RgbaImage, Tex0, Tex0Palette, decode_bgr555_palette, identify_graphics_format, parse_nanr,
     parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0, render_ncer_cell, render_tex0_texture, write_nanr, write_ncer, write_ncgr,
     write_nclr, write_nscr, write_tex0,
 };
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
 use serde::{Deserialize, Serialize};
 
 use crate::editors::{rewrap, unwrap_with};
@@ -739,17 +740,12 @@ pub struct GraphicsView {
 pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, siblings: &[String]) -> Vec<GraphicsAction> {
     let mut actions = Vec::new();
     let rendered = doc.render();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(&doc.path).strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add_enabled(doc.dirty && doc.error.is_none(), egui::Button::new("Save")).clicked() {
-                actions.push(GraphicsAction::Save);
-            }
-        });
-    });
+    if controls::document_header(ui, &doc.path, "", doc.dirty && doc.error.is_none()) {
+        actions.push(GraphicsAction::Save);
+    }
     ui.add(egui::Label::new(&rendered.info).wrap());
     if let Some(error) = &doc.companion_error {
-        ui.colored_label(Color32::from_rgb(210, 70, 60), error);
+        controls::error_text(ui, error);
     }
     if doc.error.is_some() {
         return actions;
@@ -759,9 +755,9 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
         if !primary.is_empty() {
             ui.label("Image/cell");
             let mut chosen = doc.primary.min(primary.len() - 1);
-            egui::ComboBox::from_id_salt("graphics-primary").selected_text(primary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
+            controls::drop_down("graphics-primary").selected_text(primary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
                 for (i, name) in primary.iter().enumerate() {
-                    ui.selectable_value(&mut chosen, i, name);
+                    ui.choice_value(&mut chosen, i, name);
                 }
             });
             if chosen != doc.primary {
@@ -773,9 +769,9 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
         if !secondary.is_empty() {
             ui.label("Palette");
             let mut chosen = doc.secondary.min(secondary.len() - 1);
-            egui::ComboBox::from_id_salt("graphics-secondary").selected_text(secondary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
+            controls::drop_down("graphics-secondary").selected_text(secondary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
                 for (i, name) in secondary.iter().enumerate() {
-                    ui.selectable_value(&mut chosen, i, name);
+                    ui.choice_value(&mut chosen, i, name);
                 }
             });
             if chosen != doc.secondary {
@@ -794,10 +790,10 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
                 continue;
             }
             ui.label(label);
-            egui::ComboBox::from_id_salt(("graphics-source", palette)).selected_text(current.clone().unwrap_or_else(|| "(none)".to_owned())).show_ui(
+            controls::drop_down(("graphics-source", palette)).selected_text(current.clone().unwrap_or_else(|| "(none)".to_owned())).show_ui(
                 ui,
                 |ui| {
-                    if ui.selectable_label(current.is_none(), "(none)").clicked() {
+                    if ui.choice(current.is_none(), "(none)").clicked() {
                         if palette {
                             doc.set_companion_palette(None, None);
                         } else {
@@ -806,7 +802,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
                         actions.push(GraphicsAction::Remember);
                     }
                     for choice in &choices {
-                        if ui.selectable_label(current.as_ref() == Some(choice), choice).clicked() {
+                        if ui.choice(current.as_ref() == Some(choice), choice).clicked() {
                             actions.push(GraphicsAction::Load { path: choice.clone(), palette });
                         }
                     }
@@ -819,9 +815,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
             ui.label("Width");
             let mut width = doc.pairing.width;
             ui.add(
-                egui::DragValue::new(&mut width)
-                    .range(0..=256)
-                    .custom_formatter(|n, _| if n == 0.0 { "auto".to_owned() } else { format!("{n} tiles") }),
+                controls::number(&mut width).range(0..=256).custom_formatter(|n, _| if n == 0.0 { "auto".to_owned() } else { format!("{n} tiles") }),
             );
             if width != doc.pairing.width {
                 doc.set_width(width);

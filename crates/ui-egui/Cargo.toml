@@ -21,6 +21,9 @@ image.workspace = true
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+# Draws the icons (`icons.rs`) from their SVG path data. egui draws its text with the same version, so this adds
+# nothing to a build.
+vello_cpu = { version = "0.1", default-features = false, features = ["std", "u8_pipeline"] }
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu"] }

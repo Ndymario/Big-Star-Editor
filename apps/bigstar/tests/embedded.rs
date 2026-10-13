@@ -90,7 +90,7 @@ fn import_open_drag_and_save_through_the_embedded_host() {
 
     harness.get_by_label("Import ROM…").click();
     until(&mut harness, "the file browser", |app| app.session().and_then(|s| s.browser.as_ref()).is_some_and(|b| b.listing.is_some()));
-    harness.get_by_label("roms/").click();
+    harness.get_by_label("roms").click();
     until(&mut harness, "the roms folder", |app| {
         app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path == "roms")
     });

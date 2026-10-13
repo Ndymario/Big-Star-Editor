@@ -474,6 +474,7 @@ dependencies = [
  "log",
  "rfd",
  "serde_json",
+ "zbus",
 ]
 
 [[package]]
@@ -616,6 +617,7 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
+ "vello_cpu",
 ]
 
 [[package]]

@@ -8,20 +8,21 @@ use bigstar_protocol::{DirectoryEntryKind, LevelId};
 use egui::{Color32, Key, Modifiers, RichText, Ui, ViewportCommand};
 
 use crate::canvas::{Art, TexturePool};
+use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
 use crate::files::{FilesDock, OpenRequest};
 use crate::i18n::Language;
 use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
+use crate::theme::{Theme, Tokens};
 use crate::tools::{self, Tools};
 use crate::workspace::Workspace;
-use crate::{level_data, properties_ui};
+use crate::{dialogs, icons, level_data, properties_ui};
 
 /// Storage keys, so a shell can seed them.
 pub const RECENT_HOSTS_KEY: &str = "recent_hosts";
 pub const EMBEDDED_ROOT_KEY: &str = "embedded_root";
 const RECENT_LIMIT: usize = 8;
-const ERROR_COLOR: Color32 = Color32::from_rgb(210, 70, 60);
 
 #[derive(Default)]
 struct ConnectForm {
@@ -109,6 +110,12 @@ pub struct BigStarApp {
     pub(crate) builds: crate::builds::Builds,
     /// The interface language, kept with the other per-machine choices.
     pub(crate) language: Language,
+    /// The theme, kept with them.
+    theme: Theme,
+    /// The system's accent colour, as of this frame.
+    accent: Option<Color32>,
+    /// The palette the style was last set from; `None` before the first frame.
+    styled: Option<Tokens>,
     /// The Preferences window's choices while it is open.
     pub(crate) preferences: Option<Preferences>,
     actions: Vec<Action>,
@@ -125,12 +132,15 @@ pub struct BigStarApp {
 
 /// Where the interface language is kept.
 pub const LANGUAGE_KEY: &str = "language";
+/// Where the choice of theme is kept, as [`Theme::stored`] writes it.
+pub const THEME_KEY: &str = "theme";
 
 /// The Preferences window: the language is this machine's; the autosave interval and the backups kept are the open
 /// project's, kept by its host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Preferences {
     pub(crate) language: Language,
+    pub(crate) theme: Theme,
     pub(crate) autosave_minutes: u32,
     pub(crate) backups_kept: u32,
 }
@@ -157,9 +167,13 @@ fn parent(directory: &str) -> String {
 impl BigStarApp {
     pub fn new(services: Box<dyn Services>) -> Self {
         let language = services.load(LANGUAGE_KEY).map_or_else(Language::default, |code| Language::from_code(&code));
+        let theme = services.load(THEME_KEY).map_or_else(Theme::default, |stored| Theme::parse(&stored));
         Self {
             services,
             language,
+            theme,
+            accent: None,
+            styled: None,
             preferences: None,
             form: ConnectForm::default(),
             session: None,
@@ -185,6 +199,32 @@ impl BigStarApp {
         app.host_key = "local".to_owned();
         app.session = Some(Session::new(conn));
         app
+    }
+
+    /// Chooses the dark or the light mode of the theme, as Preferences would.
+    pub fn set_dark(&mut self, dark: bool) {
+        self.set_theme(Theme { dark, ..self.theme });
+    }
+
+    /// Chooses the theme, as Preferences would.
+    pub fn set_theme(&mut self, theme: Theme) {
+        self.theme = theme;
+        self.services.store(THEME_KEY, &theme.stored());
+    }
+
+    /// The fonts once, and the style whenever the palette changes: a theme chosen in Preferences shows while the window
+    /// is open, before it is saved.
+    fn style(&mut self, ctx: &egui::Context) {
+        if self.styled.is_none() {
+            ctx.set_fonts(crate::theme::fonts());
+        }
+        self.accent = self.services.accent_color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
+        let theme = self.preferences.as_ref().map_or(self.theme, |preferences| preferences.theme);
+        let tokens = theme.tokens(self.accent);
+        if self.styled.as_ref() != Some(&tokens) {
+            crate::theme::apply(ctx, &tokens);
+            self.styled = Some(tokens);
+        }
     }
 
     pub fn session(&self) -> Option<&Session> {
@@ -353,6 +393,7 @@ impl BigStarApp {
 
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
+        self.style(&ctx);
         self.logic(&ctx);
         if self.session.is_none() {
             self.load_form();
@@ -373,11 +414,7 @@ impl BigStarApp {
         egui::CentralPanel::default().show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             if !session.connected() {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(80.0);
-                    ui.spinner();
-                    ui.label("Connecting…");
-                });
+                controls::loading(ui, "Connecting…");
             } else if session.project.is_some() {
                 self.workspace.language = self.language;
                 self.workspace.show(ui, session, &mut self.textures, keyboard, &*self.services);
@@ -412,63 +449,71 @@ impl BigStarApp {
     }
 
     fn connect_screen(&mut self, ui: &mut Ui, ctx: &egui::Context) {
+        /// How wide the two cards are.
+        const WIDTH: f32 = 480.0;
         egui::CentralPanel::default().show(ui, |ui| {
-            ui.vertical_centered(|ui| {
-                ui.add_space(60.0);
-                ui.heading("Big Star Editor");
-                ui.add_space(20.0);
-                let (mut embedded, mut remote) = (false, false);
-                if self.services.can_embed() {
-                    ui.group(|ui| {
-                        ui.set_width(460.0);
-                        ui.label(RichText::new("This computer").strong());
-                        ui.label("Open a folder of projects with the editor's own host.");
-                        ui.horizontal(|ui| {
-                            let edit = ui.add(egui::TextEdit::singleline(&mut self.form.root).hint_text("Workspace folder").desired_width(290.0));
-                            if ui.button("Browse…").clicked()
-                                && let Some(folder) = self.services.pick_folder()
-                            {
-                                self.form.root = folder;
-                            }
-                            embedded = ui.button("Open").clicked() || (edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
-                        });
-                    });
-                    ui.add_space(12.0);
-                }
-                ui.group(|ui| {
-                    ui.set_width(460.0);
-                    ui.label(RichText::new("A host").strong());
-                    ui.label("Connect to a running bigstar-host, on this computer or another.");
-                    egui::Grid::new("remote").num_columns(2).show(ui, |ui| {
-                        ui.label("Address");
-                        ui.add(egui::TextEdit::singleline(&mut self.form.host).desired_width(330.0));
-                        ui.end_row();
-                        ui.label("Token");
-                        let token = ui.add(egui::TextEdit::singleline(&mut self.form.token).password(true).desired_width(330.0));
-                        remote = token.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                        ui.end_row();
-                    });
-                    if !self.form.recent.is_empty() {
-                        ui.horizontal_wrapped(|ui| {
-                            ui.label("Recent:");
-                            for host in self.form.recent.clone() {
-                                if ui.link(&host).clicked() {
-                                    self.form.host = host;
+            let side = ((ui.available_width() - WIDTH) / 2.0).max(0.0);
+            ui.horizontal_top(|ui| {
+                ui.add_space(side);
+                ui.vertical(|ui| {
+                    ui.set_width(WIDTH.min(ui.available_width()));
+                    ui.add_space(56.0);
+                    ui.heading("Big Star Editor");
+                    ui.weak("Open a folder of projects, or connect to a host that holds them.");
+                    ui.add_space(16.0);
+                    let (mut embedded, mut remote) = (false, false);
+                    if self.services.can_embed() {
+                        controls::section(ui, "This computer", |ui| {
+                            ui.weak("Open a folder of projects with the editor's own host.");
+                            ui.add_space(4.0);
+                            ui.horizontal(|ui| {
+                                let edit = TextField::new(&mut self.form.root).hint("Workspace folder").width(Width::Rest(170.0)).show(ui);
+                                if Button::new("Browse…").with_icon(icons::FOLDER).show(ui).clicked()
+                                    && let Some(folder) = self.services.pick_folder()
+                                {
+                                    self.form.root = folder;
                                 }
-                            }
+                                embedded = Button::new("Open").primary().show(ui).clicked()
+                                    || (edit.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)));
+                            });
                         });
+                        ui.add_space(12.0);
                     }
-                    remote |= ui.button("Connect").clicked();
+                    controls::section(ui, "A host", |ui| {
+                        ui.weak("Connect to a running bigstar-host, on this computer or another.");
+                        ui.add_space(4.0);
+                        egui::Grid::new("remote").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                            ui.label("Address");
+                            TextField::new(&mut self.form.host).name("Address").show(ui);
+                            ui.end_row();
+                            ui.label("Token");
+                            let token = TextField::new(&mut self.form.token).name("Token").password().show(ui);
+                            remote = token.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                            ui.end_row();
+                        });
+                        if !self.form.recent.is_empty() {
+                            ui.horizontal_wrapped(|ui| {
+                                ui.weak("Recent:");
+                                for host in self.form.recent.clone() {
+                                    if controls::link(ui, &host).clicked() {
+                                        self.form.host = host;
+                                    }
+                                }
+                            });
+                        }
+                        ui.add_space(4.0);
+                        remote |= Button::new("Connect").primary().show(ui).clicked();
+                    });
+                    if let Some(error) = &self.form.error {
+                        ui.add_space(10.0);
+                        controls::error_text(ui, error);
+                    }
+                    if embedded {
+                        self.connect_embedded(ctx);
+                    } else if remote {
+                        self.connect_remote(ctx);
+                    }
                 });
-                if let Some(error) = &self.form.error {
-                    ui.add_space(10.0);
-                    ui.colored_label(ERROR_COLOR, error);
-                }
-                if embedded {
-                    self.connect_embedded(ctx);
-                } else if remote {
-                    self.connect_remote(ctx);
-                }
             });
         });
     }
@@ -479,10 +524,12 @@ impl BigStarApp {
         let workspace = &mut self.workspace;
         let builds = &mut self.builds;
         let language = self.language;
+        let theme = self.theme;
         let preferences = &mut self.preferences;
         egui::Panel::top("top").show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
+            ui.add_space(2.0);
             ui.horizontal(|ui| {
                 match &session.state {
                     ConnectionState::Connected(info) => {
@@ -504,19 +551,20 @@ impl BigStarApp {
                     ui.menu_button("Build", |ui| builds.build_menu(ui, session));
                     ui.menu_button(language.tr("Distribution"), |ui| builds.distribution_menu(ui, session, services));
                     ui.menu_button(language.tr("View"), |ui| {
-                        if ui.button("Preview").clicked() {
+                        if Button::menu("Preview").show(ui).clicked() {
                             workspace.show_preview_tab();
                             ui.close();
                         }
-                        if ui.selectable_label(builds.show_output, "Output").clicked() {
+                        if Button::menu("Output").selected(builds.show_output).show(ui).clicked() {
                             builds.show_output = !builds.show_output;
                             ui.close();
                         }
                         ui.separator();
-                        if ui.button("Preferences…").clicked() {
+                        if Button::menu("Preferences…").show(ui).clicked() {
                             let settings = session.settings.as_ref();
                             *preferences = Some(Preferences {
                                 language,
+                                theme,
                                 autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
                                 backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
                             });
@@ -525,8 +573,11 @@ impl BigStarApp {
                     });
                     ui.separator();
                     // A rebuild-and-test loop should not mean digging through a menu.
-                    if ui
-                        .add_enabled(!session.build.running, egui::Button::new("▶ Run Patcher"))
+                    if Button::new("Run Patcher")
+                        .with_icon(icons::PLAY)
+                        .primary()
+                        .enabled(!session.build.running)
+                        .show(ui)
                         .on_hover_text("Saves the edited levels, builds the active variant with NCPatcher, and reads the ROM it makes")
                         .clicked()
                     {
@@ -535,10 +586,10 @@ impl BigStarApp {
                     crate::builds::Builds::variant_selector(ui, session);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("Disconnect").clicked() {
+                    if Button::new("Disconnect").quiet().show(ui).clicked() {
                         actions.push(Action::Leave(Leave::Host));
                     }
-                    if session.project.is_some() && ui.button("Close project").clicked() {
+                    if session.project.is_some() && Button::new("Close project").quiet().show(ui).clicked() {
                         actions.push(Action::Leave(Leave::Project));
                     }
                 });
@@ -549,38 +600,34 @@ impl BigStarApp {
                 ui.horizontal(|ui| {
                     let undo = snapshot.undo_names.first().map_or("Undo".to_owned(), |n| format!("Undo {n}"));
                     let redo = snapshot.redo_names.first().map_or("Redo".to_owned(), |n| format!("Redo {n}"));
-                    if ui.add_enabled(idle && snapshot.can_undo, egui::Button::new(undo)).clicked() {
+                    if Button::new(undo).with_icon(icons::UNDO).enabled(idle && snapshot.can_undo).show(ui).clicked() {
                         actions.push(Action::Undo);
                     }
                     // Every step back, named; picking one undoes it and everything after it.
                     ui.add_enabled_ui(idle && snapshot.can_undo, |ui| {
-                        ui.menu_button("⏷", |ui| {
+                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Undo several steps", |ui| {
                             for (index, name) in snapshot.undo_names.iter().enumerate() {
-                                if ui.button(name).clicked() {
+                                if Button::menu(name).show(ui).clicked() {
                                     actions.push(Action::History { undo: true, steps: index + 1 });
                                     ui.close();
                                 }
                             }
-                        })
-                        .response
-                        .on_hover_text("Undo several steps");
+                        });
                     });
-                    if ui.add_enabled(idle && snapshot.can_redo, egui::Button::new(redo)).clicked() {
+                    if Button::new(redo).with_icon(icons::REDO).enabled(idle && snapshot.can_redo).show(ui).clicked() {
                         actions.push(Action::Redo);
                     }
                     ui.add_enabled_ui(idle && snapshot.can_redo, |ui| {
-                        ui.menu_button("⏷", |ui| {
+                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Redo several steps", |ui| {
                             for (index, name) in snapshot.redo_names.iter().enumerate() {
-                                if ui.button(name).clicked() {
+                                if Button::menu(name).show(ui).clicked() {
                                     actions.push(Action::History { undo: false, steps: index + 1 });
                                     ui.close();
                                 }
                             }
-                        })
-                        .response
-                        .on_hover_text("Redo several steps");
+                        });
                     });
-                    if ui.add_enabled(idle && snapshot.dirty, egui::Button::new("Save")).clicked() {
+                    if Button::new("Save").with_icon(icons::SAVE).enabled(idle && snapshot.dirty).show(ui).clicked() {
                         actions.push(Action::Save);
                     }
                     ui.separator();
@@ -593,10 +640,11 @@ impl BigStarApp {
                         snapshot.revision
                     ));
                     if let Some(error) = &snapshot.glue_error {
-                        ui.colored_label(Color32::from_rgb(210, 140, 40), format!("Custom actor data unreadable: {error}"));
+                        controls::warning_text(ui, format!("Custom actor data unreadable: {error}"));
                     }
                 });
             }
+            ui.add_space(2.0);
         });
     }
 
@@ -608,18 +656,21 @@ impl BigStarApp {
         }
         egui::Panel::bottom("status").show(ui, |ui| {
             ui.horizontal(|ui| {
-                if ui.selectable_label(self.builds.show_output, "Output").clicked() {
+                Button::new("Output").small().quiet().selected(self.builds.show_output).show(ui).clicked().then(|| {
                     self.builds.show_output = !self.builds.show_output;
-                }
+                });
                 if session.build.running {
-                    ui.spinner();
+                    ui.add(controls::Spinner::new());
                     ui.weak(&session.build.status);
                 }
                 let mut dismiss = false;
                 if let Some(notice) = &session.notice {
-                    let color = if notice.error { ERROR_COLOR } else { ui.visuals().text_color() };
-                    ui.colored_label(color, &notice.text);
-                    dismiss = ui.small_button("×").clicked();
+                    if notice.error {
+                        controls::error_text(ui, &notice.text);
+                    } else {
+                        ui.label(&notice.text);
+                    }
+                    dismiss = Button::icon(icons::CLOSE).ghost().small().name("Dismiss").show(ui).on_hover_text("Dismiss").clicked();
                 } else if let Some(last) = session.log.last() {
                     ui.weak(&last.text);
                 }
@@ -635,12 +686,9 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         let ctx = ui.ctx().clone();
         egui::Panel::left("left").resizable(true).default_size(280.0).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.left, Left::Levels, "Levels");
-                ui.selectable_value(&mut self.left, Left::Palette, "Palette");
-                ui.selectable_value(&mut self.left, Left::Filesystem, self.language.tr("Filesystem"));
-            });
-            ui.separator();
+            let filesystem = self.language.tr("Filesystem");
+            controls::tabs(ui, "left", &mut self.left, &[(Left::Levels, "Levels"), (Left::Palette, "Palette"), (Left::Filesystem, filesystem)]);
+            ui.add_space(2.0);
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
                 Left::Levels => {
@@ -675,11 +723,8 @@ impl BigStarApp {
         let mut error = None;
         egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
             let Some(view) = session.levels.get_mut(&level) else { return };
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut self.side, Side::Properties, "Properties");
-                ui.selectable_value(&mut self.side, Side::LevelData, "Level Data");
-            });
-            ui.separator();
+            controls::tabs(ui, "side", &mut self.side, &[(Side::Properties, "Properties"), (Side::LevelData, "Level Data")]);
+            ui.add_space(2.0);
             match self.side {
                 Side::Properties => {
                     let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
@@ -708,26 +753,31 @@ impl BigStarApp {
     fn workspace_screen(&mut self, ui: &mut Ui) {
         let Some(session) = &self.session else { return };
         let actions = &mut self.actions;
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.heading("Projects");
-            if ui.button("Refresh").clicked() {
-                actions.push(Action::Refresh);
-            }
-            if ui.button("Import ROM…").clicked() {
-                actions.push(Action::BeginImport);
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if Button::new("Import ROM…").with_icon(icons::PLUS).primary().show(ui).clicked() {
+                    actions.push(Action::BeginImport);
+                }
+                if Button::new("Refresh").with_icon(icons::REFRESH).show(ui).clicked() {
+                    actions.push(Action::Refresh);
+                }
+            });
         });
-        ui.separator();
+        ui.add_space(4.0);
         if session.projects.is_empty() {
-            ui.weak("No projects here yet. Import a ROM that is inside the workspace folder to make one.");
+            controls::notice(ui, icons::FOLDER, "No projects here yet", "Import a ROM that is inside the workspace folder to make one.");
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for project in &session.projects {
-                ui.horizontal(|ui| {
-                    if ui.button(RichText::new(&project.name).strong()).clicked() {
-                        actions.push(Action::OpenProject(project.path.clone()));
-                    }
-                    ui.weak(&project.path);
+                controls::section(ui, "", |ui| {
+                    ui.horizontal(|ui| {
+                        if Button::new(RichText::new(&project.name).strong()).with_icon(icons::FOLDER).quiet().show(ui).clicked() {
+                            actions.push(Action::OpenProject(project.path.clone()));
+                        }
+                        ui.weak(&project.path);
+                    });
                 });
             }
         });
@@ -738,9 +788,9 @@ impl BigStarApp {
         let actions = &mut self.actions;
         let Some(browser) = &mut session.browser else { return };
         let mut open = true;
-        egui::Window::new("Import ROM").open(&mut open).collapsible(false).default_width(460.0).show(ctx, |ui| {
+        dialogs::window("Import ROM").open(&mut open).default_width(460.0).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                if ui.add_enabled(!browser.path.is_empty(), egui::Button::new("Up")).clicked() {
+                if Button::new("Up").with_icon(icons::ARROW_UP).small().enabled(!browser.path.is_empty()).show(ui).clicked() {
                     actions.push(Action::Browse(parent(&browser.path)));
                 }
                 ui.label(if browser.path.is_empty() { "/".to_owned() } else { format!("/{}", browser.path) });
@@ -748,26 +798,26 @@ impl BigStarApp {
             ui.separator();
             egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| match &browser.listing {
                 None => {
-                    ui.spinner();
+                    ui.add(controls::Spinner::new());
                 }
                 Some(listing) => {
                     for entry in &listing.entries {
                         let full = join(&listing.path, &entry.name);
                         match entry.kind {
                             DirectoryEntryKind::Directory => {
-                                if ui.link(format!("{}/", entry.name)).clicked() {
+                                if Row::new(&entry.name).icon(icons::FOLDER).show(ui).clicked() {
                                     actions.push(Action::Browse(full));
                                 }
                             }
                             DirectoryEntryKind::File if entry.name.to_ascii_lowercase().ends_with(".nds") => {
                                 let chosen = browser.rom.as_deref() == Some(full.as_str());
-                                if ui.selectable_label(chosen, &entry.name).clicked() {
+                                if Row::new(&entry.name).icon(icons::FILE).selected(chosen).show(ui).clicked() {
                                     let stem = entry.name.rsplit_once('.').map_or(entry.name.as_str(), |(stem, _)| stem);
                                     actions.push(Action::ChooseRom { path: full, name: stem.to_owned() });
                                 }
                             }
                             DirectoryEntryKind::File => {
-                                ui.weak(&entry.name);
+                                ui.add_enabled_ui(false, |ui| Row::new(&entry.name).icon(icons::FILE).show(ui));
                             }
                         }
                     }
@@ -777,14 +827,16 @@ impl BigStarApp {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label("Project name");
-                    ui.text_edit_singleline(&mut browser.project_name);
+                    TextField::new(&mut browser.project_name).name("Project name").show(ui);
                 });
                 let folder = join(&browser.path, browser.project_name.trim());
                 ui.weak(format!("Made in /{folder}"));
                 let ready = !browser.project_name.trim().is_empty();
-                if ui.add_enabled(ready, egui::Button::new("Import")).clicked() {
-                    actions.push(Action::Import { rom, project: folder, name: browser.project_name.trim().to_owned() });
-                }
+                dialogs::actions(ui, |ui| {
+                    if Button::new("Import").primary().enabled(ready).show(ui).clicked() {
+                        actions.push(Action::Import { rom, project: folder, name: browser.project_name.trim().to_owned() });
+                    }
+                });
             }
         });
         if !open {
@@ -797,23 +849,20 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         let Some(levels) = &session.recovery_offer else { return };
         let mut answer = None;
-        egui::Window::new("Recover Autosaved Levels").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
-            ctx,
-            |ui| {
-                ui.label(format!("Big Star found {} autosaved level(s) from an interrupted or unsaved session. Recover them?", levels.len()));
-                for level in levels {
-                    ui.weak(format!("• {}", level.title));
+        dialogs::modal(ctx, "recovery", "Recover Autosaved Levels", 440.0, |ui| {
+            ui.label(format!("Big Star found {} autosaved level(s) from an interrupted or unsaved session. Recover them?", levels.len()));
+            for level in levels {
+                ui.weak(format!("• {}", level.title));
+            }
+            dialogs::actions(ui, |ui| {
+                if Button::new("Recover").primary().show(ui).clicked() {
+                    answer = Some(true);
                 }
-                ui.horizontal(|ui| {
-                    if ui.button("Recover").clicked() {
-                        answer = Some(true);
-                    }
-                    if ui.button("Discard").clicked() {
-                        answer = Some(false);
-                    }
-                });
-            },
-        );
+                if Button::new("Discard").show(ui).clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
         if let Some(accept) = answer {
             session.answer_recovery(accept);
         }
@@ -824,21 +873,22 @@ impl BigStarApp {
         let project = self.session.as_ref().is_some_and(|session| session.project.is_some());
         let mut open = true;
         let mut answer = None;
-        egui::Window::new("Preferences").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            egui::Grid::new("preferences").num_columns(2).show(ui, |ui| {
+        let accent = self.accent;
+        dialogs::window("Preferences").open(&mut open).resizable(false).show(ctx, |ui| {
+            egui::Grid::new("preferences").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(preferences.language.tr("Language"));
-                egui::ComboBox::from_id_salt("preference-language").selected_text(preferences.language.name()).show_ui(ui, |ui| {
+                controls::drop_down("preference-language").selected_text(preferences.language.name()).show_ui(ui, |ui| {
                     for language in Language::ALL {
-                        ui.selectable_value(&mut preferences.language, language, language.name());
+                        ui.choice_value(&mut preferences.language, language, language.name());
                     }
                 });
                 ui.end_row();
                 ui.label("Recovery snapshots");
-                ui.add_enabled(project, egui::DragValue::new(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
+                ui.add_enabled(project, controls::number(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
                     .on_hover_text("How often unsaved level edits are written to a recovery snapshot.");
                 ui.end_row();
                 ui.label("Backups kept");
-                ui.add_enabled(project, egui::DragValue::new(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
+                ui.add_enabled(project, controls::number(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
                     "How many level-save and patch-import backups are kept, of each kind. Older ones are removed when a project opens and whenever one is added.",
                 );
                 ui.end_row();
@@ -846,11 +896,34 @@ impl BigStarApp {
             if !project {
                 ui.weak("The snapshot interval and the backups kept belong to a project: open one to change them.");
             }
+            ui.add_space(6.0);
             ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
+                ui.label(egui::RichText::new("Theme").strong());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.choice_value(&mut preferences.theme.dark, false, "Light");
+                    ui.choice_value(&mut preferences.theme.dark, true, "Dark");
+                });
+            });
+            egui::Grid::new("preference-themes").num_columns(3).spacing([8.0, 8.0]).show(ui, |ui| {
+                for (index, family) in crate::theme::FAMILIES.iter().enumerate() {
+                    let palette = Theme { family: family.id, ..preferences.theme }.tokens(accent);
+                    if controls::theme_card(ui, family.name, &palette, preferences.theme.family == family.id).clicked() {
+                        preferences.theme.family = family.id;
+                    }
+                    if index % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+            ui.add_enabled_ui(accent.is_some(), |ui| {
+                controls::checkbox(ui, &mut preferences.theme.system_accent, "Use the system's accent colour")
+                    .on_disabled_hover_text("This system does not say what its accent colour is.");
+            });
+            dialogs::actions(ui, |ui| {
+                if Button::new("Save").primary().show(ui).clicked() {
                     answer = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if Button::new("Cancel").show(ui).clicked() {
                     answer = Some(false);
                 }
             });
@@ -861,6 +934,7 @@ impl BigStarApp {
                 self.preferences = None;
                 self.language = chosen.language;
                 self.services.store(LANGUAGE_KEY, chosen.language.code());
+                self.set_theme(chosen.theme);
                 if let Some(session) = self.session.as_mut().filter(|session| session.project.is_some()) {
                     session.set_preferences(chosen.autosave_minutes, chosen.backups_kept);
                 }
@@ -879,17 +953,20 @@ impl BigStarApp {
             Confirm::Leave(_) => ("Some levels have changes that were not saved. Leaving drops them.", "Leave without saving"),
         };
         let mut decision = None;
-        egui::Window::new("Unsaved changes").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        let (_, dismissed) = dialogs::modal(ctx, "unsaved", "Unsaved changes", 420.0, |ui| {
             ui.label(text);
-            ui.horizontal(|ui| {
-                if ui.button(leave).clicked() {
+            dialogs::actions(ui, |ui| {
+                if Button::new(leave).danger().show(ui).clicked() {
                     decision = Some(true);
                 }
-                if ui.button("Stay").clicked() {
+                if Button::new("Stay").show(ui).clicked() {
                     decision = Some(false);
                 }
             });
         });
+        if dismissed && decision.is_none() {
+            decision = Some(false);
+        }
         match decision {
             Some(true) => {
                 self.confirm = None;
@@ -1025,7 +1102,7 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
     if let Some(project) = &session.project
         && project.rom_path.is_none()
     {
-        ui.colored_label(ERROR_COLOR, "This project has no ROM, so no level can be opened.");
+        controls::error_text(ui, "This project has no ROM, so no level can be opened.");
     }
     let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
     let root = level_groups(&session.worlds);
@@ -1044,25 +1121,25 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
                     if area.course_path.is_empty() { "missing" } else { &area.course_path },
                     if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
                 );
-                let response = ui.selectable_label(shown == Some(area.token.as_str()), label).on_hover_text(tip);
+                let response = Row::new(label).selected(shown == Some(area.token.as_str())).fit().show(ui).on_hover_text(tip);
                 if response.double_clicked() {
                     picked.1 = Some(area.token.clone());
                 } else if response.clicked() {
                     picked.0 = Some(area.token.clone());
                 }
                 response.context_menu(|ui| {
-                    if ui.button("Open").clicked() {
+                    if Button::menu("Open").show(ui).clicked() {
                         picked.1 = Some(area.token.clone());
                         ui.close();
                     }
                     for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
-                        if ui.add_enabled(!path.is_empty(), egui::Button::new(name)).clicked() {
+                        if Button::menu(name).enabled(!path.is_empty()).show(ui).clicked() {
                             picked.2 = Some(path.clone());
                             ui.close();
                         }
                     }
                 });
-                if ui.small_button("Edit").clicked() {
+                if Button::new("Edit").small().quiet().show(ui).clicked() {
                     picked.1 = Some(area.token.clone());
                 }
             });
@@ -1071,7 +1148,7 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
     fn group_ui(ui: &mut Ui, group: &Group<'_>, path: &str, shown: Option<&str>, picked: &mut (Option<String>, Option<String>, Option<String>)) {
         for child in &group.groups {
             let id = format!("{path}>{}", child.name);
-            egui::CollapsingHeader::new(RichText::new(&child.name).strong()).id_salt(&id).default_open(false).show(ui, |ui| {
+            controls::group(ui, &id, RichText::new(&child.name).strong(), false, |ui| {
                 group_ui(ui, child, &id, shown, picked);
             });
         }
@@ -1079,14 +1156,11 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
             match level.areas.as_slice() {
                 [only] => area_row(ui, &level.display_name, only, shown, picked),
                 areas => {
-                    egui::CollapsingHeader::new(&level.display_name).id_salt(format!("{path}/{}", level.display_name)).default_open(true).show(
-                        ui,
-                        |ui| {
-                            for area in areas {
-                                area_row(ui, &area.display_name, area, shown, picked);
-                            }
-                        },
-                    );
+                    controls::group(ui, format!("{path}/{}", level.display_name), &level.display_name, true, |ui| {
+                        for area in areas {
+                            area_row(ui, &area.display_name, area, shown, picked);
+                        }
+                    });
                 }
             }
         }

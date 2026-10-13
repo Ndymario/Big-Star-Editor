@@ -4,12 +4,13 @@
 //! `UiResourcePages`; the document is pure and keeps the tables as the text the person typed, read back on save, as
 //! the Qt tables were.
 
+use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
 use bigstar_formats::{
     Bnbl, BnblEntry, Bncd, BncdEntry, BncdSubentry, Bncl, BnclEntry, DsBanner, Enpg, RgbaImage, RomUserMetadata, RomUserMetadataEntry,
     RomUserMetadataSection, UiResourceKind, banner_title, identify_ui_resource, parse_bnbl, parse_bncd, parse_bncl, parse_ds_banner, parse_enpg,
     parse_rom_user_metadata, set_banner_title, write_bnbl, write_bncd, write_bncl, write_ds_banner, write_enpg, write_rom_user_metadata,
 };
-use egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Ui, Vec2};
+use egui::{Color32, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::graphics_editor::{expand, picture, swatches};
 
@@ -527,17 +528,9 @@ pub struct ResourceView {
 
 /// Whether the person asked to save.
 pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool {
-    let mut save = false;
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(&doc.path).strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.add_enabled(doc.error.is_none() && doc.dirty, egui::Button::new("Save")).clicked() {
-                save = true;
-            }
-        });
-    });
+    let save = controls::document_header(ui, &doc.path, "", doc.error.is_none() && doc.dirty);
     if let Some(error) = &doc.error {
-        ui.colored_label(ui.visuals().error_fg_color, error);
+        controls::error_text(ui, error);
         return save;
     }
     match &doc.page {
@@ -550,11 +543,7 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
             layout_page(ui, doc);
         }
         Some(Page::Bncd(_)) => {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut view.tab, BncdTab::Cells, "Cells");
-                ui.selectable_value(&mut view.tab, BncdTab::Oam, "OAM");
-                ui.selectable_value(&mut view.tab, BncdTab::Texture, "Texture");
-            });
+            controls::tabs(ui, "bncd", &mut view.tab, &[(BncdTab::Cells, "Cells"), (BncdTab::Oam, "OAM"), (BncdTab::Texture, "Texture")]);
             match view.tab {
                 BncdTab::Cells => {
                     let mut rows = std::mem::take(&mut doc.rows);
@@ -567,9 +556,9 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
                     doc.subentries = rows;
                 }
                 BncdTab::Texture => {
-                    egui::ComboBox::from_id_salt("bncd-bpp").selected_text(if doc.eight { "8bpp" } else { "4bpp" }).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut doc.eight, false, "4bpp");
-                        ui.selectable_value(&mut doc.eight, true, "8bpp");
+                    controls::drop_down("bncd-bpp").selected_text(if doc.eight { "8bpp" } else { "4bpp" }).show_ui(ui, |ui| {
+                        ui.choice_value(&mut doc.eight, false, "4bpp");
+                        ui.choice_value(&mut doc.eight, true, "8bpp");
                     });
                     image_page(ui, doc, view);
                 }
@@ -580,16 +569,13 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
             image_page(ui, doc, view);
         }
         Some(Page::Banner(_)) => {
-            ui.horizontal(|ui| {
-                ui.selectable_value(&mut view.banner_titles, false, "Icon");
-                ui.selectable_value(&mut view.banner_titles, true, "Titles");
-            });
+            controls::tabs(ui, "banner", &mut view.banner_titles, &[(false, "Icon"), (true, "Titles")]);
             if view.banner_titles {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("banner-titles").num_columns(2).show(ui, |ui| {
                         for (i, title) in doc.titles.iter_mut().enumerate() {
                             ui.label(LANGUAGES.get(i).copied().unwrap_or_default());
-                            if ui.add(egui::TextEdit::multiline(title).desired_rows(3).desired_width(420.0)).changed() {
+                            if ui.add(TextField::multiline(title).rows(3).width(Width::Px(420.0))).changed() {
                                 doc.dirty = true;
                             }
                             ui.end_row();
@@ -620,11 +606,11 @@ fn table(ui: &mut Ui, id: &str, columns: &[&str], rows: &mut [Vec<String>], sele
             }
             ui.end_row();
             for (r, row) in rows.iter_mut().enumerate() {
-                if ui.selectable_label(*selected == Some(r), r.to_string()).clicked() {
+                if Row::new(r.to_string()).selected(*selected == Some(r)).fit().show(ui).clicked() {
                     *selected = Some(r);
                 }
                 for cell in row.iter_mut() {
-                    let response = ui.add(egui::TextEdit::singleline(cell).desired_width(72.0));
+                    let response = ui.add(TextField::new(cell).width(Width::Px(72.0)));
                     changed |= response.changed();
                     if response.gained_focus() {
                         *selected = Some(r);
@@ -648,10 +634,10 @@ fn layout_page(ui: &mut Ui, doc: &mut ResourceDoc) {
                 doc.rows = rows;
                 doc.selected_row = selected;
                 ui.horizontal(|ui| {
-                    if ui.button("Add").clicked() {
+                    if Button::new("Add").show(ui).clicked() {
                         doc.add_row();
                     }
-                    if ui.add_enabled(doc.selected_row.is_some(), egui::Button::new("Delete")).clicked() {
+                    if Button::new("Delete").enabled(doc.selected_row.is_some()).show(ui).clicked() {
                         doc.delete_row();
                     }
                 });
@@ -701,22 +687,22 @@ fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
             ui.strong("Value");
             ui.end_row();
             for (s, section) in doc.sections.iter_mut().enumerate() {
-                let response = ui.add(egui::TextEdit::singleline(&mut section.name).desired_width(140.0));
+                let response = ui.add(TextField::new(&mut section.name).width(Width::Px(140.0)));
                 changed |= response.changed();
                 if response.gained_focus() || response.clicked() {
                     chosen = Some((s, None));
                 }
-                if ui.selectable_label(doc.selected_item == Some((s, None)), "section").clicked() {
+                if Row::new("section").selected(doc.selected_item == Some((s, None))).fit().show(ui).clicked() {
                     chosen = Some((s, None));
                 }
                 ui.label("");
                 ui.end_row();
                 for (e, (key, value)) in section.entries.iter_mut().enumerate() {
-                    if ui.selectable_label(doc.selected_item == Some((s, Some(e))), "").clicked() {
+                    if Row::new("•").selected(doc.selected_item == Some((s, Some(e)))).fit().show(ui).clicked() {
                         chosen = Some((s, Some(e)));
                     }
-                    let key = ui.add(egui::TextEdit::singleline(key).desired_width(60.0));
-                    let value = ui.add(egui::TextEdit::singleline(value).desired_width(320.0));
+                    let key = ui.add(TextField::new(key).width(Width::Px(60.0)));
+                    let value = ui.add(TextField::new(value).width(Width::Px(320.0)));
                     changed |= key.changed() || value.changed();
                     if key.gained_focus() || value.gained_focus() {
                         chosen = Some((s, Some(e)));
@@ -731,13 +717,13 @@ fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
     }
     doc.dirty |= changed;
     ui.horizontal(|ui| {
-        if ui.button("Add section").clicked() {
+        if Button::new("Add section").show(ui).clicked() {
             doc.add_section();
         }
-        if ui.add_enabled(doc.selected_item.is_some(), egui::Button::new("Add entry")).clicked() {
+        if Button::new("Add entry").enabled(doc.selected_item.is_some()).show(ui).clicked() {
             doc.add_entry();
         }
-        if ui.add_enabled(doc.selected_item.is_some(), egui::Button::new("Delete")).clicked() {
+        if Button::new("Delete").enabled(doc.selected_item.is_some()).show(ui).clicked() {
             doc.delete_item();
         }
     });

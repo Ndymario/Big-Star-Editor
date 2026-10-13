@@ -4,13 +4,13 @@
 //! `extractRom`, `exportPatch`, `importPatch` and `runXdelta`; the work itself is the host's.
 
 use bigstar_protocol::{BuildConfigKind, DiagnosticLevel, LogLevel};
-use egui::{Color32, RichText, Ui};
+use egui::Ui;
 
+use crate::controls::{self, Button, Choice as _, TextField, Width};
+use crate::dialogs;
 use crate::services::Services;
 use crate::session::Session;
-
-const ERROR: Color32 = Color32::from_rgb(220, 80, 70);
-const WARNING: Color32 = Color32::from_rgb(210, 140, 40);
+use crate::theme::Tokens;
 
 /// xdelta's three paths, under the workspace.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -75,17 +75,17 @@ impl Builds {
     }
 
     pub fn build_menu(&mut self, ui: &mut Ui, session: &mut Session) {
-        if ui.add_enabled(!session.build.running, egui::Button::new("Run Patcher…")).clicked() {
+        if Button::menu("Run Patcher…").enabled(!session.build.running).show(ui).clicked() {
             self.run(session);
             ui.close();
         }
-        if ui.add_enabled(session.build.running && !session.build.cancelling, egui::Button::new("Cancel Build")).clicked() {
+        if Button::menu("Cancel Build").enabled(session.build.running && !session.build.cancelling).show(ui).clicked() {
             session.cancel_build();
             ui.close();
         }
         ui.separator();
         // NCPatcher's own extractor writes a directory it can read back, so that is the one that runs.
-        if ui.button("Extract ROM…").clicked() {
+        if Button::menu("Extract ROM…").show(ui).clicked() {
             let project = session.project.as_ref().map(|p| p.path.clone()).unwrap_or_default();
             self.extract = Some(if project.is_empty() { "extracted".to_owned() } else { format!("{project}/extracted") });
             ui.close();
@@ -93,11 +93,11 @@ impl Builds {
     }
 
     pub fn distribution_menu(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services) {
-        if ui.button("Export .nsmbpatch…").clicked() {
+        if Button::menu("Export .nsmbpatch…").show(ui).clicked() {
             session.export_patch();
             ui.close();
         }
-        if ui.button("Import .nsmbpatch…").clicked() {
+        if Button::menu("Import .nsmbpatch…").show(ui).clicked() {
             match services.open_file("Import Patch", Some("nsmbpatch")) {
                 Some(Ok((_, bytes))) => session.import_patch(bytes, false),
                 Some(Err(error)) => session.report(error),
@@ -106,11 +106,11 @@ impl Builds {
             ui.close();
         }
         ui.separator();
-        if ui.button("Create xdelta…").clicked() {
+        if Button::menu("Create xdelta…").show(ui).clicked() {
             self.xdelta = Some(Xdelta { create: true, ..Xdelta::default() });
             ui.close();
         }
-        if ui.button("Apply xdelta…").clicked() {
+        if Button::menu("Apply xdelta…").show(ui).clicked() {
             self.xdelta = Some(Xdelta::default());
             ui.close();
         }
@@ -122,12 +122,12 @@ impl Builds {
         let current = settings.active_variant.clone();
         let mut chosen = current.clone();
         ui.label("Variant:");
-        egui::ComboBox::from_id_salt("variant-selector")
+        controls::drop_down("variant-selector")
             .selected_text(if current.is_empty() { "(none)".to_owned() } else { current.clone() })
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut chosen, String::new(), "(none)");
+                ui.choice_value(&mut chosen, String::new(), "(none)");
                 for variant in &settings.variants {
-                    ui.selectable_value(&mut chosen, variant.clone(), variant);
+                    ui.choice_value(&mut chosen, variant.clone(), variant);
                 }
             })
             .response
@@ -147,7 +147,7 @@ impl Builds {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if session.build.running
                     && ui
-                        .add_enabled(!session.build.cancelling, egui::Button::new("Cancel"))
+                        .add(Button::new("Cancel").small().enabled(!session.build.cancelling))
                         .on_hover_text(
                             "Ask NCPatcher to stop. The project is left as it was, and the next build starts from the same place this one did.",
                         )
@@ -170,11 +170,12 @@ impl Builds {
                     ui.strong("Message");
                     ui.strong("Location");
                     ui.end_row();
+                    let t = Tokens::get(ui.ctx());
                     for diagnostic in &session.build.diagnostics {
                         let color = match diagnostic.level {
-                            DiagnosticLevel::Error => ERROR,
-                            DiagnosticLevel::Warning => WARNING,
-                            DiagnosticLevel::Info => ui.visuals().text_color(),
+                            DiagnosticLevel::Error => t.danger,
+                            DiagnosticLevel::Warning => t.warning,
+                            DiagnosticLevel::Info => t.foreground,
                         };
                         ui.colored_label(color, &diagnostic.code);
                         // The first line is the claim; the source excerpt under it belongs in the tooltip.
@@ -185,7 +186,7 @@ impl Builds {
                         } else {
                             format!("{}:{}:{}", diagnostic.file, diagnostic.line, diagnostic.column)
                         };
-                        if !location.is_empty() && ui.link(&location).on_hover_text("Shows where it was reported").clicked() {
+                        if !location.is_empty() && controls::link(ui, &location).on_hover_text("Shows where it was reported").clicked() {
                             self.location = Some(format!("{}\n\nLine {}, column {}", diagnostic.file, diagnostic.line, diagnostic.column));
                         }
                         ui.end_row();
@@ -195,13 +196,15 @@ impl Builds {
             ui.separator();
         }
         egui::ScrollArea::vertical().id_salt("log").stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
+            let t = Tokens::get(ui.ctx());
+            ui.spacing_mut().item_spacing.y = 1.0;
             for line in &session.log {
                 let color = match line.level {
-                    LogLevel::Info => ui.visuals().text_color(),
-                    LogLevel::Warning => WARNING,
-                    LogLevel::Error => ERROR,
+                    LogLevel::Info => t.muted,
+                    LogLevel::Warning => t.warning,
+                    LogLevel::Error => t.danger,
                 };
-                ui.colored_label(color, &line.text);
+                ui.label(egui::RichText::new(&line.text).monospace().size(12.0).color(color));
             }
         });
     }
@@ -210,16 +213,15 @@ impl Builds {
     pub fn windows(&mut self, ctx: &egui::Context, session: &mut Session) {
         if let Some(file) = self.migrate.clone() {
             let mut answer = None;
-            egui::Modal::new(egui::Id::new("migrate-config")).show(ctx, |ui| {
-                ui.heading("Legacy NCPatcher Project");
+            dialogs::modal(ctx, "migrate-config", "Legacy NCPatcher Project", 480.0, |ui| {
                 ui.label(format!(
                     "This project still uses the legacy ncpatcher.json:\n\n{file}\n\nNCPatcher 2 builds from ncpatcher.yaml. Convert it now?\nThe original ncpatcher.json is left in place."
                 ));
-                ui.horizontal(|ui| {
-                    if ui.button("Convert").clicked() {
+                dialogs::actions(ui, |ui| {
+                    if Button::new("Convert").primary().show(ui).clicked() {
                         answer = Some(true);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if Button::new("Cancel").show(ui).clicked() {
                         answer = Some(false);
                     }
                 });
@@ -239,14 +241,13 @@ impl Builds {
         }
         if let Some(bytes) = session.patch_ids_differ.clone() {
             let mut answer = None;
-            egui::Modal::new(egui::Id::new("patch-ids")).show(ctx, |ui| {
-                ui.heading("Import Patch");
+            dialogs::modal(ctx, "patch-ids", "Import Patch", 440.0, |ui| {
                 ui.label("One or more file IDs differ from the patch's source ROM. Apply by path anyway?");
-                ui.horizontal(|ui| {
-                    if ui.button("Apply").clicked() {
+                dialogs::actions(ui, |ui| {
+                    if Button::new("Apply").primary().show(ui).clicked() {
                         answer = Some(true);
                     }
-                    if ui.button("Cancel").clicked() {
+                    if Button::new("Cancel").show(ui).clicked() {
                         answer = Some(false);
                     }
                 });
@@ -260,23 +261,21 @@ impl Builds {
         }
         if let Some(text) = self.location.clone() {
             // Big Star has no YAML editor of its own, so the honest thing is to say exactly where the problem is.
-            let mut close = false;
-            egui::Modal::new(egui::Id::new("diagnostic-location")).show(ctx, |ui| {
-                ui.heading("Diagnostic Location");
+            let (close, dismissed) = dialogs::modal(ctx, "diagnostic-location", "Diagnostic Location", 440.0, |ui| {
                 ui.label(text);
-                close = ui.button("OK").clicked();
+                dialogs::actions(ui, |ui| Button::new("OK").primary().show(ui).clicked())
             });
-            if close {
+            if close || dismissed {
                 self.location = None;
             }
         }
         if let Some(folder) = &mut self.extract {
             let mut open = true;
             let mut run = false;
-            egui::Window::new("Extract ROM").open(&mut open).collapsible(false).show(ctx, |ui| {
+            dialogs::window("Extract ROM").open(&mut open).show(ctx, |ui| {
                 ui.label("NCPatcher writes the project's built ROM into this folder, under the workspace.");
-                ui.add(egui::TextEdit::singleline(folder).desired_width(360.0));
-                run = ui.button("Extract").clicked();
+                ui.add(TextField::new(folder).name("Folder").width(Width::Px(360.0)));
+                run = dialogs::actions(ui, |ui| Button::new("Extract").primary().show(ui).clicked());
             });
             if run {
                 session.extract_rom(folder);
@@ -289,7 +288,7 @@ impl Builds {
             let mut open = true;
             let mut run = false;
             let title = if xdelta.create { "Create xdelta" } else { "Apply xdelta" };
-            egui::Window::new(title).open(&mut open).collapsible(false).show(ctx, |ui| {
+            dialogs::window(title).open(&mut open).show(ctx, |ui| {
                 ui.label("Paths are under the workspace; xdelta3 runs on the host.");
                 let labels = if xdelta.create {
                     ["Clean ROM", "Modified ROM", "Patch to write"]
@@ -299,12 +298,12 @@ impl Builds {
                 egui::Grid::new("xdelta-paths").num_columns(2).show(ui, |ui| {
                     for (label, value) in labels.into_iter().zip([&mut xdelta.source, &mut xdelta.target, &mut xdelta.output]) {
                         ui.label(label);
-                        ui.add(egui::TextEdit::singleline(value).desired_width(320.0));
+                        ui.add(TextField::new(value).width(Width::Px(320.0)));
                         ui.end_row();
                     }
                 });
                 let ready = [&xdelta.source, &xdelta.target, &xdelta.output].iter().all(|path| !path.trim().is_empty());
-                run = ui.add_enabled(ready, egui::Button::new(RichText::new("Run"))).clicked();
+                run = dialogs::actions(ui, |ui| Button::new("Run").primary().enabled(ready).show(ui).clicked());
             });
             if run {
                 session.xdelta(xdelta.create, xdelta.source.trim(), xdelta.target.trim(), xdelta.output.trim());

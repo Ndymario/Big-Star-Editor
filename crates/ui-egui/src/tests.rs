@@ -764,9 +764,9 @@ fn drawn(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp>
 fn the_canvas_follows_the_theme() {
     let mut harness = drawn(DemoConnection::with_level(LevelEntityInsertions::default()).without_background(), Vec2::new(1200.0, 500.0));
     let inside = view(&harness).canvas.min + Vec2::new(30.0, 30.0);
-    harness.ctx.set_visuals(egui::Visuals::light());
+    harness.state_mut().set_dark(false);
     let light = rendered(&mut harness);
-    harness.ctx.set_visuals(egui::Visuals::dark());
+    harness.state_mut().set_dark(true);
     let dark = rendered(&mut harness);
     // The map surface follows the theme, and so does the minimap's; neither may stay light on a dark one. The fine grid
     // makes the surface a wash a few units off its flat colour, which the thresholds leave room for.
@@ -781,7 +781,7 @@ fn the_canvas_follows_the_theme() {
 fn the_out_of_bounds_quadrant_is_tinted() {
     let items = LevelEntityInsertions { objects: vec![object(1, 4, 4, 4, 4)], ..Default::default() };
     let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(1200.0, 500.0));
-    harness.ctx.set_visuals(egui::Visuals::light());
+    harness.state_mut().set_dark(false);
     let image = rendered(&mut harness);
     // Either side of the origin, away from grid lines and the object, so only the tint separates them.
     let outside = pixel(&image, screen(&harness, Pos2::new(-40.0, -40.0)));
@@ -803,7 +803,7 @@ fn an_object_in_front_culls_the_one_behind() {
     let items = LevelEntityInsertions { objects: vec![object(0, 4, 4, 4, 4), object(1, 5, 5, 2, 2)], ..Default::default() };
     let connection = DemoConnection::with_level(items).without_background().with_tileset(0, Some(tileset));
     let mut harness = drawn(connection, Vec2::new(1300.0, 600.0));
-    harness.ctx.set_visuals(egui::Visuals::light());
+    harness.state_mut().set_dark(false);
     view_mut(&mut harness).zoom = 1.0;
     view_mut(&mut harness).zoom_pinned = true;
     view_mut(&mut harness).pan = Vec2::ZERO;
@@ -825,7 +825,7 @@ fn actors_draw_their_own_art_and_the_rest_are_numbered_markers() {
         ..Default::default()
     };
     let mut harness = drawn(DemoConnection::with_level(items).without_background(), Vec2::new(1300.0, 600.0));
-    harness.ctx.set_visuals(egui::Visuals::light());
+    harness.state_mut().set_dark(false);
     view_mut(&mut harness).zoom = 2.0;
     view_mut(&mut harness).zoom_pinned = true;
     view_mut(&mut harness).pan = Vec2::ZERO;
@@ -895,7 +895,7 @@ fn the_history_menus_take_several_steps_at_once() {
     }
     let x = view(&harness).snapshot.course.sprites[0].x;
     assert_eq!(view(&harness).snapshot.undo_names.len(), 3);
-    harness.get_all_by_label("⏷").next().unwrap().click();
+    harness.get_all_by_label("Undo several steps").next().unwrap().click();
     harness.run();
     // The third entry is the oldest step: picking it undoes all three.
     harness.get_all_by_label("Move selection").nth(2).unwrap().click();
@@ -1181,7 +1181,8 @@ fn the_sprite_event_viewer_lists_every_event_a_sprite_names() {
     let mut harness = level_with(items);
     harness.state_mut().tools.events = true;
     harness.run();
-    harness.get_by_label("Sprite Event Viewer");
+    // The window and its heading both carry the name.
+    assert!(harness.query_all_by_label("Sprite Event Viewer").next().is_some());
     // Two rows name event 5 and one names event 2, which comes first.
     assert_eq!(harness.query_all_by_label("5").count(), 2);
     assert_eq!(harness.query_all_by_label("Coin").count(), 2, "one row for each event the coin names");
@@ -1227,19 +1228,19 @@ fn filesystem() -> (Harness<'static, BigStarApp>, std::sync::Arc<std::sync::Mute
 fn the_dock_lists_the_rom_in_id_order_and_opens_archives_on_demand() {
     let (mut harness, _) = filesystem();
     // The root is open; its folders are rows, and open with their arrow (the order is `build_tree`'s, tested there).
-    harness.get_by_label("📁 course");
+    harness.get_by_label("course");
     harness.state_mut().files.expanded.insert("course".to_owned());
     harness.state_mut().files.expanded.insert("dat".to_owned());
     harness.run();
-    harness.get_by_label("🎮 A01_1.bin");
+    harness.get_by_label("A01_1.bin");
     // An archive lists its members the first time it opens.
-    assert!(harness.query_by_label("📄 a.bin").is_none());
+    assert!(harness.query_by_label("a.bin").is_none());
     harness.state_mut().files.expanded.insert("dat/demo.narc".to_owned());
     harness.state_mut().session_mut().unwrap().list_archive("dat/demo.narc");
     harness.run();
-    harness.get_by_label("📄 a.bin");
+    harness.get_by_label("a.bin");
     // Picking a file says what it is and which editor opens it.
-    harness.get_by_label("🎮 A01_1.bin").click();
+    harness.get_by_label("A01_1.bin").click();
     harness.run();
     harness.get_by_label_contains("course/A01_1.bin   ·   File ID: 100");
 }
@@ -1263,7 +1264,7 @@ fn files_are_added_under_z_new_replaced_and_removed_through_the_module() {
     // Replacing a file the ROM holds writes the module's copy over it.
     harness.state_mut().files.expanded.insert("message".to_owned());
     harness.run();
-    harness.get_by_label("📝 msg.bmg").click();
+    harness.get_by_label("msg.bmg").click();
     harness.run();
     shelf.lock().unwrap().to_open.push_back(("msg.bmg".to_owned(), b"MESGbmg1new".to_vec()));
     harness.get_by_label("Replace").click();
@@ -1273,7 +1274,7 @@ fn files_are_added_under_z_new_replaced_and_removed_through_the_module() {
     assert!(listing.entries.iter().any(|e| e.path == "message/msg.bmg" && e.from_module));
 
     // A module's file can be removed, after asking.
-    harness.get_by_label("📝 msg.bmg").click();
+    harness.get_by_label("msg.bmg").click();
     harness.run();
     harness.get_by_label("Remove").click();
     harness.run();
@@ -1290,7 +1291,7 @@ fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
     let (mut harness, shelf) = filesystem();
     harness.state_mut().files.expanded.insert("message".to_owned());
     harness.run();
-    harness.get_by_label("📝 msg.bmg").click();
+    harness.get_by_label("msg.bmg").click();
     harness.run();
     harness.get_by_label("Extract").click();
     harness.run();
@@ -1331,7 +1332,7 @@ fn a_level_row_hands_the_person_over_to_its_file() {
     let files = &harness.state().files;
     assert_eq!(files.selected.as_deref(), Some("course/A01_1.bin"));
     assert!(files.expanded.contains("course"));
-    harness.get_by_label("🎮 A01_1.bin");
+    harness.get_by_label("A01_1.bin");
 }
 
 #[test]
@@ -1339,7 +1340,7 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     let (mut harness, _) = filesystem();
     harness.state_mut().files.expanded.insert("BG_ncg".to_owned());
     harness.run();
-    harness.get_by_label("🖼 demo_ncg.bin").click();
+    harness.get_by_label("demo_ncg.bin").click();
     harness.run();
     // It is picked up as graphics, and Open opens the graphics editor rather than hex.
     harness.get_by_label_contains("Opens in: Graphics");
@@ -1386,7 +1387,7 @@ fn a_message_file_opens_in_the_message_editor_and_saves_its_edits() {
     let (mut harness, shelf) = filesystem();
     harness.state_mut().files.expanded.insert("message".to_owned());
     harness.run();
-    harness.get_by_label("📝 msg.bmg").click();
+    harness.get_by_label("msg.bmg").click();
     harness.run();
     harness.get_by_label_contains("Opens in: Messages");
     harness.get_by_label("Open").click();
@@ -1417,7 +1418,7 @@ fn a_touch_layout_and_the_rom_metadata_open_as_pages_of_the_graphics_editor() {
     let (mut harness, shelf) = filesystem();
     harness.state_mut().files.expanded.insert("uiStudio".to_owned());
     harness.run();
-    harness.get_by_label("👆 demo.bnbl").click();
+    harness.get_by_label("demo.bnbl").click();
     harness.run();
     harness.get_by_label_contains("Opens in: Graphics");
     harness.get_by_label("Open").click();
@@ -1527,7 +1528,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
 #[test]
 fn a_build_reports_into_the_output_panel_and_its_diagnostics_show_where() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
-    harness.get_by_label("▶ Run Patcher").click();
+    harness.get_by_label("Run Patcher").click();
     harness.run();
     harness.run();
     let state = &harness.state().session().unwrap().build;
@@ -1602,6 +1603,71 @@ fn module_changes_export_as_a_patch_and_a_mismatched_one_asks_first() {
     harness.state_mut().session_mut().unwrap().read_file("message/msg.bmg", crate::session::FileRead::Extract);
     harness.run();
     assert_eq!(shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes), Some(vec![7]));
+}
+
+/// The frontend on the demo host with Preferences open, and the values it stores.
+fn preferences_open(services: MemoryServices) -> (Harness<'static, BigStarApp>, MemoryServices) {
+    let stored = services.sharing_values();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.get_by_label("View").click();
+    harness.run();
+    harness.get_by_label("Preferences…").click();
+    harness.run();
+    (harness, stored)
+}
+
+#[test]
+fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
+    use crate::theme::{Theme, Tokens};
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    let default = Theme::default().tokens(None);
+    let ocean = Theme { family: "ocean", ..Theme::default() }.tokens(None);
+    assert_eq!(*Tokens::get(&harness.ctx), default);
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    assert_eq!(*Tokens::get(&harness.ctx), ocean);
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    assert_eq!(*Tokens::get(&harness.ctx), default);
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), None);
+
+    harness.get_by_label("View").click();
+    harness.run();
+    harness.get_by_label("Preferences…").click();
+    harness.run();
+    harness.get_by_label("Ocean").click();
+    harness.get_by_label("Light").click();
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    let chosen = Theme { family: "ocean", dark: false, ..Theme::default() };
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(None));
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
+}
+
+#[test]
+fn the_systems_accent_colour_can_stand_in_for_the_themes() {
+    use crate::theme::Tokens;
+    let checkbox = "Use the system's accent colour";
+    // A system that has no accent colour offers nothing to tick.
+    let (harness, _) = preferences_open(MemoryServices::default());
+    assert!(egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label(checkbox)).is_disabled());
+
+    let purple = [111, 86, 168];
+    let (mut harness, stored) = preferences_open(MemoryServices::with_accent(purple));
+    // It is what a new installation starts with, until the theme's own is asked for.
+    assert_eq!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
+    harness.get_by_label(checkbox).click();
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    assert_ne!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY).as_deref(), Some("default dark own-accent"));
 }
 
 #[test]

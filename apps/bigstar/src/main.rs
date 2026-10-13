@@ -1,6 +1,7 @@
 //! Big Star Editor for the desktop. It can run the host in its own process or connect to a remote one; the window is
 //! the same `bigstar-ui-egui` frontend the browser build shows.
 
+mod accent;
 mod services;
 #[cfg(test)]
 mod tests;

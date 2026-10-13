@@ -78,6 +78,14 @@ file dialogs, the embedded host) come in through the `Services` trait, so the sa
 browser and under test. Everything the person does is either a local view change or a request; nothing is edited in
 the frontend that the host does not confirm.
 
+How it looks is decided in one place. `theme.rs` holds the palette as tokens, light and dark, and turns them into the
+egui style; `controls.rs` and `dialogs.rs` build every button, field, drop-down, tab row, list row, status line and
+dialog from those tokens. Screens ask for a control there instead of making egui's own, and a test in `controls.rs`
+fails when one does not. The theme (one of six families, its dark or
+light mode, and whether the system's accent colour replaces the family's) is chosen in Preferences and kept under the
+`theme` key. The shell supplies the system's accent through `Services::accent_color`: the desktop portal on Linux,
+the registry on Windows, `defaults` on macOS, and CSS `AccentColor` in the browser.
+
 ## Testing
 
 Ported C++ cases are Rust tests beside the code they test. UI behaviour is tested with `egui_kittest` against

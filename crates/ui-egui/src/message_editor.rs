@@ -2,8 +2,10 @@
 //! its `[type:HEXDATA]` escapes, its MID1 ID and INF1 attribute bytes, and the line-based text export and import. A
 //! port of `MessageEditorPanel`; the document is pure, and `show` draws it.
 
+use crate::controls::{self, Button, Row, TextField, Width};
+use crate::{dialogs, icons};
 use bigstar_formats::{Bmg, BmgMessage, bmg_encoding_name, bmg_message_plain_text, bmg_message_text, parse_bmg, parse_bmg_message_text, write_bmg};
-use egui::{RichText, Ui};
+use egui::Ui;
 
 use crate::services::Services;
 
@@ -306,24 +308,15 @@ pub struct MessageView {
 
 pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services: &dyn Services) -> Vec<MessageAction> {
     let mut actions = Vec::new();
-    ui.horizontal(|ui| {
-        ui.label(RichText::new(&doc.path).strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add_enabled(doc.error.is_none() && doc.dirty, egui::Button::new("Save"))
-                .on_hover_text("Writes the file into the module it comes from, or the active one")
-                .clicked()
-            {
-                actions.push(MessageAction::Save);
-            }
-        });
-    });
+    if controls::document_header(ui, &doc.path, "", doc.error.is_none() && doc.dirty) {
+        actions.push(MessageAction::Save);
+    }
     if let Some(error) = &doc.error {
-        ui.colored_label(ui.visuals().error_fg_color, error);
+        controls::error_text(ui, error);
         return actions;
     }
     ui.label(doc.info());
-    ui.add(egui::TextEdit::singleline(&mut doc.filter).hint_text("Filter messages by text or ID").desired_width(f32::INFINITY));
+    controls::search(ui, &mut doc.filter, "Filter messages by text or ID", Width::Fill);
 
     let list_height = (ui.available_height() * 0.55).max(80.0);
     let mut chosen = None;
@@ -341,13 +334,13 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
                 }
                 let Some((number, id, text)) = doc.row(index) else { continue };
                 let selected = doc.active == Some(index);
-                if ui.selectable_label(selected, number).clicked() {
+                if Row::new(number).selected(selected).fit().show(ui).clicked() {
                     chosen = Some(index);
                 }
-                if doc.bmg.has_mid1 && ui.selectable_label(selected, id).clicked() {
+                if doc.bmg.has_mid1 && Row::new(id).selected(selected).fit().show(ui).clicked() {
                     chosen = Some(index);
                 }
-                if ui.selectable_label(selected, text).clicked() {
+                if Row::new(text).selected(selected).fit().show(ui).clicked() {
                     chosen = Some(index);
                 }
                 ui.end_row();
@@ -361,11 +354,8 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
 
     ui.separator();
     let editing = doc.active.is_some();
-    let editor = ui.add_enabled(
-        editing,
-        egui::TextEdit::multiline(&mut doc.text).code_editor().desired_width(f32::INFINITY).desired_rows(5).id_salt("message-text"),
-    );
-    if let Some(state) = egui::TextEdit::load_state(ui.ctx(), editor.id)
+    let editor = ui.add_enabled(editing, TextField::multiline(&mut doc.text).code().lock_focus().rows(5).id_salt("message-text"));
+    if let Some(state) = egui::text_edit::TextEditState::load(ui.ctx(), editor.id)
         && let Some(range) = state.cursor.char_range()
     {
         view.cursor = Some(range.primary.index.0);
@@ -376,14 +366,14 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
     egui::Grid::new("message-fields").num_columns(2).show(ui, |ui| {
         if doc.bmg.has_mid1 {
             ui.label("Message ID");
-            if ui.add_enabled(editing, egui::DragValue::new(&mut doc.id).range(0..=i32::MAX)).changed() {
+            if ui.add_enabled(editing, controls::number(&mut doc.id).range(0..=i32::MAX)).changed() {
                 doc.commit();
             }
             ui.end_row();
         }
         if doc.bmg.attribute_size > 0 {
             ui.label("Attributes");
-            if ui.add_enabled(editing, egui::TextEdit::singleline(&mut doc.attributes).hint_text("INF1 attribute bytes, hexadecimal")).changed() {
+            if ui.add_enabled(editing, TextField::new(&mut doc.attributes).hint("INF1 attribute bytes, hexadecimal")).changed() {
                 doc.commit();
             }
             ui.end_row();
@@ -392,19 +382,19 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
     ui.weak(doc.stats());
 
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Add").clicked() {
+        if Button::new("Add").with_icon(icons::PLUS).show(ui).clicked() {
             doc.add(false);
         }
-        if ui.button("Duplicate").clicked() {
+        if Button::new("Duplicate").show(ui).clicked() {
             doc.add(true);
         }
-        if ui.add_enabled(editing, egui::Button::new("Remove")).clicked() {
+        if Button::new("Remove").enabled(editing).show(ui).clicked() {
             view.confirm_remove = doc.active;
         }
-        if ui.add_enabled(editing, egui::Button::new("Insert escape…")).clicked() {
+        if Button::new("Insert escape…").enabled(editing).show(ui).clicked() {
             view.escape = Some("255:00000000".to_owned());
         }
-        if ui.button("Export text…").clicked() {
+        if Button::new("Export text…").show(ui).clicked() {
             let text = doc.export_text();
             let name = doc.path.rsplit(['/', '!']).next().unwrap_or("messages").to_owned();
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
@@ -412,7 +402,7 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
                 view.notice = Some(error);
             }
         }
-        if ui.button("Import text…").clicked() {
+        if Button::new("Import text…").show(ui).clicked() {
             match services.open_file("Import messages", Some("txt")) {
                 Some(Ok((_, bytes))) => {
                     let done = doc.import_text(&String::from_utf8_lossy(&bytes));
@@ -437,16 +427,15 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
 fn prompts(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView) {
     if let Some(row) = view.confirm_remove {
         let mut answer = None;
-        egui::Modal::new(egui::Id::new(("message-remove", &doc.path))).show(ui.ctx(), |ui| {
-            ui.heading("Remove message");
+        dialogs::modal(ui.ctx(), ("message-remove", &doc.path), "Remove message", 440.0, |ui| {
             ui.label(format!(
                 "Remove message {row}? Every later message shifts down one index, which breaks any code that indexes this file directly."
             ));
-            ui.horizontal(|ui| {
-                if ui.button("Remove").clicked() {
+            dialogs::actions(ui, |ui| {
+                if Button::new("Remove").danger().show(ui).clicked() {
                     answer = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if Button::new("Cancel").show(ui).clicked() {
                     answer = Some(false);
                 }
             });
@@ -460,15 +449,14 @@ fn prompts(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView) {
     }
     if let Some(typed) = &mut view.escape {
         let mut answer = None;
-        egui::Modal::new(egui::Id::new(("message-escape", &doc.path))).show(ui.ctx(), |ui| {
-            ui.heading("Insert escape sequence");
+        dialogs::modal(ui.ctx(), ("message-escape", &doc.path), "Insert escape sequence", 440.0, |ui| {
             ui.label("Escape as type:hexdata, for example 255:00000100");
-            ui.text_edit_singleline(typed);
-            ui.horizontal(|ui| {
-                if ui.button("Insert").clicked() {
+            TextField::new(typed).name("Escape sequence").code().show(ui);
+            dialogs::actions(ui, |ui| {
+                if Button::new("Insert").primary().show(ui).clicked() {
                     answer = Some(true);
                 }
-                if ui.button("Cancel").clicked() {
+                if Button::new("Cancel").show(ui).clicked() {
                     answer = Some(false);
                 }
             });

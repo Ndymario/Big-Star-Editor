@@ -1,10 +1,11 @@
 //! The Level Data tab: the glue block's flags and values, named by the modules that declare them, and the stage-object
 //! registration the sprites imply. A port of `LevelDataWidget`.
 
+use crate::controls::{self, TextField, Width};
 use bigstar_formats::{GlueValue, fnv1a_32};
 use bigstar_level::{LevelDataKind, ModuleDataCatalog};
 use bigstar_protocol::{LevelEdit, LevelSnapshot};
-use egui::{Color32, RichText, Ui};
+use egui::{RichText, Ui};
 
 /// The registration lives in the glue block too, but it is derived from the sprites; it is listed, not edited.
 const REGISTRATION_HASH: u32 = fnv1a_32("glue.stageObjects");
@@ -115,10 +116,7 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
     let mut outcome = None;
     let read_only = snapshot.glue_error.is_some() || busy;
     if let Some(error) = &snapshot.glue_error {
-        ui.colored_label(
-            Color32::from_rgb(210, 70, 60),
-            format!("Malformed glue data: {error}\nThis block is read-only and will be preserved byte-for-byte."),
-        );
+        controls::error_text(ui, format!("Malformed glue data: {error}\nThis block is read-only and will be preserved byte-for-byte."));
     }
     ui.label(RichText::new("Level data").strong());
     let rows = rows(snapshot, modules);
@@ -135,15 +133,14 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
             ui.label(if row.flag { "flag" } else { "value" });
             if row.flag {
                 let mut on = row.present;
-                if ui.add_enabled(!read_only, egui::Checkbox::without_text(&mut on)).changed() {
+                if ui.add_enabled_ui(!read_only, |ui| controls::checkbox(ui, &mut on, "")).inner.changed() {
                     outcome = set_flag(snapshot, row.hash, on).map(Outcome::Edit);
                 }
             } else {
                 let shown = if row.present { hex(&row.payload) } else { String::new() };
                 let draft = drafts.entry(row.hash).or_insert_with(|| shown.clone());
                 let hint = if row.present { "" } else { "absent — enter bytes to add" };
-                let edit = ui
-                    .add_enabled(!read_only, egui::TextEdit::singleline(draft).hint_text(hint).font(egui::TextStyle::Monospace).desired_width(220.0));
+                let edit = ui.add_enabled(!read_only, TextField::new(draft).hint(hint).code().width(Width::Px(220.0)));
                 if edit.lost_focus() && *draft != shown {
                     outcome = Some(match set_value(snapshot, row.hash, draft) {
                         Ok(edit) => Outcome::Edit(edit),
