@@ -124,7 +124,10 @@ again. Where two entries name one quarter the later wins.
 speed passes 256 when the camera is 512 pixels into the view. The game does
 this by rewriting the layer's map, and only for foreground 8, which is how
 Peach's castle stands at the start of 1-1 and the hills then repeat without
-it. The DS screen shows it; the still picture is the layer before any swap.
+it. The DS screen shows it as the camera has it. The still picture of a view
+counts from the view's left edge, where the image starts: a quarter shows its
+own as far as a screen can reach before the swap, 256 pixels past `after`, and
+what it is swapped for in every repeat of the image beyond.
 
 ## Overriding
 

@@ -689,6 +689,11 @@ fn a_layer_scrolls_with_the_camera_as_the_game_scrolls_it() {
     let past = at(front, &castle, (357, 608)).with_swaps(&swaps);
     assert!(past.quarter(0, 1) == (1, 1) && past.quarter(2, 1) == (1, 1) && past.quarter(0, 0) == (0, 0) && past.quarter(1, 1) == (1, 1));
     assert_eq!(at(front, &castle, (357, 608)).quarter(0, 1), (0, 1));
+    // The still picture shows the castle once: from the view's left edge to the last column a screen can show before
+    // the swap, and in no repeat of the image after it or before the view.
+    let still = |distance: i32| crate::still_quarter(&swaps, (0, 1), distance);
+    assert_eq!((still(0), still(511), still(512), still(1024), still(-512)), ((0, 1), (0, 1), (1, 1), (1, 1), (1, 1)));
+    assert_eq!(crate::still_quarter(&swaps, (0, 0), 1024), (0, 0));
 
     // A block with no screen shows nothing.
     assert!(layer_scroll(back, &[block(u16::MAX, 0, 0, 0)], 0, view, (100, 608), true).is_none());

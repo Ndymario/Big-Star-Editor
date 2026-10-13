@@ -145,6 +145,23 @@ pub struct BackgroundSwap {
     pub shows: (u8, u8),
 }
 
+impl BackgroundSwap {
+    /// How many columns from the image's first a still picture goes on showing the quarter as its own: the last a
+    /// screen can show before the layer has scrolled past `after`.
+    pub fn still_reach(&self) -> i32 {
+        (self.after >> 12) + DS_SCREEN_WIDTH
+    }
+}
+
+/// The quarter a still picture of a layer shows for `quarter`, `distance` pixels right of the view's left edge, where
+/// the image's first column lands. The picture is every scroll at once, so a swap holds wherever the game could only
+/// show the layer after it: beyond its reach, and left of the view, where the game shows nothing. Peach's castle then
+/// stands once at the start of its view instead of in every repeat of the image.
+pub fn still_quarter(swaps: &[BackgroundSwap], quarter: (u8, u8), distance: i32) -> (u8, u8) {
+    let passed = |swap: &&BackgroundSwap| swap.quarter == quarter && !(0..swap.still_reach()).contains(&distance);
+    swaps.iter().rev().find(passed).map_or(quarter, |swap| swap.shows)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundDefinition {
     pub layer: BackgroundLayer,

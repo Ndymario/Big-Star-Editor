@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bigstar_formats::{NsmbLevelCourse, entrance_flags};
-use bigstar_level::{BackgroundLayer, BackgroundMotion, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, strip_offsets};
+use bigstar_level::{
+    BackgroundLayer, BackgroundMotion, BackgroundSwap, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, still_quarter,
+    strip_offsets,
+};
 use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, ImageGraphics, LevelEdit, TextureData, TextureId};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, Event, FontId, Key, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
@@ -694,7 +697,8 @@ fn layer_pieces(origin: f32, height: f32, repeat: LayerRepeat, top: f32, bottom:
 
 /// A background or foreground layer over `area` (level pixels), one image pixel to one level pixel. The image's top
 /// left corner sits at `origin` and it repeats sideways; `bands` are the rows that move together and how far left each
-/// has moved, as the game shifts a layer scanline by scanline.
+/// has moved, as the game shifts a layer scanline by scanline. `swaps` are the quarters the layer's script has the game
+/// replace as it scrolls, which the picture does by how far a column is from `origin`.
 #[allow(clippy::too_many_arguments)]
 fn layer(
     painter: &Painter,
@@ -705,11 +709,13 @@ fn layer(
     origin: Pos2,
     repeat: LayerRepeat,
     bands: &[(u16, u16, f32)],
+    swaps: &[BackgroundSwap],
     tint: Color32,
 ) {
     if size.x < 1.0 || size.y < 1.0 || !area.is_positive() {
         return;
     }
+    let half = size / 2.0;
     for (piece_top, first_row, last_row) in layer_pieces(origin.y, size.y, repeat, area.top(), area.bottom()) {
         for &(band_first, band_last, moved) in bands {
             let (rows_first, rows_last) = (f32::from(band_first).max(first_row), f32::from(band_last).min(last_row));
@@ -725,12 +731,38 @@ fn layer(
             while x < area.right() {
                 let tile = Rect::from_min_max(Pos2::new(x, top), Pos2::new(x + size.x, bottom));
                 let part = tile.intersect(area);
-                if part.is_positive() {
-                    let uv = Rect::from_min_max(
-                        Pos2::new((part.left() - x) / size.x, (rows_first + part.top() - top) / size.y),
-                        Pos2::new((part.right() - x) / size.x, (rows_first + part.bottom() - top) / size.y),
-                    );
-                    painter.image(texture, frame.rect(part), uv, tint);
+                // Cut where the image passes from one quarter into the next and where a swap takes hold or lets go,
+                // so every cell shows one quarter throughout.
+                let (mut columns, mut rows) = (vec![part.left(), part.right()], vec![part.top(), part.bottom()]);
+                if !swaps.is_empty() && part.is_positive() {
+                    columns.push(x + half.x);
+                    columns.push(origin.x);
+                    columns.extend(swaps.iter().map(|swap| origin.x + swap.still_reach() as f32));
+                    columns.retain(|cut| part.left() <= *cut && *cut <= part.right());
+                    columns.sort_by(f32::total_cmp);
+                    columns.dedup();
+                    rows.push(top + half.y - rows_first);
+                    rows.retain(|cut| part.top() <= *cut && *cut <= part.bottom());
+                    rows.sort_by(f32::total_cmp);
+                    rows.dedup();
+                }
+                for (&cell_top, &cell_bottom) in rows.iter().zip(rows.iter().skip(1)) {
+                    for (&cell_left, &cell_right) in columns.iter().zip(columns.iter().skip(1)) {
+                        let cell = Rect::from_min_max(Pos2::new(cell_left, cell_top), Pos2::new(cell_right, cell_bottom));
+                        if !cell.is_positive() {
+                            continue;
+                        }
+                        let mut uv = Rect::from_min_max(
+                            Pos2::new((cell.left() - x) / size.x, (rows_first + cell.top() - top) / size.y),
+                            Pos2::new((cell.right() - x) / size.x, (rows_first + cell.bottom() - top) / size.y),
+                        );
+                        if !swaps.is_empty() {
+                            let own = (u8::from(cell.left() - x >= half.x), u8::from(rows_first + cell.top() - top >= half.y));
+                            let shown = still_quarter(swaps, own, (cell.left() - origin.x).floor() as i32);
+                            uv = uv.translate(Vec2::new(f32::from(shown.0) - f32::from(own.0), f32::from(shown.1) - f32::from(own.1)) / 2.0);
+                        }
+                        painter.image(texture, frame.rect(cell), uv, tint);
+                    }
                 }
                 x += size.x;
             }
@@ -853,21 +885,24 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
                     continue;
                 }
                 // A level without views has nothing to place the layer by, and shows it from its own origin.
-                let (origin, repeat, screen) = match shown_in.and_then(|index| Some((index, course.views.get(index)?))) {
+                let (origin, repeat, screen, in_view) = match shown_in.and_then(|index| Some((index, course.views.get(index)?))) {
                     Some((index, v)) => {
                         let rect = placed(Kind::View, index);
                         let block = if which == BackgroundLayer::Background { v.background_id } else { v.foreground_id };
                         let Some(placement) = layer_placement(blocks, block, rect.top() as i32, rect.height() as i32) else { continue };
-                        (Pos2::new(rect.left(), placement.origin_y as f32), placement.repeat, placement.screen_id)
+                        (Pos2::new(rect.left(), placement.origin_y as f32), placement.repeat, placement.screen_id, true)
                     }
-                    None => (Pos2::ZERO, LayerRepeat::Wrap, loaded),
+                    None => (Pos2::ZERO, LayerRepeat::Wrap, loaded, false),
                 };
-                let strips = graphics.backgrounds.find(which, screen).map_or(&[][..], |definition| definition.strips.as_slice());
+                let definition = graphics.backgrounds.find(which, screen);
+                let strips = definition.map_or(&[][..], |definition| definition.strips.as_slice());
+                // A swap counts the layer's scroll from the view's left edge, so it needs a view to count from.
+                let swaps = definition.filter(|_| in_view).map_or(&[][..], |definition| definition.swaps.as_slice());
                 // A ripple is drawn a few rows at a time: as many as make a screen pixel or two.
                 let wave_rows = (2.0 / frame.zoom.max(0.01)).ceil().clamp(2.0, 64.0) as u16;
                 let bands = strip_offsets(strips, size.y as u16, 0, ticks, wave_rows);
                 moving |= !image.frames.is_empty() || strips.iter().any(|strip| !matches!(strip.motion, BackgroundMotion::Scroll { .. }));
-                layer(painter, frame, texture, size, area, origin, repeat, &bands, shade);
+                layer(painter, frame, texture, size, area, origin, repeat, &bands, swaps, shade);
             }
         }
         // Inside a DS screen the layers are where the game scrolls them to with its camera there, at full strength
