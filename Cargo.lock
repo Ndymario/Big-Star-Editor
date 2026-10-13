@@ -573,6 +573,7 @@ dependencies = [
  "bigstar-formats",
  "bigstar-level",
  "bigstar-nds",
+ "bigstar-patching",
  "serde",
 ]
 

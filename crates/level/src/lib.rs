@@ -4,6 +4,7 @@
 mod commands;
 mod editable_level;
 mod module_data;
+mod sprite_definitions;
 mod state;
 
 pub use editable_level::{
@@ -13,6 +14,7 @@ pub use module_data::{
     DEFAULT_STAGE_OBJECT_ID_BASE, LevelDataDeclaration, LevelDataKind, ModuleDataCatalog, StageObjectDeclaration, parse_level_data_catalog,
     parse_stage_object_catalog,
 };
+pub use sprite_definitions::*;
 pub use state::LevelTilesetReferences;
 
 #[cfg(test)]

@@ -348,3 +348,39 @@ fn bgdat_limits_are_enforced_on_save() {
     level.add_object(object(1, 16, 0, 0, 1, 1)).unwrap();
     assert!(level.serialize_bgdat().is_err());
 }
+
+#[test]
+fn sprite_fields_read_and_write_their_bits() {
+    let field = SpriteFieldDefinition { key: "mode".into(), label: "Mode".into(), bit_offset: 4, bit_width: 3, ..SpriteFieldDefinition::default() };
+    assert_eq!(read_sprite_field(0x70, &field), 7);
+    assert_eq!(write_sprite_field(0xffffffff, &field, 2), 0xffffffaf);
+
+    let event =
+        SpriteFieldDefinition { key: "event".into(), label: "Event".into(), bit_offset: 40, bit_width: 8, ..SpriteFieldDefinition::default() };
+    let sprite_data: u64 = 0x1234_89ab_cdef;
+    assert_eq!(read_sprite_field(sprite_data, &event), 0x12);
+    assert_eq!(write_sprite_field(sprite_data, &event, 0x56), 0x5634_89ab_cdef);
+
+    let signed_field = SpriteFieldDefinition { bit_width: 4, signed_value: true, value_offset: 2, ..SpriteFieldDefinition::default() };
+    assert_eq!(sprite_field_min(&signed_field), -6);
+    assert_eq!(sprite_field_max(&signed_field), 9);
+    assert_eq!(read_sprite_field(0xf, &signed_field), 1);
+    assert_eq!(write_sprite_field(0, &signed_field, 1), 0xf);
+
+    let checkbox = SpriteFieldDefinition { bit_width: 4, checkbox_value: 8, ..SpriteFieldDefinition::default() };
+    assert_eq!(sprite_field_max(&checkbox), 1);
+    assert_eq!(read_sprite_field(8, &checkbox), 1);
+    assert_eq!(write_sprite_field(0, &checkbox, 1), 8);
+
+    // Widths the C++ shifts leave undefined stay defined here.
+    let whole = SpriteFieldDefinition { bit_width: 64, ..SpriteFieldDefinition::default() };
+    assert_eq!(read_sprite_field(u64::MAX, &whole), -1);
+    assert_eq!(write_sprite_field(0, &whole, 5), 5);
+
+    let vanilla = SpriteDefinition { object_id: 83, ..SpriteDefinition::default() };
+    let custom = SpriteDefinition { hash: Some(0x12345678), ..SpriteDefinition::default() };
+    let catalog = SpriteDefinitionCatalog { definitions: vec![vanilla, custom] };
+    assert!(catalog.by_object_id(83).is_some());
+    assert!(catalog.by_hash(0x12345678).is_some());
+    assert_eq!(SpriteDefinition::default().category, "Other");
+}

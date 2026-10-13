@@ -18,4 +18,5 @@ bigstar-core.workspace = true
 bigstar-nds.workspace = true
 bigstar-formats.workspace = true
 bigstar-level.workspace = true
+bigstar-patching.workspace = true
 serde.workspace = true
