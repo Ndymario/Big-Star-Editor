@@ -6,6 +6,7 @@ use bigstar_core::read_file_prefix;
 use bigstar_formats::{GraphicsFormatKind, identify_graphics_format};
 use bigstar_host::Host;
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, RomHeader, parse_rom_header};
+use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, describe_stage};
 use bigstar_project::{INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, create_empty_project, index_rom_files, save_manifest};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -16,7 +17,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  serve <root> [--bind <address>] [--port <port>]\n"
     );
 }
 
@@ -119,6 +120,84 @@ fn import_rom(rom_path: &Path, project_dir: &Path, out: &mut dyn Write, err: &mu
     0
 }
 
+const NCPATCHER: &str = "ncpatcher";
+
+/// `run-patcher <project-dir> [--variant <name>]`: one NCPatcher build, its progress and diagnostics on stderr. A
+/// project that configures variants requires an explicit one, so NCPatcher cannot silently build the wrong language.
+fn run_patcher(executable: &str, project_dir: &Path, variant: &str, err: &mut dyn Write) -> i32 {
+    let client = NCPatcherClient::new(executable).with_logger(std::sync::Arc::new(|level, message| {
+        let name = match level {
+            log::Level::Error => "error",
+            log::Level::Warn => "warning",
+            _ => "info",
+        };
+        eprintln!("[{name}] {message}");
+    }));
+    let mut observer = BuildObserver {
+        on_progress: Some(Box::new(|progress| eprintln!("{} {}/{}  {}", progress.phase, progress.current, progress.total, progress.item))),
+        on_diagnostic: Some(Box::new(|diagnostic| eprintln!("{}: {}", diagnostic.code, diagnostic.message))),
+        on_log: Some(Box::new(|line| eprintln!("{line}"))),
+        ..BuildObserver::default()
+    };
+    let request = BuildRequest { project_dir: project_dir.to_path_buf(), variant: variant.to_owned(), ..BuildRequest::default() };
+    let summary = match client.build(&request, &mut observer) {
+        Ok(summary) => summary,
+        Err(e) => {
+            let _ = writeln!(err, "{}", e.message);
+            return 10;
+        }
+    };
+    if !summary.succeeded() {
+        let _ = writeln!(err, "NCPatcher: {} ({} error(s), {} warning(s))", describe_stage(summary.stage), summary.errors, summary.warnings);
+    }
+    summary.exit_code
+}
+
+/// `patcher-info <project-dir>`: what the project says about itself, without building it.
+fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let client = NCPatcherClient::new(executable);
+    let version = match client.version() {
+        Ok(version) => version,
+        Err(e) => {
+            let _ = writeln!(err, "{}", e.message);
+            return 10;
+        }
+    };
+    let _ = writeln!(out, "{version}");
+    let config = match client.dump_config(project_dir) {
+        Ok(config) => config,
+        Err(e) => {
+            let _ = writeln!(err, "{}", e.message);
+            return 10;
+        }
+    };
+    let _ = write!(
+        out,
+        "Config: \"{}\"\nROM: \"{}\"\nToolchain: {}\nVariants: ",
+        config.config_file.display(),
+        config.rom_file.display(),
+        config.toolchain
+    );
+    if config.variants.is_empty() {
+        let _ = write!(out, "(this project configures none)");
+    }
+    for variant in &config.variants {
+        let _ = write!(out, "{} ", variant.name);
+    }
+    let _ = writeln!(out);
+    if let Ok(graph) = client.dump_modules(project_dir) {
+        let _ = writeln!(out, "Modules ({}):", graph.modules.len());
+        for module in &graph.modules {
+            let _ = write!(out, "  {}{}", module.key, if module.enabled { "" } else { " (disabled)" });
+            if let Some(nitrofs) = &module.nitrofs {
+                let _ = write!(out, " nitrofs=\"{}\"{}", nitrofs.dir.display(), if nitrofs.layered { " [layered]" } else { "" });
+            }
+            let _ = writeln!(out);
+        }
+    }
+    0
+}
+
 /// `serve <root> [--bind <address>] [--port <port>]`: hosts a workspace until interrupted.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some((root, flags)) = args.split_first() else {
@@ -209,6 +288,13 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         }
         ["inspect-rom", path] => inspect_rom(Path::new(path), out, err),
         ["import-rom", rom, dir] => import_rom(Path::new(rom), Path::new(dir), out, err),
+        ["run-patcher", dir] => run_patcher(NCPATCHER, Path::new(dir), "", err),
+        ["run-patcher", dir, "--variant", variant] => run_patcher(NCPATCHER, Path::new(dir), variant, err),
+        ["run-patcher", _, _, _] => {
+            usage(out);
+            2
+        }
+        ["patcher-info", dir] => patcher_info(NCPATCHER, Path::new(dir), out, err),
         ["serve", rest @ ..] => serve(rest, out, err),
         _ => {
             usage(out);
@@ -243,6 +329,27 @@ mod tests {
         assert_eq!(code, 1);
         assert!(out.contains("import-rom <rom> <project-dir>"));
         assert_eq!(invoke(&["inspect-rom"]).0, 1);
+    }
+
+    #[test]
+    fn patcher_verbs_check_their_arguments_and_report_a_missing_tool() {
+        let (code, out, _) = invoke(&["run-patcher", "p", "--colour", "fr"]);
+        assert_eq!(code, 2);
+        assert!(out.contains("run-patcher <project-dir> [--variant <name>]"));
+        assert_eq!(invoke(&["run-patcher"]).0, 1);
+        assert_eq!(invoke(&["patcher-info"]).0, 1);
+
+        let dir = TempDir::new("cli-patcher");
+        std::fs::write(dir.path().join("ncpatcher.yaml"), "version: 2\n").unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        assert_eq!(super::patcher_info("big-star-no-such-tool-anywhere", dir.path(), &mut out, &mut err), 10);
+        assert!(String::from_utf8_lossy(&err).contains("could not run"));
+        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", dir.path(), "fr", &mut err), 10);
+        // No configuration at all is a missing project, reported before anything is launched.
+        let empty = TempDir::new("cli-patcher-empty");
+        let mut err = Vec::new();
+        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", empty.path(), "", &mut err), 10);
+        assert!(String::from_utf8_lossy(&err).contains("no ncpatcher.yaml"));
     }
 
     #[test]

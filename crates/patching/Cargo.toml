@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-patching"
-description = "Big Star Editor patching layer (stub)"
+description = "Big Star Editor patching layer: the no-shell process runner and the NCPatcher 2.x client"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,24 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+log.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+nix.workspace = true
+
+[dev-dependencies]
+ctrlc.workspace = true
+
+# Re-runs itself as the child fixture, as `patching_tests.cpp` does, so it needs its own `main`.
+[[test]]
+name = "process"
+harness = false
+
+# A stand-in for NCPatcher (port of apps/nsmb-qt/tests/fake_ncpatcher.cpp) for tests that drive the client.
+[[bin]]
+name = "bigstar-fake-ncpatcher"
+path = "src/bin/fake_ncpatcher.rs"
+test = false

@@ -1,12 +1,12 @@
-//! Big Star Editor `patching` layer. Populated by a later phase of docs/rust-port-plan.md.
+//! Big Star Editor `patching` layer: launching external tools without a shell, and the NCPatcher 2.x client.
+//!
+//! Port of `libs/nsmb-patching`. Host-only: it starts processes and reads their files.
 
-/// Crate name, so the stub has something to test.
-pub const NAME: &str = "bigstar-patching";
+mod ncpatcher;
+mod process;
+
+pub use ncpatcher::*;
+pub use process::*;
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn name_is_set() {
-        assert_eq!(super::NAME, "bigstar-patching");
-    }
-}
+mod tests;
