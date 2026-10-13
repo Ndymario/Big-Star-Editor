@@ -249,8 +249,17 @@ enum Prompt {
 
 /// What the dock asks the workspace to open.
 pub enum OpenRequest {
-    Hex { path: String, bytes: Vec<u8> },
-    Editor { path: String, bytes: Vec<u8>, kind: EditorKind },
+    Hex {
+        path: String,
+        bytes: Vec<u8>,
+    },
+    /// `metadata` when the file is NitroFS file 131, which the metadata page reads.
+    Editor {
+        path: String,
+        bytes: Vec<u8>,
+        kind: EditorKind,
+        metadata: bool,
+    },
 }
 
 pub struct FilesDock {
@@ -310,9 +319,14 @@ impl FilesDock {
         }
         let mut opened = Vec::new();
         for (path, bytes) in session.take_file_reads(FileRead::Open) {
-            let kind = classify(&bytes, &path, metadata(&path));
+            let metadata = metadata(&path);
+            let kind = classify(&bytes, &path, metadata);
             self.editors.insert(path.clone(), kind);
-            opened.push(if kind == EditorKind::None { OpenRequest::Hex { path, bytes } } else { OpenRequest::Editor { path, bytes, kind } });
+            opened.push(if kind == EditorKind::None {
+                OpenRequest::Hex { path, bytes }
+            } else {
+                OpenRequest::Editor { path, bytes, kind, metadata }
+            });
         }
         for (path, bytes) in session.take_file_reads(FileRead::Hex) {
             opened.push(OpenRequest::Hex { path, bytes });

@@ -93,7 +93,21 @@ struct OpenProject {
     /// The Filesystem dock's rows, built from the patcher's answer; dropped when files change.
     filesystem: Option<FilesystemView>,
     graphics: Option<ProjectGraphics>,
+    /// Where an edited ROM banner goes, from NCPatcher's configuration; asked with the rest of it.
+    banner: BannerTarget,
     _watcher: Option<ProjectWatcher>,
+}
+
+/// What NCPatcher's configuration says about the ROM banner.
+#[derive(Debug, Clone, Default)]
+enum BannerTarget {
+    /// NCPatcher has not reported the configuration.
+    #[default]
+    Unreported,
+    /// It has, and it names no banner.
+    Unconfigured,
+    /// The variant's banner, or the project's; relative paths are against the project.
+    File(PathBuf),
 }
 
 #[derive(Default)]
@@ -222,6 +236,8 @@ impl Shared {
             Request::WriteFile { path, bytes } => self.write_file(&path, &bytes),
             Request::FileTargets { path } => self.file_targets(&path),
             Request::RemoveFile { path } => self.remove_file(&path),
+            Request::Banner => self.banner(),
+            Request::WriteBanner { bytes } => self.write_banner(&bytes),
         }
     }
 
@@ -373,6 +389,7 @@ impl Shared {
             next_level: 1,
             settings,
             patcher: None,
+            banner: BannerTarget::Unreported,
             filesystem: None,
             graphics: None,
             _watcher: watcher,
@@ -528,6 +545,17 @@ impl Shared {
             client.plan_files(&open.directory, &open.settings.active_variant).map_err(|e| errors.push(e.message)).ok()
         } else {
             None
+        };
+        open.banner = match &config {
+            None => BannerTarget::Unreported,
+            Some(config) => {
+                let variant = config.variants.iter().find(|variant| variant.name == open.settings.active_variant);
+                let file = variant.map(|variant| variant.banner.clone()).filter(|banner| !banner.as_os_str().is_empty());
+                match file.unwrap_or_else(|| config.rom_banner.clone()) {
+                    banner if banner.as_os_str().is_empty() => BannerTarget::Unconfigured,
+                    banner => BannerTarget::File(banner),
+                }
+            }
         };
         open.settings.variants = config.map(|config| config.variants.into_iter().map(|variant| variant.name).collect()).unwrap_or_default();
         // Without NCPatcher, the last build's own record of the modules still says where their trees are.
@@ -922,6 +950,48 @@ impl Shared {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.emit(Event::GraphicsChanged { generation });
         self.log(LogLevel::Info, format!("Moved {path} from module {} to {TRASH_DIR}", entry.module));
+        Ok(Response::Done)
+    }
+
+    /// The configured banner file, or why there is nowhere for an edited banner to go.
+    fn banner_target(&self, open: &mut OpenProject) -> Result<PathBuf> {
+        self.ensure_patcher(open);
+        match &open.banner {
+            BannerTarget::File(file) if file.is_relative() => Ok(open.directory.join(file)),
+            BannerTarget::File(file) => Ok(file.clone()),
+            // `config dump` reports both the project banner and the variant's override, so an empty answer means the
+            // project configures no banner at all. Asking for a file would invent a source no build reads; the fix
+            // belongs in ncpatcher.yaml.
+            BannerTarget::Unconfigured => Err(invalid(
+                "This project configures no rom.banner, so there is nowhere for an edited banner to go. Add one to ncpatcher.yaml and the editor will write to it.",
+            )),
+            BannerTarget::Unreported => {
+                Err(invalid("NCPatcher has not reported this project's configuration yet, so there is nowhere for an edited banner to go."))
+            }
+        }
+    }
+
+    /// The configured banner once it exists, and otherwise the one in the ROM, which is what the game shows today.
+    fn banner(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let target = self.banner_target(open)?;
+        let bytes =
+            if target.is_file() { read_file(&target)? } else { open.rom.as_mut().ok_or_else(|| not_found("no built ROM is open"))?.read_banner()? };
+        let shown = target.strip_prefix(&open.directory).unwrap_or(&target).to_string_lossy().replace('\\', "/");
+        Ok(Response::Banner { bytes, target: shown })
+    }
+
+    fn write_banner(&self, bytes: &[u8]) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let target = self.banner_target(open)?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "Could not create the configured banner directory."))?;
+        }
+        write_file_atomically(&target, bytes)?;
+        drop(state);
+        self.log(LogLevel::Info, format!("Saved ROM banner: {}", target.display()));
         Ok(Response::Done)
     }
 

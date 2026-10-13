@@ -488,6 +488,53 @@ fn a_removed_module_file_goes_to_the_projects_trash() {
     assert!(!project.join(super::host::TRASH_DIR).exists());
 }
 
+/// A host whose NCPatcher is a script printing `config` as `config dump`'s answer.
+#[cfg(unix)]
+fn with_config(label: &str, config: &str) -> (Fixture, HostSession) {
+    use std::os::unix::fs::PermissionsExt;
+    let (fixture, _) = Fixture::with_project(label);
+    let answer = fixture.root.path().join("config.json");
+    write_bytes(&answer, config.as_bytes());
+    let script = fixture.root.path().join("ncpatcher.sh");
+    let text = format!("#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = config ] && exec cat '{}'; done\nexit 3\n", answer.display());
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    (fixture, session)
+}
+
+#[test]
+fn the_banner_needs_a_configured_file_to_go_to() {
+    // Without NCPatcher's configuration there is nowhere for an edit to go, so the banner is not offered.
+    let (_fixture, mut session) = Fixture::with_project("host-banner-none");
+    let error = session.handle(Request::Banner).unwrap_err();
+    assert!(error.message.contains("nowhere for an edited banner to go"), "{}", error.message);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_banner_is_read_from_the_rom_until_the_configured_file_exists() {
+    let config = r#"{"schema":"ncpatcher.config/1","version":2,"rom-banner":"","variants":{}}"#;
+    let (_fixture, mut session) = with_config("host-banner-unconfigured", config);
+    let error = session.handle(Request::Banner).unwrap_err();
+    assert!(error.message.contains("configures no rom.banner"), "{}", error.message);
+
+    let config = r#"{"schema":"ncpatcher.config/1","version":2,"rom-banner":"assets/banner.bin","variants":{}}"#;
+    let (fixture, mut session) = with_config("host-banner", config);
+    let Response::Banner { bytes, target } = session.handle(Request::Banner).unwrap() else { panic!("not a banner") };
+    assert_eq!(target, "assets/banner.bin");
+    assert_eq!(bytes.get(..3), Some(&[1, 0, 0xAB][..]), "the ROM's own banner");
+
+    let mut edited = bytes.clone();
+    edited[0x20] = 0x55;
+    assert_eq!(session.handle(Request::WriteBanner { bytes: edited.clone() }).unwrap(), Response::Done);
+    assert_eq!(std::fs::read(fixture.root.path().join("proj/assets/banner.bin")).unwrap(), edited);
+    let Response::Banner { bytes, .. } = session.handle(Request::Banner).unwrap() else { panic!("not a banner") };
+    assert_eq!(bytes, edited, "the configured file once it exists");
+}
+
 #[test]
 fn download_play_areas_are_read_from_their_archive() {
     let (fixture, mut session) = Fixture::with_project("host-narc");

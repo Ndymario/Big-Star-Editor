@@ -36,6 +36,8 @@ pub struct Tools {
     pub hex: Option<HexEditor>,
     pub finder: Option<Finder>,
     pub events: bool,
+    /// ROM User Metadata was asked for before the filesystem listing that says which file it is had arrived.
+    pub metadata: bool,
 }
 
 /// Bytes as hex, sixteen to a line.
@@ -71,6 +73,19 @@ pub fn import_edit(bytes: &[u8]) -> Result<LevelEdit, String> {
 
 impl Tools {
     /// Takes the bytes a tool asked for, once they arrive.
+    /// Opens NitroFS file 131, the ROM user metadata, once the listing says where it is.
+    pub fn open_metadata(&mut self, session: &mut Session) {
+        if !self.metadata {
+            return;
+        }
+        let Some(listing) = &session.filesystem else { return };
+        self.metadata = false;
+        match listing.entries.iter().find(|entry| entry.id == Some(crate::editors::ROM_USER_METADATA_ID)).map(|entry| entry.path.clone()) {
+            Some(path) => session.read_file(&path, crate::session::FileRead::Open),
+            None => session.report("NitroFS file ID 131 is not present in this ROM.".to_owned()),
+        }
+    }
+
     pub fn take_bytes(&mut self, session: &mut Session, services: &dyn Services) {
         let Some((level, purpose, bytes)) = session.level_bytes.take() else { return };
         let title = session.levels.get(&level).map_or_else(|| "level".to_owned(), |v| v.snapshot.title.clone());
@@ -276,6 +291,16 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dy
     }
     if ui.add_enabled(editing, egui::Button::new("Sprite Events…")).clicked() {
         tools.events = true;
+        ui.close();
+    }
+    ui.separator();
+    if ui.add_enabled(project, egui::Button::new("ROM Banner…")).clicked() {
+        session.request_banner();
+        ui.close();
+    }
+    if ui.add_enabled(project, egui::Button::new("ROM User Metadata…")).clicked() {
+        tools.metadata = true;
+        session.refresh_filesystem_once();
         ui.close();
     }
 }

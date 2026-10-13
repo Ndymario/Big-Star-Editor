@@ -47,6 +47,8 @@ enum Pending {
     FileChange,
     FileTargets(String),
     Settings,
+    Banner,
+    BannerWrite,
 }
 
 /// What a file's bytes were asked for.
@@ -150,6 +152,8 @@ pub struct Session {
     pub file_reads: Vec<(String, FileRead, Vec<u8>)>,
     /// Which variants already hold a module copy of a path, once asked.
     pub file_targets: Option<(String, Vec<String>)>,
+    /// The ROM banner, once asked for: its bytes and the configured file an edit goes to.
+    pub banner: Option<(Vec<u8>, String)>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -194,6 +198,7 @@ impl Session {
             listed_archives: HashSet::new(),
             file_reads: Vec::new(),
             file_targets: None,
+            banner: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -399,6 +404,15 @@ impl Session {
         self.request(Request::RemoveFile { path: path.to_owned() }, Pending::FileChange);
     }
 
+    /// Asks for the ROM banner; it arrives in `banner`.
+    pub fn request_banner(&mut self) {
+        self.request(Request::Banner, Pending::Banner);
+    }
+
+    pub fn write_banner(&mut self, bytes: Vec<u8>) {
+        self.request(Request::WriteBanner { bytes }, Pending::BannerWrite);
+    }
+
     pub fn ask_file_targets(&mut self, path: &str) {
         self.file_targets = None;
         self.request(Request::FileTargets { path: path.to_owned() }, Pending::FileTargets(path.to_owned()));
@@ -564,6 +578,8 @@ impl Session {
             (Pending::ReadFile(purpose), Response::FileBytes { path, bytes }) => self.file_reads.push((path, purpose, bytes)),
             (Pending::FileChange, Response::Done) => self.refresh_filesystem(),
             (Pending::FileTargets(path), Response::FileTargets(holding)) => self.file_targets = Some((path, holding)),
+            (Pending::Banner, Response::Banner { bytes, target }) => self.banner = Some((bytes, target)),
+            (Pending::BannerWrite, Response::Done) => {}
             (Pending::Settings, Response::Settings(settings)) => {
                 self.settings = Some(settings);
                 self.refresh_filesystem();

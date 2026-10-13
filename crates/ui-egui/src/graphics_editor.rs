@@ -39,7 +39,7 @@ pub fn pairing_key(path: &str) -> String {
 }
 
 /// BGR555 to 8-bit channels, the low bits repeating the high ones.
-fn expand(channel: u16) -> u8 {
+pub(crate) fn expand(channel: u16) -> u8 {
     ((channel << 3) | (channel >> 2)) as u8
 }
 
@@ -625,6 +625,95 @@ impl GraphicsDoc {
     }
 }
 
+/// Draws an image zoomed to fit 512 points in whole steps, at most 16, so pixel art stays crisp; a grid every `grid`
+/// pixels when cells are big enough on screen to tell apart. `texture` caches the upload for `version`. Returns the
+/// pixel clicked or dragged over, for painting.
+pub(crate) fn picture(
+    ui: &mut Ui,
+    name: &str,
+    image: &RgbaImage,
+    grid: usize,
+    version: u64,
+    texture: &mut Option<(u64, egui::TextureHandle)>,
+    max_height: f32,
+) -> Option<(usize, usize)> {
+    let longest = image.width.max(image.height).max(1);
+    let zoom = (512 / longest).clamp(1, 16) as f32;
+    if texture.as_ref().is_none_or(|(shown, _)| *shown != version) {
+        let colors = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.pixels);
+        let handle = ui.ctx().load_texture(format!("graphics:{name}"), colors, egui::TextureOptions::NEAREST);
+        *texture = Some((version, handle));
+    }
+    let mut painted = None;
+    egui::ScrollArea::both().id_salt(("picture", name)).max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
+        let size = Vec2::new(image.width as f32, image.height as f32) * zoom;
+        let (rect, response) = ui.allocate_exact_size(size.max(Vec2::splat(1.0)), Sense::click_and_drag());
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "GraphicsCanvas"));
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+        if let Some((_, texture)) = texture {
+            painter.image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
+        }
+        if grid > 0 && grid as f32 * zoom >= 8.0 {
+            let stroke = Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.4));
+            for x in (0..=image.width).step_by(grid) {
+                let sx = rect.left() + x as f32 * zoom;
+                painter.line_segment([Pos2::new(sx, rect.top()), Pos2::new(sx, rect.bottom())], stroke);
+            }
+            for y in (0..=image.height).step_by(grid) {
+                let sy = rect.top() + y as f32 * zoom;
+                painter.line_segment([Pos2::new(rect.left(), sy), Pos2::new(rect.right(), sy)], stroke);
+            }
+        }
+        // Clicking or dragging over a sheet paints the chosen index.
+        if (response.clicked() || response.dragged())
+            && let Some(at) = response.interact_pointer_pos()
+        {
+            let (x, y) = (((at.x - rect.left()) / zoom) as usize, ((at.y - rect.top()) / zoom) as usize);
+            if x < image.width && y < image.height {
+                painted = Some((x, y));
+            }
+        }
+    });
+    painted
+}
+
+/// A palette as swatches to choose the painting index from; when the palette is the file's own, the chosen colour can
+/// be changed, and the new colour is returned.
+pub(crate) fn swatches(ui: &mut Ui, colours: &[[u8; 4]], selected: &mut usize, editable: bool) -> Option<[u8; 3]> {
+    ui.horizontal_wrapped(|ui| {
+        for (index, rgba) in colours.iter().enumerate() {
+            let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *selected == index, format!("Colour {index}")));
+            let [r, g, b, _] = *rgba;
+            ui.painter().rect(
+                rect,
+                2.0,
+                Color32::from_rgb(r, g, b),
+                Stroke::new(if *selected == index { 2.0 } else { 1.0 }, ui.visuals().strong_text_color()),
+                StrokeKind::Inside,
+            );
+            if response.on_hover_text(format!("Index {index}")).clicked() {
+                *selected = index;
+            }
+        }
+    });
+    let mut changed = None;
+    if editable {
+        ui.horizontal(|ui| {
+            ui.label(format!("Colour {}", *selected));
+            if let Some([r, g, b, _]) = colours.get(*selected).copied() {
+                let mut rgb = [r, g, b];
+                if ui.color_edit_button_srgb(&mut rgb).changed() {
+                    changed = Some(rgb);
+                }
+                ui.weak("BGR555 keeps five bits a channel; the colour is rounded to the nearest one.");
+            }
+        });
+    }
+    changed
+}
+
 /// What the person did in the editor that the workspace carries out.
 pub enum GraphicsAction {
     /// Read this sibling as the palette (`true`) or the graphics (`false`).
@@ -737,78 +826,16 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
             ui.end_row();
         }
     });
-    // Zoom to fit 512 points, whole steps, at most 16: pixel art stays crisp.
     if let Some(image) = &rendered.image {
-        let longest = image.width.max(image.height).max(1);
-        let zoom = (512 / longest).clamp(1, 16) as f32;
-        if view.texture.as_ref().is_none_or(|(version, _)| *version != doc.version) {
-            let colors = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.pixels);
-            let handle = ui.ctx().load_texture(format!("graphics:{}", doc.path), colors, egui::TextureOptions::NEAREST);
-            view.texture = Some((doc.version, handle));
+        let height = (ui.available_height() - 130.0).max(120.0);
+        if let Some((x, y)) = picture(ui, &doc.path, image, rendered.grid, doc.version, &mut view.texture, height) {
+            doc.paint(x, y);
         }
-        egui::ScrollArea::both().max_height((ui.available_height() - 130.0).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
-            let size = Vec2::new(image.width as f32, image.height as f32) * zoom;
-            let (rect, response) = ui.allocate_exact_size(size.max(Vec2::splat(1.0)), Sense::click_and_drag());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "GraphicsCanvas"));
-            let painter = ui.painter_at(rect);
-            painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-            if let Some((_, texture)) = &view.texture {
-                painter.image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-            }
-            if rendered.grid > 0 && rendered.grid as f32 * zoom >= 8.0 {
-                let stroke = Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.4));
-                for x in (0..=image.width).step_by(rendered.grid) {
-                    let sx = rect.left() + x as f32 * zoom;
-                    painter.line_segment([Pos2::new(sx, rect.top()), Pos2::new(sx, rect.bottom())], stroke);
-                }
-                for y in (0..=image.height).step_by(rendered.grid) {
-                    let sy = rect.top() + y as f32 * zoom;
-                    painter.line_segment([Pos2::new(rect.left(), sy), Pos2::new(rect.right(), sy)], stroke);
-                }
-            }
-            // Clicking or dragging over a sheet paints the chosen index.
-            if (response.clicked() || response.dragged())
-                && let Some(at) = response.interact_pointer_pos()
-            {
-                let (x, y) = (((at.x - rect.left()) / zoom) as usize, ((at.y - rect.top()) / zoom) as usize);
-                if x < image.width && y < image.height {
-                    doc.paint(x, y);
-                }
-            }
-        });
     }
     if !rendered.swatches.is_empty() {
         ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            for (index, rgba) in rendered.swatches.iter().enumerate() {
-                let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
-                response.widget_info(|| {
-                    egui::WidgetInfo::selected(egui::WidgetType::Button, true, doc.selected_color == index, format!("Colour {index}"))
-                });
-                let [r, g, b, _] = *rgba;
-                ui.painter().rect(
-                    rect,
-                    2.0,
-                    Color32::from_rgb(r, g, b),
-                    Stroke::new(if doc.selected_color == index { 2.0 } else { 1.0 }, ui.visuals().strong_text_color()),
-                    StrokeKind::Inside,
-                );
-                if response.on_hover_text(format!("Index {index}")).clicked() {
-                    doc.selected_color = index;
-                }
-            }
-        });
-        if rendered.swatches_editable {
-            ui.horizontal(|ui| {
-                ui.label(format!("Colour {}", doc.selected_color));
-                if let Some([r, g, b, _]) = rendered.swatches.get(doc.selected_color).copied() {
-                    let mut rgb = [r, g, b];
-                    if ui.color_edit_button_srgb(&mut rgb).changed() {
-                        doc.set_color(doc.selected_color, rgb);
-                    }
-                    ui.weak("BGR555 keeps five bits a channel; the colour is rounded to the nearest one.");
-                }
-            });
+        if let Some(rgb) = swatches(ui, &rendered.swatches, &mut doc.selected_color, rendered.swatches_editable) {
+            doc.set_color(doc.selected_color, rgb);
         }
     }
     actions

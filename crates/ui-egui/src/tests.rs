@@ -1093,7 +1093,7 @@ fn open_documents_and_their_cameras_are_remembered_per_host_and_project() {
 #[test]
 fn the_hex_editor_replaces_the_level_as_one_step() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
-    harness.get_by_label("Level").click();
+    harness.get_by_label("Tools").click();
     harness.run();
     harness.get_by_label("Hex Editor…").click();
     harness.run();
@@ -1142,7 +1142,7 @@ fn a_level_exports_and_imports_as_nml() {
     // Importing it into 1-1 makes 1-1 hold 1-1 Area 2.
     open_document(&mut harness, "A01_1");
     shelf.lock().unwrap().to_open.push_back(("1-1 Area 2.nml".to_owned(), bytes));
-    harness.get_by_label("Level").click();
+    harness.get_by_label("Tools").click();
     harness.run();
     harness.get_by_label("Import Level (.nml)…").click();
     harness.run();
@@ -1153,7 +1153,7 @@ fn a_level_exports_and_imports_as_nml() {
 #[test]
 fn the_finder_opens_the_level_and_selects_what_it_found() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
-    harness.get_by_label("Level").click();
+    harness.get_by_label("Tools").click();
     harness.run();
     harness.get_by_label("Find Sprite…").click();
     harness.run();
@@ -1294,7 +1294,7 @@ fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
     harness.run();
     harness.get_by_label("Extract").click();
     harness.run();
-    assert_eq!(shelf.lock().unwrap().saved.pop(), Some(("msg.bmg".to_owned(), b"MESGbmg1".to_vec())));
+    assert_eq!(shelf.lock().unwrap().saved.pop(), Some(("msg.bmg".to_owned(), crate::demo::demo_messages())));
 
     harness.get_by_label("Hex edit").click();
     harness.run();
@@ -1372,4 +1372,113 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     harness.run();
     let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
     assert!(listing.entries.iter().any(|e| e.path == "BG_ncg/demo_ncg.bin" && e.from_module));
+}
+
+/// The bytes the demo host holds for `path` now, read back the way Extract reads them.
+fn file_bytes(harness: &mut Harness<'static, BigStarApp>, shelf: &std::sync::Arc<std::sync::Mutex<crate::FileShelf>>, path: &str) -> Vec<u8> {
+    harness.state_mut().session_mut().unwrap().read_file(path, crate::session::FileRead::Extract);
+    harness.run();
+    shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes).unwrap()
+}
+
+#[test]
+fn a_message_file_opens_in_the_message_editor_and_saves_its_edits() {
+    let (mut harness, shelf) = filesystem();
+    harness.state_mut().files.expanded.insert("message".to_owned());
+    harness.run();
+    harness.get_by_label("📝 msg.bmg").click();
+    harness.run();
+    harness.get_by_label_contains("Opens in: Messages");
+    harness.get_by_label("Open").click();
+    harness.run();
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    assert!(matches!(harness.state().workspace.files[&key].view, crate::workspace::FileView::Messages { .. }));
+    harness.get_by_label_contains("3 message(s) · ");
+    // The list previews plain text; the editor holds the escape.
+    harness.get_by_label(" Luigi has appeared!");
+    harness.get_by_label("Game over").click();
+    harness.run();
+    harness.get_by_label_contains("9 character(s) · 1 line(s) · 0 escape sequence(s)");
+
+    // Added at the end with the next free ID, then saved into the module.
+    harness.get_by_label("Add").click();
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    let saved = bigstar_formats::parse_bmg(&file_bytes(&mut harness, &shelf, "message/msg.bmg")).unwrap();
+    assert_eq!(saved.messages.len(), 4);
+    assert_eq!(saved.messages[3].id, Some(43));
+    assert_eq!(saved.messages[0], bigstar_formats::parse_bmg(&crate::demo::demo_messages()).unwrap().messages[0]);
+}
+
+#[test]
+fn a_touch_layout_and_the_rom_metadata_open_as_pages_of_the_graphics_editor() {
+    let (mut harness, shelf) = filesystem();
+    harness.state_mut().files.expanded.insert("uiStudio".to_owned());
+    harness.run();
+    harness.get_by_label("👆 demo.bnbl").click();
+    harness.run();
+    harness.get_by_label_contains("Opens in: Graphics");
+    harness.get_by_label("Open").click();
+    harness.run();
+    harness.get_by_label_contains("JNBL touch rectangles.");
+    harness.get_by_label("LayoutPreview");
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    let crate::workspace::FileView::Resource { doc, .. } = &harness.state().workspace.files[&key].view else { panic!("not a resource page") };
+    assert_eq!(doc.rows, [["16", "32", "0", "0", "64", "48"], ["128", "144", "0", "0", "96", "32"]]);
+    harness.get_by_label("Add").click();
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    assert_eq!(bigstar_formats::parse_bnbl(&file_bytes(&mut harness, &shelf, "uiStudio/demo.bnbl")).unwrap().entries.len(), 3);
+
+    // File 131 opens as the metadata page from the Tools menu, whatever its name says.
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("ROM User Metadata…").click();
+    harness.run();
+    harness.run();
+    harness.get_by_label_contains("Per-ROM names and object notes");
+    let doc = harness.state().workspace.files.values().find(|doc| doc.path == "NSMBeUD").unwrap();
+    let crate::workspace::FileView::Resource { doc, .. } = &doc.view else { panic!("not a resource page") };
+    assert_eq!(doc.sections.len(), 2);
+    assert_eq!(doc.sections[1].entries, [("3".to_owned(), "Pipe".to_owned())]);
+}
+
+#[test]
+fn the_rom_banner_opens_from_the_tools_menu_and_saves_to_the_configured_file() {
+    let (mut harness, _) = filesystem();
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("ROM Banner…").click();
+    harness.run();
+    harness.run();
+    let (key, doc) = harness.state().workspace.files.iter().next().map(|(k, d)| (*k, d)).unwrap();
+    assert_eq!(doc.destination, crate::workspace::Destination::Banner);
+    assert_eq!(doc.path, "assets/banner.bin");
+    harness.get_by_label("GraphicsCanvas");
+    harness.get_by_label("Titles").click();
+    harness.run();
+    if let crate::workspace::FileView::Resource { doc, .. } = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
+        assert_eq!(doc.titles[1], "Big Star Demo\nNintendo");
+        doc.titles[1] = "Edited".to_owned();
+        doc.dirty = true;
+    }
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    // Opened again, the banner is what was saved.
+    harness.state_mut().workspace.files.clear();
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("ROM Banner…").click();
+    harness.run();
+    harness.run();
+    let doc = harness.state().workspace.files.values().next().unwrap();
+    let crate::workspace::FileView::Resource { doc, .. } = &doc.view else { panic!("not a resource page") };
+    assert_eq!(doc.titles[1], "Edited");
+    assert!(!doc.dirty);
 }

@@ -273,14 +273,18 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
+        self.tools.open_metadata(session);
+        if let Some((bytes, target)) = session.banner.take() {
+            self.workspace.open_banner(&bytes, &target);
+        }
         for request in self.files.follow(session, &*self.services) {
             let reads = match request {
-                OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None, None),
-                OpenRequest::Editor { path, bytes, kind } => {
+                OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None, None, false),
+                OpenRequest::Editor { path, bytes, kind, metadata } => {
                     // What the file was paired with last time is paired again.
                     let key = crate::graphics_editor::pairing_key(&path);
                     let pairing = self.services.load(&key).and_then(|text| serde_json::from_str(&text).ok());
-                    self.workspace.open_file(&path, &bytes, kind, pairing)
+                    self.workspace.open_file(&path, &bytes, kind, pairing, metadata)
                 }
             };
             for companion in reads {
@@ -438,7 +442,7 @@ impl BigStarApp {
                         ui.weak(title);
                     }
                     ui.separator();
-                    ui.menu_button("Level", |ui| tools::menu(ui, tools, session, services));
+                    ui.menu_button("Tools", |ui| tools::menu(ui, tools, session, services));
                     ui.menu_button("View", |ui| {
                         if ui.button("Preview").clicked() {
                             workspace.show_preview_tab();

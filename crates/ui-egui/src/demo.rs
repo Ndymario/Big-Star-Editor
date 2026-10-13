@@ -59,6 +59,8 @@ pub struct DemoConnection {
     recoverable: Vec<String>,
     /// The demo ROM's other files, and what a module has written over them, by ROM address.
     files: BTreeMap<String, DemoFile>,
+    /// The ROM banner, as the configured banner file would hold it.
+    banner: Vec<u8>,
 }
 
 struct DemoFile {
@@ -76,7 +78,10 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
     let mut files = BTreeMap::new();
     files.insert("00DUMMY".to_owned(), file(0, vec![0; 16]));
     files.insert("BG_ncl/d_2d_A_J_jyotyu_ncl.bin".to_owned(), file(30, [b"RLCN\xff\xfe".to_vec(), vec![0; 26]].concat()));
-    files.insert("message/msg.bmg".to_owned(), file(40, b"MESGbmg1".to_vec()));
+    files.insert("message/msg.bmg".to_owned(), file(40, demo_messages()));
+    // A touch layout of two rectangles, and the ROM's user metadata, which only file 131 is.
+    files.insert("uiStudio/demo.bnbl".to_owned(), file(60, b"JNBL\0\0\x02\0\x10\0\x20\0\x40\x30\x80\0\x90\0\x60\x20".to_vec()));
+    files.insert("NSMBeUD".to_owned(), file(131, b"[Music]\n0=Overworld\n1=Underground\n[12]\n3=Pipe\n".to_vec()));
     // A headerless tile sheet and the palette beside it: two 4bpp tiles of index 2, and sixteen colours.
     files.insert("BG_ncg/demo_ncg.bin".to_owned(), file(20, vec![0x22; 64]));
     // Colour 1 red, colour 2 green.
@@ -86,6 +91,65 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
     files.insert("dat/demo.narc!a.bin".to_owned(), member(0, vec![1, 2, 3, 4]));
     files.insert("dat/demo.narc!b.bin".to_owned(), member(1, vec![5, 6]));
     files
+}
+
+/// The demo's message file: two messages with MID1 IDs and four attribute bytes each, one opening with an escape.
+pub(crate) fn demo_messages() -> Vec<u8> {
+    use bigstar_formats::{Bmg, BmgMessage, BmgPart, write_bmg};
+    let bmg = Bmg {
+        attribute_size: 4,
+        has_mid1: true,
+        messages: vec![
+            BmgMessage {
+                parts: vec![BmgPart::escape(255, vec![0, 0, 1, 0]), BmgPart::text(" Luigi has appeared!")],
+                attributes: vec![1, 0, 0, 0],
+                id: Some(40),
+            },
+            BmgMessage { parts: vec![BmgPart::text("Welcome!\nPress A to start.")], attributes: vec![2, 0, 0, 0], id: Some(41) },
+            BmgMessage { parts: vec![BmgPart::text("Game over")], attributes: vec![0, 0, 0, 0], id: Some(42) },
+        ],
+        ..Bmg::default()
+    };
+    write_bmg(&bmg).unwrap_or_default()
+}
+
+/// A version 1 banner: a round 32×32 icon in three colours and six titles.
+fn demo_banner() -> Vec<u8> {
+    let mut banner = vec![0u8; 0x840];
+    if let Some(version) = banner.get_mut(0..2) {
+        version.copy_from_slice(&1u16.to_le_bytes());
+    }
+    for y in 0..32usize {
+        for x in 0..32usize {
+            let distance = (x as i32 * 2 - 31).pow(2) + (y as i32 * 2 - 31).pow(2);
+            let index: u8 = if distance < 22 * 22 {
+                1
+            } else if distance < 28 * 28 {
+                2
+            } else {
+                0
+            };
+            let pixel = ((y / 8) * 4 + x / 8) * 64 + (y % 8) * 8 + x % 8;
+            if let Some(byte) = banner.get_mut(0x20 + pixel / 2) {
+                *byte |= index << ((pixel & 1) * 4);
+            }
+        }
+    }
+    for (i, colour) in [0x7fffu16, 0x027f, 0x001f].into_iter().enumerate() {
+        put_u16(&mut banner, 0x220 + i * 2, colour);
+    }
+    for language in 0..6 {
+        for (i, unit) in "Big Star Demo\nNintendo".encode_utf16().enumerate() {
+            put_u16(&mut banner, 0x240 + language * 0x100 + i * 2, unit);
+        }
+    }
+    banner
+}
+
+fn put_u16(data: &mut [u8], offset: usize, value: u16) {
+    if let Some(target) = data.get_mut(offset..offset + 2) {
+        target.copy_from_slice(&value.to_le_bytes());
+    }
 }
 
 fn put_u32(data: &mut [u8], offset: usize, value: u32) {
@@ -337,6 +401,7 @@ impl DemoConnection {
             textures: HashMap::new(),
             recoverable: Vec::new(),
             files: demo_files(),
+            banner: demo_banner(),
         };
         connection.rebuild_textures();
         connection
@@ -440,6 +505,8 @@ impl DemoConnection {
             FileIcon::Archive
         } else if path.ends_with(".bmg") {
             FileIcon::Text
+        } else if path.ends_with(".bnbl") {
+            FileIcon::TouchHitbox
         } else if path.contains("ncl") {
             FileIcon::Palette
         } else if path.contains("ncg") {
@@ -740,6 +807,11 @@ impl DemoConnection {
                 }
                 _ => Err(Error::new(ErrorCode::InvalidArgument, "only a file a module supplies can be removed")),
             },
+            Request::Banner => Ok(Response::Banner { bytes: self.banner.clone(), target: "assets/banner.bin".to_owned() }),
+            Request::WriteBanner { bytes } => {
+                self.banner = bytes;
+                Ok(Response::Done)
+            }
             Request::GetTextures { ids } => Ok(Response::Textures(ids.iter().filter_map(|id| self.textures.get(id).cloned()).collect())),
             _ => Err(Error::new(ErrorCode::Unsupported, "the demo host does not do that")),
         }

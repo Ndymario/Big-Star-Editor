@@ -1,9 +1,11 @@
 //! One entry point for "open this file in whichever editor understands it", so nothing asks the person what kind of
 //! resource they are about to edit; and the hex document every file can fall back to. A port of `FileEditors`.
 
-use bigstar_formats::{
-    UiResourceKind, compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, identify_ui_resource, is_bmg, parse_bmg, parse_rom_user_metadata,
-};
+use bigstar_formats::{compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, is_bmg};
+
+use crate::graphics_editor::GraphicsDoc;
+use crate::message_editor::MessageDoc;
+use crate::resource_editor::ResourceDoc;
 
 /// NSMB keeps its ROM user metadata in NitroFS file 131, which the metadata reader understands rather than uiStudio's.
 pub const ROM_USER_METADATA_ID: i64 = 131;
@@ -43,10 +45,15 @@ pub fn unwrap_with(bytes: &[u8]) -> (u8, Vec<u8>) {
 
 /// `edited` wrapped the way `original` was.
 pub fn rewrap(original: &[u8], edited: Vec<u8>) -> Result<Vec<u8>, String> {
-    match unwrap_with(original).0 {
-        0x10 => compress_nitro_lz10(&edited).map_err(|e| e.message),
-        0x11 => compress_nitro_lz11(&edited).map_err(|e| e.message),
-        _ => Ok(edited),
+    wrap(unwrap_with(original).0, edited)
+}
+
+/// `body` in the wrapper `unwrap_with` reported.
+pub fn wrap(compression: u8, body: Vec<u8>) -> Result<Vec<u8>, String> {
+    match compression {
+        0x10 => compress_nitro_lz10(&body).map_err(|e| e.message),
+        0x11 => compress_nitro_lz11(&body).map_err(|e| e.message),
+        _ => Ok(body),
     }
 }
 
@@ -54,14 +61,11 @@ pub fn rewrap(original: &[u8], edited: Vec<u8>) -> Result<Vec<u8>, String> {
 /// the graphics editor also accepts raw files on a name hint alone, so it goes last.
 pub fn classify(bytes: &[u8], path: &str, rom_user_metadata: bool) -> EditorKind {
     let plain = unwrap(bytes);
-    if is_bmg(&plain, path) && parse_bmg(&plain).is_ok() {
+    if is_bmg(&plain, path) && MessageDoc::supports(&plain) {
         return EditorKind::Messages;
     }
-    if rom_user_metadata && parse_rom_user_metadata(&plain).is_ok() {
-        return EditorKind::Graphics;
-    }
-    // The uiStudio resources are pages of the same graphics editor.
-    if identify_ui_resource(&plain, path) != UiResourceKind::Unknown || crate::graphics_editor::GraphicsDoc::supports(bytes, path) {
+    // The uiStudio resources, the banner and the ROM metadata are pages of the same graphics editor.
+    if ResourceDoc::supports(&plain, path, rom_user_metadata) || GraphicsDoc::supports(bytes, path) {
         return EditorKind::Graphics;
     }
     EditorKind::None
@@ -89,6 +93,24 @@ mod tests {
         assert_eq!(classify(b"hello", "notes.txt", false), EditorKind::None);
         assert_eq!(classify(b"MESGbmg1", "x.bmg", false), EditorKind::None, "a magic that does not parse claims nothing");
         assert_eq!(editor_name(EditorKind::Graphics), "Graphics");
+    }
+
+    #[test]
+    fn opening_a_file_chooses_one_editor_through_any_lz_wrapper() {
+        let bmg = crate::message_editor::tests::sample_bmg();
+        assert_eq!(classify(&bmg, "script/course.bmg", false), EditorKind::Messages);
+        // A uiStudio layout is a page of the one graphics editor, not an editor of its own.
+        assert_eq!(classify(b"JNBL\0\0\x01\0\x01\0\x02\0\x10\x0c", "uiStudio/a.bnbl", false), EditorKind::Graphics);
+        assert_eq!(classify(&[0; 64], "BG_ncg/a_ncg.bin", false), EditorKind::Graphics);
+        assert_eq!(classify(b"nothing here at all", "notes.txt", false), EditorKind::None);
+        // ROM metadata is only metadata as file 131.
+        assert_eq!(classify(b"[Music]\n0=Overworld\n", "NSMBeUD", true), EditorKind::Graphics);
+        assert_eq!(classify(b"[Music]\n0=Overworld\n", "NSMBeUD", false), EditorKind::None);
+        // Compression is the dispatcher's business: a wrapped file reaches the same editor as the plain one.
+        let compressed = compress_nitro_lz10(&bmg).unwrap();
+        assert_eq!(classify(&compressed, "script/course.bmg", false), EditorKind::Messages);
+        assert_eq!(wrap(0x10, bmg.clone()).unwrap(), compressed);
+        assert_eq!(wrap(0, bmg.clone()).unwrap(), bmg);
     }
 
     #[test]

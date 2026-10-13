@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 pub type RequestId = u64;
 
@@ -142,6 +142,14 @@ pub enum Request {
     RemoveFile {
         path: String,
     },
+    /// The ROM banner as the next build will use it: the configured banner file once it exists, and otherwise the one
+    /// in the ROM.
+    Banner,
+    /// Writes the configured banner file.
+    WriteBanner {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
@@ -220,6 +228,12 @@ pub enum Response {
         bytes: Vec<u8>,
     },
     FileTargets(Vec<String>),
+    /// The banner's bytes, and the configured file an edit goes to, relative to the project where it is inside it.
+    Banner {
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+        target: String,
+    },
     Done,
 }
 

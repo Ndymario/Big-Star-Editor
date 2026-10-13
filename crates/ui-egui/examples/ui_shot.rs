@@ -103,7 +103,30 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     for _ in 0..3 {
         harness.step();
     }
-    shot(&mut harness, dir, "remote-graphics-8bpp.png")
+    shot(&mut harness, dir, "remote-graphics-8bpp.png")?;
+    // The message editor, a touch layout, a JNCD's texture and an LZ-wrapped ENPG from the ROM.
+    for (path, name) in [
+        ("script/course.bmg", "remote-messages.png"),
+        ("uiStudio/UI_O_menu_select_d.bnbl", "remote-bnbl.png"),
+        ("uiStudio/UI_O_menu_select_d.bncl", "remote-bncl.png"),
+        ("uiStudio/UI_O_1P_course_select_d.nce.bncd", "remote-bncd.png"),
+        ("demo/staffroll_cover.enpg", "remote-enpg.png"),
+    ] {
+        if let Some(session) = harness.state_mut().session_mut() {
+            session.read_file(path, bigstar_ui_egui::FileRead::Open);
+        }
+        until(&mut harness, &|app| app.has_document(path));
+        if name == "remote-bncd.png"
+            && let Some(tab) = harness.query_all_by_label("Texture").last()
+        {
+            tab.click();
+        }
+        for _ in 0..3 {
+            harness.step();
+        }
+        shot(&mut harness, dir, name)?;
+    }
+    Ok(())
 }
 
 fn main() -> Result<(), String> {
@@ -158,5 +181,23 @@ fn main() -> Result<(), String> {
     if let Some(node) = harness.query_by_label("Level Data") {
         node.click();
     }
-    shot(&mut harness, &dir, "level-data.png")
+    shot(&mut harness, &dir, "level-data.png")?;
+    // The message editor, the uiStudio and metadata pages and the banner, each a document.
+    for (path, name) in [("message/msg.bmg", "messages.png"), ("uiStudio/demo.bnbl", "resource-bnbl.png"), ("NSMBeUD", "metadata.png")] {
+        if let Some(session) = harness.state_mut().session_mut() {
+            session.read_file(path, bigstar_ui_egui::FileRead::Open);
+        }
+        harness.run();
+        harness.run();
+        shot(&mut harness, &dir, name)?;
+    }
+    if let Some(session) = harness.state_mut().session_mut() {
+        session.request_banner();
+    }
+    harness.run();
+    shot(&mut harness, &dir, "banner.png")?;
+    if let Some(tab) = harness.query_by_label("Titles") {
+        tab.click();
+    }
+    shot(&mut harness, &dir, "banner-titles.png")
 }

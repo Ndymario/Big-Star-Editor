@@ -14,6 +14,8 @@ use crate::canvas::{self, TexturePool};
 use crate::editors::EditorKind;
 use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing, pairing_key};
 use crate::level_view::{Item, Kind};
+use crate::message_editor::{MessageAction, MessageDoc, MessageView};
+use crate::resource_editor::{ResourceDoc, ResourceView};
 use crate::services::Services;
 use crate::session::FileRead;
 use crate::session::Session;
@@ -35,6 +37,16 @@ pub struct FileDoc {
     pub view: FileView,
     /// Companion files asked for and not arrived: (path, as the palette rather than the graphics).
     pub waiting: Vec<(String, bool)>,
+    pub destination: Destination,
+}
+
+/// Where a document's edits are saved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Destination {
+    /// The module that supplies the file, or the active one.
+    Filesystem,
+    /// The banner file NCPatcher's configuration names.
+    Banner,
 }
 
 pub enum FileView {
@@ -44,6 +56,30 @@ pub enum FileView {
         saved: String,
     },
     Graphics(Box<GraphicsDoc>, GraphicsView),
+    /// A BMG; `compression` is the LZ wrapper it came in, put back on save.
+    Messages {
+        doc: Box<MessageDoc>,
+        view: MessageView,
+        compression: u8,
+    },
+    /// A uiStudio resource, the banner or the ROM metadata: pages of the graphics editor.
+    Resource {
+        doc: Box<ResourceDoc>,
+        view: ResourceView,
+        compression: u8,
+    },
+}
+
+impl FileView {
+    /// What the tab calls the editor.
+    pub fn editor(&self) -> &'static str {
+        match self {
+            FileView::Hex { .. } => "Hex",
+            FileView::Graphics(..) => "Graphics",
+            FileView::Messages { .. } => "Messages",
+            FileView::Resource { doc, .. } => doc.title(),
+        }
+    }
 }
 
 impl FileDoc {
@@ -51,6 +87,8 @@ impl FileDoc {
         match &self.view {
             FileView::Hex { text, saved } => text != saved,
             FileView::Graphics(doc, _) => doc.dirty,
+            FileView::Messages { doc, .. } => doc.dirty,
+            FileView::Resource { doc, .. } => doc.dirty,
         }
     }
 
@@ -177,34 +215,74 @@ impl Workspace {
     }
 
     /// Opens a file's bytes as a document, in its editor when it has one and as hex otherwise, or brings forward the one
-    /// already open on that path. `pairing` is what the person paired it with last time. Returns the companion files to
-    /// read.
-    pub fn open_file(&mut self, path: &str, bytes: &[u8], kind: EditorKind, pairing: Option<Pairing>) -> Vec<String> {
-        let existing = self.files.iter().find(|(_, doc)| doc.path == path).map(|(key, _)| *key);
+    /// already open on that path. `pairing` is what the person paired it with last time; `metadata` says the file is
+    /// NitroFS file 131, the ROM user metadata. Returns the companion files to read.
+    pub fn open_file(&mut self, path: &str, bytes: &[u8], kind: EditorKind, pairing: Option<Pairing>, metadata: bool) -> Vec<String> {
+        let existing = self.files.iter().find(|(_, doc)| doc.path == path && doc.destination == Destination::Filesystem).map(|(key, _)| *key);
         let mut reads = Vec::new();
-        let key = existing.unwrap_or_else(|| {
-            let key = self.next_file;
-            self.next_file += 1;
-            let graphics = (kind == EditorKind::Graphics).then(|| GraphicsDoc::open(path, bytes)).filter(|doc| doc.error.is_none());
-            let mut waiting = Vec::new();
-            let view = match graphics {
-                Some(mut doc) => {
-                    if let Some(pairing) = pairing {
-                        doc.set_width(pairing.width);
-                        waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, true)));
-                        waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, false)));
-                        reads.extend(waiting.iter().map(|(p, _)| p.clone()));
+        let key = match existing {
+            Some(key) => key,
+            None => {
+                let mut waiting = Vec::new();
+                let (compression, plain) = crate::editors::unwrap_with(bytes);
+                let view = match kind {
+                    EditorKind::Messages if MessageDoc::supports(&plain) => {
+                        FileView::Messages { doc: Box::new(MessageDoc::open(path, &plain)), view: MessageView::default(), compression }
                     }
-                    FileView::Graphics(Box::new(doc), GraphicsView::default())
-                }
-                None => {
-                    let text = crate::editors::hex_text(bytes);
-                    FileView::Hex { saved: text.clone(), text }
-                }
-            };
-            self.files.insert(key, FileDoc { path: path.to_owned(), kind, view, waiting });
-            key
+                    // The uiStudio resources and the ROM metadata are pages of the graphics editor; only when none of
+                    // them claims the file does it go down the NNS G2D path.
+                    EditorKind::Graphics if ResourceDoc::supports(&plain, path, metadata) => {
+                        FileView::Resource { doc: Box::new(ResourceDoc::open(path, &plain, metadata)), view: ResourceView::default(), compression }
+                    }
+                    EditorKind::Graphics if GraphicsDoc::supports(bytes, path) => {
+                        let mut doc = GraphicsDoc::open(path, bytes);
+                        if let Some(pairing) = pairing {
+                            doc.set_width(pairing.width);
+                            waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, true)));
+                            waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, false)));
+                            reads.extend(waiting.iter().map(|(p, _)| p.clone()));
+                        }
+                        FileView::Graphics(Box::new(doc), GraphicsView::default())
+                    }
+                    _ => {
+                        let text = crate::editors::hex_text(bytes);
+                        FileView::Hex { saved: text.clone(), text }
+                    }
+                };
+                self.insert_file(FileDoc { path: path.to_owned(), kind, view, waiting, destination: Destination::Filesystem })
+            }
+        };
+        self.raise_file(key);
+        reads
+    }
+
+    /// Opens the ROM banner in the banner page, saved to `target`, or brings forward the one already open.
+    pub fn open_banner(&mut self, bytes: &[u8], target: &str) {
+        let existing = self.files.iter().find(|(_, doc)| doc.destination == Destination::Banner).map(|(key, _)| *key);
+        let key = existing.unwrap_or_else(|| {
+            // The name is what tells the banner apart from any other file.
+            let mut doc = ResourceDoc::open("banner.bin", bytes, false);
+            doc.path = target.to_owned();
+            let view = FileView::Resource { doc: Box::new(doc), view: ResourceView::default(), compression: 0 };
+            self.insert_file(FileDoc {
+                path: target.to_owned(),
+                kind: EditorKind::Graphics,
+                view,
+                waiting: Vec::new(),
+                destination: Destination::Banner,
+            })
         });
+        self.raise_file(key);
+    }
+
+    fn insert_file(&mut self, doc: FileDoc) -> u64 {
+        let key = self.next_file;
+        self.next_file += 1;
+        self.files.insert(key, doc);
+        key
+    }
+
+    fn raise_file(&mut self, key: u64) {
         let tab = DocTab::File(key);
         if self.dock.find_tab(&tab).is_none() {
             self.dock.push_to_first_leaf(tab);
@@ -213,7 +291,6 @@ impl Workspace {
             let _ = self.dock.set_active_tab(path);
             self.dock.set_focused_node_and_surface(path.node_path());
         }
-        reads
     }
 
     /// Hands companion files that arrived to the documents waiting for them.
@@ -538,7 +615,7 @@ impl TabViewer for Viewer<'_, '_> {
                 Some(doc) => {
                     let name = doc.path.rsplit(['/', '!']).next().unwrap_or(&doc.path);
                     let dirty = if doc.dirty() { " •" } else { "" };
-                    let editor = if matches!(doc.view, FileView::Graphics(..)) { "Graphics" } else { "Hex" };
+                    let editor = if doc.destination == Destination::Banner { "Banner" } else { doc.view.editor() };
                     format!("{editor} — {name}{dirty}").into()
                 }
                 None => "…".into(),
@@ -612,9 +689,38 @@ fn siblings(session: &Session, path: &str) -> Vec<String> {
 
 /// A file in its editor. Saving writes it into the module that supplies the file, or the active one.
 fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, doc: &mut FileDoc) {
-    let FileDoc { path, kind, view, waiting } = doc;
+    let FileDoc { path, kind, view, waiting, destination } = doc;
+    let save = |session: &mut Session, compression: u8, edited: Result<Vec<u8>, String>| {
+        match edited.and_then(|bytes| crate::editors::wrap(compression, bytes)) {
+            Ok(bytes) if *destination == Destination::Banner => session.write_banner(bytes),
+            Ok(bytes) => session.write_file(path, bytes),
+            Err(error) => {
+                session.report(error);
+                return false;
+            }
+        }
+        true
+    };
     let (text, saved) = match view {
         FileView::Hex { text, saved } => (text, saved),
+        FileView::Messages { doc, view, compression } => {
+            for action in crate::message_editor::show(ui, doc, view, services) {
+                match action {
+                    MessageAction::Save => {
+                        if save(session, *compression, doc.output()) {
+                            doc.dirty = false;
+                        }
+                    }
+                }
+            }
+            return;
+        }
+        FileView::Resource { doc, view, compression } => {
+            if crate::resource_editor::show(ui, doc, view) && save(session, *compression, doc.output()) {
+                doc.dirty = false;
+            }
+            return;
+        }
         FileView::Graphics(graphics, state) => {
             let siblings = siblings(session, path);
             for action in crate::graphics_editor::show(ui, graphics, state, &siblings) {

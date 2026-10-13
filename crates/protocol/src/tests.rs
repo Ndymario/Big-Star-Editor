@@ -133,6 +133,8 @@ fn graphics_messages_survive_the_wire() {
         Request::WriteFile { path: "z_new/x".into(), bytes: vec![1, 2] },
         Request::FileTargets { path: "z_new/x".into() },
         Request::RemoveFile { path: "z_new/x".into() },
+        Request::Banner,
+        Request::WriteBanner { bytes: vec![1, 0, 0xff] },
     ] {
         client_round_trip(ClientFrame::Request { id: 16, request });
     }
@@ -157,6 +159,7 @@ fn graphics_messages_survive_the_wire() {
     server_round_trip(ServerFrame::Response { id: 11, result: Ok(Response::Files(vec![entry])) });
     server_round_trip(ServerFrame::Response { id: 12, result: Ok(Response::FileBytes { path: "x".into(), bytes: vec![0; 64] }) });
     server_round_trip(ServerFrame::Response { id: 13, result: Ok(Response::FileTargets(vec![String::new(), "en".into()])) });
+    server_round_trip(ServerFrame::Response { id: 14, result: Ok(Response::Banner { bytes: vec![3, 1, 0x20], target: "assets/banner.bin".into() }) });
     let glue = bigstar_formats::GlueBlock { flags: vec![9], values: Vec::new() };
     let edit = LevelEdit::SetGlue { glue, name: "Edit level data".into() };
     client_round_trip(ClientFrame::Request { id: 13, request: Request::EditLevel { level: 1, base_revision: 2, edit } });
