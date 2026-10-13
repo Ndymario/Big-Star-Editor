@@ -1,6 +1,6 @@
 [package]
 name = "bigstar"
-description = "bigstar (stub)"
+description = "Big Star Editor desktop app: an embedded host, or a connection to a remote one"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,23 @@ publish = false
 [lints]
 workspace = true
 
-[dependencies]
-
 [[bin]]
 name = "bigstar"
 path = "src/main.rs"
+
+[dependencies]
+bigstar-client.workspace = true
+bigstar-host.workspace = true
+bigstar-ui-egui.workspace = true
+egui.workspace = true
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+log.workspace = true
+rfd.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+bigstar-formats.workspace = true
+bigstar-level.workspace = true
+bigstar-project = { workspace = true, features = ["test-support"] }
+bigstar-protocol.workspace = true
+egui_kittest = { workspace = true, features = ["wgpu"] }

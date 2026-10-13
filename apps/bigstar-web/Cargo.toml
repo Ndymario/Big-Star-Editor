@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-web"
-description = "bigstar-web (stub)"
+description = "Big Star Editor in the browser: the frontend, connected to a remote host"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,8 +9,18 @@ publish = false
 [lints]
 workspace = true
 
-[dependencies]
-
 [[bin]]
 name = "bigstar-web"
 path = "src/main.rs"
+
+[dependencies]
+bigstar-ui-egui.workspace = true
+egui.workspace = true
+log.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# `wgpu` brings WebGPU with the WebGL2 fallback.
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "Location", "Storage"] }

@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-ui-egui"
-description = "Big Star Editor ui-egui layer (stub)"
+description = "Big Star Editor egui frontend; swappable: nothing below depends on it"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,3 +10,15 @@ publish = false
 workspace = true
 
 [dependencies]
+bigstar-core.workspace = true
+bigstar-formats.workspace = true
+bigstar-level.workspace = true
+bigstar-protocol.workspace = true
+bigstar-client.workspace = true
+egui.workspace = true
+log.workspace = true
+
+[dev-dependencies]
+egui_kittest = { workspace = true, features = ["wgpu"] }
+serde_json.workspace = true
+image.workspace = true
