@@ -364,8 +364,13 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                 }
                 _ => {}
             },
+            // A trackpad scrolls in points: two fingers pan the level, both ways, and Cmd/Ctrl turns them into zoom.
+            // Pinching arrives as `Zoom` below.
+            Event::MouseWheel { unit: MouseWheelUnit::Point, delta, modifiers, .. } if over && !modifiers.command => {
+                view.pan -= *delta / view.zoom;
+            }
             Event::MouseWheel { unit, delta, .. } if over => {
-                // One notch is 120 in Qt's units; egui gives a line, or about 50 points.
+                // A mouse wheel zooms. One notch is 120 in Qt's units; egui gives a line, or about 50 points.
                 let angle = match unit {
                     MouseWheelUnit::Point => delta.y * 2.4,
                     MouseWheelUnit::Line => delta.y * 120.0,

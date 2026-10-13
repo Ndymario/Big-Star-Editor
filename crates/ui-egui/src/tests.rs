@@ -821,3 +821,26 @@ fn actors_draw_their_own_art_and_the_rest_are_numbered_markers() {
     let marker = pixel(&image, screen(&harness, Pos2::new(8.0 * 16.0 + 2.0, 4.0 * 16.0 + 2.0)));
     assert!(i32::from(marker[0]).abs_diff(i32::from(marker[2])) < 20 && marker[0] < 200, "{marker:?}");
 }
+
+#[test]
+fn a_trackpad_pans_with_two_fingers_and_zooms_with_command() {
+    let mut harness = level_with(LevelEntityInsertions { objects: vec![object(1, 2, 3, 1, 1)], ..Default::default() });
+    let at = view(&harness).canvas.center();
+    let (pan, zoom) = (view(&harness).pan, view(&harness).zoom);
+    let scroll = |harness: &Harness<'_, BigStarApp>, delta: Vec2, modifiers: Modifiers| {
+        harness.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, modifiers, phase: egui::TouchPhase::Move });
+    };
+    harness.hover_at(at);
+    harness.run();
+    // The level follows the fingers, both ways, and the zoom stays where it was.
+    scroll(&harness, Vec2::new(30.0, -20.0), Modifiers::NONE);
+    harness.run();
+    assert!((view(&harness).pan - (pan - Vec2::new(30.0, -20.0) / zoom)).length() < 0.01);
+    assert_eq!((view(&harness).zoom, view(&harness).zoom_pinned), (zoom, false));
+    // With Cmd (Ctrl elsewhere) held it zooms about the pointer instead.
+    let under = view(&harness).to_world(at);
+    scroll(&harness, Vec2::new(0.0, 50.0), Modifiers::COMMAND);
+    harness.run();
+    assert!(view(&harness).zoom > zoom);
+    assert!((view(&harness).to_world(at) - under).length() < 0.01);
+}
