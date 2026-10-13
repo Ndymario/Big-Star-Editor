@@ -574,6 +574,7 @@ dependencies = [
  "bigstar-level",
  "bigstar-nds",
  "bigstar-patching",
+ "bigstar-project",
  "serde",
 ]
 

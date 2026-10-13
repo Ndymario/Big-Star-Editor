@@ -20,3 +20,12 @@ bigstar-formats.workspace = true
 bigstar-level.workspace = true
 bigstar-patching.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+# The patch-apply test's fake NCPatcher writes a ROM with the synthetic builder.
+bigstar-project = { path = ".", features = ["test-support"] }
+
+# Re-runs itself as a stand-in for NCPatcher, as `project_tests.cpp` does, so it needs its own `main`.
+[[test]]
+name = "patch_apply"
+harness = false

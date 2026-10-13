@@ -618,3 +618,53 @@ mod filesystem_view {
         assert_eq!(filesystem_status_name(FilesystemStatus::Orphaned), "Orphaned");
     }
 }
+
+#[test]
+fn graphics_profiles_and_the_object_bank_table() {
+    assert_eq!(nsmb_graphics_profile("A2DE").unwrap().file_id_offset, 131);
+    assert_eq!(nsmb_graphics_profile("A2DP").unwrap().file_id_offset, 135);
+    for code in ["A2DJ", "A2DK", "A2DC"] {
+        assert!(nsmb_graphics_profile(code).is_some());
+    }
+    assert!(nsmb_graphics_profile("TST1").is_none());
+
+    let mut bank_table = vec![0u8; 8 + 16 * 10 * 4];
+    let put = |table: &mut Vec<u8>, slot: usize, bank: usize, value: u32| {
+        let offset = 8 + (slot * 10 + bank) * 4;
+        table[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    };
+    let starts = [22, 32, 56, 66, 42, 76, 86, 96, 106, 116];
+    for (slot, start) in starts.iter().enumerate() {
+        for bank in 0..10 {
+            put(&mut bank_table, slot, bank, start + bank as u32);
+        }
+    }
+    for bank in 0..10 {
+        put(&mut bank_table, 15, bank, 12 + bank as u32);
+    }
+    assert_eq!(find_object_bank_overlays(&bank_table).unwrap()[15][9], 21);
+    assert!(find_object_bank_overlays(&bank_table[8..100]).is_err());
+}
+
+#[test]
+fn tile_overlays_replace_remap_and_draw_over() {
+    use std::sync::Arc;
+    let solid = |value: u8| bigstar_formats::RgbaImage { width: 2, height: 2, pixels: [value, value, value, 255].repeat(4) };
+    let mut script = TileOverlayScript::default();
+    script.blocks.insert(257, TileOverlay { remap: Some(256), ..TileOverlay::default() });
+    script.blocks.insert(258, TileOverlay::default());
+    script.blocks.insert(259, TileOverlay { image: Some(Arc::new(solid(9))), replaces: false, remap: None });
+    let catalog = TileOverlayCatalog { scripts: vec![script] };
+    assert!(!catalog.is_empty());
+    assert_eq!(catalog.block_count(5), 3);
+
+    let mut blocks = vec![solid(1), solid(2), solid(3), solid(4)];
+    overlay_map16_images(&mut blocks, 5, 256, &catalog);
+    assert_eq!(blocks[1].pixels[0], 1, "a remap takes the other block's own graphics");
+    assert_eq!(blocks[2].pixels[3], 0, "a replacement with no texture blanks the block");
+    assert_eq!(blocks[3].pixels[0], 9, "a texture drawn over keeps nothing of the block where it is opaque");
+
+    let mut sheet = bigstar_formats::RgbaImage { width: 4, height: 2, pixels: [7, 7, 7, 255].repeat(8) };
+    overlay_map16_sheet(&mut sheet, 2, 2, 5, 257, &catalog);
+    assert_eq!(sheet.pixels[3], 0, "block 257 remaps to 256, which is not on this sheet");
+}

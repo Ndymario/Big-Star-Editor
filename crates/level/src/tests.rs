@@ -384,3 +384,129 @@ fn sprite_fields_read_and_write_their_bits() {
     assert!(catalog.by_hash(0x12345678).is_some());
     assert_eq!(SpriteDefinition::default().category, "Other");
 }
+
+mod tilemap {
+    use bigstar_formats::{NsmbLevelObject, OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile};
+
+    use crate::*;
+
+    /// One object whose every cell holds `tile`.
+    fn flat(tile: i32) -> ObjectLayout {
+        ObjectLayout { rows: vec![vec![ObjectLayoutTile::new(tile, 0)]], ..ObjectLayout::default() }
+    }
+
+    fn object(object_id: u16, tileset_slot: u8, x: i16, y: i16, width: u16, height: u16) -> NsmbLevelObject {
+        NsmbLevelObject { object_id, tileset_slot, x, y, width, height }
+    }
+
+    fn tilesets() -> (DecodedTileset, DecodedTileset) {
+        let mut jyotyu = DecodedTileset::default();
+        jyotyu.objects.push(flat(40)); // 0: a plain block
+        jyotyu.objects.push(flat(OBJECT_LAYOUT_EMPTY_TILE)); // 1: the empty block
+        jyotyu.objects.push(flat(3)); // 2: a block the game skips
+        jyotyu.objects.push(ObjectLayout { slope: true, rows: vec![vec![ObjectLayoutTile::new(50, 0)]], ..ObjectLayout::default() }); // 3: a slope
+        jyotyu.objects.push(flat(41)); // 4: another plain block
+        let level_tileset = DecodedTileset { objects: vec![flat(3)], ..DecodedTileset::default() }; // block 259 once based
+        (jyotyu, level_tileset)
+    }
+
+    #[test]
+    fn later_objects_own_the_cells_they_write() {
+        let (jyotyu, level_tileset) = tilesets();
+        let sets = [Some(&jyotyu), Some(&level_tileset), None];
+        let raster = |objects: &[NsmbLevelObject]| rasterize_level_objects(objects, &sets);
+
+        // The object in front wins the cells it covers outright.
+        let tilemap = raster(&[object(0, 0, 0, 0, 2, 2), object(4, 0, 1, 1, 2, 2)]);
+        assert_eq!(tilemap.cell_at(0, 0).block, 40, "the object behind keeps the cells nothing covers");
+        assert!(tilemap.cell_at(1, 1).block == 41 && tilemap.cell_at(1, 1).slot == 0, "the object in front owns the cell it shares");
+        assert_eq!(tilemap.cell_at(2, 2).block, 41);
+
+        // An empty block is a block: the eraser leaves the cell holding nothing at all.
+        let tilemap = raster(&[object(0, 0, 0, 0, 2, 2), object(1, 0, 1, 1, 2, 2)]);
+        assert!(tilemap.cell_at(0, 0).draws());
+        assert!(tilemap.cell_at(1, 1).written() && !tilemap.cell_at(1, 1).draws());
+
+        // Blocks 1-6 never reach the array, so a cell naming one keeps what an earlier object put there.
+        let tilemap = raster(&[object(0, 0, 0, 0, 2, 2), object(2, 0, 1, 1, 2, 2)]);
+        assert_eq!(tilemap.cell_at(1, 1).block, 40);
+        assert!(!tilemap.cell_at(2, 2).written());
+
+        // The same block number in the level tileset's slot is 259, which the skip list does not reach.
+        let tilemap = raster(&[object(0, 0, 0, 0, 2, 2), object(0, 1, 1, 1, 2, 2)]);
+        assert!(tilemap.cell_at(1, 1).block == 3 && tilemap.cell_at(1, 1).slot == 1);
+
+        // A slope fills one diagonal; the cells it never reaches are not its to clear.
+        let tilemap = raster(&[object(0, 0, 0, 0, 3, 3), object(3, 0, 0, 0, 3, 3)]);
+        assert_eq!(tilemap.cell_at(0, 2).block, 50);
+        assert_eq!(tilemap.cell_at(2, 2).block, 40);
+
+        // Cells left of the origin belong to the chunk left of it, and an object far out asks for its own cells only.
+        let tilemap = raster(&[object(0, 0, -2, -2, 2, 2), object(0, 0, 300, 300, 1, 1)]);
+        assert_eq!(tilemap.cell_at(-1, -1).block, 40);
+        assert_eq!(tilemap.chunks.len(), 2);
+
+        // Nothing to draw with is not a crash.
+        let tilemap = raster(&[object(0, 2, 0, 0, 2, 2), object(99, 0, 4, 4, 2, 2)]);
+        assert!(tilemap.chunks.is_empty());
+    }
+
+    #[test]
+    fn object_effects_name_the_two_blanks() {
+        let (jyotyu, level_tileset) = tilesets();
+        assert_eq!(level_object_effect(&jyotyu.objects[0], 0), LevelObjectEffect::Draws);
+        assert_eq!(level_object_effect(&jyotyu.objects[1], 0), LevelObjectEffect::Erases);
+        assert_eq!(level_object_effect(&jyotyu.objects[2], 0), LevelObjectEffect::Inert);
+        assert_eq!(level_object_effect(&level_tileset.objects[0], 1), LevelObjectEffect::Draws);
+        let mixed = ObjectLayout {
+            rows: vec![vec![ObjectLayoutTile::new(OBJECT_LAYOUT_EMPTY_TILE, 0), ObjectLayoutTile::new(40, 0)]],
+            ..ObjectLayout::default()
+        };
+        assert_eq!(level_object_effect(&mixed, 0), LevelObjectEffect::Draws);
+    }
+
+    #[test]
+    fn tileset_objects_render_from_map16_images() {
+        let red = bigstar_formats::RgbaImage { width: 16, height: 16, pixels: [255, 0, 0, 255].repeat(256) };
+        let tileset = DecodedTileset { map16_tiles: vec![red], objects: vec![flat(0), flat(OBJECT_LAYOUT_EMPTY_TILE)] };
+        let image = render_tileset_object(&tileset, 0, 2, 1).unwrap();
+        assert_eq!((image.width, image.height), (32, 16));
+        assert_eq!(&image.pixels[..4], &[255, 0, 0, 255]);
+        assert_eq!(&image.pixels[31 * 4..32 * 4], &[255, 0, 0, 255]);
+        assert_eq!(render_tileset_object(&tileset, 1, 1, 1).unwrap().pixels[3], 0);
+        assert!(render_tileset_object(&tileset, 9, 1, 1).is_err());
+    }
+}
+
+#[test]
+fn exchange_files_round_trip() {
+    let level = LevelPackage { course_file_id: 12, bgdat_file_id: 13, course: vec![1, 2, 3, 4], bgdat: vec![5, 6] };
+    let mut nml = encode_nml(&level).unwrap();
+    let decoded = decode_nml(&nml).unwrap();
+    assert_eq!(decoded.course, level.course);
+    assert_eq!(decoded.bgdat_file_id, 13);
+    nml.push(0);
+    assert!(decode_nml(&nml).is_err(), "NML trailing bytes rejected");
+    let mut old = encode_nml(&level).unwrap();
+    old[6] = b'4';
+    assert_eq!(decode_nml(&old).unwrap(), level, "an NSMBe4 export still opens");
+
+    let entries = vec![
+        NsmbPatchEntry { path: "root/course/A01_1.bin".into(), expected_file_id: 42, contents: vec![1, 1, 1, 2, 3, 5, 8] },
+        NsmbPatchEntry { path: "root/course/A01_1_bgdat.bin".into(), expected_file_id: -1, contents: vec![9, 8, 7] },
+    ];
+    let decoded = decode_nsmbpatch(&encode_nsmbpatch(&entries).unwrap()).unwrap();
+    assert_eq!(decoded, entries);
+    assert!(encode_nsmbpatch(&[NsmbPatchEntry { path: "../escape".into(), expected_file_id: -1, contents: vec![1] }]).is_err());
+    assert!(encode_nsmbpatch(&[NsmbPatchEntry { path: "/abs".into(), ..NsmbPatchEntry::default() }]).is_err());
+    assert!(encode_nsmbpatch(&[entries[0].clone(), entries[0].clone()]).is_err(), "duplicate patch path rejected");
+
+    let recovery = LevelRecoverySnapshot {
+        course_path: "extracted/root/course/A.bin".into(),
+        bgdat_path: "extracted/root/course/A_bgdat.bin".into(),
+        package: level.clone(),
+    };
+    let recovered = decode_level_recovery(&encode_level_recovery(&recovery).unwrap()).unwrap();
+    assert_eq!(recovered, recovery);
+    assert!(encode_level_recovery(&LevelRecoverySnapshot { course_path: "a/./b".into(), ..recovery }).is_err());
+}
