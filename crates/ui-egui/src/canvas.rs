@@ -15,7 +15,7 @@ use egui::{
 
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
-use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
+use crate::level_view::{Backgrounds, Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
 /// The textures the host has sent, uploaded the first time something draws them.
@@ -269,8 +269,17 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         controls::toggle(ui, &mut options.show_grid, "Grid");
         controls::toggle(ui, &mut options.show_minimap, "Minimap");
         controls::toggle(ui, &mut options.show_ds_screen, "DS Screen");
-        controls::toggle(ui, &mut options.layers_in_views, "BG in views")
-            .on_hover_text("Draw the background layers only inside the views, as the game shows them");
+        // Named in short on the toolbar, which has no room to spare, and in full in the menu.
+        ui.menu_button(options.backgrounds.short(), |ui| {
+            for choice in Backgrounds::ALL {
+                if Button::menu(choice.name()).selected(options.backgrounds == choice).show(ui).clicked() {
+                    options.backgrounds = choice;
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Where the background layers are drawn: nowhere, only inside the views as the game shows them, or over the whole level");
         ui.separator();
         if Button::new("Fit").show(ui).clicked() {
             view.needs_fit = true;
@@ -325,7 +334,11 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                     continue;
                 }
                 if *button == PointerButton::Secondary {
-                    // Right-click creates whatever is chosen; left-click never does.
+                    // Right-click creates whatever is chosen; left-click never does. An object waits for the button
+                    // to come up, so it can be dragged out to its size.
+                    if view.begin_place(press.world, modifiers.alt) {
+                        continue;
+                    }
                     if let Some(edit) = view.placement_edit(press.world, modifiers.alt) {
                         edits.push(edit);
                         busy = true;
@@ -384,6 +397,10 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                             *delta = snapped;
                         }
                     }
+                    Some(Gesture::Place { submitted: false, .. }) => {
+                        let at = view.to_world(*pos);
+                        view.drag_place(at, free);
+                    }
                     Some(Gesture::Marquee { to, .. }) => *to = *pos,
                     _ => {}
                 }
@@ -405,6 +422,7 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                     view.gesture = edit.as_ref().map(|_| Gesture::Resize { handle, delta, submitted: true });
                     edits.extend(edit);
                 }
+                Some(Gesture::Place { submitted: false, .. }) => edits.extend(view.finish_place()),
                 Some(Gesture::Marquee { from, to }) => {
                     let (a, b) = (view.to_world(from), view.to_world(to));
                     view.select_within(a, b);
@@ -542,7 +560,12 @@ fn keys(ui: &Ui, view: &mut LevelView, busy: bool, out: &mut CanvasOutput) {
             Key::Escape
                 if matches!(
                     view.gesture,
-                    Some(Gesture::Move { submitted: false, .. } | Gesture::Resize { submitted: false, .. } | Gesture::Marquee { .. })
+                    Some(
+                        Gesture::Move { submitted: false, .. }
+                            | Gesture::Resize { submitted: false, .. }
+                            | Gesture::Place { submitted: false, .. }
+                            | Gesture::Marquee { .. }
+                    )
                 ) && !view.awaiting_clone() =>
             {
                 view.gesture = None;
@@ -634,12 +657,14 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     let hairline = |color: Color32| Stroke::new(1.0, color);
 
     let graphics = view.art.graphics.as_ref();
-    // Where the background and foreground show: inside the views, as in the game, following a view while it is dragged;
-    // a level without views, or with the option off, everywhere.
-    let layer_areas: Vec<Rect> = if view.options.layers_in_views && !course.views.is_empty() {
-        disjoint((0..course.views.len()).map(|index| placed(Kind::View, index))).into_iter().map(|area| area.intersect(visible)).collect()
-    } else {
-        vec![bounds.intersect(visible)]
+    // Where the background and foreground show, as the toolbar chooses: nowhere; inside the views, as in the game,
+    // following a view while it is dragged; or everywhere, which is also what a level without views gets.
+    let layer_areas: Vec<Rect> = match view.options.backgrounds {
+        Backgrounds::Hidden => Vec::new(),
+        Backgrounds::InViews if !course.views.is_empty() => {
+            disjoint((0..course.views.len()).map(|index| placed(Kind::View, index))).into_iter().map(|area| area.intersect(visible)).collect()
+        }
+        Backgrounds::InViews | Backgrounds::Overflowing => vec![bounds.intersect(visible)],
     };
     // The far layer, then the near one (the game's "foreground", which is still behind the level), both under
     // everything the level holds. Darkened rather than faded, so the near layer hides the far one where it is solid and
@@ -712,6 +737,10 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
             painter.rect_stroke(rect, 0.0, marker_stroke(colors), StrokeKind::Middle);
             knobs(painter, rect, colors);
         }
+    }
+
+    if let Some(rect) = view.placing_rect() {
+        painter.rect_stroke(frame.rect(rect), 0.0, marker_stroke(colors), StrokeKind::Middle);
     }
 
     for (index, sprite) in course.sprites.iter().enumerate() {

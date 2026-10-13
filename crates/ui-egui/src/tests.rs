@@ -12,7 +12,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 use crate::demo::{DemoConnection, DemoTileset};
-use crate::level_view::{Gesture, Handle, Item, Kind, LevelView, handle_centres};
+use crate::level_view::{Backgrounds, Gesture, Handle, Item, Kind, LevelView, handle_centres};
 use crate::properties::Tab;
 use crate::{BigStarApp, MemoryServices, Session};
 
@@ -420,6 +420,28 @@ fn right_click_creates_the_current_kind_and_left_click_never_does() {
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
     assert_eq!(view(&harness).snapshot.course.views.len(), 0);
+}
+
+#[test]
+fn a_right_drag_stretches_the_object_it_places() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    let (from, to) = (view(&harness).to_screen(Pos2::new(36.0, 36.0)), view(&harness).to_screen(Pos2::new(84.0, 52.0)));
+    assert!(view(&harness).canvas.contains(from) && view(&harness).canvas.contains(to));
+    harness.hover_at(from);
+    harness.run();
+    button(&harness, from, PointerButton::Secondary, true, Modifiers::NONE);
+    harness.run();
+    harness.hover_at(to);
+    harness.run();
+    // Nothing exists until the button comes up, though the canvas already shows it.
+    assert!(view(&harness).snapshot.objects.is_empty());
+    assert!(view(&harness).placing_rect().is_some());
+    button(&harness, to, PointerButton::Secondary, false, Modifiers::NONE);
+    harness.run();
+    let view = view(&harness);
+    assert_eq!(view.snapshot.objects, [object(0, 2, 2, 4, 2)]);
+    assert_eq!(view.snapshot.undo_names, ["Add object"]);
+    assert_eq!((view.gesture, view.selection.as_slice()), (None, [Item::new(Kind::Object, 0)].as_slice()));
 }
 
 #[test]
@@ -1130,6 +1152,46 @@ fn closing_a_document_with_unsaved_edits_asks_first() {
     harness.run();
     assert!(!harness.state().workspace.is_document(level));
     assert!(!harness.state().session().unwrap().levels.contains_key(&level), "the host session is closed");
+}
+
+#[test]
+fn the_canvas_switches_are_shared_by_every_level_and_remembered() {
+    let services = MemoryServices::default();
+    let later = services.sharing_values();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    let first = open_document(&mut harness, "A01_1");
+    {
+        let options = &mut harness.state_mut().session_mut().unwrap().levels.get_mut(&first).unwrap().options;
+        (options.show_grid, options.show_minimap, options.snap_size) = (false, false, 8.0);
+        options.backgrounds = Backgrounds::Hidden;
+    }
+    harness.run();
+    // A level opened afterwards has them as they were left, and so does one that was already open.
+    let second = open_document(&mut harness, "A01_2");
+    let options = |harness: &Harness<'_, BigStarApp>, level| harness.state().session().unwrap().levels[&level].options;
+    assert_eq!(options(&harness, second), options(&harness, first));
+    assert!(!options(&harness, second).show_grid);
+    harness.state_mut().session_mut().unwrap().levels.get_mut(&second).unwrap().options.show_grid = true;
+    harness.run();
+    assert!(options(&harness, first).show_grid && !options(&harness, first).show_minimap);
+    drop(harness);
+
+    // A later run starts with them.
+    let app = BigStarApp::with_connection(Box::new(later), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    let level = open_document(&mut harness, "A01_1");
+    let options = options(&harness, level);
+    assert!((options.show_grid, options.show_minimap, options.snap_size) == (true, false, 8.0), "{options:?}");
+    assert_eq!(options.backgrounds, Backgrounds::Hidden);
 }
 
 #[test]

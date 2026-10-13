@@ -1166,10 +1166,24 @@ mod tests {
         assert_eq!(view.selection, [Item::new(Kind::Object, 0)]);
         view.panel_item(1);
         assert_eq!(view.selection, [Item::new(Kind::Object, 1)]);
+        // The object picked is the one a right-click places next.
+        assert_eq!((view.placement.kind, view.placement.object_id), (Kind::Object, 2));
         // A path is picked down to its node.
         view.panel_tab(Tab::Entity(Kind::Path));
         view.panel_node(1);
         assert_eq!(view.selection, [Item::node(Kind::Path, 0, 1)]);
+        // So is one picked on the canvas.
+        view.placement.set_sprite(5);
+        view.selection = vec![Item::new(Kind::Object, 1)];
+        view.sync_panel();
+        assert_eq!((view.placement.kind, view.placement.object_id), (Kind::Object, 2));
+        view.panel_tab(Tab::Entity(Kind::Path));
+        view.panel_node(1);
+        // A sprite does the same for sprites, even from within a mixed selection, without changing the kind.
+        view.snapshot.course.sprites[0].id = 9;
+        view.selection = vec![Item::new(Kind::Zone, 0), Item::new(Kind::Sprite, 0)];
+        view.sync_panel();
+        assert_eq!((view.placement.kind, view.placement.sprite_type, view.placement.object_id), (Kind::Path, 9, 2));
         // A mixed canvas selection leaves the panel where it was; an empty one shows the course.
         view.selection = vec![Item::new(Kind::Object, 0), Item::new(Kind::Zone, 0)];
         view.sync_panel();

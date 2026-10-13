@@ -28,7 +28,7 @@ mod tileset_editor;
 mod tools;
 mod workspace;
 
-pub use app::{BigStarApp, EMBEDDED_ROOT_KEY, LANGUAGE_KEY, RECENT_HOSTS_KEY, THEME_KEY};
+pub use app::{BigStarApp, CANVAS_OPTIONS_KEY, EMBEDDED_ROOT_KEY, LANGUAGE_KEY, RECENT_HOSTS_KEY, THEME_KEY};
 pub use i18n::{KEYS as TRANSLATED_STRINGS, Language};
 pub use level_view::{Item, Kind, LevelView};
 pub use services::{FileShelf, MemoryServices, Services};

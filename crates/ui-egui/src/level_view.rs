@@ -14,6 +14,7 @@ use bigstar_level::{
 };
 use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutcome, LevelEdit, LevelGraphics, LevelSnapshot, TextureId};
 use egui::{Pos2, Rect, Vec2};
+use serde::{Deserialize, Serialize};
 
 use crate::properties::{PanelState, Tab, item_count};
 
@@ -176,6 +177,12 @@ pub enum Gesture {
         submitted: bool,
     },
     Pan,
+    /// Dragging out an object a right-press began, between two cells; it is created when the button comes up.
+    Place {
+        from: (i16, i16),
+        to: (i16, i16),
+        submitted: bool,
+    },
     /// A rubber band, in screen points.
     Marquee {
         from: Pos2,
@@ -183,8 +190,9 @@ pub enum Gesture {
     },
 }
 
-/// The canvas toolbar's switches.
-#[derive(Debug, Clone, PartialEq)]
+/// The canvas toolbar's switches. Every canvas shows the same ones, and they are kept between runs.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct CanvasOptions {
     pub snap: bool,
     /// The step of everything that is not placed in tiles: 16, or 8 with "8 px" on.
@@ -192,14 +200,43 @@ pub struct CanvasOptions {
     pub show_minimap: bool,
     pub show_grid: bool,
     pub show_ds_screen: bool,
-    /// The background and foreground drawn only inside the views, where the game shows them, rather than over the
-    /// whole level.
-    pub layers_in_views: bool,
+    pub backgrounds: Backgrounds,
+}
+
+/// Where the canvas draws a level's background and foreground layers.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Backgrounds {
+    Hidden,
+    /// Only inside the views, where the game shows them.
+    #[default]
+    InViews,
+    /// Over the whole level, past the views' edges.
+    Overflowing,
+}
+
+impl Backgrounds {
+    pub const ALL: [Self; 3] = [Self::Hidden, Self::InViews, Self::Overflowing];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Hidden => "No backgrounds",
+            Self::InViews => "Backgrounds inside views",
+            Self::Overflowing => "Backgrounds overflowing",
+        }
+    }
+
+    pub fn short(self) -> &'static str {
+        match self {
+            Self::Hidden => "BG off",
+            Self::InViews => "BG in views",
+            Self::Overflowing => "BG all over",
+        }
+    }
 }
 
 impl Default for CanvasOptions {
     fn default() -> Self {
-        Self { snap: true, snap_size: TILE, show_minimap: true, show_grid: true, show_ds_screen: false, layers_in_views: true }
+        Self { snap: true, snap_size: TILE, show_minimap: true, show_grid: true, show_ds_screen: false, backgrounds: Backgrounds::default() }
     }
 }
 
@@ -469,7 +506,10 @@ impl LevelView {
         self.previous_keys = self.actor_keys();
         self.snapshot = snapshot;
         // A gesture already sent is in the new snapshot; one still in progress carries on.
-        if matches!(self.gesture, Some(Gesture::Move { submitted: true, .. } | Gesture::Resize { submitted: true, .. })) {
+        if matches!(
+            self.gesture,
+            Some(Gesture::Move { submitted: true, .. } | Gesture::Resize { submitted: true, .. } | Gesture::Place { submitted: true, .. })
+        ) {
             self.gesture = None;
         }
         let snapshot = &self.snapshot;
@@ -502,7 +542,11 @@ impl LevelView {
 
     /// Whatever was in flight has been answered, or refused.
     pub fn settled(&mut self) {
-        if matches!(self.gesture, Some(Gesture::Move { submitted: true, .. } | Gesture::Resize { submitted: true, .. })) || self.awaiting_clone {
+        if matches!(
+            self.gesture,
+            Some(Gesture::Move { submitted: true, .. } | Gesture::Resize { submitted: true, .. } | Gesture::Place { submitted: true, .. })
+        ) || self.awaiting_clone
+        {
             self.gesture = None;
         }
         self.awaiting_clone = false;
@@ -928,6 +972,60 @@ impl LevelView {
         Some(LevelEdit::Update { updates, name: "Resize selection".to_owned() })
     }
 
+    /// The cell a right-click at level point `point` puts an object in.
+    fn place_cell(&self, point: Pos2, free: bool) -> (i16, i16) {
+        let snap = |v: f32| if self.options.snap && !free { (v / TILE).round() * TILE } else { v };
+        let cell = |v: f32| (round(snap(v)).clamp(0, i32::from(u16::MAX)) / 16) as i16;
+        (cell(point.x), cell(point.y))
+    }
+
+    /// The chosen object, covering the cells from `from` to `to` whichever way round they are.
+    fn object_between(&self, from: (i16, i16), to: (i16, i16)) -> NsmbLevelObject {
+        NsmbLevelObject {
+            object_id: self.placement.object_id,
+            tileset_slot: self.placement.object_slot,
+            x: from.0.min(to.0),
+            y: from.1.min(to.1),
+            width: from.0.abs_diff(to.0) + 1,
+            height: from.1.abs_diff(to.1) + 1,
+        }
+    }
+
+    /// A right-press at `point`. An object is not created yet: it is dragged out to its size first, as in NSMB
+    /// Editor, and `false` says the chosen kind is one a press creates outright.
+    pub fn begin_place(&mut self, point: Pos2, free: bool) -> bool {
+        if self.placement.kind != Kind::Object {
+            return false;
+        }
+        let cell = self.place_cell(point, free);
+        self.gesture = Some(Gesture::Place { from: cell, to: cell, submitted: false });
+        true
+    }
+
+    /// The pointer moved to `point` with an object being dragged out.
+    pub fn drag_place(&mut self, point: Pos2, free: bool) {
+        let cell = self.place_cell(point, free);
+        if let Some(Gesture::Place { to, submitted: false, .. }) = &mut self.gesture {
+            *to = cell;
+        }
+    }
+
+    /// The button came up: the object dragged out is created, as one step.
+    pub fn finish_place(&mut self) -> Option<LevelEdit> {
+        let Some(Gesture::Place { from, to, submitted: false }) = self.gesture else { return None };
+        let mut items = LevelEntityInsertions::default();
+        items.objects.push(self.object_between(from, to));
+        self.gesture = Some(Gesture::Place { from, to, submitted: true });
+        self.placing = true;
+        Some(LevelEdit::Add { items, name: "Add object".to_owned() })
+    }
+
+    /// Where the object being dragged out lies, in level pixels.
+    pub fn placing_rect(&self) -> Option<Rect> {
+        let Some(Gesture::Place { from, to, .. }) = self.gesture else { return None };
+        Some(object_rect(&self.object_between(from, to)))
+    }
+
     /// What a right-click at level point `point` creates. `free` (Alt) places without snapping. `None` for an unsigned
     /// kind out of bounds: dropping it at the origin instead would put it somewhere nobody clicked.
     pub fn placement_edit(&mut self, point: Pos2, free: bool) -> Option<LevelEdit> {
@@ -947,14 +1045,8 @@ impl LevelView {
         let placement = &self.placement;
         let name = match kind {
             Kind::Object => {
-                items.objects.push(NsmbLevelObject {
-                    object_id: placement.object_id,
-                    tileset_slot: placement.object_slot,
-                    x: tile_x as i16,
-                    y: tile_y as i16,
-                    width: 1,
-                    height: 1,
-                });
+                let cell = (tile_x as i16, tile_y as i16);
+                items.objects.push(self.object_between(cell, cell));
                 "Add object"
             }
             Kind::Sprite => {
@@ -1129,6 +1221,7 @@ impl LevelView {
                 }
                 _ => {}
             }
+            self.place_like_selection();
             self.panel.dragging = None;
             self.panel.settings_text = None;
         }
@@ -1139,6 +1232,24 @@ impl LevelView {
                 self.panel.multi.clear();
             }
         }
+    }
+
+    /// Points the picker at the selection, as NSMB Editor's does: the first object selected is the object a
+    /// right-click places, and the first sprite the sprite. Which of the two kinds it places is left alone.
+    fn place_like_selection(&mut self) {
+        let kind = self.placement.kind;
+        let first = |kind: Kind| self.selection.iter().find(|s| s.kind == kind).map(|s| s.index);
+        if let Some(object) = first(Kind::Object).and_then(|index| self.snapshot.objects.get(index)) {
+            self.placement.set_object(object.tileset_slot, object.object_id);
+        }
+        if let Some(index) = first(Kind::Sprite) {
+            match (self.sprite_hash(index), self.snapshot.course.sprites.get(index)) {
+                (Some(hash), _) => self.placement.set_custom_sprite(hash),
+                (None, Some(sprite)) => self.placement.set_sprite(sprite.id),
+                (None, None) => {}
+            }
+        }
+        self.placement.kind = kind;
     }
 
     /// Selects on the canvas what the panel now shows, and remembers it as seen.
@@ -1158,6 +1269,7 @@ impl LevelView {
         if let Tab::Entity(kind) = self.panel.tab {
             self.placement.kind = kind;
         }
+        self.place_like_selection();
         self.panel_seen = self.selection.clone();
         self.panel_kind = self.placement.kind;
     }
@@ -1217,8 +1329,14 @@ impl LevelView {
     /// can hold.
     fn preview_objects(&self) -> Vec<NsmbLevelObject> {
         let mut objects = self.snapshot.objects.clone();
-        if self.gesture.is_none() {
-            return objects;
+        match self.gesture {
+            None => return objects,
+            // The object being dragged out is laid over the rest, where it will be once it exists.
+            Some(Gesture::Place { from, to, .. }) => {
+                objects.push(self.object_between(from, to));
+                return objects;
+            }
+            Some(_) => {}
         }
         for (index, object) in objects.iter_mut().enumerate() {
             if !self.is_selected(Kind::Object, index, None) {
@@ -1466,7 +1584,18 @@ mod tests {
         view.placement.set_object(1, 12);
         let Some(LevelEdit::Add { items, .. }) = view.placement_edit(Pos2::new(-80.0, 32.0), false) else { panic!() };
         assert_eq!((items.objects[0].x, items.objects[0].y, items.objects[0].tileset_slot, items.objects[0].object_id), (0, 2, 1, 12));
+        // A right-press on an object's kind drags it out instead, from either corner, and creates it on release.
+        assert!(view.begin_place(Pos2::new(100.0, 41.0), false));
+        assert_eq!(view.preview_objects().len(), view.snapshot.objects.len() + 1, "shown before it exists");
+        view.drag_place(Pos2::new(36.0, 84.0), false);
+        let Some(LevelEdit::Add { items, name }) = view.finish_place() else { panic!() };
+        let o = &items.objects[0];
+        assert_eq!((name.as_str(), o.x, o.y, o.width, o.height, o.object_id), ("Add object", 2, 3, 5, 3, 12));
+        assert_eq!(view.finish_place(), None, "once");
+        view.settled();
+        assert_eq!(view.gesture, None);
         view.placement.kind = Kind::Entrance;
+        assert!(!view.begin_place(Pos2::new(13.0, 27.0), false));
         view.options.snap_size = 8.0;
         let Some(LevelEdit::Add { items, .. }) = view.placement_edit(Pos2::new(13.0, 27.0), false) else { panic!() };
         assert_eq!((items.entrances[0].x, items.entrances[0].y), (16, 24));

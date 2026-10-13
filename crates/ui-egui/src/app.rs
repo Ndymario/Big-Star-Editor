@@ -11,6 +11,7 @@ use crate::canvas::{Art, TexturePool};
 use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
 use crate::files::{FilesDock, OpenRequest};
 use crate::i18n::Language;
+use crate::level_view::CanvasOptions;
 use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
@@ -126,6 +127,8 @@ pub struct BigStarApp {
     pub(crate) files: FilesDock,
     left: Left,
     side: Side,
+    /// The canvas toolbar's switches, the same on every canvas.
+    canvas_options: CanvasOptions,
     /// Level-data value cells being typed in.
     data_drafts: level_data::Drafts,
 }
@@ -134,6 +137,8 @@ pub struct BigStarApp {
 pub const LANGUAGE_KEY: &str = "language";
 /// Where the choice of theme is kept, as [`Theme::stored`] writes it.
 pub const THEME_KEY: &str = "theme";
+/// Where the canvas toolbar's switches are kept.
+pub const CANVAS_OPTIONS_KEY: &str = "canvas_options";
 
 /// The Preferences window: the language is this machine's; the autosave interval and the backups kept are the open
 /// project's, kept by its host.
@@ -168,6 +173,7 @@ impl BigStarApp {
     pub fn new(services: Box<dyn Services>) -> Self {
         let language = services.load(LANGUAGE_KEY).map_or_else(Language::default, |code| Language::from_code(&code));
         let theme = services.load(THEME_KEY).map_or_else(Theme::default, |stored| Theme::parse(&stored));
+        let canvas_options = services.load(CANVAS_OPTIONS_KEY).and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default();
         Self {
             services,
             language,
@@ -189,6 +195,7 @@ impl BigStarApp {
             files: FilesDock::default(),
             left: Left::default(),
             side: Side::default(),
+            canvas_options,
             data_drafts: level_data::Drafts::new(),
         }
     }
@@ -199,6 +206,22 @@ impl BigStarApp {
         app.host_key = "local".to_owned();
         app.session = Some(Session::new(conn));
         app
+    }
+
+    /// A switch flipped on one canvas' toolbar is flipped on them all, and remembered; a level that arrives takes
+    /// them as they stand.
+    fn share_canvas_options(&mut self) {
+        let Some(session) = &mut self.session else { return };
+        if let Some(changed) = session.levels.values().map(|view| view.options).find(|options| *options != self.canvas_options) {
+            self.canvas_options = changed;
+            if let Ok(stored) = serde_json::to_string(&changed) {
+                self.services.store(CANVAS_OPTIONS_KEY, &stored);
+            }
+        }
+        session.canvas_options = self.canvas_options;
+        for view in session.levels.values_mut() {
+            view.options = self.canvas_options;
+        }
     }
 
     /// Chooses the dark or the light mode of the theme, as Preferences would.
@@ -394,6 +417,7 @@ impl BigStarApp {
     pub fn ui(&mut self, ui: &mut Ui) {
         let ctx = ui.ctx().clone();
         self.style(&ctx);
+        self.share_canvas_options();
         self.logic(&ctx);
         if self.session.is_none() {
             self.load_form();

@@ -13,7 +13,7 @@ use bigstar_protocol::{
 };
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
-use crate::level_view::{ActorIndex, ActorKey, LevelView};
+use crate::level_view::{ActorIndex, ActorKey, CanvasOptions, LevelView};
 
 /// What a request in flight was for, so its response lands in the right place.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,6 +171,8 @@ pub struct Session {
     pub worlds: Vec<LevelWorld>,
     /// Every level open on the host for this frontend, documents and preview alike.
     pub levels: BTreeMap<LevelId, LevelView>,
+    /// The canvas switches a level arriving starts with: the ones every other canvas has.
+    pub canvas_options: CanvasOptions,
     /// The document the panels, the menus and the shortcuts act on.
     pub active: Option<LevelId>,
     opened: Vec<(LevelId, Opening)>,
@@ -235,6 +237,7 @@ impl Session {
             project: None,
             worlds: Vec::new(),
             levels: BTreeMap::new(),
+            canvas_options: CanvasOptions::default(),
             active: None,
             opened: Vec::new(),
             renamed: Vec::new(),
@@ -798,6 +801,7 @@ impl Session {
             Some(view) => view.replace(snapshot),
             None => {
                 let mut view = LevelView::new(snapshot);
+                view.options = self.canvas_options;
                 if let Some(catalog) = &self.catalog {
                     view.art.actors = ActorIndex::new(catalog.clone());
                 }
