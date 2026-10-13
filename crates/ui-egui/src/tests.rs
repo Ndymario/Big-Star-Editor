@@ -1661,6 +1661,15 @@ fn preferences_open(services: MemoryServices) -> (Harness<'static, BigStarApp>, 
 }
 
 #[test]
+fn a_floating_window_opens_in_the_middle_of_the_screen() {
+    let (harness, _) = preferences_open(MemoryServices::default());
+    // egui names a window's area after its title, which it holds as an `Option`.
+    let window = harness.ctx.memory(|memory| memory.area_rect(egui::Id::new(Some("Preferences")))).unwrap();
+    let screen = harness.ctx.content_rect();
+    assert!((window.center() - screen.center()).length() < 1.0, "{window:?} in {screen:?}");
+}
+
+#[test]
 fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     use crate::theme::{Theme, Tokens};
     let (mut harness, stored) = preferences_open(MemoryServices::default());

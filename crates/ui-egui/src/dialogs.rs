@@ -70,7 +70,10 @@ impl<'open> Window<'open> {
             return None;
         }
         let t = Tokens::get(ctx);
-        let frame = egui::Frame::window(&ctx.global_style()).fill(t.overlay).inner_margin(egui::Margin::same(14));
+        // The editor's own background, so the fields and cards in it stand out as they do in a panel.
+        let frame = egui::Frame::window(&ctx.global_style()).fill(t.base).inner_margin(egui::Margin::same(14));
+        // Opens in the middle of the screen, and stays wherever it is then dragged.
+        let window = window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
         let mut closed = false;
         let shown = window.frame(frame).show(ctx, |ui| {
             ui.horizontal(|ui| {
