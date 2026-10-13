@@ -9,6 +9,7 @@ use egui::{Color32, Key, Modifiers, RichText, Ui, ViewportCommand};
 
 use crate::canvas::{Art, TexturePool};
 use crate::files::{FilesDock, OpenRequest};
+use crate::i18n::Language;
 use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
@@ -106,6 +107,10 @@ pub struct BigStarApp {
     /// The person said the window may close with unsaved edits.
     allow_quit: bool,
     pub(crate) builds: crate::builds::Builds,
+    /// The interface language, kept with the other per-machine choices.
+    pub(crate) language: Language,
+    /// The Preferences window's choices while it is open.
+    pub(crate) preferences: Option<Preferences>,
     actions: Vec<Action>,
     textures: TexturePool,
     pub(crate) picker: PickerState,
@@ -116,6 +121,18 @@ pub struct BigStarApp {
     side: Side,
     /// Level-data value cells being typed in.
     data_drafts: level_data::Drafts,
+}
+
+/// Where the interface language is kept.
+pub const LANGUAGE_KEY: &str = "language";
+
+/// The Preferences window: the language is this machine's; the autosave interval and the backups kept are the open
+/// project's, kept by its host.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Preferences {
+    pub(crate) language: Language,
+    pub(crate) autosave_minutes: u32,
+    pub(crate) backups_kept: u32,
 }
 
 fn waker(ctx: &egui::Context) -> Waker {
@@ -139,8 +156,11 @@ fn parent(directory: &str) -> String {
 
 impl BigStarApp {
     pub fn new(services: Box<dyn Services>) -> Self {
+        let language = services.load(LANGUAGE_KEY).map_or_else(Language::default, |code| Language::from_code(&code));
         Self {
             services,
+            language,
+            preferences: None,
             form: ConnectForm::default(),
             session: None,
             host_key: String::new(),
@@ -228,6 +248,11 @@ impl BigStarApp {
             self.services.load(RECENT_HOSTS_KEY).map(|v| v.lines().filter(|l| !l.is_empty()).map(str::to_owned).collect()).unwrap_or_default();
         self.form.host = self.form.recent.first().cloned().unwrap_or_else(|| self.services.default_host());
         self.form.root = self.services.load(EMBEDDED_ROOT_KEY).unwrap_or_default();
+        // A page the host handed out with its token is for that host.
+        if let Some(token) = self.services.default_token() {
+            self.form.token = token;
+            self.form.host = self.services.default_host();
+        }
     }
 
     fn remember_host(&mut self, host: &str) {
@@ -354,6 +379,7 @@ impl BigStarApp {
                     ui.label("Connecting…");
                 });
             } else if session.project.is_some() {
+                self.workspace.language = self.language;
                 self.workspace.show(ui, session, &mut self.textures, keyboard, &*self.services);
             } else {
                 self.workspace_screen(ui);
@@ -363,6 +389,9 @@ impl BigStarApp {
             self.workspace.show_detached(&ctx, session, &mut self.textures, keyboard);
             self.tools.show(&ctx, session, &mut self.workspace);
             self.builds.windows(&ctx, session);
+        }
+        self.preferences_window(&ctx);
+        if let Some(session) = &mut self.session {
             session.request_actor_draws();
         }
         self.import_window(&ctx);
@@ -449,6 +478,8 @@ impl BigStarApp {
         let tools = &mut self.tools;
         let workspace = &mut self.workspace;
         let builds = &mut self.builds;
+        let language = self.language;
+        let preferences = &mut self.preferences;
         egui::Panel::top("top").show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
@@ -469,16 +500,26 @@ impl BigStarApp {
                         ui.weak(title);
                     }
                     ui.separator();
-                    ui.menu_button("Tools", |ui| tools::menu(ui, tools, session, services));
+                    ui.menu_button(language.tr("Tools"), |ui| tools::menu(ui, tools, session, services, language));
                     ui.menu_button("Build", |ui| builds.build_menu(ui, session));
-                    ui.menu_button("Distribution", |ui| builds.distribution_menu(ui, session, services));
-                    ui.menu_button("View", |ui| {
+                    ui.menu_button(language.tr("Distribution"), |ui| builds.distribution_menu(ui, session, services));
+                    ui.menu_button(language.tr("View"), |ui| {
                         if ui.button("Preview").clicked() {
                             workspace.show_preview_tab();
                             ui.close();
                         }
                         if ui.selectable_label(builds.show_output, "Output").clicked() {
                             builds.show_output = !builds.show_output;
+                            ui.close();
+                        }
+                        ui.separator();
+                        if ui.button("Preferences…").clicked() {
+                            let settings = session.settings.as_ref();
+                            *preferences = Some(Preferences {
+                                language,
+                                autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
+                                backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
+                            });
                             ui.close();
                         }
                     });
@@ -597,7 +638,7 @@ impl BigStarApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.left, Left::Levels, "Levels");
                 ui.selectable_value(&mut self.left, Left::Palette, "Palette");
-                ui.selectable_value(&mut self.left, Left::Filesystem, "Filesystem");
+                ui.selectable_value(&mut self.left, Left::Filesystem, self.language.tr("Filesystem"));
             });
             ui.separator();
             match self.left {
@@ -775,6 +816,58 @@ impl BigStarApp {
         );
         if let Some(accept) = answer {
             session.answer_recovery(accept);
+        }
+    }
+
+    fn preferences_window(&mut self, ctx: &egui::Context) {
+        let Some(preferences) = &mut self.preferences else { return };
+        let project = self.session.as_ref().is_some_and(|session| session.project.is_some());
+        let mut open = true;
+        let mut answer = None;
+        egui::Window::new("Preferences").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            egui::Grid::new("preferences").num_columns(2).show(ui, |ui| {
+                ui.label(preferences.language.tr("Language"));
+                egui::ComboBox::from_id_salt("preference-language").selected_text(preferences.language.name()).show_ui(ui, |ui| {
+                    for language in Language::ALL {
+                        ui.selectable_value(&mut preferences.language, language, language.name());
+                    }
+                });
+                ui.end_row();
+                ui.label("Recovery snapshots");
+                ui.add_enabled(project, egui::DragValue::new(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
+                    .on_hover_text("How often unsaved level edits are written to a recovery snapshot.");
+                ui.end_row();
+                ui.label("Backups kept");
+                ui.add_enabled(project, egui::DragValue::new(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
+                    "How many level-save and patch-import backups are kept, of each kind. Older ones are removed when a project opens and whenever one is added.",
+                );
+                ui.end_row();
+            });
+            if !project {
+                ui.weak("The snapshot interval and the backups kept belong to a project: open one to change them.");
+            }
+            ui.horizontal(|ui| {
+                if ui.button("Save").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Cancel").clicked() {
+                    answer = Some(false);
+                }
+            });
+        });
+        match answer {
+            Some(true) => {
+                let chosen = preferences.clone();
+                self.preferences = None;
+                self.language = chosen.language;
+                self.services.store(LANGUAGE_KEY, chosen.language.code());
+                if let Some(session) = self.session.as_mut().filter(|session| session.project.is_some()) {
+                    session.set_preferences(chosen.autosave_minutes, chosen.backups_kept);
+                }
+            }
+            Some(false) => self.preferences = None,
+            None if !open => self.preferences = None,
+            None => {}
         }
     }
 

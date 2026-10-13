@@ -1603,3 +1603,43 @@ fn module_changes_export_as_a_patch_and_a_mismatched_one_asks_first() {
     harness.run();
     assert_eq!(shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes), Some(vec![7]));
 }
+
+#[test]
+fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on_the_host() {
+    let services = MemoryServices::default();
+    let stored = services.sharing_values();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.get_by_label("View").click();
+    harness.run();
+    harness.get_by_label("Preferences…").click();
+    harness.run();
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| egui_kittest::kittest::NodeT::accesskit_node(node).value().as_deref() == Some("English"))
+        .expect("the language list")
+        .click();
+    harness.run();
+    harness.get_by_label("Nederlands").click();
+    harness.run();
+    if let Some(preferences) = harness.state_mut().preferences.as_mut() {
+        preferences.autosave_minutes = 5;
+        preferences.backups_kept = 3;
+    }
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    // The menus read in Dutch now, and the choice is kept for the next run.
+    harness.get_by_label("Gereedschap");
+    harness.get_by_label("Beeld");
+    harness.get_by_label("Bestandssysteem");
+    assert_eq!(crate::Services::load(&stored, crate::LANGUAGE_KEY).as_deref(), Some("nl"));
+    let settings = harness.state().session().unwrap().settings.clone().unwrap();
+    assert_eq!((settings.autosave_minutes, settings.backups_kept), (5, 3));
+    let again = BigStarApp::new(Box::new(stored.sharing_values()));
+    assert_eq!(again.language, crate::Language::Dutch);
+}

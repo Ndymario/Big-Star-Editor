@@ -149,4 +149,8 @@ pub struct ProjectSettings {
     /// The enabled modules, in `modules.enabled` order.
     pub modules: Vec<String>,
     pub patcher_error: Option<String>,
+    /// How often unsaved level edits are written to a recovery snapshot, in minutes (1 to 60).
+    pub autosave_minutes: u32,
+    /// How many level-save and patch-import backups of each kind are kept (1 to 100).
+    pub backups_kept: u32,
 }

@@ -1,15 +1,9 @@
-//! Where a catalog area's two files live in a ROM, and where their edits go.
+//! Where a catalog area's two files live in a ROM, by the addresses the effective filesystem and module targets use.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 
-use bigstar_core::{Error, ErrorCode, Result, read_file};
+use bigstar_core::{Error, ErrorCode, Result};
 use bigstar_project::{LevelCatalogArea, RomReader};
-
-/// Where edited files wait for a build, relative to the project. The module-aware target of the C++ editor needs the
-/// effective filesystem (Phase 10 of docs/rust-port-plan.md); until then every save lands here, and a level reopens
-/// from here before it reads the ROM.
-pub(crate) const EDITS_DIR: &str = "edits";
 
 /// One file of a level: a plain file of the ROM, or a member of an archive in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -85,37 +79,13 @@ fn unsafe_name(name: &str) -> bool {
     name.starts_with('/') || name.contains('\\') || name.contains('\0') || name.split('/').any(|part| part == "..")
 }
 
-/// Where an edited copy of `source` is kept, relative to the project. An archive member goes to `<archive>_<ext>/`
-/// beside the archive, the layout a build sweeps back into the container.
-pub(crate) fn edit_path(source: &Source) -> Result<PathBuf> {
+/// A level file's address, as the filesystem view, the effective filesystem and module targets name it: a plain path,
+/// or an archive and its member joined by `!`.
+pub(crate) fn address(source: &Source) -> Result<String> {
     let refuse = || Error::new(ErrorCode::InvalidArgument, "the ROM names a file outside the project");
-    let relative = match source {
-        Source::File(path) => {
-            if unsafe_name(path) {
-                return Err(refuse());
-            }
-            path.clone()
-        }
-        Source::Member { archive, member } => {
-            if unsafe_name(archive) || unsafe_name(member) {
-                return Err(refuse());
-            }
-            let (directory, name) = archive.rsplit_once('/').unwrap_or(("", archive));
-            let folder = name.replace('.', "_");
-            if directory.is_empty() { format!("{folder}/{member}") } else { format!("{directory}/{folder}/{member}") }
-        }
-    };
-    Ok(Path::new(EDITS_DIR).join(relative))
-}
-
-/// The edited copy when there is one, otherwise the ROM's.
-pub(crate) fn read_source(rom: &mut RomReader, project_dir: &Path, source: &Source) -> Result<Vec<u8>> {
-    let edited = project_dir.join(edit_path(source)?);
-    if edited.is_file() {
-        return read_file(&edited);
-    }
     match source {
-        Source::File(path) => rom.read(path),
-        Source::Member { archive, member } => rom.read_member(archive, member),
+        Source::File(path) if !unsafe_name(path) => Ok(path.clone()),
+        Source::Member { archive, member } if !unsafe_name(archive) && !unsafe_name(member) => Ok(format!("{archive}!{member}")),
+        _ => Err(refuse()),
     }
 }

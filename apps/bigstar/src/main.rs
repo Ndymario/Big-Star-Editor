@@ -2,6 +2,8 @@
 //! the same `bigstar-ui-egui` frontend the browser build shows.
 
 mod services;
+#[cfg(test)]
+mod tests;
 
 use bigstar_ui_egui::{BigStarApp, EMBEDDED_ROOT_KEY, Services};
 use services::NativeServices;

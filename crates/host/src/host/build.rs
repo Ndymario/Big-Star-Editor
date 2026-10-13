@@ -315,7 +315,9 @@ impl Shared {
         if ids_differ && !accept_id_mismatch {
             return Ok(Response::PatchIdsDiffer);
         }
+        back_up(&open.directory, "import", &targets)?;
         write_all_or_none(&targets)?;
+        prune_patch_backups(&open.directory, open_backups_kept(&open.settings));
         open.filesystem = None;
         open.patcher = None;
         open.graphics = None;

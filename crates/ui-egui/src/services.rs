@@ -29,6 +29,12 @@ pub trait Services {
         "ws://127.0.0.1:7878".to_owned()
     }
 
+    /// A token the page was opened with, as the host's printed link carries it; it also means the host to connect to is
+    /// the default one.
+    fn default_token(&self) -> Option<String> {
+        None
+    }
+
     /// Asks the person where to save `bytes` (a file named like `suggested`, of type `extension`) and writes them.
     /// `Ok(false)` when they cancelled.
     fn save_file(&self, _title: &str, _suggested: &str, _extension: &str, _bytes: &[u8]) -> Result<bool, String> {

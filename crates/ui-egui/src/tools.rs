@@ -263,7 +263,7 @@ impl Tools {
 }
 
 /// The Level menu.
-pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services) {
+pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services, language: crate::i18n::Language) {
     let editing = session.active.is_some();
     let project = session.project.is_some();
     if ui.add_enabled(editing, egui::Button::new("Tilesets and Backgrounds…")).clicked() {
@@ -273,7 +273,7 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dy
         ui.close();
     }
     ui.separator();
-    if ui.add_enabled(editing, egui::Button::new("Hex Editor…")).clicked() {
+    if ui.add_enabled(editing, egui::Button::new(format!("{}…", language.tr("Hex Editor")))).clicked() {
         session.request_level_bytes(BytesFor::HexEditor);
         ui.close();
     }

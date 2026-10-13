@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 pub type RequestId = u64;
 
@@ -99,6 +99,11 @@ pub enum Request {
     },
     SetActiveModule {
         module: String,
+    },
+    /// The open project's autosave interval and how many backups it keeps; clamped to 1–60 and 1–100.
+    SetPreferences {
+        autosave_minutes: u32,
+        backups_kept: u32,
     },
     /// What the open project's modules declare and which overlay each object bank loads.
     ProjectData,

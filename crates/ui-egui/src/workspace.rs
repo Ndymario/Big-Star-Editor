@@ -149,6 +149,8 @@ pub struct Workspace {
     next_file: u64,
     /// Tileset workspaces, by the level they belong to.
     pub tilesets: BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
+    /// The interface language, for the tabs' own names.
+    pub language: crate::i18n::Language,
 }
 
 impl Default for Workspace {
@@ -168,6 +170,7 @@ impl Default for Workspace {
             files: BTreeMap::new(),
             next_file: 1,
             tilesets: BTreeMap::new(),
+            language: crate::i18n::Language::default(),
         }
     }
 }
@@ -539,6 +542,7 @@ impl Workspace {
             closed_files: Vec::new(),
             tilesets: &mut tilesets,
             closed_tilesets: Vec::new(),
+            language: self.language,
         };
         DockArea::new(&mut self.dock).show_close_buttons(true).show_leaf_collapse_buttons(false).show_inside(ui, &mut viewer);
         let Viewer { close, detach, session, closed_files, closed_tilesets, .. } = viewer;
@@ -633,6 +637,7 @@ struct Viewer<'a, 'f> {
     closed_files: Vec<u64>,
     tilesets: &'f mut BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
     closed_tilesets: Vec<LevelId>,
+    language: crate::i18n::Language,
     pool: &'a mut TexturePool,
     keyboard: bool,
     close: Vec<LevelId>,
@@ -664,7 +669,7 @@ impl TabViewer for Viewer<'_, '_> {
                 None => "…".into(),
             },
             DocTab::Tileset(level) => match self.tilesets.get(level) {
-                Some((doc, _)) => format!("Tilesets — {}", doc.title).into(),
+                Some((doc, _)) => format!("{} — {}", self.language.tr("Tilesets"), doc.title).into(),
                 None => "…".into(),
             },
         }

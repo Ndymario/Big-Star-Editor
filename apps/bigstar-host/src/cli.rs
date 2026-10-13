@@ -267,6 +267,9 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
         };
         let _ = writeln!(out, "Serving \"{}\" on ws://{bound}/ws", host.workspace_name());
         let _ = writeln!(out, "Token: {token}");
+        if server::has_web_bundle() {
+            let _ = writeln!(out, "Open http://{bound}/?token={token} in a browser");
+        }
         if !bound.ip().is_loopback() {
             let _ = writeln!(err, "warning: {bound} is not a loopback address; the connection is not encrypted");
         }

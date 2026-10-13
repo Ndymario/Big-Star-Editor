@@ -1,4 +1,5 @@
-//! The network face of the host: `GET /` and `GET /ws`. A connection is one `HostSession` behind the same
+//! The network face of the host: the browser frontend at `GET /` (when the host was built with its bundle) and
+//! `GET /ws`. A connection is one `HostSession` behind the same
 //! `InProcess` worker the desktop app uses, so what runs here is exactly what runs there, with a socket in front.
 
 use std::collections::HashMap;
@@ -8,8 +9,8 @@ use std::time::Duration;
 
 use axum::Router;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
+use axum::extract::{Path, Query, State};
+use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
 use bigstar_client::{Connection, HostInfo, InProcess, Incoming, Waker};
@@ -54,8 +55,37 @@ pub fn tokens_match(given: &str, expected: &str) -> bool {
     difference == 0
 }
 
+mod bundle {
+    include!(concat!(env!("OUT_DIR"), "/web_bundle.rs"));
+}
+
+/// Whether this host carries the browser frontend.
+pub fn has_web_bundle() -> bool {
+    bundle::WEB_FILES.iter().any(|(name, _)| *name == "index.html")
+}
+
 pub fn router(host: Host, token: String) -> Router {
-    Router::new().route("/", get(index)).route("/ws", get(upgrade)).with_state(AppState { host, token: Arc::new(token) })
+    Router::new().route("/", get(index)).route("/ws", get(upgrade)).route("/{file}", get(asset)).with_state(AppState { host, token: Arc::new(token) })
+}
+
+fn content_type(name: &str) -> &'static str {
+    match name.rsplit_once('.').map(|(_, extension)| extension) {
+        Some("html") => "text/html; charset=utf-8",
+        Some("js") => "text/javascript; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("css") => "text/css; charset=utf-8",
+        Some("png") => "image/png",
+        Some("json") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+/// One file of the bundle. The page and its scripts carry no secret: the socket asks for the token.
+async fn asset(Path(file): Path<String>) -> Response {
+    match bundle::WEB_FILES.iter().find(|(name, _)| *name == file) {
+        Some((name, bytes)) => ([(header::CONTENT_TYPE, content_type(name))], *bytes).into_response(),
+        None => (StatusCode::NOT_FOUND, "not found").into_response(),
+    }
 }
 
 /// Serves until the future is dropped.
@@ -70,8 +100,15 @@ pub async fn bind(address: SocketAddr) -> std::io::Result<(TcpListener, SocketAd
     Ok((listener, bound))
 }
 
-async fn index() -> Html<&'static str> {
-    Html("<!doctype html><title>Big Star host</title><p>Big Star host is running. Connect a Big Star frontend to <code>/ws</code>.</p>")
+async fn index() -> Response {
+    match bundle::WEB_FILES.iter().find(|(name, _)| *name == "index.html") {
+        Some((_, bytes)) => Html(*bytes).into_response(),
+        None => Html(
+            "<!doctype html><title>Big Star host</title><p>Big Star host is running. Connect a Big Star frontend to <code>/ws</code>.</p>\
+             <p>This host was built without the browser frontend: run <code>trunk build --release</code> in <code>apps/bigstar-web</code> and build the host again.</p>",
+        )
+        .into_response(),
+    }
 }
 
 async fn upgrade(State(state): State<AppState>, Query(query): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
@@ -219,6 +256,40 @@ mod tests {
             Some(Incoming::Response { result, .. }) => result,
             other => panic!("{other:?}"),
         }
+    }
+
+    /// The status and body of `GET path` from a running host, over a plain socket.
+    fn get(base: &str, path: &str) -> (String, Vec<u8>) {
+        use std::io::{Read, Write};
+        let address = base.trim_start_matches("ws://");
+        let mut stream = std::net::TcpStream::connect(address).unwrap();
+        write!(stream, "GET {path} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n").unwrap();
+        let mut response = Vec::new();
+        stream.read_to_end(&mut response).unwrap();
+        let split = response.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
+        let head = String::from_utf8_lossy(&response[..split]).into_owned();
+        (head.lines().next().unwrap_or_default().to_owned(), response[split + 4..].to_vec())
+    }
+
+    #[test]
+    fn the_page_is_the_browser_frontend_when_the_host_carries_it() {
+        let root = TempDir::new("host-page");
+        let base = start(root.path(), "secret");
+        let (status, body) = get(&base, "/");
+        assert!(status.contains("200"), "{status}");
+        let page = String::from_utf8_lossy(&body);
+        if super::has_web_bundle() {
+            // Every file the page names is served, and nothing else is.
+            assert!(page.contains("bigstar_canvas"));
+            for (name, bytes) in super::bundle::WEB_FILES {
+                let (status, body) = get(&base, &format!("/{name}"));
+                assert!(status.contains("200"), "{name}: {status}");
+                assert_eq!(body.len(), bytes.len());
+            }
+        } else {
+            assert!(page.contains("trunk build --release"));
+        }
+        assert!(get(&base, "/nothing.js").0.contains("404"));
     }
 
     #[test]

@@ -137,6 +137,7 @@ fn graphics_messages_survive_the_wire() {
         Request::WriteBanner { bytes: vec![1, 0, 0xff] },
         Request::TilesetResources { level: 3 },
         Request::BuildConfig,
+        Request::SetPreferences { autosave_minutes: 5, backups_kept: 20 },
         Request::MigrateConfig,
         Request::Build { verbose: true },
         Request::CancelBuild,

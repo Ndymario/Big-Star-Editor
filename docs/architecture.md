@@ -1,66 +1,101 @@
 # Architecture
 
-## Decision: strict backend/frontend split
+## Decision: the host holds the projects, the frontend is a view
 
-The backend lives under `libs/` and is portable C++20. It must not expose Qt, WinForms, .NET, browser, DOM, or UI-thread concepts. Public backend headers use STL value types such as `std::string`, `std::vector`, `std::span`, and `std::filesystem::path`, plus explicit result/error structures.
+Big Star is split where the ROM is. A **host** runs on the machine with the projects: it reads ROMs, runs Lua and
+NCPatcher, watches files and writes edits. A **frontend** shows what a host holds and sends it requests. The browser
+never opens a ROM; the desktop app runs a host in-process and can also connect to a remote one. Both frontends are
+the same `ui-egui` crate, and both speak one protocol.
 
-The frontend lives under `apps/`. Qt-specific models and widgets are allowed only in `apps/nsmb-qt`; they adapt backend data and do not become the source of truth. The web frontend uses a separate C ABI adapter around the same backend.
+A host is scoped to a **workspace root**: it lists, creates, imports and opens projects under it, and refuses any
+path that leaves it, symlinks included. Access is one user with a token; the host binds `127.0.0.1` by default.
+Several frontends may connect at once and see each other's edits.
 
-## Module boundaries
+## Crates
 
-- `nsmb-core`: common infrastructure: `Result<T>`, `Error`, `ByteBuffer`, little-endian reader/writer, atomic file I/O, logging, and undo/redo command interfaces.
-- `nsmb-nds`: NDS-level concepts independent from NSMB: GBATEK-backed ROM headers, ARM binary ranges, FNT/FAT structures, overlay tables, and banner sizing.
-- `nsmb-formats`: defensive NSMB level parsing/serialization plus portable Nitro compression, editable tile/palette/screen-map/Map16/object-layout codecs, TEX0, quantisation, and tileset bundles.
-- `nsmb-project`: editor project state, manifest serialization, dirty-state tracking, editable level sessions, compound command history, regional ROM resource resolution, and decoded graphics assembly. It also holds `RomReader`, which reads a `.nds` in place, and `EffectiveFilesystem`, which answers a read as the module source a build would use when one exists and the ROM otherwise. Those need both `nsmb-nds` and `nsmb-formats` -- a NARC's name table is an FNT, so `nsmb-formats` already depends on `nsmb-nds` -- and putting them a layer lower would close the loop.
-- `nsmb-patching`: no-shell external process boundary for NCPatcher.
+Wasm-safe (they build for `wasm32-unknown-unknown`, and `cargo xtask ci` checks it):
 
-## Error policy
+- `core`: `Error`/`Result`, little-endian reading and writing, atomic file writes, command history.
+- `nds`: the DS ROM header, FNT/FAT, overlay tables, banner sizing.
+- `formats`: NSMB levels and glue, Nitro 2D (NCLR/NCGR/NSCR/NCER/NANR), TEX0, BMG, NARC, tilesets and tilemaps,
+  uiStudio resources, banner, ROM user metadata, LZ10/LZ11/BLZ, quantisation, the 3D tile substitution.
+- `level`: `EditableLevel` and its commands, tileset references, module data catalogs, `.nml`, `.nsmbpatch` and
+  recovery snapshots. Pure: no filesystem.
+- `protocol`: the requests, responses and events, MessagePack on the wire.
+- `client`: a connection to a host: `InProcess` (a host session on a worker thread) or `WebSocket`.
+- `ui-egui`: the frontend. It must not depend on `project`, `patching` or `host`, and nothing below it may depend on
+  egui, eframe or rfd.
 
-Backend APIs return `nsmb::core::Result<T>` across module boundaries. Implementations may use local RAII and STL facilities internally, but parser/service APIs should report structured errors instead of leaking exceptions to callers.
+Host-only:
 
-## Current vertical slice
+- `patching`: the no-shell process runner and the NCPatcher 2 client (config, modules, file plans, builds, migration,
+  extraction).
+- `project`: the project manifest, `RomReader` (a `.nds` read in place), `EffectiveFilesystem` (a read answered by
+  the module a build would use, else the ROM), the filesystem view, graphics resolution, Lua actors and tiles, the
+  transactional patch apply.
+- `host`: the `Service` behind every connection: level sessions keyed by id (opening a level or a project that is
+  already open joins it), graphics as content-hashed textures, the filesystem dock's rows, file writes into module
+  targets, builds, recovery and backups.
 
-M0-M4 provides CMake configuration, backend libraries, a CLI, an optional Qt editor, YAML project manifest round-trip, NDS header parsing, in-place ROM reading, level and graphics parsing, entity editing, safe persistence, and unit tests. The Qt UI adapts backend-owned editing sessions and command histories; closing a view does not discard its edited session.
+Apps: `bigstar` (desktop: eframe, rfd, an embedded host), `bigstar-web` (the trunk bundle), `bigstar-host` (the
+command line and `serve`, which hands out the bundle and `/ws`), and `xtask` (the gates).
 
-The Qt workspace uses a reusable read-only Preview tab and one unique editable document per open level. Documents can move between the tab well and separate windows. Docks, open documents, detached-window geometry, zoom, and pan are restored per project with `QSettings`; the backend project and level sessions remain the source of truth.
+## The protocol
 
-Editable canvases provide native Qt tools for selection, panning, placement, paths, marquee selection, snapping, movement, supported resizing, and deletion. A gesture or same-kind multi-edit is submitted as one compound backend command so Undo/Redo follows user intent. Parsed level views remain visible but read-only until their serializer is implemented.
+A frontend sends `Request`s with ids and gets `Response`s; the host also pushes `Event`s to every connection: level
+changes, files changed on disk, graphics generations, settings, log lines and build progress. `PROTOCOL_VERSION` is
+checked in the `Hello`, and a frontend that disagrees is refused.
 
-ROM graphics are resolved from the built ROM's own name table and validated region-specific Overlay 0 tables, read through `EffectiveFilesystem` so a pending module edit is what the canvas draws. Portable backend codecs assemble and edit terrain, tileset objects, backgrounds, and foregrounds; Qt supplies only PNG I/O and widget presentation. Sandboxed per-actor Lua files own actor metadata and select verified sprite sheets, palettes, or model textures by filename through the active module-aware filesystem view; unknown layouts retain labeled fallbacks. Extracted artwork is never embedded in the application.
+Edits carry the revision they were made against, and a stale one is refused, so two frontends cannot overwrite each
+other's work; the loser refetches. `LevelChanged` tells the other frontends to refetch the level. Graphics carry a
+generation: when a watched file or the variant changes, the generation grows, everything served before is stale,
+and frontends ask again while keeping what is on screen until the replacement arrives.
 
-Course/BGDat saves preserve untouched block bytes, rebuild the structures the editor owns, validate the serialized result by parsing it again, back up both original files, and atomically replace each target. Manifest writes use the same failure-safe replacement policy. Backups are kept per kind and swept to the ten most recent, so an area that only ever grew is bounded. Building a ROM is NCPatcher's job alone; the editor validates what it produced and moves it into place.
+## Saving
 
-## Async frontend design
+Level saves go to the project's edit targets, are parsed again before they are written, back up what they overwrite
+into `.big-star-backups/levels-…`, and write both files or neither. File and tileset edits go into the module that
+supplies the file, or the active one; new NitroFS files must be under `z_new/`; a member of an archive is written
+beside it for the next build to sweep back in. Nothing is ever written into the ROM. Backups are kept per kind, as
+many as the project's preference says, and swept when a project opens and whenever one is added.
 
-Long-running external tools are modeled as services with structured requests and results. The Qt shell still runs external-tool actions synchronously, but the service boundary is suitable for later execution on worker threads with progress reporting and cancellation.
+Unsaved levels are written to `.big-star-autosave` as often as the project's preference says (every minute by
+default). The next session offers them back.
 
-Large graphics resources decode on the global Qt thread pool. Each request carries a generation token, so a result is applied only when it still belongs to the current level state. `QFileSystemWatcher` events are debounced and refresh only documents that use the changed file. Failed refreshes leave the last valid image in place and emit diagnostics instead of blanking the canvas.
+## Builds
 
-ROM-backed visual behavior is covered by the focused human checks in `docs/m4-manual-checklist.md`.
+Building is NCPatcher's job alone. A build runs on its own host thread: it saves the edited levels, builds the active
+variant to a staging ROM, validates what came out, and only then makes it the project's ROM. Progress, diagnostics
+and log lines stream to every frontend as `Event::Build`. When a build applies, the host closes its level sessions,
+reads the new ROM and announces it, and frontends reopen their levels as they do after a variant switch.
 
-## WebAssembly boundary
+## Frontend
 
-`apps/nsmb-web/include/big_star_web.h` is the explicit versioned boundary between
-portable C++ and the browser. Emscripten compiles the formats/core code and the
-portable `EditableLevel` implementation, but not project-directory, patching,
-CLI, Qt, or process adapters. Opaque handles own sessions; named JSON snapshots
-carry presentation data; typed mutation calls feed the same command history as
-the desktop editor; serialization exposes owned course/BGDat byte spans.
+`BigStarApp` owns a `Session` (the connection, its pending requests, and everything the host has said) and the
+widgets: the level canvas, the property and level-data panels, the picker, the Filesystem dock, the document
+workspace (egui_dock), the file editors, the tileset workspace, the Output panel. Platform services (stored values,
+file dialogs, the embedded host) come in through the `Services` trait, so the same crate runs on the desktop, in a
+browser and under test. Everything the person does is either a local view change or a request; nothing is edited in
+the frontend that the host does not confirm.
 
-The JavaScript shell owns browser file inputs, DOM rendering, Blob downloads,
-and WebAssembly memory copies. No browser type or lifecycle leaks into `libs/`.
-The initial web scope is intentionally a local schematic level editor rather
-than a second ROM/module manager.
+## Testing
+
+Ported C++ cases are Rust tests beside the code they test. UI behaviour is tested with `egui_kittest` against
+`DemoConnection`, an in-memory host with a level, art and files of its own; `examples/ui_shot.rs` renders the
+interface headlessly, against the demo or a running host. Tests that need a real NSMB ROM run when
+`BIGSTAR_NSMB_ROM` names one. `cargo xtask ci` runs fmt, clippy with warnings denied, the tests, the layering check
+and the wasm build.
 
 ## Network filesystem decision
 
-Big Star does not define a separate remote-filesystem protocol. An active
-module's NitroFS tree is an ordinary project directory and can already live on
-an OS-mounted network volume or in a synchronised folder; the existing watcher,
-atomic-write, provenance, and pending-build behavior remains the same. Building
-another transport without an authentication, conflict-resolution, offline, and
-recovery contract would duplicate that workflow while weakening its safety.
+Big Star does not define a separate remote-filesystem protocol. An active module's NitroFS tree is an ordinary
+project directory and can live on an OS-mounted network volume or in a synchronised folder; the host's watcher,
+atomic writes, provenance and pending-build behaviour stay the same. The host protocol is for editing, not for
+moving files around.
 
 ## Project files
 
-Projects are opened by directory, so the project manifest does not serialize an absolute project root. `big-star-project.yaml` stores only project-relative paths such as `big-star-build.nds`, which keeps projects portable across machines and avoids leaking user filesystem paths. See `docs/project-format.md`.
+Projects are opened by directory, so the project manifest does not serialize an absolute project root.
+`big-star-project.yaml` stores only project-relative paths such as `big-star-build.nds`, which keeps projects
+portable across machines and avoids leaking user filesystem paths. The host keeps its per-project choices (variant,
+module, autosave interval, backups kept) in `.big-star-workspace.json` beside it. See `docs/project-format.md`.

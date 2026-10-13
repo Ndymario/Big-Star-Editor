@@ -1,5 +1,5 @@
 //! The whole stack in one process: the frontend, an in-process host, a project imported through the file browser, a
-//! level opened, an object dragged, saved to disk.
+//! level opened, an object dragged, saved into a module.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -98,6 +98,20 @@ fn import_open_drag_and_save_through_the_embedded_host() {
     harness.run();
     harness.get_by_label("Import").click();
     until(&mut harness, "the imported project to open", |app| app.session().is_some_and(|s| s.project.is_some() && !s.worlds.is_empty()));
+    // A module to save into, as a build of the project would have recorded it; the host's watcher notices it.
+    let project = workspace.path().join("roms/game");
+    let modules = format!(
+        r#"{{"schema":"ncpatcher.modules/1","dir":"{dir}/modules","modules":[{{"key":"mine","id":"Mine","name":"My module","enabled":true,
+            "dir":"{dir}/modules/mine","nitrofs":{{"dir":"{dir}/modules/mine/nitrofs"}},"components":[]}}]}}"#,
+        dir = project.display()
+    );
+    write_bytes(&project.join("build/generated/modules.json"), modules.as_bytes());
+    std::fs::create_dir_all(project.join("modules/mine/nitrofs")).unwrap();
+    let settle = Instant::now();
+    while settle.elapsed() < Duration::from_millis(800) {
+        harness.step();
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
     harness.get_by_label("World 1").click();
     harness.run();
@@ -126,8 +140,9 @@ fn import_open_drag_and_save_through_the_embedded_host() {
     harness.get_by_label("Save").click();
     until(&mut harness, "the save", |app| app.session().and_then(|s| s.level()).is_some_and(|v| !v.snapshot.dirty));
 
-    let saved = std::fs::read(workspace.path().join("roms/game/edits/course/A01_1.bin")).unwrap();
-    let saved_bgdat = std::fs::read(workspace.path().join("roms/game/edits/course/A01_1_bgdat.bin")).unwrap();
+    // Into the module, for NCPatcher to build into the ROM.
+    let saved = std::fs::read(project.join("modules/mine/nitrofs/course/A01_1.bin")).unwrap();
+    let saved_bgdat = std::fs::read(project.join("modules/mine/nitrofs/course/A01_1_bgdat.bin")).unwrap();
     let reloaded = EditableLevel::load(&saved, &saved_bgdat, None).unwrap();
     assert_eq!(reloaded.objects()[0].x, 4);
 }

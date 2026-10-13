@@ -1,98 +1,91 @@
 # Big Star Editor
 
-Big Star Editor is a modern, portable C++ rewrite/rearchitecture of the New Super Mario Bros. DS editor. It now has backend libraries, service boundaries, a CLI, a Qt 6 desktop editor, tests, and documentation. It does **not** include ROM data, Nintendo SDK files, Nitro SDK contents, or game assets.
+Big Star Editor is a New Super Mario Bros. DS editor, written in Rust: a host that holds your projects and their ROMs,
+and one egui frontend that runs as a desktop app or in a browser. It does **not** include ROM data, Nintendo SDK
+files, Nitro SDK contents or game assets.
 
-## Architecture at a glance
+## How it fits together
 
-- `libs/nsmb-core`: result/error types, byte buffers, endian utilities, atomic file I/O, logging, and command interfaces.
-- `libs/nsmb-nds`: GBATEK-backed Nintendo DS ROM/header/FNT/FAT/overlay structures plus built-in extraction/build services.
-- `libs/nsmb-formats`: defensive NSMB level, Nitro 2D/TEX0, BMG message, and DS compression codecs.
-- `libs/nsmb-project`: frontend-agnostic project model, manifest load/save, editable level sessions, and undo/redo commands.
-- `libs/nsmb-patching`: narrow service wrapper for NCPatcher.
-- `apps/nsmb-cli`: minimal CLI for inspection and service command construction.
-- `apps/nsmb-qt`: optional Qt 6 Widgets editor with project/ROM file workflows, level listing, property editing, selection highlighting, undo/redo, safe saves, patching, and ROM builds.
-- `apps/nsmb-web`: dependency-free browser level editor over an explicit C ABI and WebAssembly adapter.
+- **The host** (`bigstar-host`, or built into the desktop app) runs on the machine with the projects. It reads the
+  `.nds` in place, keeps the level sessions and their undo history, renders tilesets and Lua actors, runs NCPatcher,
+  and writes every edit into a module's NitroFS tree. Nothing outside its workspace folder is reachable.
+- **The frontend** (`crates/ui-egui`) is a view of a host. The desktop app (`apps/bigstar`) runs a host in-process
+  and can also connect to a remote one; the browser build (`apps/bigstar-web`) always connects to a host, usually
+  the one that served the page. Both speak the same MessagePack protocol (`crates/protocol`).
 
-Project manifests are YAML files named `big-star-project.yaml`. They store project-relative paths only; the project directory is implied by where the manifest is opened.
+See [Architecture](docs/architecture.md) for the crates and their boundaries.
 
-## Build requirements
+## What it edits
 
-- CMake 3.20 or newer.
-- A C++20 compiler:
-  - Windows: Visual Studio 2022 or recent LLVM/MinGW.
-  - Linux: GCC 11+ or Clang 14+.
-  - macOS: AppleClang from a recent Xcode.
-- Lua 5.4 or newer development headers and library.
-- Optional: Qt 6 Widgets development package for `apps/nsmb-qt`.
-- Optional: Emscripten for the browser frontend.
+- **Levels**: objects, sprites, entrances, zones, views, paths and progress paths on a canvas with real tilesets and
+  actor graphics, with selection, marquee, resize, Ctrl-drag clone, snapping, copy/paste compatible with the Qt
+  editor, named undo history, the property panels, the actor picker and the level-data tables. Several levels open
+  as documents, in tabs or windows of their own; a workspace is remembered per host and project.
+- **Files**: the Filesystem dock lists the ROM as the active variant's modules change it, opens NARCs like folders,
+  and adds, replaces, extracts and removes module files. Files open in the editor that understands them, through
+  any LZ10/LZ11 wrapper: the graphics editor (NCLR/NCGR/NSCR/NCER/NANR/TEX0 and headerless sheets, paired with
+  their palettes), the message editor (BMG text, escapes, attributes, IDs, text export/import), the uiStudio layout
+  pages (BNBL/BNCL/BNCD/ENPG), the ROM banner and the ROM user metadata (NSMBeUD), or hex.
+- **Tilesets and backgrounds**: graphics, Map16, objects, behaviours, background and foreground maps and the level's
+  slot IDs, with quantised PNG and `.bstileset` import/export. Map16 entries that name another tileset's tiles are
+  drawn the way the game composes them ([Tileset memory](docs/tileset-memory.md)), and blocks the game hands to its
+  3D engine are drawn from the ROM's own textures by Lua scripts ([Lua tiles](docs/lua-tiles.md)).
+- **Actors** are one `.lua` file each, declaring their fields and drawing themselves ([Lua actors](docs/lua-actors.md)).
+- **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
+  and read the ROM a successful build produces. `.nsmbpatch` export/import and xdelta create/apply are in the
+  Distribution menu.
+- Recovery snapshots of unsaved levels, backups of what a save overwrites, and five interface languages (English,
+  Dutch, Portuguese, Spanish, French), in Preferences.
 
-## Configure, build, and test
+## Building
 
-```sh
-cmake -S . -B build -DBSE_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-If Qt 6 is unavailable, CMake skips `nsmb-qt` automatically. To disable Qt probing explicitly:
-
-```sh
-cmake -S . -B build -DBSE_BUILD_QT=OFF
-```
-
-## WebAssembly frontend
-
-```sh
-emcmake cmake -S . -B build-wasm \
-  -DBSE_BUILD_TESTS=OFF -DBSE_BUILD_QT=OFF -DCMAKE_BUILD_TYPE=Release
-cmake --build build-wasm --target nsmb-web
-python3 -m http.server --directory build-wasm/apps/nsmb-web
-```
-
-Open `http://127.0.0.1:8000/`. The browser editor keeps the selected course and
-BGDat files local, supports the main level entity tables plus undo/redo, and
-downloads the serialized pair. See `apps/nsmb-web/README.md` for its ABI and
-scope.
-
-## Platform notes
-
-### Windows
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -DBSE_BUILD_TESTS=ON
-cmake --build build --config Release
-ctest --test-dir build -C Release --output-on-failure
-```
-
-Install Qt 6 with the Qt Online Installer or a package manager and ensure `CMAKE_PREFIX_PATH` points at the Qt installation if CMake cannot find it.
-
-### Linux
+Rust 1.90 or newer (the CI gate uses 1.96.1), and for the browser build the `wasm32-unknown-unknown` target and
+[trunk](https://trunkrs.dev).
 
 ```sh
-sudo apt install cmake g++ qt6-base-dev liblua5.4-dev # package names vary by distro
-cmake -S . -B build -DBSE_BUILD_TESTS=ON
-cmake --build build -j
-ctest --test-dir build --output-on-failure
+cargo run --release -p bigstar                      # desktop app
+cargo run --release -p bigstar -- path/to/workspace # with that workspace folder filled in
+cargo xtask ci                                      # fmt, clippy -D warnings, tests, layering, wasm build
 ```
 
-### macOS
+### Serving to a browser
 
 ```sh
-brew install cmake qt lua
-cmake -S . -B build -DCMAKE_PREFIX_PATH="$(brew --prefix qt)" -DBSE_BUILD_TESTS=ON
-cmake --build build
-ctest --test-dir build --output-on-failure
+cd apps/bigstar-web && trunk build --release && cd ../..
+cargo run --release -p bigstar-host-app -- serve path/to/workspace --data data
 ```
 
-## CLI examples
+The host embeds the bundle `trunk` wrote to `dist/web` when it is built, and prints a link with its token:
+
+```
+Serving "workspace" on ws://127.0.0.1:7878/ws
+Token: …
+Open http://127.0.0.1:7878/?token=… in a browser
+```
+
+It binds `127.0.0.1` unless told otherwise (`--bind`, `--port`); `--ncpatcher` and `--xdelta` name the tools it
+runs. A host built without the bundle still serves desktop frontends, and its page says how to add one.
+
+### Command line
 
 ```sh
-./build/apps/nsmb-cli/nsmb-cli --version
-./build/apps/nsmb-cli/nsmb-cli inspect-rom path/to/homebrew_or_user_provided.nds
-./build/apps/nsmb-cli/nsmb-cli import-rom path/to/user_provided.nds my-project
-./build/apps/nsmb-cli/nsmb-cli run-patcher my-project
+cargo run -p bigstar-host-app -- inspect-rom path/to/user_provided.nds
+cargo run -p bigstar-host-app -- import-rom path/to/user_provided.nds my-project
+cargo run -p bigstar-host-app -- run-patcher my-project --variant en
 ```
 
-`import-rom` copies the ROM into the project and atomically writes `big-star-project.yaml` with validated project-relative paths. Nothing is unpacked: the editor reads the `.nds` in place, through its own FAT and name table, and through a container for an archive member. It refuses to overwrite an existing project. Building a ROM is NCPatcher's job -- `run-patcher` -- and the editor's own builder was removed in M16, because repacking a derived tree was never a legitimate way to produce one.
+`import-rom` copies the ROM into the project and writes `big-star-project.yaml` with project-relative paths. Nothing
+is unpacked: the ROM is read in place, through its own FAT and name table. Building a ROM is NCPatcher's job; see
+[NCPatcher integration](docs/ncpatcher-integration.md).
 
-The Qt editor can create and open projects, reopen the last ten through File > Open Recent, import `.nds` files, edit levels and Nitro graphics, inspect the module-aware filesystem, open Nitro archives like folders, and run NCPatcher. Files open the way they do in NSMB Editor: one Open button in the filesystem dock, a double click on any row, or File > Open File for a file anywhere on disk, and Big Star picks the editor that understands the bytes. LZ10/LZ11 wrappers are unwrapped before the editor sees the file and put back exactly as they were found, whichever editor opened it. Its graphics dialog views NCLR/NCGR/NSCR/NCER/NANR and TEX0 resources, paints indexed character pixels, and edits BGR555 palettes with the native colour picker. The message dialog edits BMG bundles -- text, `[type:HEXDATA]` escapes, INF1 attributes and MID1 IDs -- with filtering and a text export/import interchange compatible with the NDS BMG Editor. The tileset workspace edits graphics, Map16, objects, behaviours, background/foreground NSC maps and slot IDs, with quantized PNG and `.bstileset` import/export. A level loads three tilesets into one address space, and a Map16 entry may name a tile another of them supplies, so the Map16 sheet and the level canvas compose all three before drawing -- the way the game does, and unlike NSMB Editor, which leaves those blocks blank. See [Tileset memory](docs/tileset-memory.md). The blocks the game hands to the 3D engine instead -- pipes, fences, pillars, quicksand, the tower, water -- are drawn from the ROM's own NSBTX textures, described by Lua scripts a module can extend, where NSMB Editor ships a hand-drawn PNG. See [Lua tiles](docs/lua-tiles.md). Each actor is one `.lua` file that declares its metadata and settings fields and implements its own drawing program: `init` loads its graphics once, `render` draws them, and `grabBounds`/`renderBounds` size it, reading settings through the named fields the actor declares rather than raw bit shifts. The renderer draws images, sheet tiles and frames, text, and shapes; stills, NCGR/NCLR and TEX0 assets are cached across actors, for both vanilla and enabled-module actors alike. 204 of the 305 shipped actors draw themselves; the rest show a numbered marker, which is what the old editor shows for them too. See [Lua actors](docs/lua-actors.md). The M12 desktop workspace adds a five-tab Project Hub, visual actor grids, minimap and canvas overlays, compressed entity clipboard, named history, `.nml`/`.nsmbpatch`/xdelta exchange, level search and event tools, crash recovery, and five-language shell localization. Level and graphics saves target module NitroFS files, including a member inside an archive, which the next build sweeps back into its container; nothing is ever written into the ROM.
+## Tests
+
+`cargo xtask ci` is the gate. UI behaviour is tested with `egui_kittest`; `cargo run -p bigstar-ui-egui --example
+ui_shot -- <dir>` renders the interface headlessly against a built-in demo host, or against a running host given its
+address and token. Tests that need a real NSMB ROM run when `BIGSTAR_NSMB_ROM` names one.
+
+## The C++ tree
+
+`libs/`, `apps/nsmb-qt`, `apps/nsmb-web`, `apps/nsmb-cli` and `CMakeLists.txt` are the C++/Qt implementation this
+one was ported from ([the port plan](docs/rust-port-plan.md)). They are kept, buildable with CMake, as the reference
+until they are retired.

@@ -217,7 +217,7 @@ fn the_level_list_marks_the_areas_the_rom_holds() {
 
 #[test]
 fn edits_undo_redo_and_save() {
-    let (fixture, mut session) = Fixture::with_project("host-edit");
+    let (fixture, mut session) = with_module("host-edit");
     let opened = open_level(&mut session, "A01_1");
     assert_eq!((opened.revision, opened.dirty, opened.title.as_str()), (1, false, "1-1 Area 1"));
     assert_eq!(opened.objects.len(), 2);
@@ -235,11 +235,38 @@ fn edits_undo_redo_and_save() {
 
     let (saved, _) = edited(session.handle(Request::SaveLevel { level: opened.level }).unwrap());
     assert_eq!((saved.revision, saved.dirty), (5, false));
-    assert!(fixture.root.path().join("proj/edits/course/A01_1.bin").is_file());
-    assert!(fixture.root.path().join("proj/edits/course/A01_1_bgdat.bin").is_file());
+    // Into the module, never the ROM: the ROM's copy is what it was.
+    let module = fixture.root.path().join("proj/modules/mine/nitrofs");
+    assert!(module.join("course/A01_1.bin").is_file());
+    assert!(module.join("course/A01_1_bgdat.bin").is_file());
+    let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "course/A01_1.bin".into() }).unwrap() else { panic!() };
+    assert_eq!(bytes, level_files().0, "without NCPatcher's plan, reads are the ROM's");
+}
 
-    // A fresh host reads the saved edit before the ROM.
-    let mut other = fixture.session();
+#[test]
+fn a_level_is_not_saved_without_a_module_to_save_into() {
+    let (_fixture, mut session) = Fixture::with_project("host-edit-no-module");
+    let opened = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &opened, 40);
+    let error = session.handle(Request::SaveLevel { level: moved.level }).unwrap_err();
+    assert_eq!(error.message, "choose an active module in the Filesystem dock before saving");
+    assert!(open_level(&mut session, "A01_1").dirty, "the edit is still there to save");
+}
+
+/// A level saved into the module reads back, in a fresh host, through the plan NCPatcher makes of it.
+#[cfg(unix)]
+#[test]
+fn a_saved_level_reads_back_through_the_build_plan() {
+    let sources = [
+        ("course/A01_1.bin", 0, "modules/mine/nitrofs/course/A01_1.bin"),
+        ("course/A01_1_bgdat.bin", 1, "modules/mine/nitrofs/course/A01_1_bgdat.bin"),
+    ];
+    let (fixture, mut session) = with_plan("host-edit-plan", &sources);
+    let opened = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &opened, 40);
+    session.handle(Request::SaveLevel { level: moved.level }).unwrap();
+    let options = crate::HostOptions { ncpatcher: fixture.root.path().join("ncpatcher.sh"), ..crate::HostOptions::default() };
+    let mut other = Host::with_options(fixture.root.path(), options).unwrap().session();
     other.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let reopened = open_level(&mut other, "A01_1");
     assert_eq!((reopened.objects[0].x, reopened.dirty, reopened.revision), (40, false, 1));
@@ -390,7 +417,7 @@ fn finders_search_every_level_including_unsaved_edits() {
 
 #[test]
 fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
-    let (fixture, mut session) = Fixture::with_project("host-recovery");
+    let (fixture, mut session) = with_module("host-recovery");
     let opened = open_level(&mut session, "A01_1");
     move_first_object(&mut session, &opened, 9);
     session.shared().write_recovery_snapshots();
@@ -432,9 +459,7 @@ fn with_module(label: &str) -> (Fixture, HostSession) {
     );
     write_bytes(&project.join("build/generated/modules.json"), modules.as_bytes());
     std::fs::create_dir_all(project.join("modules/mine/nitrofs")).unwrap();
-    // Reopened, so the host reads the graph.
-    let mut session = session;
-    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    // The host reads the graph the first time something needs it, which is after this.
     (fixture, session)
 }
 
@@ -582,12 +607,13 @@ fn the_banner_is_read_from_the_rom_until_the_configured_file_exists() {
 
 #[test]
 fn download_play_areas_are_read_from_their_archive() {
-    let (fixture, mut session) = Fixture::with_project("host-narc");
+    let (fixture, mut session) = with_module("host-narc");
     let opened = open_level(&mut session, "J01_1@Dat_Field");
     assert_eq!(opened.objects.len(), 2);
     let moved = move_first_object(&mut session, &opened, 12);
     session.handle(Request::SaveLevel { level: moved.level }).unwrap();
-    assert!(fixture.root.path().join("proj/edits/dat/Dat_Field_narc/J01_1.bin").is_file());
+    // A member is saved beside its archive, for the next build to sweep back into the container.
+    assert!(fixture.root.path().join("proj/modules/mine/nitrofs/dat/Dat_Field_narc/J01_1.bin").is_file());
     assert_eq!(session.handle(Request::OpenLevel { area: "J01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(session.handle(Request::OpenLevel { area: "nope".into() }).unwrap_err().code, ErrorCode::NotFound);
 }
@@ -598,7 +624,10 @@ fn a_project_with_unsaved_levels_stays_open() {
     let opened = open_level(&mut session, "A01_1");
     let moved = move_first_object(&mut session, &opened, 3);
     assert_eq!(session.handle(Request::CloseProject).unwrap_err().code, ErrorCode::InvalidArgument);
-    assert_eq!(session.handle(Request::OpenProject { path: "proj".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    assert_eq!(session.handle(Request::OpenProject { path: "elsewhere".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    // Opening the open project joins it, as another frontend does: the unsaved edit is still there.
+    assert!(matches!(session.handle(Request::OpenProject { path: "proj".into() }).unwrap(), Response::Project(_)));
+    assert!(open_level(&mut session, "A01_1").dirty);
     session.handle(Request::CloseLevel { level: moved.level }).unwrap();
     assert_eq!(session.handle(Request::CloseLevel { level: moved.level }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(session.handle(Request::CloseProject).unwrap(), Response::Done);
@@ -816,7 +845,7 @@ fn a_build_needs_a_yaml_config_and_a_legacy_one_is_offered_for_migration() {
 #[test]
 fn a_build_streams_what_it_does_and_its_rom_becomes_the_projects() {
     use std::os::unix::fs::PermissionsExt;
-    let (fixture, _) = Fixture::with_project("host-build");
+    let (fixture, _) = with_module("host-build");
     let project = fixture.root.path().join("proj");
     write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
     // Builds by copying the project's ROM to `--out`, after one progress line, one diagnostic and one log line.
@@ -858,9 +887,9 @@ cp {rom} "$out"
     assert!(project.join(bigstar_project::BUILT_ROM_FILE_NAME).is_file());
     assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(_))));
     assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
-    let reopened = open_level(&mut session, "A01_1");
-    assert!(!reopened.dirty);
-    assert_eq!(reopened.objects[0].x, moved.objects[0].x, "the saved edit");
+    // The edit went into the module before the build; this stand-in does not build it in, NCPatcher does.
+    assert!(project.join("modules/mine/nitrofs/course/A01_1.bin").is_file());
+    assert!(!open_level(&mut session, "A01_1").dirty);
 }
 
 /// A project with module `mine` whose NCPatcher (a script) answers `config dump`, `modules dump` and `files plan`
@@ -948,4 +977,34 @@ fn xdelta_runs_on_paths_under_the_workspace() {
     assert_eq!(session.handle(request(false)).unwrap_err().message.trim(), "bad patch");
     let outside = Request::Xdelta { create: true, source: "../a.nds".into(), target: "b".into(), output: "c".into() };
     assert!(session.handle(outside).is_err(), "nothing outside the workspace");
+}
+
+#[test]
+fn preferences_persist_and_saves_keep_that_many_backups() {
+    let (fixture, mut session) = with_module("host-preferences");
+    let project = fixture.root.path().join("proj");
+    let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert_eq!((settings.autosave_minutes, settings.backups_kept), (1, 10), "the defaults");
+    let Response::Settings(settings) = session.handle(Request::SetPreferences { autosave_minutes: 90, backups_kept: 2 }).unwrap() else { panic!() };
+    assert_eq!((settings.autosave_minutes, settings.backups_kept), (60, 2), "clamped");
+
+    // Each save after the first backs up what it overwrites; only the newest two backups of the kind stay.
+    let mut snapshot = open_level(&mut session, "A01_1");
+    for x in 1..=4 {
+        snapshot = move_first_object(&mut session, &snapshot, x);
+        let Response::Edited { snapshot: saved, .. } = session.handle(Request::SaveLevel { level: snapshot.level }).unwrap() else { panic!() };
+        snapshot = *saved;
+    }
+    let backups: Vec<String> = std::fs::read_dir(project.join(".big-star-backups"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(backups.len(), 2, "{backups:?}");
+    assert!(backups.iter().all(|name| name.starts_with("levels-")));
+
+    // Another host on the project finds the preferences where they were left.
+    let mut again = fixture.session();
+    again.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Settings(restored) = again.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert_eq!((restored.autosave_minutes, restored.backups_kept), (60, 2));
 }

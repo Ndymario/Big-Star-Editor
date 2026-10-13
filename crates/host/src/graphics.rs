@@ -179,6 +179,11 @@ impl ProjectGraphics {
         self.overlays.get_or_insert_with(TileOverlayCatalog::default)
     }
 
+    /// What NCPatcher now plans, after the host wrote module files: reads follow it.
+    pub fn set_plan(&mut self, plan: Option<FileManifest>) {
+        self.files.set_plan(&self.directory, plan);
+    }
+
     /// A file as the active variant has it: the module's copy when there is one, else the ROM's.
     pub fn read_file(&mut self, address: &str) -> Result<Vec<u8>> {
         self.files.read(address)

@@ -14,7 +14,7 @@ use bigstar_patching::{FileManifest, ModuleGraph, ModuleInfo, NCPatcherClient};
 use bigstar_project::{
     DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, INPUT_ROM_FILE_NAME, LevelCatalogArea, LevelCatalogEntry, MANIFEST_FILE_NAME,
     Project, RomReader, build_filesystem_view, create_empty_project, default_rom_path, find_object_bank_overlays, index_rom_files_from,
-    load_manifest, load_module_data_catalog, module_file_target, nsmb_level_catalog, save_manifest,
+    load_manifest, load_module_data_catalog, module_file_target, nsmb_level_catalog, prune_patch_backups, save_manifest,
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
@@ -23,7 +23,7 @@ use bigstar_protocol::{
 };
 
 use crate::graphics::ProjectGraphics;
-use crate::levels::{LevelFiles, RomIndex, Source, edit_path, locate, read_source};
+use crate::levels::{LevelFiles, RomIndex, Source, address, locate};
 use crate::settings::{load_settings, save_settings};
 use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
@@ -97,6 +97,8 @@ struct OpenProject {
     /// The Filesystem dock's rows, built from the patcher's answer; dropped when files change.
     filesystem: Option<FilesystemView>,
     graphics: Option<ProjectGraphics>,
+    /// Level files the host itself wrote, which the watcher is not to treat as someone else's change.
+    own_writes: std::collections::HashSet<PathBuf>,
     /// Where an edited ROM banner goes, from NCPatcher's configuration; asked with the rest of it.
     banner: BannerTarget,
     _watcher: Option<ProjectWatcher>,
@@ -154,14 +156,18 @@ impl Host {
             generation: AtomicU64::new(1),
             build: Mutex::new(None),
         });
-        // Every minute, the levels with unsaved edits are written where the next session can offer them back. The
-        // thread holds the host weakly and ends with it.
+        // Every few minutes, as the project's preference says, the levels with unsaved edits are written where the next
+        // session can offer them back. The thread holds the host weakly and ends with it.
         let weak = Arc::downgrade(&shared);
         let _ = std::thread::Builder::new().name("bigstar-autosave".to_owned()).spawn(move || {
+            let mut last = std::time::Instant::now();
             loop {
-                std::thread::sleep(AUTOSAVE_INTERVAL);
+                std::thread::sleep(AUTOSAVE_TICK);
                 let Some(shared) = weak.upgrade() else { break };
-                shared.write_recovery_snapshots();
+                if last.elapsed() >= shared.autosave_interval() {
+                    shared.write_recovery_snapshots();
+                    last = std::time::Instant::now();
+                }
             }
         });
         Ok(Self { shared })
@@ -248,6 +254,7 @@ impl Shared {
             Request::TilesetResources { level } => self.tileset_resources(level),
             Request::WriteFiles { files } => self.write_files(&files),
             Request::BuildConfig => self.build_config(),
+            Request::SetPreferences { autosave_minutes, backups_kept } => self.set_preferences(autosave_minutes, backups_kept),
             Request::MigrateConfig => self.migrate_config(),
             Request::Build { verbose } => self.build(verbose),
             Request::CancelBuild => self.cancel_build(),
@@ -373,6 +380,14 @@ impl Shared {
     fn open_project(self: &Arc<Self>, path: &str) -> Result<Response> {
         let directory = self.workspace.resolve(path)?;
         let mut state = lock(&self.state);
+        // Another frontend opening the project that is open joins it, as a level opened twice is one session: reopening
+        // would close everyone's levels.
+        if let Some(open) = state.open.as_ref().filter(|open| open.directory == directory) {
+            let project = load_manifest(&directory.join(MANIFEST_FILE_NAME))?;
+            let rom_path = open.rom_file.as_ref().map(|file| file.strip_prefix(&directory).unwrap_or(file).to_string_lossy().replace('\\', "/"));
+            let file_count = open.rom.as_ref().map_or(0, |rom| rom.files().len());
+            return Ok(Response::Project(project_info(&self.workspace, &directory, &project, rom_path, file_count)));
+        }
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
             return Err(invalid("save or close the open levels before opening another project"));
         }
@@ -388,6 +403,8 @@ impl Shared {
         if settings.generated_path.is_empty() {
             settings.generated_path = DEFAULT_GENERATED_DIR.to_owned();
         }
+        // Backups accumulate for as long as somebody keeps working; a project that opens sheds the oldest.
+        prune_patch_backups(&directory, open_backups_kept(&settings));
         let catalog = load_module_data_catalog(&directory, Path::new(&settings.generated_path))?;
         let index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
         let file_count = rom.as_ref().map_or(0, |rom| rom.files().len());
@@ -409,6 +426,7 @@ impl Shared {
             banner: BannerTarget::Unreported,
             filesystem: None,
             graphics: None,
+            own_writes: std::collections::HashSet::new(),
             _watcher: watcher,
         });
         drop(state);
@@ -445,8 +463,8 @@ impl Shared {
                     token: area.source_token.clone(),
                     display_name: area.display_name.clone(),
                     available: files.is_some(),
-                    course_path: files.as_ref().map(|f| address(&f.course)).unwrap_or_default(),
-                    bgdat_path: files.as_ref().map(|f| address(&f.bgdat)).unwrap_or_default(),
+                    course_path: files.as_ref().and_then(|f| address(&f.course).ok()).unwrap_or_default(),
+                    bgdat_path: files.as_ref().and_then(|f| address(&f.bgdat).ok()).unwrap_or_default(),
                 })
                 .collect();
             let level = LevelSummary { display_name: entry.display_name.clone(), areas };
@@ -467,8 +485,11 @@ impl Shared {
         let (entry, area) = find_area(area_token).ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
         let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
         let files = locate(rom, &open.index, area).ok_or_else(|| not_found(format!("the ROM does not hold {area_token}")))?;
-        let course = read_source(rom, &open.directory, &files.course)?;
-        let bgdat = read_source(rom, &open.directory, &files.bgdat)?;
+        // Read as a build would use them: the module's copy when there is one, else the ROM's.
+        let (course_address, bgdat_address) = (address(&files.course)?, address(&files.bgdat)?);
+        let graphics = self.ensure_graphics(open)?;
+        let course = graphics.read_file(&course_address)?;
+        let bgdat = graphics.read_file(&bgdat_address)?;
         let level = EditableLevel::load(&course, &bgdat, Some(&open.catalog))?;
         let title = area_title(entry, area);
         let id = open.next_level;
@@ -525,19 +546,40 @@ impl Shared {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
         let directory = open.directory.clone();
-        let session = open.levels.get_mut(&id).ok_or_else(unknown_level)?;
-
-        let course = session.level.serialize_course()?;
-        let bgdat = session.level.serialize_bgdat()?;
-        EditableLevel::load(&course, &bgdat, None)
-            .map_err(|e| Error::new(ErrorCode::ParseError, format!("serialized level failed validation: {}", e.message)))?;
-
-        let targets = [(directory.join(edit_path(&session.files.course)?), course), (directory.join(edit_path(&session.files.bgdat)?), bgdat)];
+        let keep = open_backups_kept(&open.settings);
+        let (course, bgdat, course_address, bgdat_address) = {
+            let session = open.levels.get(&id).ok_or_else(unknown_level)?;
+            let course = session.level.serialize_course()?;
+            let bgdat = session.level.serialize_bgdat()?;
+            EditableLevel::load(&course, &bgdat, None)
+                .map_err(|e| Error::new(ErrorCode::ParseError, format!("serialized level failed validation: {}", e.message)))?;
+            (course, bgdat, address(&session.files.course)?, address(&session.files.bgdat)?)
+        };
+        // Into the module that supplies each file, or the active one, as every other file edit; never the ROM.
+        self.ensure_filesystem(open)?;
+        let variant = open.settings.active_variant.clone();
+        let target = |path: &str| -> Result<PathBuf> {
+            let module = Self::target_module(open, path).map_err(|_| invalid("choose an active module in the Filesystem dock before saving"))?;
+            module_file_target(&module, &variant, path, &[])
+        };
+        let targets = [(target(&course_address)?, course), (target(&bgdat_address)?, bgdat)];
+        back_up(&directory, "levels", &targets)?;
         write_all_or_none(&targets)?;
+        prune_patch_backups(&directory, keep);
+        open.own_writes.extend(targets.iter().map(|(path, _)| path.clone()));
+        // The files are pending now: the dock and the plan reads go through are asked again.
+        open.filesystem = None;
+        open.patcher = None;
+        self.ensure_patcher(open);
+        let plan = open.patcher.as_ref().and_then(|(_, plan)| plan.clone());
+        if let Some(graphics) = open.graphics.as_mut() {
+            graphics.set_plan(plan);
+        }
+        let session = open.levels.get_mut(&id).ok_or_else(unknown_level)?;
         session.level.mark_clean();
         session.revision += 1;
         let (snapshot, event) = snapshot_and_event(id, session);
-        let message = format!("Saved {} to the project's edits; a build applies them to the ROM", session.title);
+        let message = format!("Saved {} to its module; run NCPatcher to build it into the ROM", session.title);
         drop(state);
         self.emit(event);
         self.log(LogLevel::Info, message);
@@ -672,6 +714,9 @@ impl Shared {
     fn find_entities(&self, sprites: bool, id: u16) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        // Levels not open are read as a build would use them; the graphics own that view of the files.
+        self.ensure_graphics(open)?;
+        let mut graphics = open.graphics.take();
         let mut found = Vec::new();
         for entry in nsmb_level_catalog() {
             for area in &entry.areas {
@@ -682,9 +727,9 @@ impl Shared {
                     None => {
                         let Some(rom) = open.rom.as_mut() else { continue };
                         let Some(files) = locate(rom, &open.index, area) else { continue };
-                        let (Ok(course), Ok(bgdat)) =
-                            (read_source(rom, &open.directory, &files.course), read_source(rom, &open.directory, &files.bgdat))
-                        else {
+                        let (Ok(course_address), Ok(bgdat_address)) = (address(&files.course), address(&files.bgdat)) else { continue };
+                        let Some(graphics) = graphics.as_mut() else { continue };
+                        let (Ok(course), Ok(bgdat)) = (graphics.read_file(&course_address), graphics.read_file(&bgdat_address)) else {
                             continue;
                         };
                         let Ok(level) = EditableLevel::load(&course, &bgdat, Some(&open.catalog)) else { continue };
@@ -703,6 +748,7 @@ impl Shared {
                 }
             }
         }
+        open.graphics = graphics;
         Ok(Response::Found(found))
     }
 
@@ -716,8 +762,8 @@ impl Shared {
         for session in open.levels.values().filter(|session| session.level.dirty()) {
             let written = (|| -> Result<String> {
                 let snapshot = LevelRecoverySnapshot {
-                    course_path: edit_path(&session.files.course)?.to_string_lossy().replace('\\', "/"),
-                    bgdat_path: edit_path(&session.files.bgdat)?.to_string_lossy().replace('\\', "/"),
+                    course_path: address(&session.files.course)?,
+                    bgdat_path: address(&session.files.bgdat)?,
                     package: LevelPackage {
                         course: session.level.serialize_course()?,
                         bgdat: session.level.serialize_bgdat()?,
@@ -1073,6 +1119,25 @@ impl Shared {
         Ok(Response::Settings(settings))
     }
 
+    fn set_preferences(&self, autosave_minutes: u32, backups_kept: u32) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        open.settings.autosave_minutes = autosave_minutes.clamp(1, 60);
+        open.settings.backups_kept = backups_kept.clamp(1, 100);
+        save_settings(&open.directory, &open.settings)?;
+        prune_patch_backups(&open.directory, open_backups_kept(&open.settings));
+        let settings = open.settings.clone();
+        drop(state);
+        self.emit(Event::SettingsChanged(settings.clone()));
+        Ok(Response::Settings(settings))
+    }
+
+    /// The open project's autosave interval; a minute when none is open.
+    fn autosave_interval(&self) -> std::time::Duration {
+        let minutes = lock(&self.state).open.as_ref().map_or(crate::settings::DEFAULT_AUTOSAVE_MINUTES, |open| open.settings.autosave_minutes);
+        std::time::Duration::from_secs(u64::from(minutes.clamp(1, 60)) * 60)
+    }
+
     fn set_active_module(&self, module: String) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -1089,11 +1154,12 @@ impl Shared {
     pub(crate) fn files_changed(&self, paths: Vec<PathBuf>) {
         let mut state = lock(&self.state);
         let Some(open) = state.open.as_mut() else { return };
+        let written = std::mem::take(&mut open.own_writes);
         let own = |path: &Path| {
-            path.strip_prefix(&open.directory).is_ok_and(|relative| {
-                relative.starts_with(crate::levels::EDITS_DIR)
-                    || relative.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with(".big-star"))
-            })
+            written.contains(path)
+                || path.strip_prefix(&open.directory).is_ok_and(|relative| {
+                    relative.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with(".big-star"))
+                })
         };
         let stale = paths.iter().any(|path| !own(path));
         if stale {
@@ -1130,18 +1196,50 @@ fn unknown_level() -> Error {
     not_found("that level is not open")
 }
 
-const AUTOSAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+/// How many backups of each kind the project keeps.
+fn open_backups_kept(settings: &bigstar_protocol::ProjectSettings) -> usize {
+    settings.backups_kept.clamp(1, 100) as usize
+}
+
+/// How often the autosave thread looks at the clock; the interval itself is the project's preference.
+const AUTOSAVE_TICK: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// A new backup directory under `.big-star-backups`: what made it, then when (UTC, to the millisecond, so two saves in
+/// one second are two backups), then which process, since two hosts on one project are not unheard of.
+fn new_backup_directory(project: &Path, kind: &str) -> PathBuf {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let (days, seconds) = ((now.as_secs() / 86_400) as i64, now.as_secs() % 86_400);
+    // Days since 1970-01-01 to a civil date (Howard Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    let stamp = format!("{year:04}{month:02}{day:02}-{:02}{:02}{:02}-{:03}", seconds / 3600, seconds / 60 % 60, seconds % 60, now.subsec_millis());
+    bigstar_project::patch_backup_root(project).join(format!("{kind}-{stamp}-{}", std::process::id()))
+}
+
+/// Copies every target that exists into a new backup directory of `kind`, keeping its path under the project, before
+/// it is overwritten.
+fn back_up(project: &Path, kind: &str, targets: &[(PathBuf, Vec<u8>)]) -> Result<()> {
+    let root = new_backup_directory(project, kind);
+    for (target, _) in targets.iter().filter(|(target, _)| target.is_file()) {
+        let relative = target.strip_prefix(project).unwrap_or(target);
+        let backup = root.join(relative);
+        if let Some(parent) = backup.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create the backup directory"))?;
+        }
+        std::fs::copy(target, &backup).map_err(|_| Error::new(ErrorCode::IoError, format!("could not back up {}", target.display())))?;
+    }
+    Ok(())
+}
 
 /// Where removed module files go, relative to the project.
 pub(crate) const TRASH_DIR: &str = ".big-star-trash";
-
-/// A level file as the Filesystem dock names it.
-fn address(source: &Source) -> String {
-    match source {
-        Source::File(path) => path.clone(),
-        Source::Member { archive, member } => format!("{archive}!{member}"),
-    }
-}
 
 /// Where autosaves live, relative to the project.
 pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";

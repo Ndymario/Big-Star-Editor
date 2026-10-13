@@ -25,6 +25,12 @@ impl Services for WebServices {
         }
     }
 
+    /// `?token=…` in the page's address, which is how `bigstar-host serve` prints its link.
+    fn default_token(&self) -> Option<String> {
+        let search = web_sys::window()?.location().search().ok()?;
+        search.trim_start_matches('?').split('&').find_map(|pair| pair.strip_prefix("token=")).filter(|token| !token.is_empty()).map(str::to_owned)
+    }
+
     /// The host that served this page, over the matching socket scheme.
     fn default_host(&self) -> String {
         let location = web_sys::window().map(|w| w.location());

@@ -504,6 +504,8 @@ impl DemoConnection {
                 generated_path: "build/generated".to_owned(),
                 variants: vec!["en".to_owned(), "fr".to_owned()],
                 modules: vec!["demo".to_owned()],
+                autosave_minutes: 1,
+                backups_kept: 10,
                 ..Default::default()
             },
         };
@@ -955,6 +957,11 @@ impl DemoConnection {
             Request::SetActiveVariant { variant } => {
                 self.settings.active_variant = variant;
                 self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
+                Ok(Response::Settings(self.settings.clone()))
+            }
+            Request::SetPreferences { autosave_minutes, backups_kept } => {
+                self.settings.autosave_minutes = autosave_minutes.clamp(1, 60);
+                self.settings.backups_kept = backups_kept.clamp(1, 100);
                 Ok(Response::Settings(self.settings.clone()))
             }
             Request::BuildConfig => Ok(Response::BuildConfig(bigstar_protocol::BuildConfigKind::Yaml)),

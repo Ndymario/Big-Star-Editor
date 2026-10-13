@@ -224,7 +224,15 @@ fn main() -> Result<(), String> {
         button.click();
     }
     harness.run();
-    shot(&mut harness, &dir, "build-output.png")
+    shot(&mut harness, &dir, "build-output.png")?;
+    if let Some(menu) = harness.query_by_label("View") {
+        menu.click();
+    }
+    harness.run();
+    if let Some(item) = harness.query_by_label("Preferences…") {
+        item.click();
+    }
+    shot(&mut harness, &dir, "preferences.png")
 }
 
 /// Each tab of the open tileset workspace but Slots: graphics, Map16, objects, behaviours and both backgrounds.

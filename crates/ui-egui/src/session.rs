@@ -475,6 +475,11 @@ impl Session {
         self.request(Request::SetActiveVariant { variant: variant.to_owned() }, Pending::Settings);
     }
 
+    /// The open project's autosave interval and how many backups it keeps; the host clamps and keeps them.
+    pub fn set_preferences(&mut self, autosave_minutes: u32, backups_kept: u32) {
+        self.request(Request::SetPreferences { autosave_minutes, backups_kept }, Pending::Settings);
+    }
+
     /// Asks what NCPatcher configuration the project has; the answer lands in `build_config`.
     pub fn request_build_config(&mut self) {
         self.build_config = None;
