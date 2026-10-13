@@ -1,5 +1,6 @@
 -- BG_nsc/d_2d_I_M_free_nohara_W1_1_nsc.bin
--- StageLayout::bgAnmNoharaW1.
+-- StageLayout::bgAnmNoharaW1. The swap is StageLayout::computeTopBgScrolling's: past 256 pixels the quarter
+-- holding Peach's castle is overwritten by the one beside it, so the castle is seen once.
 return {
     layer = "foreground",
     id = 8,
@@ -12,5 +13,8 @@ return {
             { layer = "foreground", to = 256, count = 6, from = 0 },
             { layer = "foreground", to = 288, count = 6, from = 16 },
         },
+    },
+    swaps = {
+        { after = 256, quarter = "bottom-left", shows = "bottom-right" },
     },
 }

@@ -681,13 +681,14 @@ fn a_layer_scrolls_with_the_camera_as_the_game_scrolls_it() {
     assert_eq!(at(BackgroundLayer::Foreground, &rock, (100, 516)).sampling, LayerSampling::BottomHalf);
     assert_eq!(at(back, &rock, (100, 216)).sampling, LayerSampling::Whole);
 
-    // Foreground 8 loses Peach's castle once it has scrolled a screen.
+    // A script's swap takes hold once the layer has scrolled past it, as foreground 8 loses Peach's castle.
+    let swaps = [crate::BackgroundSwap { after: 256 * 4096, quarter: (0, 1), shows: (1, 1) }];
     let castle = block(8, 0, 0, 0);
     let front = BackgroundLayer::Foreground;
-    assert!(!at(front, &castle, (356, 608)).bottom_left_swapped);
-    let past = at(front, &castle, (357, 608));
-    assert!(past.bottom_left_swapped && past.quarter(0, 1) == (1, 1) && past.quarter(0, 0) == (0, 0));
-    assert!(!at(back, &castle, (357, 608)).bottom_left_swapped);
+    assert!(at(front, &castle, (356, 608)).with_swaps(&swaps).swapped.is_empty());
+    let past = at(front, &castle, (357, 608)).with_swaps(&swaps);
+    assert!(past.quarter(0, 1) == (1, 1) && past.quarter(2, 1) == (1, 1) && past.quarter(0, 0) == (0, 0) && past.quarter(1, 1) == (1, 1));
+    assert_eq!(at(front, &castle, (357, 608)).quarter(0, 1), (0, 1));
 
     // A block with no screen shows nothing.
     assert!(layer_scroll(back, &[block(u16::MAX, 0, 0, 0)], 0, view, (100, 608), true).is_none());

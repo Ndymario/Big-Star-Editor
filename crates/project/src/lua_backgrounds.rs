@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use bigstar_core::{Error, ErrorCode, Result, read_file};
 use bigstar_level::{
     BACKGROUND_FX_ONE, BackgroundCatalog, BackgroundDefinition, BackgroundLayer, BackgroundMotion, BackgroundPaletteAnimation, BackgroundStrip,
-    BackgroundTileAnimation, BackgroundTileCopy, BackgroundTileStep,
+    BackgroundSwap, BackgroundTileAnimation, BackgroundTileCopy, BackgroundTileStep,
 };
 use mlua::{ChunkMode, Table, Value};
 
@@ -173,6 +173,31 @@ fn read_palette(table: &Table, what: &str) -> Result<Option<BackgroundPaletteAni
     }))
 }
 
+/// A quarter of the image by name, as `(column, row)`.
+fn quarter_field(table: &Table, key: &str, what: &str) -> Result<(u8, u8)> {
+    match string_field(table, key, what, true)?.as_str() {
+        "top-left" => Ok((0, 0)),
+        "top-right" => Ok((1, 0)),
+        "bottom-left" => Ok((0, 1)),
+        "bottom-right" => Ok((1, 1)),
+        _ => Err(parse_error(format!("{what} has a {key} that is not top-left, top-right, bottom-left or bottom-right"))),
+    }
+}
+
+fn read_swaps(table: &Table, what: &str) -> Result<Vec<BackgroundSwap>> {
+    let mut swaps = Vec::new();
+    for (index, entry) in list(table, "swaps", what, false)?.iter().enumerate() {
+        let what = format!("{what} swap {}", index + 1);
+        let Value::Table(entry) = entry else { return Err(parse_error(format!("{what} must be a table"))) };
+        swaps.push(BackgroundSwap {
+            after: fixed_field(entry, "after", &what)?.ok_or_else(|| parse_error(format!("{what} needs an after")))?,
+            quarter: quarter_field(entry, "quarter", &what)?,
+            shows: quarter_field(entry, "shows", &what)?,
+        });
+    }
+    Ok(swaps)
+}
+
 fn load_script(path: &Path) -> Result<BackgroundDefinition> {
     let bytes = read_file(path)?;
     if bytes.len() > MAX_SCRIPT_BYTES {
@@ -199,6 +224,7 @@ fn load_script(path: &Path) -> Result<BackgroundDefinition> {
         strips: read_strips(&table, &what)?,
         tiles: read_tiles(&table, &what, layer)?,
         palette: read_palette(&table, &what)?,
+        swaps: read_swaps(&table, &what)?,
     })
 }
 

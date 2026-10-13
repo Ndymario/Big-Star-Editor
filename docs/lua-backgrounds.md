@@ -41,6 +41,7 @@ return {
 | `strips` | how bands of its rows move sideways. |
 | `tiles` | tiles the game overwrites as it runs. |
 | `palette` | colours the game overwrites as it runs. |
+| `swaps` | quarters of the image the game replaces once the layer has scrolled far enough. |
 
 A script that sets only the first three names a background and nothing more,
 which is all most of them need. The filename is free; the shipped ones are
@@ -104,6 +105,26 @@ palette = { file = "BG_ncl/d_2d_Bg1_TEN_W_yougan_ncl.bin", interval = 16, frames
 Every `interval` frames the game copies `count` colours over the layer's
 palette from colour `to`, taking each frame's `stride` colours further into
 `file` than the last. `stride` defaults to `count`.
+
+### `swaps`
+
+```lua
+swaps = {
+    { after = 256, quarter = "bottom-left", shows = "bottom-right" },
+},
+```
+
+Some layers change themselves as the level goes by. A layer's image is four
+256-pixel quarters, `top-left`, `top-right`, `bottom-left` and `bottom-right`,
+and each entry says that once the layer has scrolled more than `after` pixels
+sideways, `quarter` shows what `shows` holds. Scrolled back, it shows its own
+again. Where two entries name one quarter the later wins.
+
+`after` counts the layer's own scroll, not the level's: a foreground at half
+speed passes 256 when the camera is 512 pixels into the view. The game does
+this by rewriting the layer's map, and only for foreground 8, which is how
+Peach's castle stands at the start of 1-1 and the hills then repeat without
+it. The DS screen shows it; the still picture is the layer before any swap.
 
 ## Overriding
 
@@ -180,9 +201,8 @@ the way:
   switches to a 256-pixel-wide map of the bottom left quarter above the bottom
   right one, which is the same thing only for an image that repeats every 256
   pixels.
-- Foreground 8, once it has scrolled past 256 pixels, shows its bottom right
-  quarter in place of its bottom left: Peach's castle stands at the start of
-  1-1 and is not seen again.
+- A script's `swaps` take hold: foreground 8, once it has scrolled past 256
+  pixels, shows its bottom right quarter in place of its bottom left.
 
 ### Where an entrance puts the camera
 

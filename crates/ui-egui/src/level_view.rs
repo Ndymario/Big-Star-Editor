@@ -781,7 +781,15 @@ impl LevelView {
         // The game lets tileset 30's foreground scroll on past the view as well.
         let free = layer == BackgroundLayer::Foreground && course.header.tileset_theme[0] == 0x1e;
         let camera = (screen.rect.left() as i32, screen.rect.top() as i32);
-        layer_scroll(layer, blocks, block, ViewFrame::of(view), camera, !wraps && !free)
+        let scroll = layer_scroll(layer, blocks, block, ViewFrame::of(view), camera, !wraps && !free)?;
+        // What the layer's script says the game rewrites of it once it has scrolled far enough.
+        let swaps = self
+            .art
+            .graphics
+            .as_ref()
+            .and_then(|graphics| graphics.backgrounds.find(layer, scroll.screen_id))
+            .map_or(&[][..], |definition| &definition.swaps);
+        Some(scroll.with_swaps(swaps))
     }
 
     /// The single selected rectangle the knobs belong to.
@@ -1599,6 +1607,15 @@ mod tests {
         assert_eq!(view.screen_layer(&screens[0], BackgroundLayer::Background).map(|scroll| (scroll.screen_id, scroll.x >> 12)), Some((9, 372)));
         view.hover = Some(Pos2::new(500.0, 700.0));
         assert_eq!(view.ds_screens()[0].view, None);
+
+        // A layer whose script swaps a quarter does once it has scrolled that far.
+        let mut definition = bigstar_level::BackgroundDefinition { id: 9, ..Default::default() };
+        definition.swaps = vec![bigstar_level::BackgroundSwap { after: 256 * 4096, quarter: (0, 1), shows: (1, 1) }];
+        view.art.graphics =
+            Some(LevelGraphics { backgrounds: bigstar_level::BackgroundCatalog { definitions: vec![definition] }, ..Default::default() });
+        assert_eq!(view.screen_layer(&screens[0], BackgroundLayer::Background).unwrap().quarter(0, 1), (1, 1));
+        let near = DsScreen { rect: rect(100.0, 1104.0, 256.0, 192.0), ..screens[0] };
+        assert_eq!(view.screen_layer(&near, BackgroundLayer::Background).unwrap().quarter(0, 1), (0, 1));
 
         // An entrance adds the screen the game opens on, by its view and that view's camera settings, and lends the
         // pointer's screen its view.

@@ -136,6 +136,15 @@ pub struct BackgroundPaletteAnimation {
     pub stride: u16,
 }
 
+/// A quarter of the image that shows another once the layer has scrolled more than `after` (fixed point) sideways:
+/// the game rewrites the layer's own map as it runs. Quarters are `(column, row)`, each 0 or 1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BackgroundSwap {
+    pub after: i32,
+    pub quarter: (u8, u8),
+    pub shows: (u8, u8),
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BackgroundDefinition {
     pub layer: BackgroundLayer,
@@ -145,6 +154,8 @@ pub struct BackgroundDefinition {
     pub strips: Vec<BackgroundStrip>,
     pub tiles: Option<BackgroundTileAnimation>,
     pub palette: Option<BackgroundPaletteAnimation>,
+    /// In order; where two name one quarter, the later wins.
+    pub swaps: Vec<BackgroundSwap>,
 }
 
 impl BackgroundDefinition {
@@ -365,7 +376,7 @@ pub enum LayerSampling {
 }
 
 /// A layer exactly as the game scrolls it with the camera somewhere in a view.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LayerScroll {
     pub screen_id: u16,
     /// How far the layer has scrolled sideways, in fixed point; the hardware takes its whole pixels, band by band.
@@ -373,9 +384,8 @@ pub struct LayerScroll {
     /// The image row at the top of the screen. Negative above the image.
     pub y: i32,
     pub sampling: LayerSampling,
-    /// The bottom left quarter shows the bottom right one. The game does this to foreground 8 once it has scrolled
-    /// past 256 pixels, so that Peach's castle stands at the start of the level and nowhere else.
-    pub bottom_left_swapped: bool,
+    /// The quarters showing another, as `(quarter, what it shows)`: the layer's swaps that the scroll has passed.
+    pub swapped: Vec<((u8, u8), (u8, u8))>,
 }
 
 impl LayerScroll {
@@ -389,7 +399,14 @@ impl LayerScroll {
             LayerSampling::BottomHalf => (column, 1),
             LayerSampling::BottomQuarters => (row, 1),
         };
-        if self.bottom_left_swapped && quarter == (0, 1) { (1, 1) } else { quarter }
+        self.swapped.iter().rev().find(|swap| swap.0 == quarter).map_or(quarter, |swap| swap.1)
+    }
+
+    /// With the swaps of the layer's script that this scroll has passed.
+    #[must_use]
+    pub fn with_swaps(mut self, swaps: &[BackgroundSwap]) -> Self {
+        self.swapped = swaps.iter().filter(|swap| self.x > swap.after).map(|swap| (swap.quarter, swap.shows)).collect();
+        self
     }
 }
 
@@ -397,6 +414,9 @@ impl LayerScroll {
 /// or `computeTopBgScrolling` sideways, and the six vertical modes. `camera` is the screen's top left corner in level
 /// pixels. `clamped` is false in a level that wraps around, where the layer scrolls on past the view's width. `None`
 /// when the view shows no such layer.
+///
+/// A layer's script may swap quarters of the image once it has scrolled far enough; `LayerScroll::with_swaps` adds
+/// those.
 ///
 /// Left out: a `scroll_x` of 0x100 or more also drifts while the level is being cleared, and the zoom some entrances
 /// set.
@@ -443,6 +463,5 @@ pub fn layer_scroll(
         }
         _ => {}
     }
-    let bottom_left_swapped = layer == BackgroundLayer::Foreground && block.screen_id & 0xff == 8 && x > pixels(256);
-    Some(LayerScroll { screen_id: block.screen_id, x, y: y >> 12, sampling, bottom_left_swapped })
+    Some(LayerScroll { screen_id: block.screen_id, x, y: y >> 12, sampling, swapped: Vec::new() })
 }

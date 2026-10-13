@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use bigstar_level::{
-    BACKGROUND_SLOT_COUNT, BackgroundLayer, BackgroundMotion, BackgroundPaletteAnimation, BackgroundTileAnimation, BackgroundTileCopy,
+    BACKGROUND_SLOT_COUNT, BackgroundLayer, BackgroundMotion, BackgroundPaletteAnimation, BackgroundSwap, BackgroundTileAnimation, BackgroundTileCopy,
 };
 use bigstar_project::{
     BackgroundResourceFiles, LuaBackgroundLayer, ResourceFile, background_palette_animator, background_tile_animator, load_background_frames,
@@ -67,7 +67,10 @@ return {
 }
 "#,
     );
-    write(&root.join("base/fg-001-castle.lua"), r#"return { layer = "foreground", id = 1, name = "Castle front" }"#);
+    write(
+        &root.join("base/fg-001-castle.lua"),
+        r#"return { layer = "foreground", id = 1, name = "Castle front", swaps = { { after = 256, quarter = "bottom-left", shows = "bottom-right" } } }"#,
+    );
     // Mistakes name themselves and cost nothing else.
     write(&root.join("base/zz-broken.lua"), "return {");
     write(&root.join("base/zz-no-layer.lua"), r#"return { id = 2, name = "Nowhere" }"#);
@@ -76,16 +79,20 @@ return {
         &root.join("base/zz-no-interval.lua"),
         r#"return { layer = "background", id = 4, name = "Stuck", tiles = { file = "a", frames = { 0 }, copies = { { to = 0, count = 1 } } } }"#,
     );
+    write(
+        &root.join("base/zz-odd-quarter.lua"),
+        r#"return { layer = "foreground", id = 5, name = "Odd", swaps = { { after = 1, quarter = "middle", shows = "top-left" } } }"#,
+    );
     // A module renames one background and leaves the rest alone.
     write(&root.join("module/castle.lua"), r#"return { layer = "background", id = 1, name = "Haunted castle" }"#);
 
     let layers = [layer("module", root.join("module")), layer("missing", root.join("missing")), layer("base", root.join("base"))];
     let loaded = load_lua_background_layers(&layers).unwrap();
-    assert_eq!(loaded.sources.len(), 8);
-    assert_eq!(loaded.errors.len(), 4, "{:?}", loaded.errors);
+    assert_eq!(loaded.sources.len(), 9);
+    assert_eq!(loaded.errors.len(), 5, "{:?}", loaded.errors);
     assert!(loaded.errors[0].starts_with("base / zz-broken.lua: "), "{:?}", loaded.errors);
     assert!(loaded.errors[2].contains("needs a layer"), "{:?}", loaded.errors);
-    assert!(loaded.errors[3].contains("background 3 strip 1 needs exactly one of scroll, drift and wave"), "{:?}", loaded.errors);
+    assert!(loaded.errors[4].contains("background 3 strip 1 needs exactly one of scroll, drift and wave"), "{:?}", loaded.errors);
     assert!(loaded.errors[1].contains("background 4 tiles frame 1 has no ticks"), "{:?}", loaded.errors);
 
     let catalog = &loaded.catalog;
@@ -95,6 +102,10 @@ return {
     assert_eq!(castle.name, "Haunted castle");
     assert!(castle.tiles.is_none() && !castle.animated());
     assert_eq!(catalog.name(BackgroundLayer::Foreground, 1), Some("Castle front"));
+    // Past 256 pixels its bottom left quarter shows the bottom right one.
+    let front = catalog.find(BackgroundLayer::Foreground, 1).unwrap();
+    assert_eq!(front.swaps, [BackgroundSwap { after: 256 * 4096, quarter: (0, 1), shows: (1, 1) }]);
+    assert!(loaded.errors.iter().any(|error| error.contains("foreground 5 swap 1 has a quarter that is not")), "{:?}", loaded.errors);
 
     let hills = catalog.find(BackgroundLayer::Background, 0).unwrap();
     assert!(hills.animated());
