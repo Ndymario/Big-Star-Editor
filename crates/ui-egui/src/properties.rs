@@ -389,14 +389,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
     match panel.tab {
         Tab::Course => {
             let r = snapshot.tileset_references;
-            // In the order `apply` reads them back.
+            // In the order the game's own structures hold them, which is the order `apply` reads them back in: the
+            // header's three graphics, then the first background block's screen and palette, then the foreground's.
             for (label, value, layer) in [
-                ("Tileset", r.tileset_id, None),
                 ("BG graphics", r.background_graphics_id, Some(BackgroundLayer::Background)),
-                ("BG screen", r.background_screen_id, Some(BackgroundLayer::Background)),
+                ("Tileset", r.tileset_id, None),
                 ("FG graphics", r.foreground_graphics_id, Some(BackgroundLayer::Foreground)),
-                ("FG screen", r.foreground_screen_id, Some(BackgroundLayer::Foreground)),
+                ("BG screen", r.background_screen_id, Some(BackgroundLayer::Background)),
                 ("BG palette", r.background_palette_id, Some(BackgroundLayer::Background)),
+                ("FG screen", r.foreground_screen_id, Some(BackgroundLayer::Foreground)),
                 ("FG palette", r.foreground_palette_id, Some(BackgroundLayer::Foreground)),
             ] {
                 full(rows, label, Some(i64::from(value)), 0, 255);
@@ -766,12 +767,12 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
         Tab::Course => {
             let mut r: LevelTilesetReferences = snapshot.tileset_references;
             let target = match changed {
-                0 => &mut r.tileset_id,
-                1 => &mut r.background_graphics_id,
-                2 => &mut r.background_screen_id,
-                3 => &mut r.foreground_graphics_id,
-                4 => &mut r.foreground_screen_id,
-                5 => &mut r.background_palette_id,
+                0 => &mut r.background_graphics_id,
+                1 => &mut r.tileset_id,
+                2 => &mut r.foreground_graphics_id,
+                3 => &mut r.background_screen_id,
+                4 => &mut r.background_palette_id,
+                5 => &mut r.foreground_screen_id,
                 6 => &mut r.foreground_palette_id,
                 _ => return None,
             };
@@ -1366,7 +1367,7 @@ mod tests {
         view.sync_panel();
         assert_eq!(view.panel.tab, Tab::Course);
         // The course tab edits the tileset references; the banks name their overlay.
-        let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 2, 7) else { panic!() };
+        let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 3, 7) else { panic!() };
         assert_eq!(references.background_screen_id, 7);
         view.panel_tab(Tab::Banks);
         view.snapshot.course.object_banks[0] = 3;

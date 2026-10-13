@@ -675,7 +675,13 @@ impl Session {
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
             (pending @ (Pending::Edit(_) | Pending::History(_) | Pending::Save(_)), Response::Edited { snapshot, outcome }) => {
                 let level = snapshot.level;
+                // An edit, an undo or a redo that changes which tilesets, layers or palettes the level names leaves its
+                // graphics out of date.
+                let renamed = self.levels.get(&level).is_some_and(|view| view.snapshot.tileset_references != snapshot.tileset_references);
                 let owed = self.levels.get_mut(&level).and_then(|view| view.edited(*snapshot, &outcome));
+                if renamed {
+                    self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
+                }
                 if let Some(edit) = owed {
                     self.edit_level(level, edit);
                 }
@@ -798,7 +804,14 @@ impl Session {
             self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
         }
         match self.levels.get_mut(&level) {
-            Some(view) => view.replace(snapshot),
+            Some(view) => {
+                // A level reopened with other tilesets, layers or palettes than it had needs its graphics made again.
+                let renamed = view.snapshot.tileset_references != snapshot.tileset_references;
+                view.replace(snapshot);
+                if renamed {
+                    self.request(Request::LevelGraphics { level }, Pending::LevelGraphics(level));
+                }
+            }
             None => {
                 let mut view = LevelView::new(snapshot);
                 view.options = self.canvas_options;

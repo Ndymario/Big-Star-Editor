@@ -538,12 +538,12 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
     egui::Grid::new("tileset-references").num_columns(2).show(ui, |ui| {
         let references = &mut doc.references;
         for (label, value) in [
-            ("Level tileset", &mut references.tileset_id),
             ("Background graphics", &mut references.background_graphics_id),
-            ("Background screen", &mut references.background_screen_id),
+            ("Level tileset", &mut references.tileset_id),
             ("Foreground graphics", &mut references.foreground_graphics_id),
-            ("Foreground screen", &mut references.foreground_screen_id),
+            ("Background screen", &mut references.background_screen_id),
             ("Background palette", &mut references.background_palette_id),
+            ("Foreground screen", &mut references.foreground_screen_id),
             ("Foreground palette", &mut references.foreground_palette_id),
         ] {
             ui.label(label);

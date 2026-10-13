@@ -218,6 +218,36 @@ fn graphics_from_before_a_change_on_disk_are_dropped() {
     assert!(session.notice.is_none(), "graphics failures are logged, not put in front of the person");
 }
 
+#[test]
+fn an_edit_that_changes_what_the_level_draws_from_asks_for_its_graphics_again() {
+    let script = std::sync::Arc::new(std::sync::Mutex::new(Scripted::default()));
+    let mut session = Session::new(Box::new(Shared(script.clone())));
+    let snapshot = demo_snapshot();
+    session.open_level("A01_1");
+    let open = last_request(&script, |r| matches!(r, Request::OpenLevel { .. }));
+    answer(&script, open, Ok(Response::Level(Box::new(snapshot.clone()))));
+    session.poll();
+    let first = last_request(&script, |r| matches!(r, Request::LevelGraphics { .. }));
+
+    // An edit that leaves the tilesets, layers and palettes alone does not.
+    let edited =
+        |snapshot: &LevelSnapshot| Ok(Response::Edited { snapshot: Box::new(snapshot.clone()), outcome: bigstar_protocol::EditOutcome::None });
+    let mut references = snapshot.tileset_references;
+    session.edit_level(snapshot.level, LevelEdit::SetTilesetReferences { references });
+    let edit = last_request(&script, |r| matches!(r, Request::EditLevel { .. }));
+    answer(&script, edit, edited(&LevelSnapshot { revision: 2, ..snapshot.clone() }));
+    session.poll();
+    assert_eq!(last_request(&script, |r| matches!(r, Request::LevelGraphics { .. })), first);
+
+    // A new background palette does: the picture on screen was made with the old one.
+    references.background_palette_id += 1;
+    session.edit_level(snapshot.level, LevelEdit::SetTilesetReferences { references });
+    let edit = last_request(&script, |r| matches!(r, Request::EditLevel { .. }));
+    answer(&script, edit, edited(&LevelSnapshot { revision: 3, tileset_references: references, ..snapshot }));
+    session.poll();
+    assert_ne!(last_request(&script, |r| matches!(r, Request::LevelGraphics { .. })), first);
+}
+
 fn demo_snapshot() -> LevelSnapshot {
     let mut demo = DemoConnection::new();
     demo.send(Request::OpenLevel { area: "A01_1".to_owned() });
