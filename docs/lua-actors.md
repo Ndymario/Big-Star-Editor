@@ -9,7 +9,8 @@ directories in this order, with the first definition for an ID winning:
 3. the shipped `data/actors` directory
 
 `bigstar/` is a module's whole contribution to the editor, one directory per
-kind -- `actors` here, `tiles` in [Lua tiles](lua-tiles.md). The bare `actors/`
+kind -- `actors` here, `tiles` in [Lua tiles](lua-tiles.md), `backgrounds` in
+[Lua backgrounds](lua-backgrounds.md). The bare `actors/`
 beside it is the older spelling and is still read, after it. There is no layer
 in the user's config directory: an edit that lives there never reaches anybody
 else on the project.

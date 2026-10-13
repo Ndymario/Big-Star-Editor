@@ -171,6 +171,8 @@ fn every_entity_kind_survives_a_save_and_load() {
             background_screen_id: 7,
             foreground_graphics_id: 6,
             foreground_screen_id: 5,
+            background_palette_id: 4,
+            foreground_palette_id: 3,
         })
         .unwrap();
     assert_eq!(level.course().header.tileset_theme[0], 9);
@@ -184,6 +186,7 @@ fn every_entity_kind_survives_a_save_and_load() {
     let round_trip = EditableLevel::load(&course, &bgdat, None).unwrap();
     assert_eq!(round_trip.course().header.tileset_theme[0], 9);
     assert_eq!(round_trip.course().foregrounds[0].screen_id, 5);
+    assert_eq!((round_trip.course().backgrounds[0].palette_id, round_trip.course().foregrounds[0].palette_id), (4, 3));
     assert_eq!(round_trip.course().sprites.len(), 1);
     assert_eq!(round_trip.course().sprites[0], sprite(3, 10, 20, [1, 2], 0x06050403));
     assert_eq!(round_trip.course().entrances.len(), 1);
@@ -509,4 +512,183 @@ fn exchange_files_round_trip() {
     let recovered = decode_level_recovery(&encode_level_recovery(&recovery).unwrap()).unwrap();
     assert_eq!(recovered, recovery);
     assert!(encode_level_recovery(&LevelRecoverySnapshot { course_path: "a/./b".into(), ..recovery }).is_err());
+}
+
+#[test]
+fn a_view_places_a_layer_by_the_block_it_names() {
+    use crate::{LayerPlacement, LayerRepeat, layer_block, layer_placement};
+    let block = |id, screen_id, scroll_y, vertical_offset| NsmbLevelScreen { id, screen_id, scroll_y, vertical_offset, ..Default::default() };
+    // A view 384 tall whose floor is at 400.
+    let (view_y, view_height) = (16, 384);
+
+    // Mode 0 hangs the image from the view's floor, 32 rows of it below; each step of the offset lifts it eight more.
+    let blocks = [block(0, 5, 0x02, 0), block(1, 5, 0x02, 2), block(2, 5, 0x02, (-2i16) as u16)];
+    let at = |id| layer_placement(&blocks, id, view_y, view_height).unwrap();
+    assert_eq!(at(0), LayerPlacement { screen_id: 5, origin_y: 400 - 512 + 32, repeat: LayerRepeat::Wrap });
+    assert_eq!((at(1).origin_y, at(2).origin_y), (400 - 512 + 32 - 16, 400 - 512 + 32 + 16));
+    // No block has id 9, so the game falls back to the first.
+    assert_eq!(layer_block(&blocks, 9).unwrap().id, 0);
+    assert_eq!(at(9), at(0));
+
+    // The odd modes hang it from the ceiling instead, and the last two repeat half of it past its end.
+    let blocks = [block(0, 5, 0x13, 0), block(1, 5, 0x42, 0), block(2, 5, 0x42, 4), block(3, 5, 0x53, 0)];
+    let at = |id| layer_placement(&blocks, id, view_y, view_height).unwrap();
+    assert_eq!((at(0).origin_y, at(0).repeat), (16 - 32, LayerRepeat::Wrap));
+    assert_eq!((at(1).origin_y, at(1).repeat), (400 - 512 + 32, LayerRepeat::TopHalfAbove));
+    assert_eq!(at(2).origin_y, 400 - 512, "mode 4 stops at the image's last row");
+    assert_eq!((at(3).origin_y, at(3).repeat), (16 - 32, LayerRepeat::BottomHalfBelow));
+
+    // A view whose block names no screen has no such layer: the ghost houses drop the foreground outside this way.
+    let blocks = [block(0, 40, 0x01, 0), block(1, 0xffff, 0xffff, 0)];
+    assert!(layer_placement(&blocks, 0, view_y, view_height).is_some());
+    assert!(layer_placement(&blocks, 1, view_y, view_height).is_none());
+    // A level with no blocks at all is placed as a block of zeros would place it.
+    assert_eq!(layer_placement(&[], 0, view_y, view_height).unwrap().origin_y, 400 - 512 + 32);
+}
+
+#[test]
+fn bands_of_a_layer_move_as_the_scanline_table_moves_them() {
+    use crate::{BackgroundCatalog, BackgroundDefinition, BackgroundLayer, BackgroundMotion, BackgroundStrip, strip_offsets};
+    let drift = |through_row, speed, channel| BackgroundStrip { through_row, motion: BackgroundMotion::Drift { speed, channel } };
+    let scroll = BackgroundStrip { through_row: u16::MAX, motion: BackgroundMotion::Scroll { factor: 4096 } };
+
+    // Nothing to say: the whole image, still.
+    assert_eq!(strip_offsets(&[], 512, 0, 100, 2), [(0, 512, 0.0)]);
+    // Clouds an eighth of a pixel a frame over hills that only scroll.
+    let strips = [drift(344, 512, 2), scroll];
+    assert_eq!(strip_offsets(&strips, 512, 0, 0, 2), [(0, 345, 0.0), (345, 512, 0.0)]);
+    assert_eq!(strip_offsets(&strips, 512, 0, 80, 2), [(0, 345, 10.0), (345, 512, 0.0)]);
+    // Round the image and back where it started.
+    assert_eq!(strip_offsets(&strips, 512, 0, 4096, 2), [(0, 345, 0.0), (345, 512, 0.0)]);
+    // Two bands on one channel both add to its counter, so both move at the sum.
+    let strips = [drift(279, 256, 2), drift(335, 512, 3), drift(364, 1024, 3), scroll];
+    let moved: Vec<f32> = strip_offsets(&strips, 512, 0, 16, 2).iter().map(|band| band.2).collect();
+    assert_eq!(moved, [1.0, 6.0, 6.0, 0.0]);
+    // A negative speed runs the other way, which comes back as the long way round.
+    assert_eq!(strip_offsets(&[drift(u16::MAX, -2048, 2)], 512, 0, 2, 2), [(0, 512, 511.0)]);
+
+    // A ripple comes back a few rows at a time, each a little further round.
+    let wave = BackgroundStrip { through_row: u16::MAX, motion: BackgroundMotion::Wave { amplitude: 8192, speed: 0, step: 16384 } };
+    let bands = strip_offsets(&[wave], 8, 0, 0, 1);
+    assert_eq!(bands.len(), 8);
+    let moved: Vec<i32> = bands.iter().map(|band| band.2.round() as i32).collect();
+    assert_eq!(moved, [0, 2, 0, -2, 0, 2, 0, -2]);
+
+    // Scrolled, a band that only scrolls goes at its own share of the layer's speed and the rest ride on top of it.
+    let strips = [drift(344, 512, 2), BackgroundStrip { through_row: u16::MAX, motion: BackgroundMotion::Scroll { factor: 2048 } }];
+    assert_eq!(strip_offsets(&strips, 512, 100 * 4096, 80, 2), [(0, 345, 110.0), (345, 512, 50.0)]);
+    assert_eq!(strip_offsets(&[], 512, 4096 * 7 + 4095, 0, 2), [(0, 512, 7.0)]);
+
+    // The first definition of a layer and id wins, and an id is found by its low byte, as the game indexes.
+    let named = |layer, id, name: &str| BackgroundDefinition { layer, id, name: name.to_owned(), ..Default::default() };
+    let catalog = BackgroundCatalog {
+        definitions: vec![
+            named(BackgroundLayer::Background, 3, "Mine"),
+            named(BackgroundLayer::Foreground, 3, "Front"),
+            named(BackgroundLayer::Background, 3, "Shipped"),
+            named(BackgroundLayer::Background, 1, "Castle"),
+        ],
+    };
+    assert_eq!(catalog.name(BackgroundLayer::Background, 3), Some("Mine"));
+    assert_eq!(catalog.name(BackgroundLayer::Background, 0x403), Some("Mine"));
+    assert_eq!(catalog.name(BackgroundLayer::Foreground, 3), Some("Front"));
+    assert_eq!(catalog.name(BackgroundLayer::Foreground, 1), None);
+    assert_eq!(catalog.layer(BackgroundLayer::Background).iter().map(|d| d.id).collect::<Vec<_>>(), [1, 3, 3]);
+    assert!(!catalog.definitions[0].animated());
+}
+
+#[test]
+fn an_entrance_places_the_camera_as_the_game_does() {
+    use crate::{ViewFrame, camera_block, entrance_camera, entrance_spawn_point};
+    use bigstar_formats::{NsmbLevelCamera, NsmbLevelEntrance};
+    let view = ViewFrame { left: 0, top: 0, right: 2000, bottom: 400 };
+    let entrance = |x, y, kind, flags| NsmbLevelEntrance { x, y, kind, flags, ..Default::default() };
+
+    // A normal entrance stands the player half a tile right and a tile down; aligned, only down. A pipe facing up
+    // puts them a tile right and two down.
+    assert_eq!(entrance_spawn_point(&entrance(320, 304, 0, 0)), (328, 320));
+    assert_eq!(entrance_spawn_point(&entrance(320, 304, 0, 0x40)), (320, 320));
+    assert_eq!(entrance_spawn_point(&entrance(320, 304, 3, 0)), (336, 336));
+    assert_eq!(entrance_spawn_point(&entrance(320, 304, 200, 0)), (320, 304));
+
+    // Centred sideways; 128 pixels of screen above the player, until the view's floor stops it.
+    assert_eq!(entrance_camera(&entrance(320, 304, 0, 0), view, None, false, None), (200, 192));
+    assert_eq!(entrance_camera(&entrance(320, 404, 0, 0), ViewFrame { bottom: 800, ..view }, None, false, None), (200, 292));
+    // Kept inside the view at either end, unless the level wraps around and is wide enough to.
+    assert_eq!(entrance_camera(&entrance(32, 304, 0, 0), view, None, false, None).0, 0);
+    assert_eq!(entrance_camera(&entrance(1990, 304, 0, 0), view, None, false, None).0, 2000 - 256);
+    assert_eq!(entrance_camera(&entrance(32, 304, 0, 0), view, None, true, None).0, 0);
+    assert_eq!(entrance_camera(&entrance(32, 304, 0, 0), ViewFrame { right: 257 * 16, ..view }, None, true, None).0, 40 - 128);
+    // Near the top of the map the player is above the upper line, and sits 64 pixels down the screen instead.
+    let tall = ViewFrame { left: 0, top: 0, right: 2000, bottom: 2000 };
+    assert_eq!(entrance_camera(&entrance(320, 0, 0, 0), tall, None, false, None).1, 0);
+    // The camera settings move both lines, and a camera that already frames the player stays where it was.
+    let settings = NsmbLevelCamera { top_offset: 16, bottom_offset: -32, id: 3, ..Default::default() };
+    assert_eq!(entrance_camera(&entrance(320, 984, 0, 0), tall, Some(&settings), false, None).1, 1000 - 96);
+    assert_eq!(entrance_camera(&entrance(320, 984, 0, 0), tall, None, false, Some(900)).1, 900);
+    assert_eq!(entrance_camera(&entrance(320, 984, 0, 0), tall, None, false, Some(1500)).1, 1000 - 64);
+    // A view shorter than the screen rests on its floor.
+    assert_eq!(entrance_camera(&entrance(320, 50, 0, 0), ViewFrame { bottom: 100, ..view }, None, false, None).1, 100 - 192);
+
+    let cameras = [NsmbLevelCamera { id: 1, ..Default::default() }, settings.clone()];
+    assert_eq!(camera_block(&cameras, 3), Some(&settings));
+    assert_eq!(camera_block(&cameras, 9).map(|camera| camera.id), Some(1));
+    assert!(camera_block(&[], 0).is_none());
+}
+
+#[test]
+fn a_layer_scrolls_with_the_camera_as_the_game_scrolls_it() {
+    use crate::{BackgroundLayer, LayerSampling, ViewFrame, layer_placement, layer_scroll};
+    let view = ViewFrame { left: 100, top: 16, right: 2100, bottom: 800 };
+    let block =
+        |screen_id, scroll_x, scroll_y, vertical_offset| NsmbLevelScreen { screen_id, scroll_x, scroll_y, vertical_offset, ..Default::default() };
+    let at = |layer, block: &NsmbLevelScreen, camera| layer_scroll(layer, std::slice::from_ref(block), 0, view, camera, true).unwrap();
+    let back = BackgroundLayer::Background;
+
+    // Half speed both ways, anchored to the floor: resting on it, the image's last row is the screen's.
+    let half = block(5, 1, 1, 0);
+    let rest = at(back, &half, (100, 800 - 192));
+    assert_eq!((rest.x, rest.y, rest.sampling), (0, 320 - 32, LayerSampling::Whole));
+    // That is where the still picture puts it.
+    let still = layer_placement(std::slice::from_ref(&half), 0, view.top, view.bottom - view.top).unwrap();
+    assert_eq!(800 - 192 - rest.y, still.origin_y);
+    // A hundred pixels along and up, the layer has gone fifty.
+    let moved = at(back, &half, (200, 800 - 192 - 100));
+    assert_eq!((moved.x, moved.y), (50 * 4096, 320 - 32 - 50));
+    // Never before the view's start nor past its width at the layer's speed.
+    assert_eq!(at(back, &half, (0, 608)).x, 0);
+    assert_eq!(at(back, &half, (9000, 608)).x, 1000 * 4096);
+    assert_eq!(layer_scroll(back, std::slice::from_ref(&half), 0, view, (0, 608), false).unwrap().x, -50 * 4096);
+
+    // Anchored to the ceiling, the image's first row starts 32 above it, and an offset lowers the scroll further.
+    let top = block(5, 0, 0x10, 2);
+    assert_eq!(at(back, &top, (100, 16)).y, 32 + 16);
+    assert_eq!(at(back, &top, (100, 116)).y, 100 + 32 + 16);
+
+    // Mode 4 repeats the top half once the screen climbs past the image, and never sinks below its last row.
+    let sky = block(5, 0, 0x40, 8);
+    assert_eq!((at(back, &sky, (100, 608)).y, at(back, &sky, (100, 608)).sampling), (320, LayerSampling::Whole));
+    let high = at(back, &sky, (100, 208));
+    assert_eq!((high.y, high.sampling), (320 + 32 - 400, LayerSampling::TopHalf));
+    assert_eq!((high.quarter(0, -1), high.quarter(1, 1)), ((0, 0), (1, 0)));
+
+    // Mode 5 repeats the bottom half below: by copying it for the foreground, by stacking its quarters for the
+    // background.
+    let rock = block(5, 0, 0x50, 0);
+    let deep = at(back, &rock, (100, 516));
+    assert_eq!((deep.y, deep.sampling), (532, LayerSampling::BottomQuarters));
+    assert_eq!((deep.quarter(1, 2), deep.quarter(0, 3)), ((0, 1), (1, 1)));
+    assert_eq!(at(BackgroundLayer::Foreground, &rock, (100, 516)).sampling, LayerSampling::BottomHalf);
+    assert_eq!(at(back, &rock, (100, 216)).sampling, LayerSampling::Whole);
+
+    // Foreground 8 loses Peach's castle once it has scrolled a screen.
+    let castle = block(8, 0, 0, 0);
+    let front = BackgroundLayer::Foreground;
+    assert!(!at(front, &castle, (356, 608)).bottom_left_swapped);
+    let past = at(front, &castle, (357, 608));
+    assert!(past.bottom_left_swapped && past.quarter(0, 1) == (1, 1) && past.quarter(0, 0) == (0, 0));
+    assert!(!at(back, &castle, (357, 608)).bottom_left_swapped);
+
+    // A block with no screen shows nothing.
+    assert!(layer_scroll(back, &[block(u16::MAX, 0, 0, 0)], 0, view, (100, 608), true).is_none());
 }

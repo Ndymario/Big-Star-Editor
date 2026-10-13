@@ -12,7 +12,8 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 fn shot(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, name: &str) -> Result<(), String> {
-    harness.run();
+    // A level whose backgrounds are animated never stops asking to be painted again, so settling is not required.
+    harness.run_ok();
     let image = harness.render()?;
     let path = dir.join(name);
     image.save(&path).map_err(|e| e.to_string())?;
@@ -77,6 +78,19 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         view.selection = vec![Item::new(Kind::Sprite, 0), Item::new(Kind::Object, 3)];
     }
     shot(&mut harness, dir, "remote-100.png")?;
+    // The DS screen: where the first entrance opens the camera, and another under the pointer further along.
+    let mut pointer = egui::Pos2::ZERO;
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
+        view.options.show_ds_screen = true;
+        view.selection = vec![Item::new(Kind::Entrance, 0)];
+        pointer = view.canvas.min + egui::Vec2::new(620.0, 150.0);
+    }
+    harness.event(egui::Event::PointerMoved(pointer));
+    shot(&mut harness, dir, "remote-ds.png")?;
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
+        view.options.show_ds_screen = false;
+        view.selection.clear();
+    }
     // The Filesystem dock, with an archive opened.
     if let Some(tab) = harness.query_by_label("Filesystem") {
         tab.click();

@@ -4,11 +4,13 @@
 use std::path::PathBuf;
 
 use bigstar_core::{Error, ErrorCode, Result};
+use std::collections::HashMap;
+
 use bigstar_formats::{
-    EditableTileset, RgbaImage, TilesetResourceData, compose_tileset_memory, decode_8bpp_tiles, decode_bgr555_palette, decode_screen_map,
-    decompress_nitro_lz, mark_palette_blocks_transparent, parse_tileset, render_screen_map,
+    Bgr555Color, EditableTileset, IndexedTile8Bpp, RgbaImage, ScreenMapEntry, TilesetResourceData, compose_tileset_memory, decode_8bpp_tiles,
+    decode_bgr555_palette, decode_screen_map, decompress_nitro_lz, mark_palette_blocks_transparent, parse_tileset, render_screen_map,
 };
-use bigstar_level::{DecodedTileset, LevelTilesetReferences};
+use bigstar_level::{BackgroundLayer, BackgroundPaletteAnimation, BackgroundTileAnimation, DecodedTileset, LevelTilesetReferences};
 use serde::{Deserialize, Serialize};
 
 use crate::EffectiveFilesystem;
@@ -179,12 +181,20 @@ fn unwrap_resource(data: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-fn table_file_id(overlay: &[u8], table: usize, id: u8, base: u16) -> Result<u16> {
+/// What the game's tables hold where a slot has no file. The game checks for it before every load and skips the
+/// resource.
+const NO_FILE: u16 = 0x7a5;
+
+fn table_entry(overlay: &[u8], table: usize, id: u8) -> Result<u16> {
     let offset = table + usize::from(id) * 4;
     match (overlay.get(offset), overlay.get(offset + 1)) {
-        (Some(&low), Some(&high)) => Ok(u16::from_le_bytes([low, high]).wrapping_add(base)),
+        (Some(&low), Some(&high)) => Ok(u16::from_le_bytes([low, high])),
         _ => Err(Error::new(ErrorCode::OutOfBounds, "graphics resource table is outside Overlay 0")),
     }
+}
+
+fn table_file_id(overlay: &[u8], table: usize, id: u8, base: u16) -> Result<u16> {
+    table_entry(overlay, table, id).map(|entry| entry.wrapping_add(base))
 }
 
 /// What the level's graphics are, read through `files` rather than off a tree somebody unpacked earlier. The game's
@@ -290,12 +300,15 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
         fill(files, &mut nohara.behaviors, Ok(behaviors))?;
     }
 
+    // `StageLayout::loadCharacterGraphics`, `loadPalettes` and `loadTilemaps`: the graphics come from the header, the
+    // palette and the screen from the layer's own block, and each is its own table.
     let backgrounds = [
         (
             profile.background_graphics,
             profile.background_palette,
             profile.background_screen,
             references.background_graphics_id,
+            references.background_palette_id,
             references.background_screen_id,
         ),
         (
@@ -303,19 +316,25 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
             profile.foreground_palette,
             profile.foreground_screen,
             references.foreground_graphics_id,
+            references.foreground_palette_id,
             references.foreground_screen_id,
         ),
     ];
-    for (target, (graphics_table, palette_table, screen_table, graphics_id, screen_id)) in
+    for (target, (graphics_table, palette_table, screen_table, graphics_id, palette_id, screen_id)) in
         [&mut result.background, &mut result.foreground].into_iter().zip(backgrounds)
     {
         // A level without the layer names it 0xFFFF; truncated, that would index an unrelated file.
-        if graphics_id == u16::MAX || screen_id == u16::MAX {
+        if graphics_id == u16::MAX || palette_id == u16::MAX || screen_id == u16::MAX {
+            continue;
+        }
+        // A slot the game has no file for loads nothing, so the layer is not there to draw.
+        let slots = [(graphics_table, graphics_id), (palette_table, palette_id), (screen_table, screen_id)];
+        if slots.iter().any(|&(offset, id)| table_entry(&overlay, offset, id as u8).is_ok_and(|entry| entry == NO_FILE)) {
             continue;
         }
         let graphics = table(files, graphics_table, graphics_id);
         fill(files, &mut target.graphics, graphics)?;
-        let palette = table(files, palette_table, graphics_id);
+        let palette = table(files, palette_table, palette_id);
         fill(files, &mut target.palette, palette)?;
         let screen = table(files, screen_table, screen_id);
         fill(files, &mut target.screen, screen)?;
@@ -404,20 +423,174 @@ pub fn load_level_tilesets(files: &[TilesetResourceFiles; 3], tileset_id: u16, o
     result
 }
 
-/// A background or foreground layer as one image. Its screen names tiles and palette rows from where the game loads
-/// the layer (`tile_offset`, `palette_offset`), and colour 0 of each palette is see-through.
+/// A background or foreground layer decoded but not yet drawn. Its screen names tiles and palette rows from where the
+/// game loads the layer (`tile_offset`, `palette_offset`), and colour 0 of each palette is see-through.
+struct DecodedLayer {
+    tiles: Vec<IndexedTile8Bpp>,
+    palette: Vec<Bgr555Color>,
+    screen: Vec<ScreenMapEntry>,
+    width: usize,
+}
+
+impl DecodedLayer {
+    fn decode(files: &BackgroundResourceFiles, tile_offset: u16, palette_offset: u8) -> Result<Self> {
+        let graphics = unwrap_resource(&files.graphics.data);
+        let palette_data = unwrap_resource(&files.palette.data);
+        let screen_data = unwrap_resource(&files.screen.data);
+        let (graphics, palette_data, screen_data) = (graphics?, palette_data?, screen_data?);
+        let tiles = decode_8bpp_tiles(&graphics);
+        let palette = decode_bgr555_palette(&palette_data, false).map(|mut palette| {
+            mark_palette_blocks_transparent(&mut palette, 256);
+            palette
+        });
+        let screen = decode_screen_map(&screen_data, tile_offset, palette_offset);
+        let (tiles, palette, screen) = (tiles?, palette?, screen?);
+        let width = if screen.len().is_multiple_of(64) { 64 } else { 32 };
+        Ok(Self { tiles, palette, screen, width })
+    }
+
+    fn render(&self) -> Result<RgbaImage> {
+        render_screen_map(&self.screen, self.width, &self.tiles, &self.palette)
+    }
+}
+
+/// A background or foreground layer as one image, as the files hold it.
 pub fn load_background_graphics(files: &BackgroundResourceFiles, tile_offset: u16, palette_offset: u8) -> Result<RgbaImage> {
-    let graphics = unwrap_resource(&files.graphics.data);
-    let palette_data = unwrap_resource(&files.palette.data);
-    let screen_data = unwrap_resource(&files.screen.data);
-    let (graphics, palette_data, screen_data) = (graphics?, palette_data?, screen_data?);
-    let tiles = decode_8bpp_tiles(&graphics);
-    let palette = decode_bgr555_palette(&palette_data, false).map(|mut palette| {
-        mark_palette_blocks_transparent(&mut palette, 256);
-        palette
-    });
-    let screen = decode_screen_map(&screen_data, tile_offset, palette_offset);
-    let (tiles, palette, screen) = (tiles?, palette?, screen?);
-    let width = if screen.len().is_multiple_of(64) { 64 } else { 32 };
-    render_screen_map(&screen, width, &tiles, &palette)
+    DecodedLayer::decode(files, tile_offset, palette_offset)?.render()
+}
+
+/// What one step of an animation overwrites in a layer, and for how long it shows. Steps that write the same thing
+/// share a `key`, so the picture they make is drawn once.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackgroundAnimationStep {
+    pub key: u32,
+    pub ticks: u32,
+    tiles: Vec<(usize, IndexedTile8Bpp)>,
+    colors: Vec<(usize, Bgr555Color)>,
+}
+
+/// One thing animating a layer, as the steps it cycles through.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackgroundAnimator {
+    pub steps: Vec<BackgroundAnimationStep>,
+}
+
+/// The part of a tile animation that lands in `layer`'s graphics, read from the animation's own graphics file.
+/// `None` when it writes nothing there: a castle's background animates tiles of its foreground.
+pub fn background_tile_animator(animation: &BackgroundTileAnimation, layer: BackgroundLayer, data: &[u8]) -> Result<Option<BackgroundAnimator>> {
+    if animation.copies.iter().all(|copy| copy.layer != layer) {
+        return Ok(None);
+    }
+    let source = decode_8bpp_tiles(&unwrap_resource(data)?)?;
+    let steps = animation
+        .steps
+        .iter()
+        .map(|step| {
+            let mut tiles = Vec::new();
+            for copy in animation.copies.iter().filter(|copy| copy.layer == layer) {
+                let first = usize::from(step.tile) + usize::from(copy.from);
+                for offset in 0..usize::from(copy.count) {
+                    // A copy that runs off the file writes what it has; the game would write whatever follows.
+                    if let Some(tile) = source.get(first + offset) {
+                        tiles.push((usize::from(copy.to) + offset, *tile));
+                    }
+                }
+            }
+            BackgroundAnimationStep { key: u32::from(step.tile), ticks: u32::from(step.ticks), tiles, colors: Vec::new() }
+        })
+        .collect();
+    Ok(Some(BackgroundAnimator { steps }))
+}
+
+/// A palette animation's frames, read from its own palette file.
+pub fn background_palette_animator(animation: &BackgroundPaletteAnimation, data: &[u8]) -> Result<BackgroundAnimator> {
+    let source = decode_bgr555_palette(&unwrap_resource(data)?, false)?;
+    let steps = (0..usize::from(animation.frames))
+        .map(|frame| {
+            let first = frame * usize::from(animation.stride);
+            let colors = (0..usize::from(animation.count))
+                .filter_map(|offset| Some((usize::from(animation.to) + offset, *source.get(first + offset)?)))
+                .collect();
+            BackgroundAnimationStep { key: frame as u32, ticks: u32::from(animation.ticks), tiles: Vec::new(), colors }
+        })
+        .collect();
+    Ok(BackgroundAnimator { steps })
+}
+
+/// A layer's animation as pictures and the order they show in: `frames` holds an index into `images` and how many
+/// frames of the game it stays up.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackgroundFrames {
+    pub images: Vec<RgbaImage>,
+    pub frames: Vec<(usize, u32)>,
+}
+
+/// Longer than any loop the game has; an animation whose parts never line up again is cut here.
+const MAX_ANIMATION_TICKS: u32 = 3600;
+const MAX_ANIMATION_IMAGES: usize = 64;
+
+/// Plays `animators` over a layer until they are all back at their first step, drawing each distinct picture once.
+/// Empty when nothing animates the layer.
+pub fn load_background_frames(
+    files: &BackgroundResourceFiles,
+    tile_offset: u16,
+    palette_offset: u8,
+    animators: &[BackgroundAnimator],
+) -> Result<BackgroundFrames> {
+    let animators: Vec<&BackgroundAnimator> =
+        animators.iter().filter(|animator| animator.steps.len() > 1 && animator.steps.iter().all(|step| step.ticks > 0)).collect();
+    let mut result = BackgroundFrames::default();
+    if animators.is_empty() {
+        return Ok(result);
+    }
+    let base = DecodedLayer::decode(files, tile_offset, palette_offset)?;
+    let mut drawn: HashMap<Vec<u32>, usize> = HashMap::new();
+    // Where each animator is: its step, and how long that step has left.
+    let mut at: Vec<(usize, u32)> = animators.iter().map(|animator| (0, animator.steps.first().map_or(1, |step| step.ticks))).collect();
+    let mut elapsed = 0;
+    loop {
+        let steps: Vec<&BackgroundAnimationStep> = animators.iter().zip(&at).filter_map(|(animator, &(step, _))| animator.steps.get(step)).collect();
+        let keys: Vec<u32> = steps.iter().map(|step| step.key).collect();
+        let image = match drawn.get(&keys) {
+            Some(&image) => image,
+            None => {
+                if result.images.len() >= MAX_ANIMATION_IMAGES {
+                    break;
+                }
+                let mut layer = DecodedLayer { tiles: base.tiles.clone(), palette: base.palette.clone(), screen: Vec::new(), width: base.width };
+                for step in &steps {
+                    for (index, tile) in &step.tiles {
+                        if let Some(target) = layer.tiles.get_mut(*index) {
+                            *target = *tile;
+                        }
+                    }
+                    for (index, color) in &step.colors {
+                        // The slot keeps whether it is see-through: that is its place in the palette, not its colour.
+                        if let Some(target) = layer.palette.get_mut(*index) {
+                            *target = Bgr555Color { transparent: target.transparent, ..*color };
+                        }
+                    }
+                }
+                result.images.push(render_screen_map(&base.screen, base.width, &layer.tiles, &layer.palette)?);
+                drawn.insert(keys, result.images.len() - 1);
+                result.images.len() - 1
+            }
+        };
+        let ticks = at.iter().map(|&(_, left)| left).min().unwrap_or(1);
+        result.frames.push((image, ticks));
+        elapsed += ticks;
+        for (animator, (step, left)) in animators.iter().zip(&mut at) {
+            *left -= ticks;
+            if *left == 0 {
+                *step = (*step + 1) % animator.steps.len();
+                *left = animator.steps.get(*step).map_or(1, |step| step.ticks);
+            }
+        }
+        let restarted =
+            animators.iter().zip(&at).all(|(animator, &(step, left))| step == 0 && animator.steps.first().is_some_and(|first| first.ticks == left));
+        if restarted || elapsed >= MAX_ANIMATION_TICKS {
+            break;
+        }
+    }
+    Ok(result)
 }

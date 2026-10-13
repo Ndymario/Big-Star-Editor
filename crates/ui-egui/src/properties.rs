@@ -3,10 +3,12 @@
 //! `properties_ui` only draws these rows.
 
 use bigstar_core::Fx32;
-use bigstar_formats::{NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone};
+use bigstar_formats::{
+    NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelScreen, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone,
+};
 use bigstar_level::{
-    IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, SpriteFieldDefinition,
-    read_sprite_field, sprite_field_max, sprite_field_min, write_sprite_field,
+    BackgroundLayer, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences,
+    SpriteFieldDefinition, read_sprite_field, sprite_field_max, sprite_field_min, write_sprite_field,
 };
 use bigstar_protocol::{ActorInfo, LevelEdit, LevelSnapshot, ObjectBankOverlays};
 
@@ -312,6 +314,49 @@ impl Rows {
     }
 }
 
+/// What a view's background or foreground number means: the block of that layer it names, and what the block shows.
+fn layer_note(view: &LevelView, layer: BackgroundLayer, blocks: &[NsmbLevelScreen], block_id: u8) -> String {
+    let what = layer.name();
+    let lead = format!("The {what} block this view scrolls by: its speeds, its height and whether the {what} shows here at all.");
+    let Some(block) = bigstar_level::layer_block(blocks, block_id) else { return format!("{lead} The level has no {what} blocks.") };
+    let fallback =
+        if block.id == u16::from(block_id) { String::new() } else { format!(" No block has this id, so the game uses block {}.", block.id) };
+    if block.screen_id == u16::MAX || block.scroll_y == u16::MAX {
+        return format!("{lead}{fallback} That block names no screen, so this view has no {what}.");
+    }
+    let name = view.art.graphics.as_ref().and_then(|graphics| graphics.backgrounds.name(layer, block.screen_id));
+    match name {
+        Some(name) => format!("{lead}{fallback} It shows screen {}, {name}.", block.screen_id),
+        None => format!("{lead}{fallback} It shows screen {}.", block.screen_id),
+    }
+}
+
+/// Where the game opens on coming in through an entrance: the screen's corner and how far each layer has scrolled.
+fn spawn_note(view: &LevelView, entrance: &NsmbLevelEntrance) -> String {
+    let screen = view.spawn_screen(entrance);
+    let (player_x, player_y) = bigstar_level::entrance_spawn_point(entrance);
+    let mut note = format!(
+        "\n\nComing in here the player stands at {player_x}, {player_y} and the screen's top left corner is at {}, {}.",
+        screen.rect.left(),
+        screen.rect.top()
+    );
+    if screen.view.is_none() {
+        note.push_str(" No view has this ID, so nothing bounds the camera or scrolls the layers.");
+        return note;
+    }
+    for layer in [BackgroundLayer::Background, BackgroundLayer::Foreground] {
+        match view.screen_layer(&screen, layer) {
+            Some(scroll) => note.push_str(&format!(" The {} is scrolled to {}, {}.", layer.name(), scroll.x >> 12, scroll.y)),
+            None => note.push_str(&format!(" The view shows no {}.", layer.name())),
+        }
+    }
+    note.push_str(" Turn on DS Screen to see it.");
+    if !matches!(entrance.camera_zoom, 0 | 16 | 255) {
+        note.push_str(" This entrance changes the zoom, which the prediction leaves out.");
+    }
+    note
+}
+
 /// The rows of the panel's tab for what it is looking at. `overlays` labels each object bank with the code overlay it
 /// loads.
 pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOverlays>) -> Rows {
@@ -340,14 +385,24 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
     match panel.tab {
         Tab::Course => {
             let r = snapshot.tileset_references;
-            for (label, value) in [
-                ("Tileset", r.tileset_id),
-                ("BG graphics", r.background_graphics_id),
-                ("BG screen", r.background_screen_id),
-                ("FG graphics", r.foreground_graphics_id),
-                ("FG screen", r.foreground_screen_id),
+            // In the order `apply` reads them back.
+            for (label, value, layer) in [
+                ("Tileset", r.tileset_id, None),
+                ("BG graphics", r.background_graphics_id, Some(BackgroundLayer::Background)),
+                ("BG screen", r.background_screen_id, Some(BackgroundLayer::Background)),
+                ("FG graphics", r.foreground_graphics_id, Some(BackgroundLayer::Foreground)),
+                ("FG screen", r.foreground_screen_id, Some(BackgroundLayer::Foreground)),
+                ("BG palette", r.background_palette_id, Some(BackgroundLayer::Background)),
+                ("FG palette", r.foreground_palette_id, Some(BackgroundLayer::Foreground)),
             ] {
                 full(rows, label, Some(i64::from(value)), 0, 255);
+                // The game's tables hold a background's graphics, palette and screen at the same number, so the name
+                // the project's scripts give that number names all three.
+                let named = view.art.graphics.as_ref().zip(layer).map(|(graphics, layer)| graphics.backgrounds.layer(layer)).unwrap_or_default();
+                if let Some(row) = rows.last_mut().filter(|_| !named.is_empty()) {
+                    row.representable = named.iter().any(|definition| i64::from(definition.id) == i64::from(value));
+                    row.editor = Editor::Choice(named.iter().map(|definition| (i64::from(definition.id), definition.name.clone())).collect());
+                }
             }
         }
         Tab::Banks => {
@@ -492,6 +547,12 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 row.representable = named;
                 row.note = "How the player arrives, and for doors and pipes how they leave. The game's tables stop at Vine: Nintendo's levels use the connected mini pipes after it, but the game reads past its tables for them.".to_owned();
             }
+            // Where all of the above puts the camera and the two layers, for the one entrance being looked at.
+            if let ([only], Some(row)) = (indices.as_slice(), rows.iter_mut().find(|row| row.label == "View ID"))
+                && let Some(entrance) = list.get(*only)
+            {
+                row.note.push_str(&spawn_note(view, entrance));
+            }
         }
         Tab::Entity(Kind::View) => {
             // A view reads only the first selected one, and a selection of views edits nothing: as the Qt panel.
@@ -509,6 +570,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Progress path", v.progress_path_id),
                 ] {
                     full(rows, label, Some(i64::from(value)), 0, 255);
+                    // A view names a block of the layer, and the block says which screen scrolls there and how.
+                    let (layer, blocks) = match label {
+                        "Background" => (BackgroundLayer::Background, &course.backgrounds),
+                        "Foreground" => (BackgroundLayer::Foreground, &course.foregrounds),
+                        _ => continue,
+                    };
+                    if let Some(row) = rows.last_mut() {
+                        row.note = layer_note(view, layer, blocks, value);
+                    }
                 }
             }
         }
@@ -657,6 +727,8 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
                 2 => &mut r.background_screen_id,
                 3 => &mut r.foreground_graphics_id,
                 4 => &mut r.foreground_screen_id,
+                5 => &mut r.background_palette_id,
+                6 => &mut r.foreground_palette_id,
                 _ => return None,
             };
             *target = narrow(value, *target);

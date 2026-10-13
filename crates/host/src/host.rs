@@ -30,7 +30,7 @@ use crate::workspace::Workspace;
 
 mod build;
 
-/// What a host needs besides its root: where the shipped actor and tile scripts are, and which NCPatcher to ask.
+/// What a host needs besides its root: where the shipped actor, tile and background scripts are, and which NCPatcher to ask.
 #[derive(Debug, Clone)]
 pub struct HostOptions {
     pub data_dir: PathBuf,

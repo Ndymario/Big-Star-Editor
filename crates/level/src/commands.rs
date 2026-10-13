@@ -169,10 +169,13 @@ impl Tileset {
     }
 }
 
-fn set_first_screen(screens: &mut Vec<NsmbLevelScreen>, screen_id: u16) {
+fn set_first_screen(screens: &mut Vec<NsmbLevelScreen>, screen_id: u16, palette_id: u16) {
     match screens.first_mut() {
-        Some(screen) => screen.screen_id = screen_id,
-        None => screens.push(NsmbLevelScreen { screen_id, ..NsmbLevelScreen::default() }),
+        Some(screen) => {
+            screen.screen_id = screen_id;
+            screen.palette_id = palette_id;
+        }
+        None => screens.push(NsmbLevelScreen { screen_id, palette_id, ..NsmbLevelScreen::default() }),
     }
 }
 
@@ -180,9 +183,9 @@ impl Tileset {
     fn apply(target: &mut LevelState, value: LevelTilesetReferences) {
         target.course.header.tileset_theme[0] = value.tileset_id;
         target.course.header.background_theme[0] = value.background_graphics_id;
-        set_first_screen(&mut target.course.backgrounds, value.background_screen_id);
+        set_first_screen(&mut target.course.backgrounds, value.background_screen_id, value.background_palette_id);
         target.course.header.foreground_theme[0] = value.foreground_graphics_id;
-        set_first_screen(&mut target.course.foregrounds, value.foreground_screen_id);
+        set_first_screen(&mut target.course.foregrounds, value.foreground_screen_id, value.foreground_palette_id);
     }
 }
 

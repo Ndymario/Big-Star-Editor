@@ -543,6 +543,8 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
             ("Background screen", &mut references.background_screen_id),
             ("Foreground graphics", &mut references.foreground_graphics_id),
             ("Foreground screen", &mut references.foreground_screen_id),
+            ("Background palette", &mut references.background_palette_id),
+            ("Foreground palette", &mut references.foreground_palette_id),
         ] {
             ui.label(label);
             ui.add(controls::number(value).range(0..=255));

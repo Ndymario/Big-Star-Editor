@@ -9,8 +9,9 @@ use std::sync::Arc;
 
 use bigstar_formats::{NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone};
 use bigstar_level::{
-    DecodedTileset, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilemap, ReorderKind, SpriteBounds,
-    SpriteInsertion, rasterize_level_objects,
+    BackgroundLayer, DS_SCREEN_HEIGHT, DS_SCREEN_WIDTH, DecodedTileset, IndexedLevelValue, LEVEL_WRAPS_AROUND, LayerScroll, LevelEntityInsertions,
+    LevelEntitySelection, LevelEntityUpdates, LevelTilemap, ReorderKind, SpriteBounds, SpriteInsertion, ViewFrame, camera_block, entrance_camera,
+    layer_scroll, rasterize_level_objects,
 };
 use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutcome, LevelEdit, LevelGraphics, LevelSnapshot, TextureId};
 use egui::{Pos2, Rect, Vec2};
@@ -201,6 +202,8 @@ pub struct CanvasOptions {
     pub show_grid: bool,
     pub show_ds_screen: bool,
     pub backgrounds: Backgrounds,
+    /// Whether the layers move as the game moves them: their clouds drifting, their lava and torches turning over.
+    pub animate_backgrounds: bool,
 }
 
 /// Where the canvas draws a level's background and foreground layers.
@@ -236,7 +239,15 @@ impl Backgrounds {
 
 impl Default for CanvasOptions {
     fn default() -> Self {
-        Self { snap: true, snap_size: TILE, show_minimap: true, show_grid: true, show_ds_screen: false, backgrounds: Backgrounds::default() }
+        Self {
+            snap: true,
+            snap_size: TILE,
+            show_minimap: true,
+            show_grid: true,
+            show_ds_screen: false,
+            backgrounds: Backgrounds::default(),
+            animate_backgrounds: true,
+        }
     }
 }
 
@@ -376,8 +387,10 @@ impl LevelArt {
             .tilesets
             .iter()
             .filter_map(|slot| slot.atlas.clone())
-            .chain(graphics.background.texture.clone())
-            .chain(graphics.foreground.texture.clone())
+            .chain([&graphics.background, &graphics.foreground].into_iter().flat_map(|layer| {
+                // The still, and every picture the layer plays through.
+                layer.texture.iter().cloned().chain(layer.frames.iter().map(|frame| frame.texture.clone()))
+            }))
             .collect()
     }
 
@@ -425,6 +438,18 @@ pub struct LevelView {
     release_after_clone: bool,
     /// The next `Added` is a placement, and a placed path is selected by its first node.
     placing: bool,
+    /// Where the pointer is over the canvas, in level pixels: what the DS screen follows.
+    pub hover: Option<Pos2>,
+}
+
+/// One screen of the DS screen overlay: what the game would show with its camera here.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DsScreen {
+    pub rect: Rect,
+    /// The view whose blocks scroll the layers, when there is one to go by.
+    pub view: Option<usize>,
+    /// Where the selected entrance puts the camera, rather than where the pointer is.
+    pub spawn: bool,
 }
 
 fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect {
@@ -498,6 +523,7 @@ impl LevelView {
             awaiting_clone: false,
             release_after_clone: false,
             placing: false,
+            hover: None,
         }
     }
 
@@ -684,6 +710,78 @@ impl LevelView {
     /// for each of its nodes.
     pub fn is_selected(&self, kind: Kind, index: usize, node: Option<usize>) -> bool {
         self.selection.iter().any(|s| s.kind == kind && s.index == index && (node.is_none() || s.node.is_none() || s.node == node))
+    }
+
+    /// The entrance the DS screen goes by: the only thing selected, where a drag in progress has it.
+    fn screen_entrance(&self) -> Option<NsmbLevelEntrance> {
+        let [item] = self.selection.as_slice() else { return None };
+        if item.kind != Kind::Entrance {
+            return None;
+        }
+        let mut entrance = self.snapshot.course.entrances.get(item.index)?.clone();
+        let at = self.preview(Kind::Entrance, item.index, entrance_rect(&entrance)).min;
+        entrance.x = at.x.round().clamp(0.0, 65535.0) as u16;
+        entrance.y = at.y.round().clamp(0.0, 65535.0) as u16;
+        Some(entrance)
+    }
+
+    /// The screen the game opens on when the player comes in through `entrance`: the entrance's type and alignment
+    /// place the player, its view bounds the camera, and the view's camera settings say how far down the screen the
+    /// player is kept.
+    pub fn spawn_screen(&self, entrance: &NsmbLevelEntrance) -> DsScreen {
+        let course = &self.snapshot.course;
+        let entered = course.views.iter().position(|view| view.id == entrance.view_id);
+        let corner = match entered.and_then(|index| course.views.get(index)) {
+            Some(view) => {
+                let wraps = course.header.settings & LEVEL_WRAPS_AROUND != 0;
+                entrance_camera(entrance, ViewFrame::of(view), camera_block(&course.cameras, view.camera_settings_id), wraps, None)
+            }
+            // No view to keep the camera in: the player centred, as far down the screen as the game likes them.
+            None => {
+                let (x, y) = bigstar_level::entrance_spawn_point(entrance);
+                (x - DS_SCREEN_WIDTH / 2, y - 128)
+            }
+        };
+        let size = Vec2::new(DS_SCREEN_WIDTH as f32, DS_SCREEN_HEIGHT as f32);
+        DsScreen { rect: Rect::from_min_size(Pos2::new(corner.0 as f32, corner.1 as f32), size), view: entered, spawn: true }
+    }
+
+    /// What the DS screen overlay shows. A screen follows the pointer, centred on it, scrolled by the view the pointer
+    /// is in. With one entrance selected the view is that entrance's instead, wherever the pointer goes, and a second
+    /// screen stands where the game puts the camera when the player comes in through it.
+    pub fn ds_screens(&self) -> Vec<DsScreen> {
+        let mut screens = Vec::new();
+        if !self.options.show_ds_screen {
+            return screens;
+        }
+        let course = &self.snapshot.course;
+        let size = Vec2::new(DS_SCREEN_WIDTH as f32, DS_SCREEN_HEIGHT as f32);
+        let entrance = self.screen_entrance();
+        let spawn = entrance.as_ref().map(|entrance| self.spawn_screen(entrance));
+        let entered = spawn.and_then(|screen| screen.view);
+        screens.extend(spawn);
+        if let Some(hover) = self.hover {
+            let corner = Pos2::new((hover.x - size.x / 2.0).round(), (hover.y - size.y / 2.0).round());
+            let under = course.views.iter().position(|view| view_rect(view).contains(hover));
+            screens.push(DsScreen { rect: Rect::from_min_size(corner, size), view: if entrance.is_some() { entered } else { under }, spawn: false });
+        }
+        screens
+    }
+
+    /// How the game scrolls a layer with its camera on `screen`, or nothing when the screen has no view to go by or
+    /// the view shows no such layer.
+    pub fn screen_layer(&self, screen: &DsScreen, layer: BackgroundLayer) -> Option<LayerScroll> {
+        let course = &self.snapshot.course;
+        let view = course.views.get(screen.view?)?;
+        let (blocks, block) = match layer {
+            BackgroundLayer::Background => (&course.backgrounds, view.background_id),
+            BackgroundLayer::Foreground => (&course.foregrounds, view.foreground_id),
+        };
+        let wraps = course.header.settings & LEVEL_WRAPS_AROUND != 0;
+        // The game lets tileset 30's foreground scroll on past the view as well.
+        let free = layer == BackgroundLayer::Foreground && course.header.tileset_theme[0] == 0x1e;
+        let camera = (screen.rect.left() as i32, screen.rect.top() as i32);
+        layer_scroll(layer, blocks, block, ViewFrame::of(view), camera, !wraps && !free)
     }
 
     /// The single selected rectangle the knobs belong to.
@@ -1473,6 +1571,54 @@ mod tests {
             }
             other => panic!("no move: {other:?}"),
         }
+    }
+
+    #[test]
+    fn the_ds_screen_follows_the_pointer_and_marks_where_an_entrance_opens() {
+        use bigstar_formats::{NsmbLevelCamera, NsmbLevelScreen};
+        let mut level = snapshot();
+        level.course.views = vec![
+            NsmbLevelView { x: 0, y: 0, width: 2000, height: 400, id: 0, camera_settings_id: 2, ..Default::default() },
+            NsmbLevelView { x: 0, y: 1000, width: 2000, height: 400, id: 7, background_id: 1, ..Default::default() },
+        ];
+        level.course.cameras = vec![NsmbLevelCamera { id: 2, bottom_offset: -32, ..Default::default() }];
+        level.course.backgrounds = vec![
+            NsmbLevelScreen { id: 0, screen_id: 5, scroll_x: 1, scroll_y: 1, ..Default::default() },
+            NsmbLevelScreen { id: 1, screen_id: 9, ..Default::default() },
+        ];
+        level.course.entrances =
+            vec![NsmbLevelEntrance { x: 320, y: 304, view_id: 0, ..Default::default() }, NsmbLevelEntrance { view_id: 99, ..Default::default() }];
+        let mut view = LevelView::new(level);
+        view.hover = Some(Pos2::new(500.0, 1200.0));
+        assert!(view.ds_screens().is_empty());
+
+        // Under the pointer, centred, scrolled by the view the pointer is in.
+        view.options.show_ds_screen = true;
+        let screens = view.ds_screens();
+        assert_eq!(screens, [DsScreen { rect: rect(372.0, 1104.0, 256.0, 192.0), view: Some(1), spawn: false }]);
+        assert_eq!(view.screen_layer(&screens[0], BackgroundLayer::Background).map(|scroll| (scroll.screen_id, scroll.x >> 12)), Some((9, 372)));
+        view.hover = Some(Pos2::new(500.0, 700.0));
+        assert_eq!(view.ds_screens()[0].view, None);
+
+        // An entrance adds the screen the game opens on, by its view and that view's camera settings, and lends the
+        // pointer's screen its view.
+        view.selection = vec![Item::new(Kind::Entrance, 0)];
+        let screens = view.ds_screens();
+        assert_eq!(screens[0], DsScreen { rect: rect(200.0, 208.0, 256.0, 192.0), view: Some(0), spawn: true });
+        assert_eq!((screens[1].view, screens[1].spawn), (Some(0), false));
+        let scroll = view.screen_layer(&screens[0], BackgroundLayer::Background).unwrap();
+        assert_eq!((scroll.screen_id, scroll.x >> 12, scroll.y), (5, 100, 288));
+        // Dragged, it is predicted where the drag has it.
+        view.gesture = Some(Gesture::Move { delta: Vec2::new(64.0, 0.0), submitted: false });
+        assert_eq!(view.ds_screens()[0].rect.left(), 264.0);
+        view.gesture = None;
+
+        // An entrance whose view does not exist still shows where the player would be framed, with nothing scrolled.
+        view.selection = vec![Item::new(Kind::Entrance, 1)];
+        view.hover = None;
+        let screens = view.ds_screens();
+        assert_eq!(screens, [DsScreen { rect: rect(8.0 - 128.0, 16.0 - 128.0, 256.0, 192.0), view: None, spawn: true }]);
+        assert!(view.screen_layer(&screens[0], BackgroundLayer::Background).is_none());
     }
 
     #[test]

@@ -199,7 +199,7 @@ fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: 
 }
 
 /// `serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]`: hosts a workspace until
-/// interrupted. `--data` is where the shipped actor and tile scripts are, `--ncpatcher` which NCPatcher builds and is asked about
+/// interrupted. `--data` is where the shipped actor, tile and background scripts are, `--ncpatcher` which NCPatcher builds and is asked about
 /// variants, modules and plans, `--xdelta` which xdelta3 the patch tools run.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let Some((root, flags)) = args.split_first() else {

@@ -7,16 +7,17 @@ use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result};
 use bigstar_formats::{BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET, FOREGROUND_TILE_OFFSET, RgbaImage};
-use bigstar_level::{LevelTilesetReferences, ModuleDataCatalog, SpriteDefinition};
+use bigstar_level::{BackgroundCatalog, BackgroundLayer, LevelTilesetReferences, ModuleDataCatalog, SpriteDefinition};
 use bigstar_patching::{FileManifest, ModuleGraph};
 use bigstar_project::{
-    ActorResource, ActorResourceKind, EffectiveFilesystem, LuaActorCatalog, LuaActorDrawKind, LuaActorLayer, LuaActorRenderInput, LuaTileLayer,
-    RomReader, StageObjectIdentity, TileOverlayCatalog, has_lua_renderer, load_background_graphics, load_level_tilesets, load_lua_actor_layers,
-    load_lua_tile_layers, lua_actor_bounds, render_lua_actor, resolve_level_graphics,
+    ActorResource, ActorResourceKind, BackgroundAnimator, BackgroundResourceFiles, EffectiveFilesystem, LuaActorCatalog, LuaActorDrawKind,
+    LuaActorLayer, LuaActorRenderInput, LuaBackgroundLayer, LuaTileLayer, RomReader, StageObjectIdentity, TileOverlayCatalog,
+    background_palette_animator, background_tile_animator, has_lua_renderer, load_background_frames, load_background_graphics, load_level_tilesets,
+    load_lua_actor_layers, load_lua_background_layers, load_lua_tile_layers, lua_actor_bounds, render_lua_actor, resolve_level_graphics,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LevelGraphics, LevelId, Map16Overlay,
-    ResourceBytes, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LayerFrame, LevelGraphics, LevelId,
+    Map16Overlay, ResourceBytes, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -117,6 +118,7 @@ pub(crate) struct ProjectGraphics {
     modules: ModuleGraph,
     catalog: ModuleDataCatalog,
     overlays: Option<TileOverlayCatalog>,
+    backgrounds: Option<BackgroundCatalog>,
     actors: Option<LuaActorCatalog>,
     sprite_object_ids: Option<Vec<u32>>,
     pub textures: TextureStore,
@@ -145,6 +147,7 @@ impl ProjectGraphics {
             modules,
             catalog,
             overlays: None,
+            backgrounds: None,
             actors: None,
             sprite_object_ids: None,
             textures: TextureStore::default(),
@@ -152,7 +155,7 @@ impl ProjectGraphics {
         })
     }
 
-    /// Layers in the order `docs/lua-actors.md` and `docs/lua-tiles.md` give: the project's own, each enabled module's
+    /// Layers in the order `docs/lua-actors.md`, `docs/lua-tiles.md` and `docs/lua-backgrounds.md` give: the project's own, each enabled module's
     /// in module order, then the shipped directory.
     fn layers(&self, kind: &str, bare: bool) -> Vec<(String, PathBuf)> {
         let mut layers = vec![(format!("project bigstar/{kind}"), self.directory.join("bigstar").join(kind))];
@@ -192,6 +195,92 @@ impl ProjectGraphics {
         self.overlays.get_or_insert_with(TileOverlayCatalog::default)
     }
 
+    /// What the background scripts say, read once. A script that will not load is logged and the rest stand.
+    fn backgrounds(&mut self) -> &BackgroundCatalog {
+        if self.backgrounds.is_none() {
+            let layers: Vec<LuaBackgroundLayer> =
+                self.layers("backgrounds", false).into_iter().map(|(name, directory)| LuaBackgroundLayer { name, directory }).collect();
+            let loaded = load_lua_background_layers(&layers).unwrap_or_else(|error| {
+                log::warn!("background scripts: {}", error.message);
+                Default::default()
+            });
+            for error in &loaded.errors {
+                log::warn!("background scripts: {error}");
+            }
+            self.watched.extend(loaded.sources);
+            self.backgrounds = Some(loaded.catalog);
+        }
+        self.backgrounds.get_or_insert_with(BackgroundCatalog::default)
+    }
+
+    /// Everything the scripts have animating one layer of a level: the tiles its own screen and the other layer's
+    /// overwrite in it, and the colours its palette cycles. An animation whose file will not read is logged and
+    /// dropped, and the layer is drawn without it.
+    fn animators(&mut self, layer: BackgroundLayer, references: LevelTilesetReferences) -> Vec<BackgroundAnimator> {
+        let catalog = self.backgrounds().clone();
+        let own_palette = match layer {
+            BackgroundLayer::Background => references.background_palette_id,
+            BackgroundLayer::Foreground => references.foreground_palette_id,
+        };
+        let screens =
+            [(BackgroundLayer::Background, references.background_screen_id), (BackgroundLayer::Foreground, references.foreground_screen_id)];
+        let mut animators = Vec::new();
+        let read = |files: &mut EffectiveFilesystem, watched: &mut Vec<PathBuf>, name: &str| -> Option<Vec<u8>> {
+            let data = files.read(name).map_err(|error| log::warn!("background scripts: {name}: {}", error.message)).ok()?;
+            watched.extend(files.source(name));
+            Some(data)
+        };
+        for (of, screen) in screens {
+            let Some(tiles) = catalog.find(of, screen).and_then(|definition| definition.tiles.as_ref()) else { continue };
+            if tiles.copies.iter().all(|copy| copy.layer != layer) {
+                continue;
+            }
+            let Some(data) = read(&mut self.files, &mut self.watched, &tiles.file) else { continue };
+            match background_tile_animator(tiles, layer, &data) {
+                Ok(animator) => animators.extend(animator),
+                Err(error) => log::warn!("background scripts: {}: {}", tiles.file, error.message),
+            }
+        }
+        // The game picks the colours to cycle by the palette the layer loaded, which its own block names.
+        if let Some(palette) = catalog.find(layer, own_palette).and_then(|definition| definition.palette.as_ref())
+            && let Some(data) = read(&mut self.files, &mut self.watched, &palette.file)
+        {
+            match background_palette_animator(palette, &data) {
+                Ok(animator) => animators.push(animator),
+                Err(error) => log::warn!("background scripts: {}: {}", palette.file, error.message),
+            }
+        }
+        animators
+    }
+
+    /// One layer of a level as a still and, where the scripts animate it, as the frames it plays.
+    fn layer_graphics(&mut self, layer: BackgroundLayer, files: &BackgroundResourceFiles, references: LevelTilesetReferences) -> ImageGraphics {
+        // A level without the layer has no files for it, which is not an error.
+        if files.screen.is_empty() {
+            return ImageGraphics::default();
+        }
+        let (tile_offset, palette_offset) = match layer {
+            BackgroundLayer::Background => (BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET),
+            BackgroundLayer::Foreground => (FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET),
+        };
+        let texture = match load_background_graphics(files, tile_offset, palette_offset) {
+            Ok(image) => self.textures.add_owned(image),
+            Err(error) => return ImageGraphics { texture: None, error: Some(error.message), frames: Vec::new() },
+        };
+        let animators = self.animators(layer, references);
+        let frames = match load_background_frames(files, tile_offset, palette_offset, &animators) {
+            Ok(played) => {
+                let textures: Vec<TextureId> = played.images.into_iter().map(|image| self.textures.add_owned(image)).collect();
+                played.frames.iter().filter_map(|&(image, ticks)| Some(LayerFrame { texture: textures.get(image)?.clone(), ticks })).collect()
+            }
+            Err(error) => {
+                log::warn!("background scripts: {} animation: {}", layer.name(), error.message);
+                Vec::new()
+            }
+        };
+        ImageGraphics { texture: Some(texture), error: None, frames }
+    }
+
     /// What NCPatcher now plans, after the host wrote module files: reads follow it.
     pub fn set_plan(&mut self, plan: Option<FileManifest>) {
         self.files.set_plan(&self.directory, plan);
@@ -222,7 +311,7 @@ impl ProjectGraphics {
                 tile_page_offset: files.tile_page_offset,
             })
             .collect();
-        let map = |files: &bigstar_project::BackgroundResourceFiles| TilemapSlot {
+        let map = |files: &BackgroundResourceFiles| TilemapSlot {
             graphics: bytes(&files.graphics),
             palette: bytes(&files.palette),
             screen: bytes(&files.screen),
@@ -263,18 +352,9 @@ impl ProjectGraphics {
                 error: (!error.is_empty()).then_some(error),
             };
         }
-        let mut image = |files: &bigstar_project::BackgroundResourceFiles, tile_offset, palette_offset| {
-            // A level without the layer has no files for it, which is not an error.
-            if files.screen.is_empty() {
-                return ImageGraphics::default();
-            }
-            match load_background_graphics(files, tile_offset, palette_offset) {
-                Ok(image) => ImageGraphics { texture: Some(self.textures.add_owned(image)), error: None },
-                Err(error) => ImageGraphics { texture: None, error: Some(error.message) },
-            }
-        };
-        result.background = image(&resources.background, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET);
-        result.foreground = image(&resources.foreground, FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET);
+        result.background = self.layer_graphics(BackgroundLayer::Background, &resources.background, references);
+        result.foreground = self.layer_graphics(BackgroundLayer::Foreground, &resources.foreground, references);
+        result.backgrounds = self.backgrounds().clone();
         result
     }
 

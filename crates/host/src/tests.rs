@@ -1081,3 +1081,60 @@ fn real_backgrounds_and_foregrounds_draw() {
     assert!(graphics.background.texture.is_some());
     assert_eq!((graphics.foreground.texture.as_ref(), graphics.foreground.error.as_ref()), (None, None));
 }
+
+/// The shipped background scripts against a real ROM: every layer has a name, and the ones the game animates come
+/// back as the frames it plays, each a picture the host can hand over.
+#[test]
+fn real_backgrounds_are_named_and_animated() {
+    use bigstar_level::BackgroundLayer;
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-background-scripts");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.session();
+    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.into_iter().flat_map(|world| world.levels).flat_map(|level| level.areas).collect();
+    let (mut animated, mut seen) = (std::collections::BTreeMap::new(), 0);
+    for area in areas.iter().filter(|area| area.available) {
+        let Ok(Response::Level(snapshot)) = session.handle(Request::OpenLevel { area: area.token.clone() }) else { continue };
+        let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else { panic!() };
+        seen += 1;
+        assert_eq!(graphics.backgrounds.definitions.len(), 152);
+        let references = snapshot.tileset_references;
+        for (layer, image, screen) in [
+            (BackgroundLayer::Background, &graphics.background, references.background_screen_id),
+            (BackgroundLayer::Foreground, &graphics.foreground, references.foreground_screen_id),
+        ] {
+            assert!(image.error.is_none(), "{} {layer:?}: {:?}", area.course_path, image.error);
+            if image.texture.is_none() {
+                continue;
+            }
+            assert!(
+                graphics.backgrounds.name(layer, screen).is_some_and(|name| !name.starts_with("Empty")),
+                "{} {layer:?} {screen}",
+                area.course_path
+            );
+            if image.frames.is_empty() {
+                continue;
+            }
+            // The first step of every animation the game ships is the picture the files already hold.
+            assert_eq!(image.frames.first().map(|frame| &frame.texture), image.texture.as_ref(), "{} {layer:?} {screen}", area.course_path);
+            let ids: Vec<String> = image.frames.iter().map(|frame| frame.texture.clone()).collect();
+            let Response::Textures(textures) = session.handle(Request::GetTextures { ids: ids.clone() }).unwrap() else { panic!() };
+            assert!(textures.iter().all(|texture| (texture.width, texture.height) == (512, 512)));
+            let distinct: std::collections::BTreeSet<&String> = ids.iter().collect();
+            let ticks: u32 = image.frames.iter().map(|frame| frame.ticks).sum();
+            animated.entry((layer, screen)).or_insert((distinct.len(), image.frames.len(), ticks));
+        }
+        session.handle(Request::CloseLevel { level: snapshot.level }).unwrap();
+    }
+    assert!(seen > 150, "{seen}");
+    println!("{animated:#?}");
+    // A castle animates eight pictures of its foreground, five frames each. The volcano plays 40 steps over 448
+    // frames, but its six source frames hold only two different pictures.
+    assert_eq!(animated.get(&(BackgroundLayer::Foreground, 1)), Some(&(8, 8, 40)));
+    assert_eq!(animated.get(&(BackgroundLayer::Foreground, 15)), Some(&(2, 40, 448)));
+    assert_eq!(animated.get(&(BackgroundLayer::Background, 7)), Some(&(8, 8, 128)));
+}

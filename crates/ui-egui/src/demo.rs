@@ -11,8 +11,8 @@ use bigstar_formats::{
     OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage, fnv1a_32,
 };
 use bigstar_level::{
-    EditableLevel, LevelDataDeclaration, LevelDataKind, LevelEntityInsertions, ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice,
-    SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
+    BackgroundCatalog, BackgroundDefinition, BackgroundLayer, EditableLevel, LevelDataDeclaration, LevelDataKind, LevelEntityInsertions,
+    ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice, SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
 };
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FileEntry, FileIcon,
@@ -452,6 +452,12 @@ fn image(id: &str, width: usize, height: usize, pixel: impl Fn(usize, usize) -> 
     TextureData { id: id.to_owned(), width: width as u32, height: height as u32, rgba }
 }
 
+/// What a project's background scripts would say of the demo's layers: their names, and nothing moving.
+fn demo_backgrounds() -> BackgroundCatalog {
+    let named = |layer, name: &str| BackgroundDefinition { layer, id: 0, name: name.to_owned(), ..Default::default() };
+    BackgroundCatalog { definitions: vec![named(BackgroundLayer::Background, "Demo sky"), named(BackgroundLayer::Foreground, "Demo bushes")] }
+}
+
 /// A sky, darker at the top.
 fn background() -> TextureData {
     image(BACKGROUND, 64, 64, |_, y| {
@@ -683,11 +689,19 @@ impl DemoConnection {
             None => TilesetGraphics::default(),
         });
         let background = if self.background {
-            ImageGraphics { texture: Some(BACKGROUND.to_owned()), error: None }
+            ImageGraphics { texture: Some(BACKGROUND.to_owned()), error: None, frames: Vec::new() }
         } else {
-            ImageGraphics { texture: None, error: Some("the demo has no background".to_owned()) }
+            ImageGraphics { texture: None, error: Some("the demo has no background".to_owned()), frames: Vec::new() }
         };
-        LevelGraphics { level, generation: 0, tilesets, background, foreground: ImageGraphics::default(), error: None }
+        LevelGraphics {
+            level,
+            generation: 0,
+            tilesets,
+            background,
+            foreground: ImageGraphics::default(),
+            backgrounds: demo_backgrounds(),
+            error: None,
+        }
     }
 
     fn catalog() -> ActorCatalog {

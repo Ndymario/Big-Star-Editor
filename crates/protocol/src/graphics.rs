@@ -2,7 +2,7 @@
 //! frontend keeps them; everything else names them by [`TextureId`].
 
 use bigstar_formats::ObjectLayout;
-use bigstar_level::{SpriteBounds, SpriteDefinition};
+use bigstar_level::{BackgroundCatalog, SpriteBounds, SpriteDefinition};
 use serde::{Deserialize, Serialize};
 
 /// A texture's content hash. The same pixels always have the same id, so a frontend that holds one never asks for it
@@ -33,11 +33,21 @@ pub struct TilesetGraphics {
     pub error: Option<String>,
 }
 
+/// One picture of an animated layer and how many of the game's frames, sixty a second, it stays up.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerFrame {
+    pub texture: TextureId,
+    pub ticks: u32,
+}
+
 /// A decoded image or why there is none.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ImageGraphics {
     pub texture: Option<TextureId>,
     pub error: Option<String>,
+    /// The layer as the game animates its tiles and colours, played in order and round again. Empty when it stands
+    /// still, and then `texture` is all there is.
+    pub frames: Vec<LayerFrame>,
 }
 
 /// Everything the canvas draws a level's tiles from. `generation` grows whenever a watched file changes; an answer
@@ -49,6 +59,9 @@ pub struct LevelGraphics {
     pub tilesets: [TilesetGraphics; 3],
     pub background: ImageGraphics,
     pub foreground: ImageGraphics,
+    /// What the project's background scripts say of every background and foreground: their names, and how the bands of
+    /// each drift. See `docs/lua-backgrounds.md`.
+    pub backgrounds: BackgroundCatalog,
     /// Set when the level's resources could not be found at all; nothing else is filled then.
     pub error: Option<String>,
 }

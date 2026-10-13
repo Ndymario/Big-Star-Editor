@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use bigstar_core::{Error, ErrorCode, LittleEndianReader, LittleEndianWriter, Result};
 use bigstar_formats::{
     GlueBlock, GlueValue, NSMB_BGDAT_OBJECT_SIZE, NSMB_HEADER_SIZE, NSMB_LEVEL_BLOCK_COUNT, NSMB_OBJECT_BANK_SLOT_COUNT, NsmbLevelCourse,
-    NsmbLevelObject, NsmbLevelPath, fnv1a_32, write_glue_block,
+    NsmbLevelObject, NsmbLevelPath, NsmbLevelScreen, fnv1a_32, write_glue_block,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,6 +16,9 @@ pub struct LevelTilesetReferences {
     pub background_screen_id: u16,
     pub foreground_graphics_id: u16,
     pub foreground_screen_id: u16,
+    /// The game loads a layer's palette by its first block's palette id, not by the graphics id beside it.
+    pub background_palette_id: u16,
+    pub foreground_palette_id: u16,
 }
 
 /// Everything the history edits.
@@ -115,11 +118,13 @@ fn encode_paths(paths: &[NsmbLevelPath]) -> Result<(Vec<u8>, Vec<u8>)> {
     Ok((headers, nodes))
 }
 
-fn patch_screen_id(block: &mut Vec<u8>, screen_id: u16) -> Result<()> {
+fn patch_screen_ids(block: &mut Vec<u8>, screen: &NsmbLevelScreen) -> Result<()> {
     if block.len() < 20 {
         block.resize(20, 0);
     }
-    LittleEndianWriter::new(block).u16(2, screen_id)
+    let mut writer = LittleEndianWriter::new(block);
+    writer.u16(2, screen.screen_id)?;
+    writer.u16(4, screen.palette_id)
 }
 
 impl LevelState {
@@ -130,6 +135,8 @@ impl LevelState {
             background_screen_id: self.course.backgrounds.first().map_or(0, |screen| screen.screen_id),
             foreground_graphics_id: self.course.header.foreground_theme[0],
             foreground_screen_id: self.course.foregrounds.first().map_or(0, |screen| screen.screen_id),
+            background_palette_id: self.course.backgrounds.first().map_or(0, |screen| screen.palette_id),
+            foreground_palette_id: self.course.foregrounds.first().map_or(0, |screen| screen.palette_id),
         }
     }
 
@@ -218,10 +225,10 @@ impl LevelState {
             blocks[0] = header;
         }
         if let Some(screen) = self.course.backgrounds.first() {
-            patch_screen_id(&mut blocks[2], screen.screen_id)?;
+            patch_screen_ids(&mut blocks[2], screen)?;
         }
         if let Some(screen) = self.course.foregrounds.first() {
-            patch_screen_id(&mut blocks[4], screen.screen_id)?;
+            patch_screen_ids(&mut blocks[4], screen)?;
         }
 
         blocks[5].clear();

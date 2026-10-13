@@ -30,6 +30,8 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
   slot IDs, with quantised PNG and `.bstileset` import/export. Map16 entries that name another tileset's tiles are
   drawn the way the game composes them ([Tileset memory](docs/tileset-memory.md)), and blocks the game hands to its
   3D engine are drawn from the ROM's own textures by Lua scripts ([Lua tiles](docs/lua-tiles.md)).
+- **Backgrounds** are placed per view as the game places them, named and animated -- drifting clouds, lava, colour
+  cycles -- by one Lua script each ([Lua backgrounds](docs/lua-backgrounds.md)).
 - **Actors** are one `.lua` file each, declaring their fields and drawing themselves ([Lua actors](docs/lua-actors.md)).
 - **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
   and read the ROM a successful build produces. `.nsmbpatch` export/import and xdelta create/apply are in the

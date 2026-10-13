@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bigstar_formats::entrance_flags;
-use bigstar_level::{LEVEL_CHUNK_CELLS, LevelTilemap};
-use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, LevelEdit, TextureData, TextureId};
+use bigstar_formats::{NsmbLevelCourse, entrance_flags};
+use bigstar_level::{BackgroundLayer, BackgroundMotion, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, strip_offsets};
+use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, ImageGraphics, LevelEdit, TextureData, TextureId};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, Event, FontId, Key, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2, ViewportCommand,
@@ -277,9 +277,16 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
                     ui.close();
                 }
             }
+            ui.separator();
+            if Button::menu("Animate backgrounds").selected(options.animate_backgrounds).show(ui).clicked() {
+                options.animate_backgrounds = !options.animate_backgrounds;
+                ui.close();
+            }
         })
         .response
-        .on_hover_text("Where the background layers are drawn: nowhere, only inside the views as the game shows them, or over the whole level");
+        .on_hover_text(
+            "Where the background layers are drawn: nowhere, only inside the views as the game shows them, or over the whole level; and whether they move as the game moves them",
+        );
         ui.separator();
         if Button::new("Fit").show(ui).clicked() {
             view.needs_fit = true;
@@ -319,6 +326,7 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
     let mut press: Press = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let (events, space, latest) = ui.input(|i| (i.events.clone(), i.key_down(Key::Space), i.pointer.latest_pos()));
     let over = response.contains_pointer();
+    view.hover = latest.filter(|at| over && view.canvas.contains(*at)).map(|at| view.to_world(at));
     let mut busy = busy;
     for event in &events {
         match event {
@@ -609,39 +617,183 @@ fn subtract(rect: Rect, cut: Rect) -> Vec<Rect> {
     .collect()
 }
 
-/// The area the rectangles cover, as rectangles that do not overlap, so a layer drawn over each is drawn once.
-fn disjoint(rects: impl IntoIterator<Item = Rect>) -> Vec<Rect> {
-    let mut covered: Vec<Rect> = Vec::new();
-    for rect in rects {
+/// The area the rectangles cover, as rectangles that do not overlap, so a layer drawn over each is drawn once. Each
+/// piece comes with the rectangle it was cut from: where two overlap, the earlier one keeps the ground.
+fn disjoint(rects: impl IntoIterator<Item = Rect>) -> Vec<(Rect, usize)> {
+    let mut covered: Vec<(Rect, usize)> = Vec::new();
+    for (index, rect) in rects.into_iter().enumerate() {
         let mut pieces = vec![rect];
-        for done in &covered {
+        for (done, _) in &covered {
             pieces = pieces.into_iter().flat_map(|piece| subtract(piece, *done)).collect();
         }
-        covered.extend(pieces);
+        covered.extend(pieces.into_iter().map(|piece| (piece, index)));
     }
     covered
 }
 
-/// A background or foreground layer over `area` (level pixels), one image pixel to one level pixel, repeated from the
-/// level's origin as the layer repeats across a level wider or taller than it.
-fn tiled(painter: &Painter, frame: Frame, texture: egui::TextureId, size: Vec2, area: Rect, tint: Color32) {
+/// Which rows of a layer's image land where down a stretch of the level: `(level y of the piece's top, first image row,
+/// one past its last)`, covering `top..bottom`. The image's first row is at `origin`; how it goes on past its own
+/// `height` rows is the layer's vertical mode.
+fn layer_pieces(origin: f32, height: f32, repeat: LayerRepeat, top: f32, bottom: f32) -> Vec<(f32, f32, f32)> {
+    let mut pieces = Vec::new();
+    if height < 1.0 {
+        return pieces;
+    }
+    let half = height / 2.0;
+    let wrap_above = |pieces: &mut Vec<(f32, f32, f32)>| {
+        let mut y = origin - height;
+        while y + height > top {
+            pieces.push((y, 0.0, height));
+            y -= height;
+        }
+    };
+    let wrap_below = |pieces: &mut Vec<(f32, f32, f32)>| {
+        let mut y = origin + height;
+        while y < bottom {
+            pieces.push((y, 0.0, height));
+            y += height;
+        }
+    };
+    pieces.push((origin, 0.0, height));
+    match repeat {
+        LayerRepeat::Wrap => {
+            wrap_above(&mut pieces);
+            wrap_below(&mut pieces);
+        }
+        LayerRepeat::TopHalfAbove => {
+            let mut y = origin - half;
+            while y + half > top {
+                pieces.push((y, 0.0, half));
+                y -= half;
+            }
+            wrap_below(&mut pieces);
+        }
+        LayerRepeat::BottomHalfBelow => {
+            wrap_above(&mut pieces);
+            let mut y = origin + height;
+            while y < bottom {
+                pieces.push((y, half, height));
+                y += half;
+            }
+        }
+    }
+    pieces.retain(|&(y, first, last)| y < bottom && y + (last - first) > top);
+    pieces
+}
+
+/// A background or foreground layer over `area` (level pixels), one image pixel to one level pixel. The image's top
+/// left corner sits at `origin` and it repeats sideways; `bands` are the rows that move together and how far left each
+/// has moved, as the game shifts a layer scanline by scanline.
+#[allow(clippy::too_many_arguments)]
+fn layer(
+    painter: &Painter,
+    frame: Frame,
+    texture: egui::TextureId,
+    size: Vec2,
+    area: Rect,
+    origin: Pos2,
+    repeat: LayerRepeat,
+    bands: &[(u16, u16, f32)],
+    tint: Color32,
+) {
     if size.x < 1.0 || size.y < 1.0 || !area.is_positive() {
         return;
     }
-    let mut y = (area.top() / size.y).floor() * size.y;
-    while y < area.bottom() {
-        let mut x = (area.left() / size.x).floor() * size.x;
-        while x < area.right() {
-            let tile = Rect::from_min_size(Pos2::new(x, y), size);
-            let part = tile.intersect(area);
-            if part.is_positive() {
-                let uv = Rect::from_min_max(((part.min - tile.min) / size).to_pos2(), ((part.max - tile.min) / size).to_pos2());
-                painter.image(texture, frame.rect(part), uv, tint);
+    for (piece_top, first_row, last_row) in layer_pieces(origin.y, size.y, repeat, area.top(), area.bottom()) {
+        for &(band_first, band_last, moved) in bands {
+            let (rows_first, rows_last) = (f32::from(band_first).max(first_row), f32::from(band_last).min(last_row));
+            if rows_last <= rows_first {
+                continue;
             }
-            x += size.x;
+            let (top, bottom) = (piece_top + rows_first - first_row, piece_top + rows_last - first_row);
+            if bottom <= area.top() || top >= area.bottom() {
+                continue;
+            }
+            let start = origin.x - moved;
+            let mut x = start + ((area.left() - start) / size.x).floor() * size.x;
+            while x < area.right() {
+                let tile = Rect::from_min_max(Pos2::new(x, top), Pos2::new(x + size.x, bottom));
+                let part = tile.intersect(area);
+                if part.is_positive() {
+                    let uv = Rect::from_min_max(
+                        Pos2::new((part.left() - x) / size.x, (rows_first + part.top() - top) / size.y),
+                        Pos2::new((part.right() - x) / size.x, (rows_first + part.bottom() - top) / size.y),
+                    );
+                    painter.image(texture, frame.rect(part), uv, tint);
+                }
+                x += size.x;
+            }
         }
-        y += size.y;
     }
+}
+
+/// A layer inside one DS screen (`screen`, level pixels), scrolled as the game has it: each run of rows that moves
+/// together, cut wherever it crosses from one quarter of the image into the next, since which quarter shows where is
+/// the game's to choose.
+fn screen_layer(
+    painter: &Painter,
+    frame: Frame,
+    texture: egui::TextureId,
+    screen: Rect,
+    scroll: &LayerScroll,
+    bands: &[(u16, u16, f32)],
+    tint: Color32,
+) {
+    const QUARTER: i32 = 256;
+    let (first, last) = (scroll.y, scroll.y + screen.height() as i32);
+    let width = screen.width() as i32;
+    // The band a row belongs to; rows off either end of the image take the nearest, as the game's table walk does.
+    let band_of = |row: i32| {
+        let row = row.clamp(0, QUARTER * 2 - 1) as u16;
+        bands.iter().find(|band| band.0 <= row && row < band.1).or(bands.last()).map_or(0, |band| band.2 as i32)
+    };
+    let mut cuts: Vec<i32> = bands.iter().flat_map(|band| [i32::from(band.0), i32::from(band.1)]).collect();
+    cuts.extend((first.div_euclid(QUARTER)..=last.div_euclid(QUARTER)).map(|block| block * QUARTER));
+    cuts.retain(|cut| first < *cut && *cut < last);
+    cuts.extend([first, last]);
+    cuts.sort_unstable();
+    cuts.dedup();
+    for (&top, &bottom) in cuts.iter().zip(cuts.iter().skip(1)) {
+        let left = band_of(top);
+        let mut x = left;
+        while x < left + width {
+            let next = ((x.div_euclid(QUARTER) + 1) * QUARTER).min(left + width);
+            let (column, row) = scroll.quarter(x.div_euclid(QUARTER), top.div_euclid(QUARTER));
+            let corner = Pos2::new(
+                f32::from(column) * QUARTER as f32 + x.rem_euclid(QUARTER) as f32,
+                f32::from(row) * QUARTER as f32 + top.rem_euclid(QUARTER) as f32,
+            );
+            let size = Vec2::new((next - x) as f32, (bottom - top) as f32);
+            let uv = Rect::from_min_size((corner.to_vec2() / (QUARTER * 2) as f32).to_pos2(), size / (QUARTER * 2) as f32);
+            let at = Rect::from_min_size(screen.min + Vec2::new((x - left) as f32, (top - first) as f32), size);
+            painter.image(texture, frame.rect(at), uv, tint);
+            x = next;
+        }
+    }
+}
+
+/// The picture an animated layer shows `ticks` frames of the game in: its frames played in order and round again.
+fn layer_frame(graphics: &ImageGraphics, ticks: u64) -> Option<&TextureId> {
+    let total: u64 = graphics.frames.iter().map(|frame| u64::from(frame.ticks)).sum();
+    if total == 0 {
+        return graphics.texture.as_ref();
+    }
+    let mut at = ticks % total;
+    for frame in &graphics.frames {
+        if at < u64::from(frame.ticks) {
+            return Some(&frame.texture);
+        }
+        at -= u64::from(frame.ticks);
+    }
+    graphics.texture.as_ref()
+}
+
+/// The view the level opens in: the one its starting entrance names, or failing that its first.
+fn start_view(course: &NsmbLevelCourse) -> Option<usize> {
+    let start = course.header.entrances[0];
+    let named =
+        course.entrances.iter().find(|entrance| entrance.id == start).and_then(|entrance| course.views.iter().position(|v| v.id == entrance.view_id));
+    named.or(if course.views.is_empty() { None } else { Some(0) })
 }
 
 #[allow(clippy::too_many_lines)]
@@ -658,24 +810,74 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
 
     let graphics = view.art.graphics.as_ref();
     // Where the background and foreground show, as the toolbar chooses: nowhere; inside the views, as in the game,
-    // following a view while it is dragged; or everywhere, which is also what a level without views gets.
-    let layer_areas: Vec<Rect> = match view.options.backgrounds {
+    // following a view while it is dragged; or everywhere, which is also what a level without views gets. Each area
+    // comes with the view whose blocks place the layers in it: the game picks a layer's block, and so where it sits,
+    // how it repeats and whether it shows at all, by the view the player entered.
+    let layer_areas: Vec<(Rect, Option<usize>)> = match view.options.backgrounds {
         Backgrounds::Hidden => Vec::new(),
-        Backgrounds::InViews if !course.views.is_empty() => {
-            disjoint((0..course.views.len()).map(|index| placed(Kind::View, index))).into_iter().map(|area| area.intersect(visible)).collect()
-        }
-        Backgrounds::InViews | Backgrounds::Overflowing => vec![bounds.intersect(visible)],
+        Backgrounds::InViews if !course.views.is_empty() => disjoint((0..course.views.len()).map(|index| placed(Kind::View, index)))
+            .into_iter()
+            .map(|(area, index)| (area.intersect(visible), Some(index)))
+            .collect(),
+        Backgrounds::InViews | Backgrounds::Overflowing => vec![(bounds.intersect(visible), start_view(course))],
     };
     // The far layer, then the near one (the game's "foreground", which is still behind the level), both under
     // everything the level holds. Darkened rather than faded, so the near layer hides the far one where it is solid and
     // the level stands out against both.
     let shade = Color32::from_gray(140);
-    for layer in [graphics.and_then(|g| g.background.texture.as_ref()), graphics.and_then(|g| g.foreground.texture.as_ref())] {
-        if let Some((texture, size)) = art.texture(layer) {
-            for area in &layer_areas {
-                tiled(painter, frame, texture, size, *area, shade);
+    let animate = live && view.options.animate_backgrounds;
+    // The game runs at sixty frames a second, and its animations count in them.
+    let ticks = if animate { (art.ctx.input(|input| input.time) * 60.0) as u64 } else { 0 };
+    let mut moving = false;
+    if let Some(graphics) = graphics {
+        let references = view.snapshot.tileset_references;
+        let layers = [
+            (BackgroundLayer::Background, &graphics.background, &course.backgrounds, references.background_screen_id),
+            (BackgroundLayer::Foreground, &graphics.foreground, &course.foregrounds, references.foreground_screen_id),
+        ];
+        for (which, image, blocks, loaded) in layers {
+            let Some((texture, size)) = art.texture(layer_frame(image, ticks)) else { continue };
+            for &(area, shown_in) in &layer_areas {
+                if !area.is_positive() {
+                    continue;
+                }
+                // A level without views has nothing to place the layer by, and shows it from its own origin.
+                let (origin, repeat, screen) = match shown_in.and_then(|index| Some((index, course.views.get(index)?))) {
+                    Some((index, v)) => {
+                        let rect = placed(Kind::View, index);
+                        let block = if which == BackgroundLayer::Background { v.background_id } else { v.foreground_id };
+                        let Some(placement) = layer_placement(blocks, block, rect.top() as i32, rect.height() as i32) else { continue };
+                        (Pos2::new(rect.left(), placement.origin_y as f32), placement.repeat, placement.screen_id)
+                    }
+                    None => (Pos2::ZERO, LayerRepeat::Wrap, loaded),
+                };
+                let strips = graphics.backgrounds.find(which, screen).map_or(&[][..], |definition| definition.strips.as_slice());
+                // A ripple is drawn a few rows at a time: as many as make a screen pixel or two.
+                let wave_rows = (2.0 / frame.zoom.max(0.01)).ceil().clamp(2.0, 64.0) as u16;
+                let bands = strip_offsets(strips, size.y as u16, 0, ticks, wave_rows);
+                moving |= !image.frames.is_empty() || strips.iter().any(|strip| !matches!(strip.motion, BackgroundMotion::Scroll { .. }));
+                layer(painter, frame, texture, size, area, origin, repeat, &bands, shade);
             }
         }
+        // Inside a DS screen the layers are where the game scrolls them to with its camera there, at full strength
+        // over the still picture.
+        for screen in if live { view.ds_screens() } else { Vec::new() } {
+            if screen.view.is_none() || !screen.rect.intersects(visible) {
+                continue;
+            }
+            painter.rect_filled(frame.rect(screen.rect), 0.0, colors.surface);
+            for (which, image, ..) in layers {
+                let Some(scroll) = view.screen_layer(&screen, which) else { continue };
+                let Some((texture, size)) = art.texture(layer_frame(image, ticks)) else { continue };
+                let strips = graphics.backgrounds.find(which, scroll.screen_id).map_or(&[][..], |definition| definition.strips.as_slice());
+                let bands = strip_offsets(strips, size.y as u16, scroll.x, ticks, 1);
+                moving |= !image.frames.is_empty() || strips.iter().any(|strip| !matches!(strip.motion, BackgroundMotion::Scroll { .. }));
+                screen_layer(painter, frame, texture, screen.rect, &scroll, &bands, Color32::WHITE);
+            }
+        }
+    }
+    if animate && moving {
+        art.ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
     // A coarse grid of screens over the level.
     let grid = 256.0;
@@ -962,12 +1164,27 @@ fn overlays(painter: &Painter, view: &LevelView, frame: Frame, colors: &Colors) 
             y += TILE;
         }
     }
-    if view.options.show_ds_screen {
-        let red = Color32::from_rgb(220, 45, 55);
-        for top in [0.0, 192.0] {
-            let screen = frame.rect(Rect::from_min_size(Pos2::new(0.0, top), Vec2::new(256.0, 192.0)));
-            painter.rect(screen, 0.0, with_alpha(red, 18), Stroke::new(1.0, red), StrokeKind::Middle);
+    // The DS screens: hollow, so the level shows through as the game would show it. The one an entrance starts the
+    // camera on is dashed; the one under the pointer is not.
+    let red = Color32::from_rgb(220, 45, 55);
+    for screen in view.ds_screens() {
+        let rect = frame.rect(screen.rect);
+        if screen.spawn {
+            let corners = vec![rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+            painter.extend(Shape::dashed_line(&corners, Stroke::new(2.0, red), 6.0, 4.0));
+        } else {
+            painter.rect_stroke(rect, 0.0, Stroke::new(2.0, red), StrokeKind::Outside);
         }
+        let mut text = format!("{}{}, {}", if screen.spawn { "Spawn camera " } else { "" }, screen.rect.left(), screen.rect.top());
+        for (name, layer) in [("BG", BackgroundLayer::Background), ("FG", BackgroundLayer::Foreground)] {
+            if let Some(scroll) = view.screen_layer(&screen, layer) {
+                text.push_str(&format!("   {name} {}, {}", scroll.x >> 12, scroll.y));
+            }
+        }
+        let galley = painter.layout_no_wrap(text, FontId::proportional(11.0), Color32::WHITE);
+        let label = Rect::from_min_size(rect.left_top() - Vec2::new(1.0, galley.size().y + 6.0), galley.size() + Vec2::new(8.0, 4.0));
+        painter.rect_filled(label, 2.0, with_alpha(red, 220));
+        painter.galley(label.min + Vec2::new(4.0, 2.0), galley, Color32::WHITE);
     }
     if let Some(Gesture::Marquee { from, to }) = view.gesture {
         let band = Rect::from_two_pos(from, to);
@@ -1052,7 +1269,10 @@ mod tests {
     fn overlapping_views_cover_their_union_once() {
         // Two views sharing a 64×64 corner, and a third apart from both.
         let views = [rect(0.0, 0.0, 256.0, 192.0), rect(192.0, 128.0, 256.0, 192.0), rect(1000.0, 0.0, 100.0, 100.0)];
-        let pieces = disjoint(views);
+        let cut = disjoint(views);
+        // The corner the first two share stays the first one's.
+        assert!(cut.iter().all(|&(piece, from)| from == 0 || !piece.intersect(views[0]).is_positive()));
+        let pieces: Vec<Rect> = cut.into_iter().map(|(piece, _)| piece).collect();
         assert_eq!(area(&pieces), 256.0 * 192.0 * 2.0 - 64.0 * 64.0 + 100.0 * 100.0);
         for (i, a) in pieces.iter().enumerate() {
             for b in pieces.iter().skip(i + 1) {
@@ -1060,7 +1280,8 @@ mod tests {
             }
         }
         // A view inside another adds nothing; apart, a rectangle is itself.
-        assert_eq!(area(&disjoint([rect(0.0, 0.0, 100.0, 100.0), rect(10.0, 10.0, 20.0, 20.0)])), 10_000.0);
+        let nested: Vec<Rect> = disjoint([rect(0.0, 0.0, 100.0, 100.0), rect(10.0, 10.0, 20.0, 20.0)]).into_iter().map(|(piece, _)| piece).collect();
+        assert_eq!(area(&nested), 10_000.0);
         assert_eq!(subtract(rect(0.0, 0.0, 10.0, 10.0), rect(50.0, 50.0, 5.0, 5.0)), [rect(0.0, 0.0, 10.0, 10.0)]);
     }
 }

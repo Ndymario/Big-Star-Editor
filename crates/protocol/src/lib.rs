@@ -11,8 +11,8 @@ mod service;
 mod wire;
 
 pub use graphics::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LevelGraphics, ProjectSettings, TextureData,
-    TextureId, TilesetGraphics,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LayerFrame, LevelGraphics, ProjectSettings,
+    TextureData, TextureId, TilesetGraphics,
 };
 pub use message::{
     AreaSummary, BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, ClientFrame, DiagnosticLevel, DirectoryEntry, DirectoryEntryKind,
