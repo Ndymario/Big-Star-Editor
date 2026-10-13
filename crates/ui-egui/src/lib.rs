@@ -7,6 +7,7 @@ mod clipboard;
 pub mod demo;
 mod editors;
 mod files;
+mod graphics_editor;
 mod level_data;
 mod level_view;
 mod picker;
@@ -20,7 +21,7 @@ mod workspace;
 pub use app::{BigStarApp, EMBEDDED_ROOT_KEY, RECENT_HOSTS_KEY};
 pub use level_view::{Item, Kind, LevelView};
 pub use services::{FileShelf, MemoryServices, Services};
-pub use session::{BytesFor, Opening, Session};
+pub use session::{BytesFor, FileRead, Opening, Session};
 pub use workspace::{DocTab, Memory};
 
 #[cfg(test)]

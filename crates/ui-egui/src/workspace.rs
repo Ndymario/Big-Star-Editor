@@ -12,7 +12,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::canvas::{self, TexturePool};
 use crate::editors::EditorKind;
+use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing, pairing_key};
 use crate::level_view::{Item, Kind};
+use crate::services::Services;
+use crate::session::FileRead;
 use crate::session::Session;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -24,15 +27,46 @@ pub enum DocTab {
     File(u64),
 }
 
-/// A file open as a document: the raw bytes as hex, for files nothing else understands, or until an editor for its
-/// kind exists here.
+/// A file open as a document, in the editor that understands it, or as hex.
 pub struct FileDoc {
     pub path: String,
     /// What the editor that understands it is, when one does.
     pub kind: EditorKind,
-    pub text: String,
-    /// The text as last read or saved, so a change shows.
-    pub saved: String,
+    pub view: FileView,
+    /// Companion files asked for and not arrived: (path, as the palette rather than the graphics).
+    pub waiting: Vec<(String, bool)>,
+}
+
+pub enum FileView {
+    Hex {
+        text: String,
+        /// The text as last read or saved, so a change shows.
+        saved: String,
+    },
+    Graphics(Box<GraphicsDoc>, GraphicsView),
+}
+
+impl FileDoc {
+    pub fn dirty(&self) -> bool {
+        match &self.view {
+            FileView::Hex { text, saved } => text != saved,
+            FileView::Graphics(doc, _) => doc.dirty,
+        }
+    }
+
+    /// Takes a companion file the editor asked for.
+    pub fn companion(&mut self, path: &str, bytes: &[u8]) {
+        let FileView::Graphics(doc, _) = &mut self.view else { return };
+        let (arrived, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting).into_iter().partition(|(wanted, _)| wanted == path);
+        self.waiting = waiting;
+        for (_, palette) in arrived {
+            if palette {
+                doc.set_companion_palette(Some(path.to_owned()), Some(bytes));
+            } else {
+                doc.set_companion_characters(Some(path.to_owned()), Some(bytes));
+            }
+        }
+    }
 }
 
 /// What a workspace remembers about a project between runs.
@@ -142,14 +176,33 @@ impl Workspace {
         }
     }
 
-    /// Opens a file's bytes as a document, or brings forward the one already open on that path.
-    pub fn open_file(&mut self, path: &str, bytes: &[u8], kind: EditorKind) {
+    /// Opens a file's bytes as a document, in its editor when it has one and as hex otherwise, or brings forward the one
+    /// already open on that path. `pairing` is what the person paired it with last time. Returns the companion files to
+    /// read.
+    pub fn open_file(&mut self, path: &str, bytes: &[u8], kind: EditorKind, pairing: Option<Pairing>) -> Vec<String> {
         let existing = self.files.iter().find(|(_, doc)| doc.path == path).map(|(key, _)| *key);
+        let mut reads = Vec::new();
         let key = existing.unwrap_or_else(|| {
             let key = self.next_file;
             self.next_file += 1;
-            let text = crate::editors::hex_text(bytes);
-            self.files.insert(key, FileDoc { path: path.to_owned(), kind, saved: text.clone(), text });
+            let graphics = (kind == EditorKind::Graphics).then(|| GraphicsDoc::open(path, bytes)).filter(|doc| doc.error.is_none());
+            let mut waiting = Vec::new();
+            let view = match graphics {
+                Some(mut doc) => {
+                    if let Some(pairing) = pairing {
+                        doc.set_width(pairing.width);
+                        waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, true)));
+                        waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, false)));
+                        reads.extend(waiting.iter().map(|(p, _)| p.clone()));
+                    }
+                    FileView::Graphics(Box::new(doc), GraphicsView::default())
+                }
+                None => {
+                    let text = crate::editors::hex_text(bytes);
+                    FileView::Hex { saved: text.clone(), text }
+                }
+            };
+            self.files.insert(key, FileDoc { path: path.to_owned(), kind, view, waiting });
             key
         });
         let tab = DocTab::File(key);
@@ -159,6 +212,16 @@ impl Workspace {
         if let Some(path) = self.dock.find_tab(&tab) {
             let _ = self.dock.set_active_tab(path);
             self.dock.set_focused_node_and_surface(path.node_path());
+        }
+        reads
+    }
+
+    /// Hands companion files that arrived to the documents waiting for them.
+    pub fn companions(&mut self, arrived: Vec<(String, Vec<u8>)>) {
+        for (path, bytes) in arrived {
+            for doc in self.files.values_mut() {
+                doc.companion(&path, &bytes);
+            }
         }
     }
 
@@ -353,10 +416,11 @@ impl Workspace {
     }
 
     /// The tab well.
-    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, keyboard: bool) {
+    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, keyboard: bool, services: &dyn Services) {
         let mut files = std::mem::take(&mut self.files);
         let mut viewer = Viewer {
             session,
+            services,
             preview: self.preview,
             pool,
             keyboard,
@@ -445,6 +509,7 @@ fn document(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, level: L
 
 struct Viewer<'a, 'f> {
     session: &'a mut Session,
+    services: &'a dyn Services,
     preview: Option<LevelId>,
     files: &'f mut BTreeMap<u64, FileDoc>,
     closed_files: Vec<u64>,
@@ -472,8 +537,9 @@ impl TabViewer for Viewer<'_, '_> {
             DocTab::File(key) => match self.files.get(key) {
                 Some(doc) => {
                     let name = doc.path.rsplit(['/', '!']).next().unwrap_or(&doc.path);
-                    let dirty = if doc.text != doc.saved { " •" } else { "" };
-                    format!("Hex — {name}{dirty}").into()
+                    let dirty = if doc.dirty() { " •" } else { "" };
+                    let editor = if matches!(doc.view, FileView::Graphics(..)) { "Graphics" } else { "Hex" };
+                    format!("{editor} — {name}{dirty}").into()
                 }
                 None => "…".into(),
             },
@@ -489,7 +555,7 @@ impl TabViewer for Viewer<'_, '_> {
             DocTab::Preview => preview(ui, self.session, self.pool, self.preview),
             DocTab::File(key) => {
                 if let Some(doc) = self.files.get_mut(&key) {
-                    file_document(ui, self.session, doc);
+                    file_document(ui, self.session, self.services, doc);
                 }
             }
         }
@@ -528,23 +594,72 @@ impl TabViewer for Viewer<'_, '_> {
     }
 }
 
-/// The raw bytes of a file as hex. Saving writes them into the module that supplies the file, or the active one.
-fn file_document(ui: &mut Ui, session: &mut Session, doc: &mut FileDoc) {
+/// The files beside `path`: in its folder, or inside an archive the other members of its folder there.
+fn siblings(session: &Session, path: &str) -> Vec<String> {
+    let folder = |address: &str| {
+        let segments = crate::files::split_address(address);
+        segments.len().checked_sub(2).and_then(|i| segments.get(i)).map(|(_, key)| key.clone()).unwrap_or_default()
+    };
+    let own = folder(path);
+    let mut found: Vec<String> = session
+        .filesystem
+        .as_ref()
+        .map(|listing| listing.entries.iter().filter(|e| e.path != path && folder(&e.path) == own).map(|e| e.path.clone()).collect())
+        .unwrap_or_default();
+    found.sort();
+    found
+}
+
+/// A file in its editor. Saving writes it into the module that supplies the file, or the active one.
+fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, doc: &mut FileDoc) {
+    let FileDoc { path, kind, view, waiting } = doc;
+    let (text, saved) = match view {
+        FileView::Hex { text, saved } => (text, saved),
+        FileView::Graphics(graphics, state) => {
+            let siblings = siblings(session, path);
+            for action in crate::graphics_editor::show(ui, graphics, state, &siblings) {
+                match action {
+                    GraphicsAction::Load { path: companion, palette } => {
+                        waiting.retain(|(_, p)| *p != palette);
+                        waiting.push((companion.clone(), palette));
+                        session.read_file(&companion, FileRead::Companion);
+                    }
+                    GraphicsAction::Remember => {}
+                    GraphicsAction::Save => match graphics.output() {
+                        Ok(bytes) => {
+                            session.write_file(path, bytes);
+                            graphics.dirty = false;
+                        }
+                        Err(error) => session.report(error),
+                    },
+                }
+            }
+            // Remembered as soon as it changes, so a sheet is paired and dialled in once.
+            if let Ok(text) = serde_json::to_string(&graphics.pairing) {
+                let key = pairing_key(path);
+                if services.load(&key).as_deref() != Some(text.as_str()) {
+                    services.store(&key, &text);
+                }
+            }
+            return;
+        }
+    };
+    let (path, kind) = (&*path, *kind);
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&doc.path).strong());
-        if doc.kind != EditorKind::None {
-            ui.weak(format!("· a {} file, shown as its bytes", crate::editors::editor_name(doc.kind).to_lowercase()));
+        ui.label(RichText::new(path).strong());
+        if kind != EditorKind::None {
+            ui.weak(format!("· a {} file, shown as its bytes", crate::editors::editor_name(kind).to_lowercase()));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add_enabled(doc.text != doc.saved, egui::Button::new("Save"))
+                .add_enabled(text != saved, egui::Button::new("Save"))
                 .on_hover_text("Writes the bytes into the module the file comes from, or the active one")
                 .clicked()
             {
-                match crate::editors::hex_bytes(&doc.text) {
+                match crate::editors::hex_bytes(text) {
                     Ok(bytes) => {
-                        session.write_file(&doc.path, bytes);
-                        doc.saved.clone_from(&doc.text);
+                        session.write_file(path, bytes);
+                        saved.clone_from(text);
                     }
                     Err(error) => session.report(error),
                 }
@@ -552,7 +667,7 @@ fn file_document(ui: &mut Ui, session: &mut Session, doc: &mut FileDoc) {
         });
     });
     egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-        ui.add(egui::TextEdit::multiline(&mut doc.text).code_editor().desired_width(f32::INFINITY));
+        ui.add(egui::TextEdit::multiline(text).code_editor().desired_width(f32::INFINITY));
     });
 }
 

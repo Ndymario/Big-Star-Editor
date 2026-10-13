@@ -85,7 +85,25 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     for _ in 0..5 {
         harness.step();
     }
-    shot(&mut harness, dir, "remote-files.png")
+    shot(&mut harness, dir, "remote-files.png")?;
+    // A real tile sheet in the graphics editor, paired with its palette from the next folder.
+    let sheet = "BG_ncg/d_2d_A_J_jyotyu_ncg.bin";
+    if let Some(session) = harness.state_mut().session_mut() {
+        session.read_file(sheet, bigstar_ui_egui::FileRead::Open);
+    }
+    until(&mut harness, &|app| app.has_document(sheet));
+    harness.state_mut().pair_for_screenshot(sheet, "BG_ncl/d_2d_A_J_jyotyu_ncl.bin");
+    for _ in 0..20 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    shot(&mut harness, dir, "remote-graphics.png")?;
+    // It is an 8bpp sheet; read as one, sixteen tiles across.
+    harness.state_mut().choose_for_screenshot(sheet, 1, 16);
+    for _ in 0..3 {
+        harness.step();
+    }
+    shot(&mut harness, dir, "remote-graphics-8bpp.png")
 }
 
 fn main() -> Result<(), String> {

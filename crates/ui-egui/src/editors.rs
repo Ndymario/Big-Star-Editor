@@ -2,8 +2,7 @@
 //! resource they are about to edit; and the hex document every file can fall back to. A port of `FileEditors`.
 
 use bigstar_formats::{
-    GraphicsFormatKind, UiResourceKind, decompress_nitro_lz, identify_graphics_format, identify_ui_resource, is_bmg, parse_bmg,
-    parse_rom_user_metadata,
+    UiResourceKind, compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, identify_ui_resource, is_bmg, parse_bmg, parse_rom_user_metadata,
 };
 
 /// NSMB keeps its ROM user metadata in NitroFS file 131, which the metadata reader understands rather than uiStudio's.
@@ -27,9 +26,27 @@ pub fn editor_name(kind: EditorKind) -> &'static str {
 /// A file with its LZ wrapper, if it had a real one, taken off: an editor sees plain bytes. A file that only looks
 /// compressed stays exactly as it was read.
 pub fn unwrap(bytes: &[u8]) -> Vec<u8> {
+    unwrap_with(bytes).1
+}
+
+/// The wrapper (`0x10` LZ10, `0x11` LZ11, `0` none) and the plain bytes, so what an editor hands back can go to disk
+/// compressed the way it arrived.
+pub fn unwrap_with(bytes: &[u8]) -> (u8, Vec<u8>) {
     match bytes.first() {
-        Some(0x10 | 0x11) => decompress_nitro_lz(bytes).unwrap_or_else(|_| bytes.to_vec()),
-        _ => bytes.to_vec(),
+        Some(&compression @ (0x10 | 0x11)) => match decompress_nitro_lz(bytes) {
+            Ok(body) => (compression, body),
+            Err(_) => (0, bytes.to_vec()),
+        },
+        _ => (0, bytes.to_vec()),
+    }
+}
+
+/// `edited` wrapped the way `original` was.
+pub fn rewrap(original: &[u8], edited: Vec<u8>) -> Result<Vec<u8>, String> {
+    match unwrap_with(original).0 {
+        0x10 => compress_nitro_lz10(&edited).map_err(|e| e.message),
+        0x11 => compress_nitro_lz11(&edited).map_err(|e| e.message),
+        _ => Ok(edited),
     }
 }
 
@@ -43,7 +60,8 @@ pub fn classify(bytes: &[u8], path: &str, rom_user_metadata: bool) -> EditorKind
     if rom_user_metadata && parse_rom_user_metadata(&plain).is_ok() {
         return EditorKind::Graphics;
     }
-    if identify_ui_resource(&plain, path) != UiResourceKind::Unknown || identify_graphics_format(&plain, path) != GraphicsFormatKind::Unknown {
+    // The uiStudio resources are pages of the same graphics editor.
+    if identify_ui_resource(&plain, path) != UiResourceKind::Unknown || crate::graphics_editor::GraphicsDoc::supports(bytes, path) {
         return EditorKind::Graphics;
     }
     EditorKind::None
@@ -65,7 +83,9 @@ mod tests {
 
     #[test]
     fn files_go_to_the_editor_that_understands_them() {
-        assert_eq!(classify(b"RLCN\xff\xfe\x00\x01\x00\x00\x00\x00\x10\x00\x01\x00", "a.nclr", false), EditorKind::Graphics);
+        let nclr = bigstar_formats::write_nclr(&bigstar_formats::Nclr { palette: vec![0; 32], ..Default::default() }).unwrap();
+        assert_eq!(classify(&nclr, "a.nclr", false), EditorKind::Graphics);
+        assert_eq!(classify(b"RLCN\xff\xfe\x00\x01", "b.nclr", false), EditorKind::None, "a header that does not parse claims nothing");
         assert_eq!(classify(b"hello", "notes.txt", false), EditorKind::None);
         assert_eq!(classify(b"MESGbmg1", "x.bmg", false), EditorKind::None, "a magic that does not parse claims nothing");
         assert_eq!(editor_name(EditorKind::Graphics), "Graphics");

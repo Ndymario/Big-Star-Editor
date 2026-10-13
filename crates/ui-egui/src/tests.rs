@@ -1304,7 +1304,9 @@ fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
         (*key, doc.path.clone())
     };
     assert_eq!(path, "message/msg.bmg");
-    harness.state_mut().workspace.files.get_mut(&key).unwrap().text = "AA BB".to_owned();
+    if let crate::workspace::FileView::Hex { text, .. } = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
+        *text = "AA BB".to_owned();
+    }
     harness.run();
     harness.get_by_label("Save").click();
     harness.run();
@@ -1330,4 +1332,44 @@ fn a_level_row_hands_the_person_over_to_its_file() {
     assert_eq!(files.selected.as_deref(), Some("course/A01_1.bin"));
     assert!(files.expanded.contains("course"));
     harness.get_by_label("🎮 A01_1.bin");
+}
+
+#[test]
+fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted_pixels() {
+    let (mut harness, _) = filesystem();
+    harness.state_mut().files.expanded.insert("BG_ncg".to_owned());
+    harness.run();
+    harness.get_by_label("🖼 demo_ncg.bin").click();
+    harness.run();
+    // It is picked up as graphics, and Open opens the graphics editor rather than hex.
+    harness.get_by_label_contains("Opens in: Graphics");
+    harness.get_by_label("Open").click();
+    harness.run();
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    assert!(matches!(harness.state().workspace.files[&key].view, crate::workspace::FileView::Graphics(..)));
+    harness.get_by_label_contains("Indices are shown as greys until a palette file is chosen.");
+
+    // Pairing the sibling palette (as its combo box does) reads it from the host and colours the sheet.
+    {
+        let doc = harness.state_mut().workspace.files.get_mut(&key).unwrap();
+        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), true));
+    }
+    harness.state_mut().session_mut().unwrap().read_file("BG_ncg/demo_ncl.bin", crate::session::FileRead::Companion);
+    harness.run();
+    harness.run();
+    let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
+    assert_eq!(doc.pairing.palette.as_deref(), Some("BG_ncg/demo_ncl.bin"));
+    assert!(!doc.render().info.contains("greys"));
+
+    // Painting index 1 into the first pixel and saving writes the sheet into the module.
+    if let crate::workspace::FileView::Graphics(doc, _) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
+        doc.selected_color = 1;
+        doc.paint(0, 0);
+    }
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
+    assert!(listing.entries.iter().any(|e| e.path == "BG_ncg/demo_ncg.bin" && e.from_module));
 }

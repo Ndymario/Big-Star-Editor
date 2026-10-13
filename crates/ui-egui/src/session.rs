@@ -60,6 +60,8 @@ pub enum FileRead {
     Hex,
     /// To save a copy outside the project.
     Extract,
+    /// A palette or graphics file an editor pairs the open one with.
+    Companion,
 }
 
 /// Why a level is being opened.

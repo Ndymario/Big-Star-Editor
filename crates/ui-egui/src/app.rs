@@ -175,6 +175,32 @@ impl BigStarApp {
         self.session.as_mut()
     }
 
+    /// Whether a file is open as a document (screenshots).
+    pub fn has_document(&self, path: &str) -> bool {
+        self.workspace.files.values().any(|doc| doc.path == path)
+    }
+
+    /// Chooses what an open graphics document shows: its image/cell choice and sheet width (screenshots).
+    pub fn choose_for_screenshot(&mut self, path: &str, primary: usize, width: usize) {
+        if let Some(doc) = self.workspace.files.values_mut().find(|doc| doc.path == path)
+            && let crate::workspace::FileView::Graphics(graphics, _) = &mut doc.view
+        {
+            graphics.set_primary(primary);
+            graphics.set_width(width);
+        }
+    }
+
+    /// Pairs an open graphics document with a palette from anywhere, as its combo box would from its folder
+    /// (screenshots).
+    pub fn pair_for_screenshot(&mut self, path: &str, palette: &str) {
+        if let Some(doc) = self.workspace.files.values_mut().find(|doc| doc.path == path) {
+            doc.waiting.push((palette.to_owned(), true));
+        }
+        if let Some(session) = &mut self.session {
+            session.read_file(palette, crate::session::FileRead::Companion);
+        }
+    }
+
     fn load_form(&mut self) {
         if self.form.loaded {
             return;
@@ -248,11 +274,20 @@ impl BigStarApp {
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
         for request in self.files.follow(session, &*self.services) {
-            match request {
-                OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None),
-                OpenRequest::Editor { path, bytes, kind } => self.workspace.open_file(&path, &bytes, kind),
+            let reads = match request {
+                OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None, None),
+                OpenRequest::Editor { path, bytes, kind } => {
+                    // What the file was paired with last time is paired again.
+                    let key = crate::graphics_editor::pairing_key(&path);
+                    let pairing = self.services.load(&key).and_then(|text| serde_json::from_str(&text).ok());
+                    self.workspace.open_file(&path, &bytes, kind, pairing)
+                }
+            };
+            for companion in reads {
+                session.read_file(&companion, crate::session::FileRead::Companion);
             }
         }
+        self.workspace.companions(session.take_file_reads(crate::session::FileRead::Companion));
         self.workspace.remember(session, &*self.services, &self.host_key);
         if self.confirm.is_none()
             && let Some(level) = self.workspace.asking_close.take()
@@ -289,7 +324,7 @@ impl BigStarApp {
                     ui.label("Connecting…");
                 });
             } else if session.project.is_some() {
-                self.workspace.show(ui, session, &mut self.textures, keyboard);
+                self.workspace.show(ui, session, &mut self.textures, keyboard, &*self.services);
             } else {
                 self.workspace_screen(ui);
             }

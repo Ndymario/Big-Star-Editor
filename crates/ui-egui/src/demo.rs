@@ -77,6 +77,11 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
     files.insert("00DUMMY".to_owned(), file(0, vec![0; 16]));
     files.insert("BG_ncl/d_2d_A_J_jyotyu_ncl.bin".to_owned(), file(30, [b"RLCN\xff\xfe".to_vec(), vec![0; 26]].concat()));
     files.insert("message/msg.bmg".to_owned(), file(40, b"MESGbmg1".to_vec()));
+    // A headerless tile sheet and the palette beside it: two 4bpp tiles of index 2, and sixteen colours.
+    files.insert("BG_ncg/demo_ncg.bin".to_owned(), file(20, vec![0x22; 64]));
+    // Colour 1 red, colour 2 green.
+    let palette = [[0, 0], 0x001fu16.to_le_bytes(), 0x03e0u16.to_le_bytes()].into_iter().flatten().chain(std::iter::repeat_n(0, 26)).collect();
+    files.insert("BG_ncg/demo_ncl.bin".to_owned(), file(21, palette));
     files.insert("dat/demo.narc".to_owned(), file(50, [b"NARC\xfe\xff".to_vec(), vec![0; 26]].concat()));
     files.insert("dat/demo.narc!a.bin".to_owned(), member(0, vec![1, 2, 3, 4]));
     files.insert("dat/demo.narc!b.bin".to_owned(), member(1, vec![5, 6]));
@@ -437,6 +442,8 @@ impl DemoConnection {
             FileIcon::Text
         } else if path.contains("ncl") {
             FileIcon::Palette
+        } else if path.contains("ncg") {
+            FileIcon::Image
         } else {
             FileIcon::File
         };
