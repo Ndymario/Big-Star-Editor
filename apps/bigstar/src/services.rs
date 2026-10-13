@@ -71,8 +71,14 @@ impl Services for NativeServices {
         bigstar_core::write_file_atomically(&path, bytes).map(|()| true).map_err(|e| e.message)
     }
 
-    fn open_file(&self, title: &str, extension: &str) -> Option<Result<Vec<u8>, String>> {
-        let path = rfd::FileDialog::new().set_title(title).add_filter(extension, &[extension]).pick_file()?;
-        Some(std::fs::read(&path).map_err(|e| format!("could not read {}: {e}", path.display())))
+    fn open_file(&self, title: &str, extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
+        let dialog = rfd::FileDialog::new().set_title(title);
+        let dialog = match extension {
+            Some(extension) => dialog.add_filter(extension, &[extension]),
+            None => dialog,
+        };
+        let path = dialog.pick_file()?;
+        let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
+        Some(std::fs::read(&path).map(|bytes| (name, bytes)).map_err(|e| format!("could not read {}: {e}", path.display())))
     }
 }

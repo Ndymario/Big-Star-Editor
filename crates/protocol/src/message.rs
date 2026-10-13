@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 pub type RequestId = u64;
 
@@ -117,6 +117,31 @@ pub enum Request {
     Recover {
         accept: bool,
     },
+    /// The Filesystem dock's rows: the ROM, the plan and the last build joined.
+    Filesystem,
+    /// An archive's members that the plan had no reason to name, listed when the archive is first opened.
+    ListArchive {
+        path: String,
+    },
+    /// A file's bytes as the active variant has them: the module's copy when there is one, else the ROM's.
+    ReadFile {
+        path: String,
+    },
+    /// Writes a file into its module (or the active module) for the next build. A path the ROM does not hold must be
+    /// under `z_new/`.
+    WriteFile {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// Which variants (`""` for the base layer) already hold a module copy of `path` in the target module.
+    FileTargets {
+        path: String,
+    },
+    /// Moves a module's copy of a file into the project's trash; the ROM's copy shows again.
+    RemoveFile {
+        path: String,
+    },
 }
 
 /// The compound mutations of `EditableLevel`, each one undo step.
@@ -187,7 +212,91 @@ pub enum Response {
     Recovery(Vec<RecoverableLevel>),
     /// The areas whose autosaves were applied; open them to see the recovered edits.
     Recovered(Vec<String>),
+    Filesystem(Box<FilesystemListing>),
+    Files(Vec<FileEntry>),
+    FileBytes {
+        path: String,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    FileTargets(Vec<String>),
     Done,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileStatus {
+    #[default]
+    Vanilla,
+    Replaced,
+    Added,
+    /// The modules differ from the last build: a rebuild (or a first insertion) is due.
+    Pending,
+    /// The last build placed it and no module supplies it any more; the next build reverts it.
+    Orphaned,
+}
+
+/// What a file is, for its icon. Read from the head of the file, then its name.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileIcon {
+    #[default]
+    File,
+    Archive,
+    Image,
+    Palette,
+    ScreenMap,
+    Model,
+    Animation,
+    Audio,
+    Level,
+    Text,
+    Particle,
+    TouchHitbox,
+    OamPositions,
+}
+
+/// One row of the Filesystem dock. `path` is a ROM address; `a.narc!b/c` is member `b/c` of archive `a.narc`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FileEntry {
+    pub path: String,
+    pub status: FileStatus,
+    /// The module supplying it, empty when the ROM does.
+    pub module: String,
+    pub component: String,
+    pub variant: String,
+    pub id: Option<i64>,
+    /// `id` is what the next build would assign, not an address the game can use yet.
+    pub id_is_planned: bool,
+    /// A member's id inside its archive's own name table.
+    pub member_id: Option<i64>,
+    pub size: u64,
+    /// A module file supplies it, so it can be removed.
+    pub from_module: bool,
+    pub icon: FileIcon,
+}
+
+impl FileEntry {
+    pub fn inside_archive(&self) -> bool {
+        self.member_id.is_some()
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModuleChoice {
+    pub key: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FilesystemListing {
+    pub entries: Vec<FileEntry>,
+    /// Modules differ from the last build.
+    pub pending: bool,
+    /// The enabled modules with a NitroFS tree: where add and replace can write.
+    pub modules: Vec<ModuleChoice>,
+    pub active_module: String,
+    pub active_variant: String,
+    /// Why there is no plan, when NCPatcher could not be asked.
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +420,10 @@ pub struct AreaSummary {
     pub display_name: String,
     /// Whether the ROM holds both of the area's files.
     pub available: bool,
+    /// The area's two files as the Filesystem dock names them (`dat/X.narc!Y.bin` inside an archive); empty when
+    /// missing.
+    pub course_path: String,
+    pub bgdat_path: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

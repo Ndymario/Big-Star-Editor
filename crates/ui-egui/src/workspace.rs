@@ -2,7 +2,7 @@
 //! moved out to windows of their own, and what is open remembered per host and project. A port of `MainWindow`'s tab
 //! and document handling (`openLevelEditor`, `detachEditor`, `saveWorkspaceState`, `restoreWorkspaceState`).
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use bigstar_protocol::LevelId;
 use egui::{Id, RichText, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, WidgetText};
@@ -11,6 +11,7 @@ use egui_dock::{DockArea, DockState, TabViewer};
 use serde::{Deserialize, Serialize};
 
 use crate::canvas::{self, TexturePool};
+use crate::editors::EditorKind;
 use crate::level_view::{Item, Kind};
 use crate::session::Session;
 
@@ -19,6 +20,19 @@ pub enum DocTab {
     /// Whatever level is picked in the level list, read-only.
     Preview,
     Level(LevelId),
+    /// A file opened from the Filesystem dock, by its key in `Workspace::files`.
+    File(u64),
+}
+
+/// A file open as a document: the raw bytes as hex, for files nothing else understands, or until an editor for its
+/// kind exists here.
+pub struct FileDoc {
+    pub path: String,
+    /// What the editor that understands it is, when one does.
+    pub kind: EditorKind,
+    pub text: String,
+    /// The text as last read or saved, so a change shows.
+    pub saved: String,
 }
 
 /// What a workspace remembers about a project between runs.
@@ -56,6 +70,8 @@ pub struct Workspace {
     last_saved: Option<String>,
     /// A document whose unsaved edits the person is being asked about before it closes.
     pub asking_close: Option<LevelId>,
+    pub files: BTreeMap<u64, FileDoc>,
+    next_file: u64,
 }
 
 impl Default for Workspace {
@@ -72,6 +88,8 @@ impl Default for Workspace {
             to_select: None,
             last_saved: None,
             asking_close: None,
+            files: BTreeMap::new(),
+            next_file: 1,
         }
     }
 }
@@ -89,7 +107,7 @@ impl Workspace {
             .iter_all_tabs()
             .filter_map(|(_, tab)| match tab {
                 DocTab::Level(id) => Some(*id),
-                DocTab::Preview => None,
+                DocTab::Preview | DocTab::File(_) => None,
             })
             .collect();
         ids.extend(self.detached.iter().copied());
@@ -121,6 +139,26 @@ impl Workspace {
         }
         if let Some(path) = self.dock.find_tab(&DocTab::Preview) {
             let _ = self.dock.set_active_tab(path);
+        }
+    }
+
+    /// Opens a file's bytes as a document, or brings forward the one already open on that path.
+    pub fn open_file(&mut self, path: &str, bytes: &[u8], kind: EditorKind) {
+        let existing = self.files.iter().find(|(_, doc)| doc.path == path).map(|(key, _)| *key);
+        let key = existing.unwrap_or_else(|| {
+            let key = self.next_file;
+            self.next_file += 1;
+            let text = crate::editors::hex_text(bytes);
+            self.files.insert(key, FileDoc { path: path.to_owned(), kind, saved: text.clone(), text });
+            key
+        });
+        let tab = DocTab::File(key);
+        if self.dock.find_tab(&tab).is_none() {
+            self.dock.push_to_first_leaf(tab);
+        }
+        if let Some(path) = self.dock.find_tab(&tab) {
+            let _ = self.dock.set_active_tab(path);
+            self.dock.set_focused_node_and_surface(path.node_path());
         }
     }
 
@@ -204,8 +242,10 @@ impl Workspace {
         }
         // Documents whose levels are gone: the project closed, or the host refused them.
         let levels = &session.levels;
+        let files = &self.files;
         self.dock.retain_tabs(|tab| match tab {
             DocTab::Level(level) => levels.contains_key(level),
+            DocTab::File(key) => files.contains_key(key),
             DocTab::Preview => true,
         });
         self.detached.retain(|level| levels.contains_key(level));
@@ -314,9 +354,23 @@ impl Workspace {
 
     /// The tab well.
     pub fn show(&mut self, ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, keyboard: bool) {
-        let mut viewer = Viewer { session, preview: self.preview, pool, keyboard, close: Vec::new(), detach: Vec::new() };
+        let mut files = std::mem::take(&mut self.files);
+        let mut viewer = Viewer {
+            session,
+            preview: self.preview,
+            pool,
+            keyboard,
+            close: Vec::new(),
+            detach: Vec::new(),
+            files: &mut files,
+            closed_files: Vec::new(),
+        };
         DockArea::new(&mut self.dock).show_close_buttons(true).show_leaf_collapse_buttons(false).show_inside(ui, &mut viewer);
-        let Viewer { close, detach, session, .. } = viewer;
+        let Viewer { close, detach, session, closed_files, .. } = viewer;
+        for key in closed_files {
+            files.remove(&key);
+        }
+        self.files = files;
         for level in close {
             self.close_document(session, level);
         }
@@ -389,16 +443,18 @@ fn document(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, level: L
     }
 }
 
-struct Viewer<'a> {
+struct Viewer<'a, 'f> {
     session: &'a mut Session,
     preview: Option<LevelId>,
+    files: &'f mut BTreeMap<u64, FileDoc>,
+    closed_files: Vec<u64>,
     pool: &'a mut TexturePool,
     keyboard: bool,
     close: Vec<LevelId>,
     detach: Vec<LevelId>,
 }
 
-impl TabViewer for Viewer<'_> {
+impl TabViewer for Viewer<'_, '_> {
     type Tab = DocTab;
 
     fn id(&mut self, tab: &mut DocTab) -> Id {
@@ -413,6 +469,14 @@ impl TabViewer for Viewer<'_> {
                 Some(view) => view.snapshot.title.clone().into(),
                 None => "…".into(),
             },
+            DocTab::File(key) => match self.files.get(key) {
+                Some(doc) => {
+                    let name = doc.path.rsplit(['/', '!']).next().unwrap_or(&doc.path);
+                    let dirty = if doc.text != doc.saved { " •" } else { "" };
+                    format!("Hex — {name}{dirty}").into()
+                }
+                None => "…".into(),
+            },
         }
     }
 
@@ -423,6 +487,11 @@ impl TabViewer for Viewer<'_> {
                 document(ui, self.session, self.pool, level, mine);
             }
             DocTab::Preview => preview(ui, self.session, self.pool, self.preview),
+            DocTab::File(key) => {
+                if let Some(doc) = self.files.get_mut(&key) {
+                    file_document(ui, self.session, doc);
+                }
+            }
         }
     }
 
@@ -434,6 +503,10 @@ impl TabViewer for Viewer<'_> {
                 OnCloseResponse::Ignore
             }
             DocTab::Preview => OnCloseResponse::Close,
+            DocTab::File(key) => {
+                self.closed_files.push(key);
+                OnCloseResponse::Close
+            }
         }
     }
 
@@ -453,6 +526,34 @@ impl TabViewer for Viewer<'_> {
     fn allowed_in_windows(&self, _tab: &mut DocTab) -> bool {
         false
     }
+}
+
+/// The raw bytes of a file as hex. Saving writes them into the module that supplies the file, or the active one.
+fn file_document(ui: &mut Ui, session: &mut Session, doc: &mut FileDoc) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(&doc.path).strong());
+        if doc.kind != EditorKind::None {
+            ui.weak(format!("· a {} file, shown as its bytes", crate::editors::editor_name(doc.kind).to_lowercase()));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add_enabled(doc.text != doc.saved, egui::Button::new("Save"))
+                .on_hover_text("Writes the bytes into the module the file comes from, or the active one")
+                .clicked()
+            {
+                match crate::editors::hex_bytes(&doc.text) {
+                    Ok(bytes) => {
+                        session.write_file(&doc.path, bytes);
+                        doc.saved.clone_from(&doc.text);
+                    }
+                    Err(error) => session.report(error),
+                }
+            }
+        });
+    });
+    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+        ui.add(egui::TextEdit::multiline(&mut doc.text).code_editor().desired_width(f32::INFINITY));
+    });
 }
 
 fn preview(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, shown: Option<LevelId>) {

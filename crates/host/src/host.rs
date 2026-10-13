@@ -10,15 +10,16 @@ use bigstar_level::{
     EditableLevel, LevelEntityInsertions, LevelPackage, LevelRecoverySnapshot, ModuleDataCatalog, decode_level_recovery, encode_level_recovery,
 };
 use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
-use bigstar_patching::{FileManifest, ModuleGraph, NCPatcherClient};
+use bigstar_patching::{FileManifest, ModuleGraph, ModuleInfo, NCPatcherClient};
 use bigstar_project::{
-    DEFAULT_GENERATED_DIR, INPUT_ROM_FILE_NAME, LevelCatalogArea, LevelCatalogEntry, MANIFEST_FILE_NAME, Project, RomReader, create_empty_project,
-    default_rom_path, find_object_bank_overlays, index_rom_files_from, load_manifest, load_module_data_catalog, nsmb_level_catalog, save_manifest,
+    DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, INPUT_ROM_FILE_NAME, LevelCatalogArea, LevelCatalogEntry, MANIFEST_FILE_NAME,
+    Project, RomReader, build_filesystem_view, create_empty_project, default_rom_path, find_object_bank_overlays, index_rom_files_from,
+    load_manifest, load_module_data_catalog, module_file_target, nsmb_level_catalog, save_manifest,
 };
 use bigstar_protocol::{
-    ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FoundEntity, LevelBytes, LevelEdit, LevelId,
-    LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request,
-    Response, Service, TextureId,
+    ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
+    LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectSettings,
+    ProjectSummary, RecoverableLevel, Request, Response, Service, TextureId,
 };
 
 use crate::graphics::ProjectGraphics;
@@ -89,6 +90,8 @@ struct OpenProject {
     settings: ProjectSettings,
     /// What NCPatcher said, asked once per project open and variant: the module graph and the file plan.
     patcher: Option<(ModuleGraph, Option<FileManifest>)>,
+    /// The Filesystem dock's rows, built from the patcher's answer; dropped when files change.
+    filesystem: Option<FilesystemView>,
     graphics: Option<ProjectGraphics>,
     _watcher: Option<ProjectWatcher>,
 }
@@ -213,6 +216,12 @@ impl Shared {
             Request::FindEntities { sprites, id } => self.find_entities(sprites, id),
             Request::Recovery => self.recovery(),
             Request::Recover { accept } => self.recover(accept),
+            Request::Filesystem => self.filesystem(),
+            Request::ListArchive { path } => self.list_archive(&path),
+            Request::ReadFile { path } => self.read_file(&path),
+            Request::WriteFile { path, bytes } => self.write_file(&path, &bytes),
+            Request::FileTargets { path } => self.file_targets(&path),
+            Request::RemoveFile { path } => self.remove_file(&path),
         }
     }
 
@@ -364,6 +373,7 @@ impl Shared {
             next_level: 1,
             settings,
             patcher: None,
+            filesystem: None,
             graphics: None,
             _watcher: watcher,
         });
@@ -396,10 +406,13 @@ impl Shared {
             let areas = entry
                 .areas
                 .iter()
-                .map(|area| AreaSummary {
+                .map(|area| (area, open.rom.as_mut().and_then(|rom| locate(rom, &open.index, area))))
+                .map(|(area, files)| AreaSummary {
                     token: area.source_token.clone(),
                     display_name: area.display_name.clone(),
-                    available: open.rom.as_mut().is_some_and(|rom| locate(rom, &open.index, area).is_some()),
+                    available: files.is_some(),
+                    course_path: files.as_ref().map(|f| address(&f.course)).unwrap_or_default(),
+                    bgdat_path: files.as_ref().map(|f| address(&f.bgdat)).unwrap_or_default(),
                 })
                 .collect();
             let level = LevelSummary { display_name: entry.display_name.clone(), areas };
@@ -517,6 +530,13 @@ impl Shared {
             None
         };
         open.settings.variants = config.map(|config| config.variants.into_iter().map(|variant| variant.name).collect()).unwrap_or_default();
+        // Without NCPatcher, the last build's own record of the modules still says where their trees are.
+        let modules = modules.or_else(|| {
+            let generated = if open.settings.generated_path.is_empty() { DEFAULT_GENERATED_DIR } else { &open.settings.generated_path };
+            let file = open.directory.join(generated).join("modules.json");
+            let text = String::from_utf8(read_file(&file).ok()?).ok()?;
+            bigstar_patching::parse_module_graph(&text).ok()
+        });
         let modules = modules.unwrap_or_default();
         open.settings.modules = modules.modules.iter().filter(|module| module.enabled).map(|module| module.key.clone()).collect();
         open.settings.patcher_error = errors.into_iter().next();
@@ -734,6 +754,177 @@ impl Shared {
         Ok(Response::Recovered(recovered))
     }
 
+    /// The filesystem view of the open project, built once per change of files or variant.
+    fn ensure_filesystem<'a>(&self, open: &'a mut OpenProject) -> Result<&'a FilesystemView> {
+        if open.filesystem.is_none() {
+            self.ensure_patcher(open);
+            let (mut modules, plan) = open.patcher.clone().unwrap_or_default();
+            crate::filesystem::localize_modules(&mut modules, &open.directory);
+            let generated =
+                if open.settings.generated_path.is_empty() { DEFAULT_GENERATED_DIR.to_owned() } else { open.settings.generated_path.clone() };
+            let manifest_file = open.directory.join(generated).join("files.json");
+            let manifest = manifest_file
+                .is_file()
+                .then(|| read_file(&manifest_file).ok())
+                .flatten()
+                .and_then(|bytes| String::from_utf8(bytes).ok().and_then(|text| bigstar_patching::parse_file_manifest(&text).ok()));
+            let view = build_filesystem_view(FilesystemViewRequest {
+                rom: open.rom.as_mut(),
+                project_dir: open.directory.clone(),
+                modules,
+                plan,
+                manifest,
+                variant: open.settings.active_variant.clone(),
+            })?;
+            open.filesystem = Some(view);
+        }
+        open.filesystem.as_ref().ok_or_else(no_project)
+    }
+
+    /// The module a write lands in: the one already supplying the file, else the active one, else the first that can.
+    fn target_module(open: &OpenProject, path: &str) -> Result<ModuleInfo> {
+        let mut modules = open.patcher.as_ref().map(|(modules, _)| modules.clone()).unwrap_or_default();
+        crate::filesystem::localize_modules(&mut modules, &open.directory);
+        let supplier = open.filesystem.as_ref().and_then(|view| view.find(path)).map(|entry| entry.module.clone()).filter(|m| !m.is_empty());
+        let key = supplier.unwrap_or_else(|| open.settings.active_module.clone());
+        let found = modules.find(&key).cloned().or_else(|| modules.modules.iter().find(|m| m.enabled && m.nitrofs.is_some()).cloned());
+        found.ok_or_else(|| invalid("choose an active module target first"))
+    }
+
+    fn filesystem(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let view = self.ensure_filesystem(open)?.clone();
+        let mut entries = Vec::with_capacity(view.entries.len());
+        for entry in &view.entries {
+            // The head is enough to recognise a format; members are named only, since reading one means reading its
+            // archive.
+            let head = if !entry.source.as_os_str().is_empty() {
+                let source = if entry.source.is_absolute() { entry.source.clone() } else { open.directory.join(&entry.source) };
+                read_file_prefix(&source, crate::filesystem::HEAD).unwrap_or_default()
+            } else if entry.inside_archive() {
+                Vec::new()
+            } else {
+                open.rom.as_mut().and_then(|rom| rom.read_prefix(&entry.path, crate::filesystem::HEAD).ok()).unwrap_or_default()
+            };
+            entries.push(crate::filesystem::entry(entry, crate::filesystem::icon(&head, &entry.path)));
+        }
+        let modules: Vec<ModuleChoice> = open
+            .patcher
+            .as_ref()
+            .map(|(graph, _)| graph.modules.iter().filter(|m| m.enabled && m.nitrofs.is_some()).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|m| ModuleChoice { key: m.key.clone(), name: if m.name.is_empty() { m.key.clone() } else { m.name.clone() } })
+            .collect();
+        let active_module = Some(open.settings.active_module.clone())
+            .filter(|key| modules.iter().any(|m| &m.key == key))
+            .or_else(|| modules.first().map(|m| m.key.clone()))
+            .unwrap_or_default();
+        Ok(Response::Filesystem(Box::new(FilesystemListing {
+            pending: view.has_pending(),
+            entries,
+            modules,
+            active_module,
+            active_variant: open.settings.active_variant.clone(),
+            error: open.settings.patcher_error.clone(),
+        })))
+    }
+
+    /// The members of an archive the plan had no reason to name, read from the container itself.
+    fn list_archive(&self, container: &str) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let known: std::collections::BTreeSet<String> = self.ensure_filesystem(open)?.entries.iter().map(|e| e.path.clone()).collect();
+        let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
+        let mut rows = Vec::new();
+        for member in rom.list_archive(container)? {
+            // A member the container does not name has no address to open it by.
+            if member.path.is_empty() {
+                continue;
+            }
+            let path = format!("{container}!{}", member.path);
+            if known.contains(&path) {
+                continue;
+            }
+            let head = rom
+                .read_member_id(container, usize::from(member.id))
+                .map(|bytes| bytes.into_iter().take(crate::filesystem::HEAD).collect::<Vec<_>>());
+            let icon = crate::filesystem::icon(&head.unwrap_or_default(), &path);
+            rows.push(FileEntry { path, member_id: Some(i64::from(member.id)), size: u64::from(member.size), icon, ..FileEntry::default() });
+        }
+        Ok(Response::Files(rows))
+    }
+
+    fn read_file(&self, path: &str) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let bytes = self.ensure_graphics(open)?.read_file(path)?;
+        Ok(Response::FileBytes { path: path.to_owned(), bytes })
+    }
+
+    fn write_file(&self, path: &str, bytes: &[u8]) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let known = self.ensure_filesystem(open)?.find(path).is_some();
+        if !known && !path.starts_with("z_new/") {
+            return Err(invalid("New NitroFS files must be under z_new/."));
+        }
+        let module = Self::target_module(open, path)?;
+        let target = module_file_target(&module, &open.settings.active_variant, path, &[])?;
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create module target directory"))?;
+        }
+        write_file_atomically(&target, bytes)?;
+        // What the dock shows and what graphics read from have both changed.
+        open.filesystem = None;
+        open.patcher = None;
+        open.graphics = None;
+        drop(state);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.emit(Event::GraphicsChanged { generation });
+        self.log(LogLevel::Info, format!("Wrote {path} to module {}", module.key));
+        Ok(Response::Done)
+    }
+
+    fn file_targets(&self, path: &str) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        self.ensure_filesystem(open)?;
+        let module = Self::target_module(open, path)?;
+        let variants = std::iter::once(String::new()).chain(open.settings.variants.iter().cloned());
+        let holding = variants.filter(|variant| module_file_target(&module, variant, path, &[]).is_ok_and(|target| target.is_file())).collect();
+        Ok(Response::FileTargets(holding))
+    }
+
+    /// Moves a module's copy of a file into `.big-star-trash`, kept for the person to restore by hand.
+    fn remove_file(&self, path: &str) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let entry = self.ensure_filesystem(open)?.find(path).cloned().ok_or_else(|| not_found(format!("there is no file {path}")))?;
+        if entry.inside_archive() {
+            return Err(invalid("a member of an archive cannot be removed; replace it instead"));
+        }
+        if entry.source.as_os_str().is_empty() || entry.module.is_empty() {
+            return Err(invalid("only a file a module supplies can be removed"));
+        }
+        let source = if entry.source.is_absolute() { entry.source.clone() } else { open.directory.join(&entry.source) };
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let trash = open.directory.join(TRASH_DIR).join(stamp.to_string()).join(path.replace('!', "/"));
+        if let Some(parent) = trash.parent() {
+            std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create the trash directory"))?;
+        }
+        std::fs::rename(&source, &trash).map_err(|_| Error::new(ErrorCode::IoError, "could not move the module file to the trash"))?;
+        open.filesystem = None;
+        open.patcher = None;
+        open.graphics = None;
+        drop(state);
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.emit(Event::GraphicsChanged { generation });
+        self.log(LogLevel::Info, format!("Moved {path} from module {} to {TRASH_DIR}", entry.module));
+        Ok(Response::Done)
+    }
+
     fn set_active_variant(&self, variant: String) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -744,6 +935,7 @@ impl Shared {
         open.settings.active_variant = variant;
         open.levels.clear();
         open.patcher = None;
+        open.filesystem = None;
         open.graphics = None;
         save_settings(&open.directory, &open.settings)?;
         self.ensure_patcher(open);
@@ -780,6 +972,8 @@ impl Shared {
         let stale = paths.iter().any(|path| !own(path));
         if stale {
             open.graphics = None;
+            open.filesystem = None;
+            open.patcher = None;
         }
         drop(state);
         let mut relative: Vec<String> = paths.iter().filter_map(|path| self.workspace.relative(path)).collect();
@@ -811,6 +1005,17 @@ fn unknown_level() -> Error {
 }
 
 const AUTOSAVE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Where removed module files go, relative to the project.
+pub(crate) const TRASH_DIR: &str = ".big-star-trash";
+
+/// A level file as the Filesystem dock names it.
+fn address(source: &Source) -> String {
+    match source {
+        Source::File(path) => path.clone(),
+        Source::Member { archive, member } => format!("{archive}!{member}"),
+    }
+}
 
 /// Where autosaves live, relative to the project.
 pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";

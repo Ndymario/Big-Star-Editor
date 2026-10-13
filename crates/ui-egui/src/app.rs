@@ -8,6 +8,7 @@ use bigstar_protocol::{DirectoryEntryKind, LevelId, LogLevel};
 use egui::{Color32, Key, Modifiers, RichText, Ui, ViewportCommand};
 
 use crate::canvas::{Art, TexturePool};
+use crate::files::{FilesDock, OpenRequest};
 use crate::picker::{self, PickerState};
 use crate::services::Services;
 use crate::session::Session;
@@ -84,6 +85,7 @@ enum Left {
     #[default]
     Levels,
     Palette,
+    Filesystem,
 }
 
 /// The right-hand panel's two tabs.
@@ -109,6 +111,7 @@ pub struct BigStarApp {
     pub(crate) picker: PickerState,
     pub(crate) workspace: Workspace,
     pub(crate) tools: Tools,
+    pub(crate) files: FilesDock,
     left: Left,
     side: Side,
     /// Level-data value cells being typed in.
@@ -149,6 +152,7 @@ impl BigStarApp {
             picker: PickerState::default(),
             workspace: Workspace::default(),
             tools: Tools::default(),
+            files: FilesDock::default(),
             left: Left::default(),
             side: Side::default(),
             data_drafts: level_data::Drafts::new(),
@@ -243,6 +247,12 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
+        for request in self.files.follow(session, &*self.services) {
+            match request {
+                OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None),
+                OpenRequest::Editor { path, bytes, kind } => self.workspace.open_file(&path, &bytes, kind),
+            }
+        }
         self.workspace.remember(session, &*self.services, &self.host_key);
         if self.confirm.is_none()
             && let Some(level) = self.workspace.asking_close.take()
@@ -515,10 +525,20 @@ impl BigStarApp {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.left, Left::Levels, "Levels");
                 ui.selectable_value(&mut self.left, Left::Palette, "Palette");
+                ui.selectable_value(&mut self.left, Left::Filesystem, "Filesystem");
             });
             ui.separator();
             match self.left {
-                Left::Levels => level_list(ui, session, self.workspace.preview),
+                Left::Filesystem => self.files.show(ui, session, &*self.services),
+                Left::Levels => {
+                    if let Some(path) = level_list(ui, session, self.workspace.preview) {
+                        // A level row hands the person over to its file.
+                        self.left = Left::Filesystem;
+                        if !self.files.reveal(session.filesystem.as_ref(), &path) {
+                            session.report(format!("{path} is not in this variant's files"));
+                        }
+                    }
+                }
                 Left::Palette => match session.active.and_then(|level| session.levels.get_mut(&level)) {
                     Some(view) => {
                         let mut art = Art { ctx: &ctx, store: &session.textures, pool: &mut self.textures };
@@ -804,46 +824,115 @@ impl BigStarApp {
     }
 }
 
+/// A group of the level list: a world, or a step of a world path such as "Mario vs. Luigi > Multicard".
+#[derive(Default)]
+struct Group<'a> {
+    name: String,
+    groups: Vec<Group<'a>>,
+    levels: Vec<&'a bigstar_protocol::LevelSummary>,
+}
+
+/// The catalog's worlds as a tree: a world named as a path is a group holding a group, not a row with an arrow in its
+/// label.
+fn level_groups(worlds: &[bigstar_protocol::LevelWorld]) -> Group<'_> {
+    let mut root = Group::default();
+    for world in worlds {
+        let mut group = &mut root;
+        for part in world.name.split('>').map(str::trim).filter(|part| !part.is_empty()) {
+            let position = match group.groups.iter().position(|g| g.name == part) {
+                Some(position) => position,
+                None => {
+                    group.groups.push(Group { name: part.to_owned(), ..Group::default() });
+                    group.groups.len() - 1
+                }
+            };
+            let Some(next) = group.groups.get_mut(position) else { break };
+            group = next;
+        }
+        group.levels.extend(&world.levels);
+    }
+    root
+}
+
 /// The project's levels by world. Picking an area shows it in the Preview tab; Edit (or a double-click) opens it as a
-/// document.
-fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) {
+/// document. A level of one area is one row. Returns a file to show in the Filesystem dock, when asked for.
+fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) -> Option<String> {
     if let Some(project) = &session.project
         && project.rom_path.is_none()
     {
         ui.colored_label(ERROR_COLOR, "This project has no ROM, so no level can be opened.");
     }
     let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
-    let mut preview = None;
-    let mut open = None;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        for world in &session.worlds {
-            egui::CollapsingHeader::new(RichText::new(&world.name).strong()).id_salt(&world.name).default_open(false).show(ui, |ui| {
-                for level in &world.levels {
-                    ui.label(&level.display_name);
-                    for area in &level.areas {
-                        ui.horizontal(|ui| {
-                            ui.add_space(12.0);
-                            ui.add_enabled_ui(area.available, |ui| {
-                                let response =
-                                    ui.selectable_label(shown.as_deref() == Some(area.token.as_str()), &area.display_name).on_hover_text(&area.token);
-                                if response.double_clicked() {
-                                    open = Some(area.token.clone());
-                                } else if response.clicked() {
-                                    preview = Some(area.token.clone());
-                                }
-                                if ui.small_button("Edit").clicked() {
-                                    open = Some(area.token.clone());
-                                }
-                            });
-                        });
+    let root = level_groups(&session.worlds);
+    fn area_row(
+        ui: &mut Ui,
+        label: &str,
+        area: &bigstar_protocol::AreaSummary,
+        shown: Option<&str>,
+        picked: &mut (Option<String>, Option<String>, Option<String>),
+    ) {
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(area.available, |ui| {
+                let tip = format!(
+                    "{label}\nToken: {}\nCourse: {}\nBGDat: {}",
+                    area.token,
+                    if area.course_path.is_empty() { "missing" } else { &area.course_path },
+                    if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
+                );
+                let response = ui.selectable_label(shown == Some(area.token.as_str()), label).on_hover_text(tip);
+                if response.double_clicked() {
+                    picked.1 = Some(area.token.clone());
+                } else if response.clicked() {
+                    picked.0 = Some(area.token.clone());
+                }
+                response.context_menu(|ui| {
+                    if ui.button("Open").clicked() {
+                        picked.1 = Some(area.token.clone());
+                        ui.close();
                     }
+                    for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
+                        if ui.add_enabled(!path.is_empty(), egui::Button::new(name)).clicked() {
+                            picked.2 = Some(path.clone());
+                            ui.close();
+                        }
+                    }
+                });
+                if ui.small_button("Edit").clicked() {
+                    picked.1 = Some(area.token.clone());
                 }
             });
+        });
+    }
+    fn group_ui(ui: &mut Ui, group: &Group<'_>, path: &str, shown: Option<&str>, picked: &mut (Option<String>, Option<String>, Option<String>)) {
+        for child in &group.groups {
+            let id = format!("{path}>{}", child.name);
+            egui::CollapsingHeader::new(RichText::new(&child.name).strong()).id_salt(&id).default_open(false).show(ui, |ui| {
+                group_ui(ui, child, &id, shown, picked);
+            });
         }
-    });
+        for level in &group.levels {
+            match level.areas.as_slice() {
+                [only] => area_row(ui, &level.display_name, only, shown, picked),
+                areas => {
+                    egui::CollapsingHeader::new(&level.display_name).id_salt(format!("{path}/{}", level.display_name)).default_open(true).show(
+                        ui,
+                        |ui| {
+                            for area in areas {
+                                area_row(ui, &area.display_name, area, shown, picked);
+                            }
+                        },
+                    );
+                }
+            }
+        }
+    }
+    let mut picked = (None, None, None);
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| group_ui(ui, &root, "", shown.as_deref(), &mut picked));
+    let (preview, open, reveal) = picked;
     if let Some(area) = open {
         session.open_level(&area);
     } else if let Some(area) = preview {
         session.preview_level(&area);
     }
+    reveal
 }

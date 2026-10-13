@@ -126,6 +126,37 @@ fn graphics_messages_survive_the_wire() {
     let offered = crate::RecoverableLevel { area: "A01_1".into(), title: "1-1".into() };
     server_round_trip(ServerFrame::Response { id: 8, result: Ok(Response::Recovery(vec![offered])) });
     server_round_trip(ServerFrame::Response { id: 9, result: Ok(Response::Recovered(vec!["A01_1".into()])) });
+    for request in [
+        Request::Filesystem,
+        Request::ListArchive { path: "dat/a.narc".into() },
+        Request::ReadFile { path: "dat/a.narc!b.bin".into() },
+        Request::WriteFile { path: "z_new/x".into(), bytes: vec![1, 2] },
+        Request::FileTargets { path: "z_new/x".into() },
+        Request::RemoveFile { path: "z_new/x".into() },
+    ] {
+        client_round_trip(ClientFrame::Request { id: 16, request });
+    }
+    let entry = crate::FileEntry {
+        path: "dat/a.narc!b.bin".into(),
+        status: crate::FileStatus::Pending,
+        module: "coop".into(),
+        member_id: Some(3),
+        size: 9,
+        icon: crate::FileIcon::Palette,
+        ..Default::default()
+    };
+    let listing = crate::FilesystemListing {
+        entries: vec![entry.clone()],
+        pending: true,
+        modules: vec![crate::ModuleChoice { key: "coop".into(), name: "Co-op".into() }],
+        active_module: "coop".into(),
+        active_variant: "en".into(),
+        error: None,
+    };
+    server_round_trip(ServerFrame::Response { id: 10, result: Ok(Response::Filesystem(Box::new(listing))) });
+    server_round_trip(ServerFrame::Response { id: 11, result: Ok(Response::Files(vec![entry])) });
+    server_round_trip(ServerFrame::Response { id: 12, result: Ok(Response::FileBytes { path: "x".into(), bytes: vec![0; 64] }) });
+    server_round_trip(ServerFrame::Response { id: 13, result: Ok(Response::FileTargets(vec![String::new(), "en".into()])) });
     let glue = bigstar_formats::GlueBlock { flags: vec![9], values: Vec::new() };
     let edit = LevelEdit::SetGlue { glue, name: "Edit level data".into() };
     client_round_trip(ClientFrame::Request { id: 13, request: Request::EditLevel { level: 1, base_revision: 2, edit } });

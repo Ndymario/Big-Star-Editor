@@ -179,6 +179,11 @@ impl ProjectGraphics {
         self.overlays.get_or_insert_with(TileOverlayCatalog::default)
     }
 
+    /// A file as the active variant has it: the module's copy when there is one, else the ROM's.
+    pub fn read_file(&mut self, address: &str) -> Result<Vec<u8>> {
+        self.files.read(address)
+    }
+
     pub fn level_graphics(&mut self, level: LevelId, generation: u64, references: LevelTilesetReferences) -> LevelGraphics {
         let mut result = LevelGraphics { level, generation, ..LevelGraphics::default() };
         let resources = match resolve_level_graphics(&mut self.files, references) {

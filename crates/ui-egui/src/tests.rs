@@ -1141,7 +1141,7 @@ fn a_level_exports_and_imports_as_nml() {
 
     // Importing it into 1-1 makes 1-1 hold 1-1 Area 2.
     open_document(&mut harness, "A01_1");
-    shelf.lock().unwrap().to_open.push_back(bytes);
+    shelf.lock().unwrap().to_open.push_back(("1-1 Area 2.nml".to_owned(), bytes));
     harness.get_by_label("Level").click();
     harness.run();
     harness.get_by_label("Import Level (.nml)…").click();
@@ -1204,4 +1204,130 @@ fn autosaves_an_interrupted_session_left_are_offered_back() {
     let view = view(&harness);
     assert_eq!((view.snapshot.area.as_str(), view.snapshot.objects.len(), view.snapshot.dirty), ("A01_1", 6, true));
     assert_eq!(view.snapshot.undo_names[0], "Recover autosave");
+}
+
+// --- the filesystem dock ------------------------------------------------------------------------------------------------
+
+/// The app with the demo project open and the Filesystem dock showing; the shelf is the test's file dialogs.
+fn filesystem() -> (Harness<'static, BigStarApp>, std::sync::Arc<std::sync::Mutex<crate::FileShelf>>) {
+    let services = MemoryServices::default();
+    let shelf = services.shelf.clone();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.get_by_label("Filesystem").click();
+    harness.run();
+    (harness, shelf)
+}
+
+#[test]
+fn the_dock_lists_the_rom_in_id_order_and_opens_archives_on_demand() {
+    let (mut harness, _) = filesystem();
+    // The root is open; its folders are rows, and open with their arrow (the order is `build_tree`'s, tested there).
+    harness.get_by_label("📁 course");
+    harness.state_mut().files.expanded.insert("course".to_owned());
+    harness.state_mut().files.expanded.insert("dat".to_owned());
+    harness.run();
+    harness.get_by_label("🎮 A01_1.bin");
+    // An archive lists its members the first time it opens.
+    assert!(harness.query_by_label("📄 a.bin").is_none());
+    harness.state_mut().files.expanded.insert("dat/demo.narc".to_owned());
+    harness.state_mut().session_mut().unwrap().list_archive("dat/demo.narc");
+    harness.run();
+    harness.get_by_label("📄 a.bin");
+    // Picking a file says what it is and which editor opens it.
+    harness.get_by_label("🎮 A01_1.bin").click();
+    harness.run();
+    harness.get_by_label_contains("course/A01_1.bin   ·   File ID: 100");
+}
+
+#[test]
+fn files_are_added_under_z_new_replaced_and_removed_through_the_module() {
+    let (mut harness, shelf) = filesystem();
+    shelf.lock().unwrap().to_open.push_back(("hello.bin".to_owned(), vec![1, 2, 3]));
+    harness.get_by_label("Add file").click();
+    harness.run();
+    // The destination is asked for, under z_new/ by default.
+    harness.get_by_label("Add").click();
+    harness.run();
+    harness.run();
+    let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
+    let added = listing.entries.iter().find(|e| e.path == "z_new/hello.bin").expect("added");
+    assert_eq!((added.status, added.from_module, added.id_is_planned), (bigstar_protocol::FileStatus::Pending, true, true));
+    assert!(listing.pending);
+    harness.get_by_label_contains("Module files differ from the last build");
+
+    // Replacing a file the ROM holds writes the module's copy over it.
+    harness.state_mut().files.expanded.insert("message".to_owned());
+    harness.run();
+    harness.get_by_label("📝 msg.bmg").click();
+    harness.run();
+    shelf.lock().unwrap().to_open.push_back(("msg.bmg".to_owned(), b"MESGbmg1new".to_vec()));
+    harness.get_by_label("Replace").click();
+    harness.run();
+    harness.run();
+    let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
+    assert!(listing.entries.iter().any(|e| e.path == "message/msg.bmg" && e.from_module));
+
+    // A module's file can be removed, after asking.
+    harness.get_by_label("📝 msg.bmg").click();
+    harness.run();
+    harness.get_by_label("Remove").click();
+    harness.run();
+    harness.get_by_label_contains("Move this module file to the project's trash");
+    harness.get_all_by_label("Remove").last().unwrap().click();
+    harness.run();
+    harness.run();
+    let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
+    assert!(listing.entries.iter().any(|e| e.path == "message/msg.bmg" && !e.from_module));
+}
+
+#[test]
+fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
+    let (mut harness, shelf) = filesystem();
+    harness.state_mut().files.expanded.insert("message".to_owned());
+    harness.run();
+    harness.get_by_label("📝 msg.bmg").click();
+    harness.run();
+    harness.get_by_label("Extract").click();
+    harness.run();
+    assert_eq!(shelf.lock().unwrap().saved.pop(), Some(("msg.bmg".to_owned(), b"MESGbmg1".to_vec())));
+
+    harness.get_by_label("Hex edit").click();
+    harness.run();
+    let (key, path) = {
+        let files = &harness.state().workspace.files;
+        let (key, doc) = files.iter().next().expect("a document");
+        (*key, doc.path.clone())
+    };
+    assert_eq!(path, "message/msg.bmg");
+    harness.state_mut().workspace.files.get_mut(&key).unwrap().text = "AA BB".to_owned();
+    harness.run();
+    harness.get_by_label("Save").click();
+    harness.run();
+    harness.run();
+    harness.state_mut().session_mut().unwrap().read_file("message/msg.bmg", crate::session::FileRead::Extract);
+    harness.run();
+    assert_eq!(shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes), Some(vec![0xaa, 0xbb]));
+}
+
+#[test]
+fn a_level_row_hands_the_person_over_to_its_file() {
+    let (mut harness, _) = filesystem();
+    harness.get_by_label("Levels").click();
+    harness.run();
+    harness.get_by_label("World 1").click();
+    harness.run();
+    // A level of several areas holds them; its areas name their files.
+    harness.get_all_by_label("Area 1").next().unwrap().click_secondary();
+    harness.run();
+    harness.get_by_label("Show Course in Filesystem").click();
+    harness.run();
+    let files = &harness.state().files;
+    assert_eq!(files.selected.as_deref(), Some("course/A01_1.bin"));
+    assert!(files.expanded.contains("course"));
+    harness.get_by_label("🎮 A01_1.bin");
 }

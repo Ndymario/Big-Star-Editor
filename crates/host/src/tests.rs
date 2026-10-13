@@ -2,7 +2,7 @@ use bigstar_core::{ErrorCode, Fx32};
 use bigstar_formats::{NSMB_LEVEL_BLOCK_COUNT, NsmbLevelObject};
 use bigstar_level::{EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates};
 use bigstar_project::test_support::{RomFile, TempDir, make_narc, make_rom, write_bytes};
-use bigstar_protocol::{DirectoryEntryKind, EditOutcome, Event, LevelEdit, LevelSnapshot, Request, Response, Service};
+use bigstar_protocol::{DirectoryEntryKind, EditOutcome, Event, FileIcon, FileStatus, LevelEdit, LevelSnapshot, Request, Response, Service};
 
 use crate::{Host, HostSession, Workspace};
 
@@ -399,6 +399,93 @@ fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
     let Response::Recovered(none) = next.handle(Request::Recover { accept: false }).unwrap() else { panic!() };
     assert!(none.is_empty());
     assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 0);
+}
+
+/// A project whose last build left a module graph naming module `mine` with a NitroFS tree.
+fn with_module(label: &str) -> (Fixture, HostSession) {
+    let (fixture, session) = Fixture::with_project(label);
+    let project = fixture.root.path().join("proj");
+    let modules = format!(
+        r#"{{"schema":"ncpatcher.modules/1","dir":"{dir}/modules","modules":[{{"key":"mine","id":"Mine","name":"My module","enabled":true,
+            "dir":"{dir}/modules/mine","nitrofs":{{"dir":"{dir}/modules/mine/nitrofs"}},"components":[]}}]}}"#,
+        dir = project.display()
+    );
+    write_bytes(&project.join("build/generated/modules.json"), modules.as_bytes());
+    std::fs::create_dir_all(project.join("modules/mine/nitrofs")).unwrap();
+    // Reopened, so the host reads the graph.
+    let mut session = session;
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    (fixture, session)
+}
+
+fn listing(session: &mut HostSession) -> bigstar_protocol::FilesystemListing {
+    match session.handle(Request::Filesystem).unwrap() {
+        Response::Filesystem(listing) => *listing,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn the_filesystem_lists_the_rom_with_ids_icons_and_archive_members_on_demand() {
+    let (_fixture, mut session) = Fixture::with_project("host-fs");
+    let listing = listing(&mut session);
+    let find = |path: &str| listing.entries.iter().find(|e| e.path == path).cloned().unwrap_or_else(|| panic!("{path}"));
+    let course = find("course/A01_1.bin");
+    assert_eq!((course.status, course.icon, course.id.is_some(), course.from_module), (FileStatus::Vanilla, FileIcon::Level, true, false));
+    assert_eq!(find("dat/Dat_Field.narc").icon, FileIcon::Archive);
+    assert!(!listing.pending);
+
+    let Response::Files(members) = session.handle(Request::ListArchive { path: "dat/Dat_Field.narc".into() }).unwrap() else { panic!() };
+    assert_eq!(
+        members.iter().map(|m| (m.path.as_str(), m.member_id)).collect::<Vec<_>>(),
+        [("dat/Dat_Field.narc!J01_1.bin", Some(0)), ("dat/Dat_Field.narc!J01_1_bgdat.bin", Some(1))]
+    );
+    let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into() }).unwrap() else {
+        panic!()
+    };
+    assert_eq!(bytes, level_files().1);
+
+    // The level list names the files the way the dock does.
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let areas: Vec<_> = worlds.iter().flat_map(|w| &w.levels).flat_map(|l| &l.areas).filter(|a| a.available).collect();
+    assert!(areas.iter().any(|a| a.course_path == "course/A01_1.bin" && a.bgdat_path == "course/A01_1_bgdat.bin"));
+    assert!(areas.iter().any(|a| a.course_path == "dat/Dat_Field.narc!J01_1.bin"));
+}
+
+#[test]
+fn writes_go_to_the_module_and_new_files_under_z_new() {
+    let (fixture, mut session) = with_module("host-fs-write");
+    let project = fixture.root.path().join("proj");
+    let listing = listing(&mut session);
+    assert_eq!(listing.modules, [bigstar_protocol::ModuleChoice { key: "mine".into(), name: "My module".into() }]);
+    assert_eq!(listing.active_module, "mine");
+
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: vec![1, 2, 3] }).unwrap();
+    assert_eq!(std::fs::read(project.join("modules/mine/nitrofs/course/A01_1.bin")).unwrap(), [1, 2, 3]);
+    let Response::FileTargets(holding) = session.handle(Request::FileTargets { path: "course/A01_1.bin".into() }).unwrap() else { panic!() };
+    assert_eq!(holding, [""], "the base layer holds it");
+    // Reads go through NCPatcher's plan; with no NCPatcher to ask there is none, and the ROM's copy is what reads, as
+    // in the Qt editor.
+    let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "course/A01_1.bin".into() }).unwrap() else { panic!() };
+    assert_eq!(bytes, level_files().0);
+
+    let error = session.handle(Request::WriteFile { path: "elsewhere/new.bin".into(), bytes: vec![1] }).unwrap_err();
+    assert_eq!(error.message, "New NitroFS files must be under z_new/.");
+    session.handle(Request::WriteFile { path: "z_new/new.bin".into(), bytes: vec![9] }).unwrap();
+    assert!(project.join("modules/mine/nitrofs/z_new/new.bin").is_file());
+}
+
+#[test]
+fn a_removed_module_file_goes_to_the_projects_trash() {
+    let (fixture, mut session) = with_module("host-fs-remove");
+    let project = fixture.root.path().join("proj");
+    // A module file the view knows about (it reads the module trees through the plan, which needs NCPatcher; without
+    // one the ROM's own file cannot be removed).
+    let error = session.handle(Request::RemoveFile { path: "course/A01_1.bin".into() }).unwrap_err();
+    assert_eq!(error.message, "only a file a module supplies can be removed");
+    let error = session.handle(Request::RemoveFile { path: "dat/Dat_Field.narc!J01_1.bin".into() }).unwrap_err();
+    assert!(error.message.contains("there is no file") || error.message.contains("archive"), "{}", error.message);
+    assert!(!project.join(super::host::TRASH_DIR).exists());
 }
 
 #[test]

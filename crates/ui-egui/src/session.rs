@@ -7,8 +7,9 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel, ProjectData,
-    ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TextureId,
+    ActorCatalog, DirectoryListing, Event, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld, LogLevel,
+    ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
+    TextureId,
 };
 
 use crate::level_view::{ActorIndex, ActorKey, LevelView};
@@ -33,9 +34,32 @@ enum Pending {
     ActorDraws(LevelId, Vec<ActorKey>),
     ProjectData,
     LevelBytes(LevelId, BytesFor),
-    Find { sprites: bool, id: u16 },
+    Find {
+        sprites: bool,
+        id: u16,
+    },
     Recovery,
     Recover,
+    Filesystem,
+    ListArchive(String),
+    ReadFile(FileRead),
+    /// A file write or removal: when it is answered the listing is fetched again.
+    FileChange,
+    FileTargets(String),
+    Settings,
+}
+
+/// What a file's bytes were asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FileRead {
+    /// To say which editor opens it.
+    Classify,
+    /// To open it in that editor.
+    Open,
+    /// To open it as hex whatever it is.
+    Hex,
+    /// To save a copy outside the project.
+    Extract,
 }
 
 /// Why a level is being opened.
@@ -115,6 +139,15 @@ pub struct Session {
     pub found: Option<Found>,
     /// Levels an interrupted session left autosaved, waiting for the person to say whether to recover them.
     pub recovery_offer: Option<Vec<RecoverableLevel>>,
+    /// The Filesystem dock's rows, with the members of the archives opened so far added in.
+    pub filesystem: Option<FilesystemListing>,
+    filesystem_requested: bool,
+    /// Archives whose members have been listed (or asked for).
+    pub listed_archives: HashSet<String>,
+    /// File bytes that arrived, for whoever asked: (path, why, bytes).
+    pub file_reads: Vec<(String, FileRead, Vec<u8>)>,
+    /// Which variants already hold a module copy of a path, once asked.
+    pub file_targets: Option<(String, Vec<String>)>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -154,6 +187,11 @@ impl Session {
             level_bytes: None,
             found: None,
             recovery_offer: None,
+            filesystem: None,
+            filesystem_requested: false,
+            listed_archives: HashSet::new(),
+            file_reads: Vec::new(),
+            file_targets: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -320,6 +358,57 @@ impl Session {
         self.request(Request::Recover { accept }, Pending::Recover);
     }
 
+    /// Fetches the Filesystem dock's rows again.
+    pub fn refresh_filesystem(&mut self) {
+        if self.project.is_some() && !self.filesystem_requested {
+            self.filesystem_requested = true;
+            self.request(Request::Filesystem, Pending::Filesystem);
+        }
+    }
+
+    /// Fetches the listing if it has never been fetched.
+    pub fn refresh_filesystem_once(&mut self) {
+        if self.filesystem.is_none() {
+            self.refresh_filesystem();
+        }
+    }
+
+    /// Chooses the module that add and replace write into.
+    pub fn set_active_module(&mut self, module: &str) {
+        self.request(Request::SetActiveModule { module: module.to_owned() }, Pending::Settings);
+    }
+
+    /// Lists an archive's members the first time it is opened.
+    pub fn list_archive(&mut self, path: &str) {
+        if self.listed_archives.insert(path.to_owned()) {
+            self.request(Request::ListArchive { path: path.to_owned() }, Pending::ListArchive(path.to_owned()));
+        }
+    }
+
+    pub fn read_file(&mut self, path: &str, purpose: FileRead) {
+        self.request(Request::ReadFile { path: path.to_owned() }, Pending::ReadFile(purpose));
+    }
+
+    pub fn write_file(&mut self, path: &str, bytes: Vec<u8>) {
+        self.request(Request::WriteFile { path: path.to_owned(), bytes }, Pending::FileChange);
+    }
+
+    pub fn remove_file(&mut self, path: &str) {
+        self.request(Request::RemoveFile { path: path.to_owned() }, Pending::FileChange);
+    }
+
+    pub fn ask_file_targets(&mut self, path: &str) {
+        self.file_targets = None;
+        self.request(Request::FileTargets { path: path.to_owned() }, Pending::FileTargets(path.to_owned()));
+    }
+
+    /// Takes the file reads made for `purpose`.
+    pub fn take_file_reads(&mut self, purpose: FileRead) -> Vec<(String, Vec<u8>)> {
+        let (taken, kept) = std::mem::take(&mut self.file_reads).into_iter().partition(|(_, why, _)| *why == purpose);
+        self.file_reads = kept;
+        taken.into_iter().map(|(path, _, bytes)| (path, bytes)).collect()
+    }
+
     /// Whether any open level has edits that were not saved.
     pub fn dirty(&self) -> bool {
         self.levels.values().any(|view| view.snapshot.dirty)
@@ -391,6 +480,9 @@ impl Session {
             }
             Err(error) => {
                 self.history_steps = None;
+                if kind == Pending::Filesystem {
+                    self.filesystem_requested = false;
+                }
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
                 if let Pending::Edit(level) | Pending::History(level) | Pending::Save(level) = kind {
@@ -420,6 +512,7 @@ impl Session {
                 self.request(Request::ListLevels, Pending::ListLevels);
                 self.request(Request::ProjectData, Pending::ProjectData);
                 self.request(Request::Recovery, Pending::Recovery);
+                self.refresh_filesystem();
             }
             (Pending::ImportRom, Response::Project(info)) => {
                 self.browser = None;
@@ -454,6 +547,25 @@ impl Session {
             (Pending::Find { sprites, id }, Response::Found(entities)) => self.found = Some(Found { sprites, id, entities }),
             (Pending::Recovery, Response::Recovery(levels)) => self.recovery_offer = (!levels.is_empty()).then_some(levels),
             (Pending::Recover, Response::Recovered(areas)) => self.recovered.extend(areas),
+            (Pending::Filesystem, Response::Filesystem(listing)) => {
+                self.filesystem_requested = false;
+                // Archives opened before keep their members: they are listed again on demand.
+                self.listed_archives.clear();
+                self.filesystem = Some(*listing);
+            }
+            (Pending::ListArchive(_), Response::Files(members)) => {
+                if let Some(listing) = &mut self.filesystem {
+                    let known: HashSet<String> = listing.entries.iter().map(|e| e.path.clone()).collect();
+                    listing.entries.extend(members.into_iter().filter(|m| !known.contains(&m.path)));
+                }
+            }
+            (Pending::ReadFile(purpose), Response::FileBytes { path, bytes }) => self.file_reads.push((path, purpose, bytes)),
+            (Pending::FileChange, Response::Done) => self.refresh_filesystem(),
+            (Pending::FileTargets(path), Response::FileTargets(holding)) => self.file_targets = Some((path, holding)),
+            (Pending::Settings, Response::Settings(settings)) => {
+                self.settings = Some(settings);
+                self.refresh_filesystem();
+            }
             (Pending::CloseLevel, Response::Done) => {}
             (Pending::Textures, Response::Textures(textures)) => {
                 for texture in textures {
@@ -553,6 +665,11 @@ impl Session {
         self.level_bytes = None;
         self.found = None;
         self.recovery_offer = None;
+        self.filesystem = None;
+        self.filesystem_requested = false;
+        self.listed_archives.clear();
+        self.file_reads.clear();
+        self.file_targets = None;
         self.forget_project_graphics();
     }
 
@@ -614,7 +731,8 @@ impl Session {
                     self.refresh_level(level);
                 }
             }
-            Event::FilesChanged { .. } => {}
+            // A module tree or the ROM changed on disk: the dock's statuses may have.
+            Event::FilesChanged { .. } => self.refresh_filesystem(),
             // Everything served before is stale. What is on screen stays there until its replacement arrives.
             Event::GraphicsChanged { generation } if generation > self.graphics_generation => {
                 self.graphics_generation = generation;

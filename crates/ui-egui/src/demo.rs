@@ -2,7 +2,7 @@
 //! tests have something to show without a ROM. The level is a real `EditableLevel`, so every edit, its undo name and
 //! its outcome are the ones a real host gives; the tileset art and the actors are drawn up here.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use bigstar_client::{Connection, ConnectionState, HostInfo, Incoming};
 use bigstar_core::{Error, ErrorCode};
@@ -15,9 +15,10 @@ use bigstar_level::{
     SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FoundEntity,
-    ImageGraphics, LevelBytes, LevelEdit, LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ProjectData, ProjectInfo,
-    ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FileEntry, FileIcon,
+    FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit, LevelGraphics, LevelId, LevelSnapshot, LevelSummary,
+    LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult,
+    TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
@@ -56,6 +57,30 @@ pub struct DemoConnection {
     textures: HashMap<String, TextureData>,
     /// Areas the demo pretends an earlier session left autosaved.
     recoverable: Vec<String>,
+    /// The demo ROM's other files, and what a module has written over them, by ROM address.
+    files: BTreeMap<String, DemoFile>,
+}
+
+struct DemoFile {
+    id: Option<i64>,
+    member_id: Option<i64>,
+    bytes: Vec<u8>,
+    /// The module that wrote it, if one did.
+    module: Option<String>,
+}
+
+/// A few files beside the levels, so the Filesystem dock has a ROM to show: a message file, a palette, an archive.
+fn demo_files() -> BTreeMap<String, DemoFile> {
+    let file = |id, bytes: Vec<u8>| DemoFile { id: Some(id), member_id: None, bytes, module: None };
+    let member = |id, bytes: Vec<u8>| DemoFile { id: None, member_id: Some(id), bytes, module: None };
+    let mut files = BTreeMap::new();
+    files.insert("00DUMMY".to_owned(), file(0, vec![0; 16]));
+    files.insert("BG_ncl/d_2d_A_J_jyotyu_ncl.bin".to_owned(), file(30, [b"RLCN\xff\xfe".to_vec(), vec![0; 26]].concat()));
+    files.insert("message/msg.bmg".to_owned(), file(40, b"MESGbmg1".to_vec()));
+    files.insert("dat/demo.narc".to_owned(), file(50, [b"NARC\xfe\xff".to_vec(), vec![0; 26]].concat()));
+    files.insert("dat/demo.narc!a.bin".to_owned(), member(0, vec![1, 2, 3, 4]));
+    files.insert("dat/demo.narc!b.bin".to_owned(), member(1, vec![5, 6]));
+    files
 }
 
 fn put_u32(data: &mut [u8], offset: usize, value: u32) {
@@ -306,6 +331,7 @@ impl DemoConnection {
             background: true,
             textures: HashMap::new(),
             recoverable: Vec::new(),
+            files: demo_files(),
         };
         connection.rebuild_textures();
         connection
@@ -384,6 +410,73 @@ impl DemoConnection {
         let snapshot = self.snapshot(id)?;
         self.events.push(Incoming::Event(Event::LevelChanged { level: id, revision: snapshot.revision, dirty: snapshot.dirty }));
         Ok(Response::Edited { snapshot: Box::new(snapshot), outcome })
+    }
+
+    /// A level's file, as saved: `course/<area>.bin` or `course/<area>_bgdat.bin`.
+    fn level_file(&mut self, path: &str) -> Result<Vec<u8>, Error> {
+        let missing = || Error::new(ErrorCode::NotFound, format!("the demo ROM has no {path}"));
+        let name = path.strip_prefix("course/").ok_or_else(missing)?;
+        let (area, bgdat) = match name.strip_suffix("_bgdat.bin") {
+            Some(area) => (area, true),
+            None => (name.strip_suffix(".bin").ok_or_else(missing)?, false),
+        };
+        let index = self.levels.iter().position(|entry| entry.area == area).ok_or_else(missing)?;
+        let level = &self.levels.get(index).ok_or_else(missing)?.level;
+        if bgdat { level.serialize_bgdat() } else { level.serialize_course() }
+    }
+
+    fn row(path: &str, file: &DemoFile) -> FileEntry {
+        let status = match (&file.module, file.id) {
+            (Some(_), Some(_)) => FileStatus::Pending,
+            (Some(_), None) => FileStatus::Pending,
+            (None, _) => FileStatus::Vanilla,
+        };
+        let icon = if path.ends_with(".narc") {
+            FileIcon::Archive
+        } else if path.ends_with(".bmg") {
+            FileIcon::Text
+        } else if path.contains("ncl") {
+            FileIcon::Palette
+        } else {
+            FileIcon::File
+        };
+        FileEntry {
+            path: path.to_owned(),
+            status,
+            module: file.module.clone().unwrap_or_default(),
+            id: file.id,
+            id_is_planned: file.module.is_some() && file.id.is_none() && file.member_id.is_none(),
+            member_id: file.member_id,
+            size: file.bytes.len() as u64,
+            from_module: file.module.is_some(),
+            icon,
+            ..FileEntry::default()
+        }
+    }
+
+    fn listing(&mut self) -> Result<FilesystemListing, Error> {
+        let mut entries: Vec<FileEntry> =
+            self.files.iter().filter(|(path, _)| !path.contains('!')).map(|(path, file)| Self::row(path, file)).collect();
+        for (index, area) in [AREA, SECOND_AREA].into_iter().enumerate() {
+            for (offset, suffix) in [(0, ".bin"), (1, "_bgdat.bin")] {
+                let path = format!("course/{area}{suffix}");
+                if self.files.contains_key(&path) {
+                    continue;
+                }
+                let size = self.level_file(&path)?.len() as u64;
+                let id = Some(100 + 2 * index as i64 + offset);
+                entries.push(FileEntry { path, id, size, icon: FileIcon::Level, ..FileEntry::default() });
+            }
+        }
+        let pending = entries.iter().any(|e| e.status == FileStatus::Pending);
+        Ok(FilesystemListing {
+            entries,
+            pending,
+            modules: vec![ModuleChoice { key: "demo".to_owned(), name: "Demo module".to_owned() }],
+            active_module: "demo".to_owned(),
+            active_variant: String::new(),
+            error: None,
+        })
     }
 
     fn graphics(&self, level: LevelId) -> LevelGraphics {
@@ -505,8 +598,13 @@ impl DemoConnection {
             })),
             Request::CloseProject => Ok(Response::Done),
             Request::ListLevels => {
-                let area =
-                    |token: &str, display: &str, available| AreaSummary { token: token.to_owned(), display_name: display.to_owned(), available };
+                let area = |token: &str, display: &str, available: bool| AreaSummary {
+                    token: token.to_owned(),
+                    display_name: display.to_owned(),
+                    available,
+                    course_path: if available { format!("course/{token}.bin") } else { String::new() },
+                    bgdat_path: if available { format!("course/{token}_bgdat.bin") } else { String::new() },
+                };
                 let level = |name: &str, areas| LevelSummary { display_name: name.to_owned(), areas };
                 Ok(Response::Levels(vec![LevelWorld {
                     name: "World 1".to_owned(),
@@ -596,6 +694,45 @@ impl DemoConnection {
                 }
                 Ok(Response::Recovered(areas))
             }
+            Request::Filesystem => Ok(Response::Filesystem(Box::new(self.listing()?))),
+            Request::ListArchive { path } => {
+                let prefix = format!("{path}!");
+                let members = self.files.iter().filter(|(p, _)| p.starts_with(&prefix)).map(|(p, f)| Self::row(p, f)).collect();
+                Ok(Response::Files(members))
+            }
+            Request::ReadFile { path } => {
+                let bytes = match self.files.get(&path) {
+                    Some(file) => file.bytes.clone(),
+                    None => self.level_file(&path)?,
+                };
+                Ok(Response::FileBytes { path, bytes })
+            }
+            Request::WriteFile { path, bytes } => {
+                let known = self.files.contains_key(&path) || self.level_file(&path).is_ok();
+                if !known && !path.starts_with("z_new/") {
+                    return Err(Error::new(ErrorCode::InvalidArgument, "New NitroFS files must be under z_new/."));
+                }
+                let id = self.files.get(&path).and_then(|f| f.id);
+                self.files.insert(path, DemoFile { id, member_id: None, bytes, module: Some("demo".to_owned()) });
+                Ok(Response::Done)
+            }
+            Request::FileTargets { path } => {
+                let held = self.files.get(&path).is_some_and(|f| f.module.is_some());
+                Ok(Response::FileTargets(if held { vec![String::new()] } else { Vec::new() }))
+            }
+            Request::RemoveFile { path } => match self.files.get(&path) {
+                Some(file) if file.module.is_some() && file.id.is_none() => {
+                    self.files.remove(&path);
+                    Ok(Response::Done)
+                }
+                Some(file) if file.module.is_some() => {
+                    // The ROM's copy shows again.
+                    let restored = demo_files().remove(&path).map_or_else(Vec::new, |f| f.bytes);
+                    self.files.insert(path, DemoFile { id: file.id, member_id: None, bytes: restored, module: None });
+                    Ok(Response::Done)
+                }
+                _ => Err(Error::new(ErrorCode::InvalidArgument, "only a file a module supplies can be removed")),
+            },
             Request::GetTextures { ids } => Ok(Response::Textures(ids.iter().filter_map(|id| self.textures.get(id).cloned()).collect())),
             _ => Err(Error::new(ErrorCode::Unsupported, "the demo host does not do that")),
         }

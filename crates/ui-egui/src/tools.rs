@@ -92,8 +92,8 @@ impl Tools {
         if session.active.is_none() {
             return;
         }
-        match services.open_file("Import Level", "nml") {
-            Some(Ok(bytes)) => match import_edit(&bytes) {
+        match services.open_file("Import Level", Some("nml")) {
+            Some(Ok((_, bytes))) => match import_edit(&bytes) {
                 Ok(edit) => session.edit(edit),
                 Err(error) => session.report(error),
             },

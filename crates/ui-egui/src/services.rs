@@ -35,8 +35,9 @@ pub trait Services {
         Err("this build cannot save files".to_owned())
     }
 
-    /// Asks the person for a file of type `extension` and reads it. `None` when they cancelled.
-    fn open_file(&self, _title: &str, _extension: &str) -> Option<Result<Vec<u8>, String>> {
+    /// Asks the person for a file (of type `extension`, or any) and reads it: its name and its bytes. `None` when they
+    /// cancelled.
+    fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
         None
     }
 }
@@ -44,8 +45,8 @@ pub trait Services {
 /// Files a test hands the frontend, and the ones it saved.
 #[derive(Debug, Default)]
 pub struct FileShelf {
-    /// What the next "open" dialogs return, first first.
-    pub to_open: std::collections::VecDeque<Vec<u8>>,
+    /// What the next "open" dialogs return, first first: a name and the bytes.
+    pub to_open: std::collections::VecDeque<(String, Vec<u8>)>,
     /// Every file saved, by suggested name.
     pub saved: Vec<(String, Vec<u8>)>,
 }
@@ -81,7 +82,7 @@ impl Services for MemoryServices {
         Ok(true)
     }
 
-    fn open_file(&self, _title: &str, _extension: &str) -> Option<Result<Vec<u8>, String>> {
+    fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
         self.shelf.lock().ok()?.to_open.pop_front().map(Ok)
     }
 }

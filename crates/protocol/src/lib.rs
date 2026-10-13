@@ -15,9 +15,10 @@ pub use graphics::{
     TextureId, TilesetGraphics,
 };
 pub use message::{
-    AreaSummary, ClientFrame, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FoundEntity, LevelBytes, LevelEdit, LevelId,
-    LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ObjectBankOverlays, PROTOCOL_VERSION, ProjectData, ProjectInfo, ProjectSummary,
-    RecoverableLevel, Request, RequestId, Response, ResponseResult, ServerFrame,
+    AreaSummary, ClientFrame, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FileIcon, FileStatus,
+    FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ModuleChoice,
+    ObjectBankOverlays, PROTOCOL_VERSION, ProjectData, ProjectInfo, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult,
+    ServerFrame,
 };
 pub use service::Service;
 pub use wire::{decode_client_frame, decode_server_frame, encode_client_frame, encode_server_frame};

@@ -76,7 +76,16 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         view.pan = egui::Vec2::new(0.0, 160.0);
         view.selection = vec![Item::new(Kind::Sprite, 0), Item::new(Kind::Object, 3)];
     }
-    shot(&mut harness, dir, "remote-100.png")
+    shot(&mut harness, dir, "remote-100.png")?;
+    // The Filesystem dock, with an archive opened.
+    if let Some(tab) = harness.query_by_label("Filesystem") {
+        tab.click();
+    }
+    until(&mut harness, &|app| app.session().is_some_and(|s| s.filesystem.is_some()));
+    for _ in 0..5 {
+        harness.step();
+    }
+    shot(&mut harness, dir, "remote-files.png")
 }
 
 fn main() -> Result<(), String> {

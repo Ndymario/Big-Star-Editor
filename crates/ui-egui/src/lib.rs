@@ -5,6 +5,8 @@ mod app;
 mod canvas;
 mod clipboard;
 pub mod demo;
+mod editors;
+mod files;
 mod level_data;
 mod level_view;
 mod picker;
