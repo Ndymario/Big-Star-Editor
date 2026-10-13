@@ -619,14 +619,16 @@ impl LevelView {
         self.entity_rects().into_iter().rev().find(|(_, rect)| rect.expand(HIT_SLACK).contains(point)).map(|(item, _)| item)
     }
 
-    /// The box around everything in the level, with room around it.
+    /// The box around everything in the level, with room around it. A sprite counts as the tile it sits on, not as
+    /// what its actor draws: that arrives from the host after the level does, and a view fitted to these bounds would
+    /// jump when it did. The margin takes the overhang.
     pub fn scene_bounds(&self) -> Rect {
         let course = &self.snapshot.course;
         let mut rects: Vec<Rect> = Vec::new();
         rects.extend(course.zones.iter().map(zone_rect));
         rects.extend(course.views.iter().map(view_rect));
         rects.extend(self.snapshot.objects.iter().map(object_rect));
-        rects.extend((0..course.sprites.len()).filter_map(|index| self.sprite_rect(index, true)));
+        rects.extend(course.sprites.iter().map(|sprite| rect(f32::from(sprite.x) * TILE, f32::from(sprite.y) * TILE, TILE, TILE)));
         rects.extend(course.entrances.iter().map(entrance_rect));
         rects.extend(course.paths.iter().chain(&course.progress_paths).flat_map(|p| p.nodes.iter().map(node_rect)));
         rects.into_iter().reduce(Rect::union).unwrap_or(EMPTY_SCENE).expand(SCENE_MARGIN)
@@ -1544,6 +1546,11 @@ mod tests {
         let key = view.actor_keys()[0];
         view.art.draws.insert(key, ActorDraw { found: true, grab: Some(SpriteBounds { x: 300, y: 300, width: 8, height: 8 }), ..Default::default() });
         assert_eq!(view.sprite_rect(0, false), Some(Rect::from_min_size(Pos2::new(300.0, 300.0), Vec2::splat(8.0))));
+        // What the actor draws arrives after the level, and must not reframe a view already fitted to it.
+        let fitted = view.scene_bounds();
+        view.art.draws.get_mut(&key).unwrap().render = Some(SpriteBounds { x: -4000, y: -4000, width: 9000, height: 9000 });
+        assert_eq!(view.sprite_rect(0, true), Some(Rect::from_min_size(Pos2::new(-4000.0, -4000.0), Vec2::splat(9000.0))));
+        assert_eq!(view.scene_bounds(), fitted);
         // Moved by the host, it is drawn from its old draw list until the new one arrives.
         let mut next = view.snapshot.clone();
         next.course.sprites[0].x = 11;
