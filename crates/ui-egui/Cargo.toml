@@ -1,0 +1,12 @@
+[package]
+name = "bigstar-ui-egui"
+description = "Big Star Editor ui-egui layer (stub)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

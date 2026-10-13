@@ -1,0 +1,12 @@
+[package]
+name = "bigstar-level"
+description = "Big Star Editor level layer (stub)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]

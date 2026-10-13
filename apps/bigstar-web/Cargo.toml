@@ -1,0 +1,16 @@
+[package]
+name = "bigstar-web"
+description = "bigstar-web (stub)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lints]
+workspace = true
+
+[dependencies]
+
+[[bin]]
+name = "bigstar-web"
+path = "src/main.rs"

@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "apps/bigstar", "apps/bigstar-web", "apps/bigstar-host", "xtask"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-only"
+rust-version = "1.90"
+
+[workspace.dependencies]
+bigstar-core = { path = "crates/core" }
+bigstar-nds = { path = "crates/nds" }
+bigstar-formats = { path = "crates/formats" }
+bigstar-level = { path = "crates/level" }
+bigstar-patching = { path = "crates/patching" }
+bigstar-project = { path = "crates/project" }
+bigstar-protocol = { path = "crates/protocol" }
+bigstar-host = { path = "crates/host" }
+bigstar-client = { path = "crates/client" }
+bigstar-ui-egui = { path = "crates/ui-egui" }
+
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "warn"
+indexing_slicing = "deny"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 16

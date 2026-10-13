@@ -73,3 +73,7 @@ deps/
 
 # macOS
 .DS_Store
+
+# Rust
+target/
+dist/
