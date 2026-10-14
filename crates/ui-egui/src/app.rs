@@ -122,6 +122,8 @@ pub struct BigStarApp {
     styled: Option<Tokens>,
     /// The Preferences window's choices while it is open.
     pub(crate) preferences: Option<Preferences>,
+    /// Whether the About window is open.
+    about: bool,
     actions: Vec<Action>,
     textures: TexturePool,
     pub(crate) picker: PickerState,
@@ -188,6 +190,7 @@ impl BigStarApp {
             accent: None,
             styled: None,
             preferences: None,
+            about: false,
             form: ConnectForm::default(),
             session: None,
             host_key: String::new(),
@@ -513,6 +516,7 @@ impl BigStarApp {
             self.builds.windows(&ctx, session);
         }
         self.preferences_window(&ctx);
+        self.about_window(&ctx);
         if let Some(session) = &mut self.session {
             session.request_actor_draws();
         }
@@ -623,6 +627,7 @@ impl BigStarApp {
         let language = self.language;
         let theme = self.theme;
         let preferences = &mut self.preferences;
+        let about = &mut self.about;
         egui::Panel::top("top").show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
@@ -683,6 +688,9 @@ impl BigStarApp {
                             ui.close();
                         }
                     });
+                    if Button::new("About").quiet().show(ui).clicked() {
+                        *about = true;
+                    }
                     ui.separator();
                     if session.uploaded() {
                         let download = Button::new(if session.undownloaded { "Download ROM •" } else { "Download ROM" })
@@ -1055,6 +1063,41 @@ impl BigStarApp {
         });
         if let Some(accept) = answer {
             session.answer_recovery(accept);
+        }
+    }
+
+    fn about_window(&mut self, ctx: &egui::Context) {
+        if !self.about {
+            return;
+        }
+        let mut open = true;
+        let mut close = false;
+        dialogs::window("About Big Star Editor").open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
+            ui.set_width(420.0);
+            ui.label(RichText::new(format!("Big Star Editor {}", env!("CARGO_PKG_VERSION"))).strong());
+            ui.add_space(6.0);
+            ui.label(
+                "Thank you to the whole New Super Mario Bros. DS community for the years of effort, \
+                 curiosity and generosity that made this editor possible.",
+            );
+            ui.add_space(6.0);
+            ui.label(
+                "Thank you to every original contributor to NSMB Editor, whose work this editor builds on: \
+                 its actors, its artwork and the formats it first understood.",
+            );
+            ui.add_space(6.0);
+            ui.label(
+                "And thank you to the Mamma Mia Team, whose research into the game and its files is the \
+                 foundation all of this stands on.",
+            );
+            dialogs::actions(ui, |ui| {
+                if Button::new("Close").primary().show(ui).clicked() {
+                    close = true;
+                }
+            });
+        });
+        if close || !open {
+            self.about = false;
         }
     }
 
