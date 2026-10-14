@@ -33,6 +33,10 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
 - **Backgrounds** are placed per view as the game places them, named and animated -- drifting clouds, lava, colour
   cycles -- by one Lua script each ([Lua backgrounds](docs/lua-backgrounds.md)).
 - **Actors** are one `.lua` file each, declaring their fields and drawing themselves ([Lua actors](docs/lua-actors.md)).
+- **ROMs directly**: **Open ROM…** on the desktop edits a `.nds` picked with the system's file dialog, as NSMB Editor
+  does: no workspace, no project, and every save writes into the ROM, laid out the way NCPatcher lays out a replaced
+  file. In the browser, a host started with `serve --rom-sessions` takes an uploaded ROM, keeps it in memory for that
+  connection alone, and gives it back as a download. Builds, variants and patches need a module project.
 - **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
   and read the ROM a successful build produces. `.nsmbpatch` export/import and xdelta create/apply are in the
   Distribution menu.
@@ -67,6 +71,16 @@ Open http://127.0.0.1:7878/?token=… in a browser
 
 It binds `127.0.0.1` unless told otherwise (`--bind`, `--port`); `--ncpatcher` and `--xdelta` name the tools it
 runs. A host built without the bundle still serves desktop frontends, and its page says how to add one.
+
+To let people edit ROMs they upload, without a workspace or the token, serve uploads only (or add `--rom-sessions`
+to a workspace host, so the token still opens the workspace):
+
+```sh
+cargo run --release -p bigstar-host-app -- serve --rom-sessions --data data
+```
+
+Connecting without a token offers **Upload ROM…**. The ROM stays in the host's memory for that connection alone, and
+**Download ROM** saves it with its edits. A ROM may be up to 64 MiB, and the host holds eight at once.
 
 ### Command line
 

@@ -519,7 +519,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 (
                     "Unknown 0x11",
                     |e| i64::from(e.unknown_11),
-                    "Anything but 0 replaces the warp: entering fades out and back in within this area, ignoring the target. One below this number, 0 to 7, is kept for something that has not been found.",
+                    "Anything but 0 replaces the warp: entering fades out and back in within this area, ignoring the target. What the number means beyond that has not been found.",
                 ),
             ];
             let flag_rows = |rows: &mut Vec<Row>| {

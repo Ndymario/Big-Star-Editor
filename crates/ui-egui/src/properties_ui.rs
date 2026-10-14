@@ -391,9 +391,9 @@ fn actor_info(ctx: &egui::Context, view: &mut LevelView, shown: &Rows) {
     let mut open = true;
     dialogs::window(&definition.name).open(&mut open).default_size([520.0, 420.0]).show(ctx, |ui| {
         ui.weak(format!("{} · object {}", definition.category, definition.object_id));
-        ui.label(if definition.notes.is_empty() { "This actor documents nothing about itself." } else { &definition.notes });
+        ui.label(if definition.notes.is_empty() { "This actor has no description." } else { &definition.notes });
         if let Some(error) = &actor.init_error {
-            controls::warning_text(ui, format!("Its script failed to start: {error}"));
+            controls::warning_text(ui, format!("Its script could not start: {error}"));
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {

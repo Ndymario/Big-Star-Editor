@@ -6,9 +6,12 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 pub type RequestId = u64;
+
+/// The most ROM bytes one `UploadRom` or `RomChunk` carries: a ROM travels in pieces well under any socket's message limit.
+pub const ROM_CHUNK_BYTES: usize = 4 * 1024 * 1024;
 
 /// A level session on the host, for as long as the level stays open.
 pub type LevelId = u64;
@@ -23,9 +26,21 @@ pub type ResponseResult = Result<Response, Error>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ServerFrame {
-    Welcome { protocol_version: u32, host_version: String, workspace_name: String },
-    Refused { reason: String },
-    Response { id: RequestId, result: ResponseResult },
+    /// `has_workspace` is false when there is no workspace for this connection: the host has none, or it let the
+    /// frontend in without the workspace token. Such a connection edits only ROMs it uploads.
+    Welcome {
+        protocol_version: u32,
+        host_version: String,
+        workspace_name: String,
+        has_workspace: bool,
+    },
+    Refused {
+        reason: String,
+    },
+    Response {
+        id: RequestId,
+        result: ResponseResult,
+    },
     Event(Event),
 }
 
@@ -50,6 +65,27 @@ pub enum Request {
     },
     OpenProject {
         path: String,
+    },
+    /// Opens a `.nds` under the root to edit directly, without a project: every save writes into that file.
+    OpenRom {
+        path: String,
+    },
+    /// Writes the ROM being edited directly to another `.nds` under the root, which later saves then go to.
+    SaveRomAs {
+        path: String,
+    },
+    /// One piece of a `.nds` the frontend sends to edit directly, held only in the host's memory and only for this
+    /// connection. Pieces come in order from `offset` 0, each at most [`ROM_CHUNK_BYTES`]; the last one opens the ROM.
+    UploadRom {
+        name: String,
+        offset: u64,
+        total: u64,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
+    /// The piece of the uploaded ROM, every edit written into it, that starts at `offset`.
+    DownloadRom {
+        offset: u64,
     },
     CloseProject,
     /// The vanilla level list of the open project, with which areas its ROM holds.
@@ -409,6 +445,18 @@ pub enum Response {
     },
     /// The patch was not written: some of its file IDs differ from this ROM's.
     PatchIdsDiffer,
+    /// How much of an upload the host holds so far.
+    Uploaded {
+        received: u64,
+    },
+    /// A piece of the uploaded ROM with its edits, and the name to suggest for the whole.
+    RomChunk {
+        name: String,
+        total: u64,
+        offset: u64,
+        #[serde(with = "serde_bytes")]
+        bytes: Vec<u8>,
+    },
     Done,
 }
 
@@ -598,12 +646,32 @@ pub struct DirectoryListing {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectInfo {
+    /// The project directory, or the ROM file a ROM edited directly came from.
     pub path: String,
     pub name: String,
     pub rom_path: Option<String>,
     pub game_title: Option<String>,
     pub game_code: Option<String>,
     pub file_count: usize,
+    pub mode: ProjectMode,
+}
+
+/// What an open project is: a module project NCPatcher builds, or a ROM edited directly.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProjectMode {
+    #[default]
+    Module,
+    /// A `.nds` in the workspace, which every save writes into.
+    Rom,
+    /// A `.nds` the frontend uploaded, held only in the host's memory; it leaves as a download.
+    Uploaded,
+}
+
+impl ProjectMode {
+    /// Whether this is a ROM edited directly, wherever it came from.
+    pub fn is_rom(self) -> bool {
+        matches!(self, ProjectMode::Rom | ProjectMode::Uploaded)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

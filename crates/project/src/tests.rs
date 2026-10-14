@@ -85,6 +85,78 @@ fn rom_reader_reads_in_place() {
 }
 
 #[test]
+fn a_rom_in_memory_reads_like_one_on_disk() {
+    let plain = make_narc(&[("vs.bmg", b"MESG")]);
+    let packed = compress_nitro_lz10(&make_narc(&[("kart.bin", b"KART")])).unwrap();
+    let rom = make_rom(&[RomFile::new("plain.narc", &plain), RomFile::new("packed.carc", &packed), RomFile::new("z_new/fresh.bin", b"FRESH")], &[]);
+    let mut reader = RomReader::from_bytes("upload.nds", rom.into()).unwrap();
+    assert_eq!(reader.path(), std::path::Path::new("upload.nds"));
+    assert_eq!(reader.header().game_code, "A2DE");
+    assert_eq!(reader.read("z_new/fresh.bin").unwrap(), b"FRESH");
+    assert_eq!(reader.read_prefix("z_new/fresh.bin", 2).unwrap(), b"FR");
+    assert_eq!(reader.read_banner().unwrap().len(), BANNER_SIZE);
+    assert_eq!(reader.read_member("plain.narc", "vs.bmg").unwrap(), b"MESG");
+    assert_eq!(reader.read_member("packed.carc", "kart.bin").unwrap(), b"KART");
+    // A truncated upload is refused up front, as a truncated file is.
+    assert!(RomReader::from_bytes("short.nds", vec![0u8; 0x100].into()).is_err());
+}
+
+#[test]
+fn edits_in_memory_answer_before_the_rom() {
+    let plain = make_narc(&[("vs.bmg", b"MESG"), ("menu/hd.bin", b"HD")]);
+    let rom = make_rom(&[RomFile::new("plain.narc", &plain), RomFile::new("z_new/fresh.bin", b"FRESH")], &[]);
+    let mut files = EffectiveFilesystem::new();
+    files.set_rom(Some(RomReader::from_bytes("game.nds", rom.into()).unwrap()));
+
+    files.set_edit("z_new/fresh.bin", b"EDITED".to_vec());
+    assert_eq!(files.read("z_new/fresh.bin").unwrap(), b"EDITED");
+    assert_eq!(files.read_prefix("z_new/fresh.bin", 2).unwrap(), b"ED");
+
+    // A member edited on its own answers for itself; its siblings still come from the ROM's container.
+    files.set_edit("plain.narc!vs.bmg", b"CHANGED".to_vec());
+    assert_eq!(files.read("plain.narc!vs.bmg").unwrap(), b"CHANGED");
+    assert_eq!(files.read("plain.narc!menu/hd.bin").unwrap(), b"HD");
+
+    // A whole container replaced answers for every member inside it, compressed or not.
+    files.clear_edits();
+    files.set_edit("plain.narc", compress_nitro_lz10(&make_narc(&[("vs.bmg", b"NEW"), ("menu/hd.bin", b"HD2")])).unwrap());
+    assert_eq!(files.read("plain.narc!menu/hd.bin").unwrap(), b"HD2");
+    assert!(files.read("plain.narc!absent.bin").is_err());
+
+    files.clear();
+    assert!(files.edits().is_empty());
+}
+
+#[test]
+fn edits_are_written_into_the_rom_they_were_made_against() {
+    let plain = make_narc(&[("vs.bmg", b"MESG"), ("menu/hd.bin", b"HD")]);
+    let packed = compress_nitro_lz10(&make_narc(&[("kart.bin", b"KART")])).unwrap();
+    let rom: std::sync::Arc<[u8]> =
+        make_rom(&[RomFile::new("plain.narc", &plain), RomFile::new("packed.carc", &packed), RomFile::new("z_new/fresh.bin", b"FRESH")], &[]).into();
+
+    // Nothing to write is the ROM itself.
+    assert_eq!(write_edited_rom(&rom, &Default::default(), None).unwrap(), rom.to_vec());
+
+    let mut edits = std::collections::BTreeMap::new();
+    edits.insert("z_new/fresh.bin".to_owned(), vec![0x5A; 0x300]);
+    edits.insert("plain.narc!menu/hd.bin".to_owned(), b"HD-EDITED".to_vec());
+    edits.insert("packed.carc!kart.bin".to_owned(), b"KART-EDITED".to_vec());
+    let written = write_edited_rom(&rom, &edits, None).unwrap();
+
+    let mut reader = RomReader::from_bytes("written.nds", written.into()).unwrap();
+    assert_eq!(reader.read("z_new/fresh.bin").unwrap(), vec![0x5A; 0x300]);
+    assert_eq!(reader.read_member("plain.narc", "menu/hd.bin").unwrap(), b"HD-EDITED");
+    assert_eq!(reader.read_member("plain.narc", "vs.bmg").unwrap(), b"MESG");
+    assert_eq!(reader.read_member("packed.carc", "kart.bin").unwrap(), b"KART-EDITED");
+    // The compressed container is still compressed.
+    assert_eq!(reader.read("packed.carc").unwrap().first(), Some(&0x10));
+
+    let mut unknown = std::collections::BTreeMap::new();
+    unknown.insert("plain.narc!absent.bin".to_owned(), vec![1]);
+    assert!(write_edited_rom(&rom, &unknown, None).is_err());
+}
+
+#[test]
 fn rom_reader_cache_is_bounded() {
     let dir = TempDir::new("rom-cache");
     let narcs: Vec<(String, Vec<u8>)> = (0..6).map(|i| (format!("a{i}.narc"), make_narc(&[("m.bin", &[i as u8])]))).collect();

@@ -31,7 +31,7 @@ impl Services for EmbeddedServices {
 
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {
         let host = Host::new(std::path::Path::new(root)).map_err(|e| e.message)?;
-        let info = HostInfo { host_version: "test".to_owned(), workspace_name: host.workspace_name() };
+        let info = HostInfo { host_version: "test".to_owned(), workspace_name: host.workspace_name(), has_workspace: true };
         Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
     }
 }

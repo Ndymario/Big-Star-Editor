@@ -429,8 +429,8 @@ impl GraphicsDoc {
         let composed = !self.companion_characters.is_empty();
         let eight = self.companion_8bpp;
         let palette = self.active_palette(if eight { 256 } else { 16 });
-        for (i, pair) in bytes.chunks_exact(2).enumerate() {
-            let value = u16::from_le_bytes([pair.first().copied().unwrap_or(0), pair.get(1).copied().unwrap_or(0)]);
+        for (i, pair) in bytes.as_chunks::<2>().0.iter().enumerate() {
+            let value = u16::from_le_bytes(*pair);
             let (left, top) = ((i % width) * 8, (i / width) * 8);
             if !composed {
                 // Nothing to compose with yet: each entry coloured by its tile id, so the arrangement is legible.
@@ -712,7 +712,7 @@ pub(crate) fn swatches(ui: &mut Ui, colours: &[[u8; 4]], selected: &mut usize, e
                 if ui.color_edit_button_srgb(&mut rgb).changed() {
                     changed = Some(rgb);
                 }
-                ui.weak("BGR555 keeps five bits a channel; the colour is rounded to the nearest one.");
+                ui.weak("The DS stores 5 bits per colour channel, so the colour is rounded to the nearest one it can show.");
             }
         });
     }

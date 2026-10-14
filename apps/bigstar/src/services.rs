@@ -1,4 +1,4 @@
-//! What the desktop gives the frontend: a settings file, a folder dialog, and a host in this process.
+//! What the desktop gives the frontend: a settings file, file and folder dialogs, and a host in this process.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -61,8 +61,31 @@ impl Services for NativeServices {
 
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {
         let host = Host::new(std::path::Path::new(root)).map_err(|e| e.message)?;
-        let info = HostInfo { host_version: env!("CARGO_PKG_VERSION").to_owned(), workspace_name: host.workspace_name() };
+        let info = HostInfo { host_version: env!("CARGO_PKG_VERSION").to_owned(), workspace_name: host.workspace_name(), has_workspace: true };
         Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
+    }
+
+    fn connect_local_roms(&self, waker: Waker) -> Result<Box<dyn Connection>, String> {
+        let host = Host::for_local_roms(bigstar_host::HostOptions::default());
+        let info = HostInfo { host_version: env!("CARGO_PKG_VERSION").to_owned(), workspace_name: String::new(), has_workspace: false };
+        Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
+    }
+
+    fn pick_rom(&self) -> Option<String> {
+        rfd::FileDialog::new()
+            .set_title("Open ROM")
+            .add_filter("Nintendo DS ROM", &["nds"])
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned())
+    }
+
+    fn pick_save_path(&self, title: &str, suggested: &str, extension: &str) -> Option<String> {
+        rfd::FileDialog::new()
+            .set_title(title)
+            .set_file_name(suggested)
+            .add_filter(extension, &[extension])
+            .save_file()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     fn pick_folder(&self) -> Option<String> {

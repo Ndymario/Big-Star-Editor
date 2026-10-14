@@ -281,7 +281,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         })
         .response
         .on_hover_text(
-            "The DS screen: a 256 by 192 rectangle with the backgrounds inside it scrolled as the game scrolls them. Under the cursor, where each selected entrance opens the camera, or both",
+            "The DS screen (256×192), with its backgrounds scrolled as the game scrolls them: under the cursor, at each selected entrance, or both",
         );
         // Named in short on the toolbar, which has no room to spare, and in full in the menu.
         ui.menu_button(options.backgrounds.short(), |ui| {

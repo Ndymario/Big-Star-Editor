@@ -4,8 +4,10 @@
 //! the same thing on every host and cross the protocol unchanged.
 
 mod rom;
+mod rom_writer;
 
 pub use rom::*;
+pub use rom_writer::NdsRomWriter;
 
 #[cfg(test)]
 mod tests;

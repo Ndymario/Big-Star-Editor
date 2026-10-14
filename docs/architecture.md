@@ -56,11 +56,42 @@ and frontends ask again while keeping what is on screen until the replacement ar
 Level saves go to the project's edit targets, are parsed again before they are written, back up what they overwrite
 into `.big-star-backups/levels-…`, and write both files or neither. File and tileset edits go into the module that
 supplies the file, or the active one; new NitroFS files must be under `z_new/`; a member of an archive is written
-beside it for the next build to sweep back in. Nothing is ever written into the ROM. Backups are kept per kind, as
-many as the project's preference says, and swept when a project opens and whenever one is added.
+beside it for the next build to sweep back in. A module project never writes into the ROM. Backups are kept per kind,
+as many as the project's preference says, and swept when a project opens and whenever one is added.
 
 Unsaved levels are written to `.big-star-autosave` as often as the project's preference says (every minute by
 default). The next session offers them back.
+
+## Editing a ROM directly
+
+A `.nds` can also be edited without a project, and without a workspace: a workspace is where module projects live, and
+a ROM edited directly is not one. It comes from one of two places.
+
+- **On the desktop**, **Open ROM…** asks the system's file dialog for a `.nds` and starts `Host::for_local_roms`, a
+  host in the app's process with no workspace that opens and saves ROMs by their full path (`OpenRom`, `SaveRomAs`).
+  Only that host takes a path for a ROM; a workspace host refuses one, inside its root or out. The ROM is the
+  whole connection, so closing it closes the connection, as **Close Workspace** does for a workspace.
+- **In the browser**, a connection uploads the ROM in pieces of at most `ROM_CHUNK_BYTES` (`UploadRom`) and fetches it
+  back with its edits the same way (`DownloadRom`). Each uploaded ROM gets a host of its own -- its own open ROM,
+  levels, graphics and events -- that belongs to that connection, has no workspace, and writes nothing to disk; it
+  ends with the connection. `HostOptions` bounds the size of a ROM and how many the host holds at once.
+  `serve --rom-sessions` lets a frontend without the token in as a guest, which can upload a ROM and reach nothing of
+  the workspace, its events included; `serve --rom-sessions` without a root serves uploads and nothing else. `Welcome`
+  tells the frontend whether its connection has a workspace.
+
+Either way the host holds the ROM in memory, and every save -- a level, a file, a tileset, the banner -- is kept as an
+edit by address over it, then the whole ROM is written: `write_edited_rom`
+packs member edits back into their archive (in the LZ wrapper it came in) and `NdsRomWriter` lays the files into the
+original the way NCPatcher's in-place commit does -- back into their own extent when they fit, appended after the used
+ROM when they do not. Writing from the original every time keeps a ROM saved a hundred times the size of one saved
+once. A ROM on this machine is written into its file on every save; the first write of a session backs up the file it
+overwrites into `.big-star-backups/rom-…` beside it, and autosaves go to `.big-star-autosave/<rom name>/`. An uploaded
+ROM is written only for a download, and has no backups or autosaves.
+
+This is not a return of the ROM builder M16 removed. A module project still never repacks anything: NCPatcher builds
+its ROM from the modules. A ROM edited directly has no modules to build from, so writing into it is the only way an
+edit can land. Only existing files can be replaced; adding or removing one would renumber file IDs. Variants, modules,
+builds, `.nsmbpatch` exchange and glue editing need a module project, and the host refuses them by name.
 
 ## Builds
 

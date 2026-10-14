@@ -84,7 +84,7 @@ impl Tools {
         self.metadata = false;
         match listing.entries.iter().find(|entry| entry.id == Some(crate::editors::ROM_USER_METADATA_ID)).map(|entry| entry.path.clone()) {
             Some(path) => session.read_file(&path, crate::session::FileRead::Open),
-            None => session.report("NitroFS file ID 131 is not present in this ROM.".to_owned()),
+            None => session.report("This ROM has no file 131, where its metadata is kept.".to_owned()),
         }
     }
 
@@ -173,7 +173,7 @@ impl Tools {
             });
             ui.separator();
             let Some(found) = session.found.clone().filter(|f| f.sprites == finder.sprites) else {
-                ui.weak("Every level the project holds is searched, unsaved edits included.");
+                ui.weak("Searches every level in the project, including unsaved edits.");
                 return;
             };
             if found.entities.is_empty() {

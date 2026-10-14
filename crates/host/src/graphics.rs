@@ -155,12 +155,38 @@ impl ProjectGraphics {
         })
     }
 
+    /// A ROM edited directly: read from memory with `edits` over it, drawn with the shipped scripts alone, since there
+    /// is no project or module to bring scripts of their own.
+    pub fn for_rom(data_dir: &Path, rom: RomReader, edits: &std::collections::BTreeMap<String, Vec<u8>>) -> Self {
+        let mut files = EffectiveFilesystem::new();
+        files.set_rom(Some(rom));
+        for (address, bytes) in edits {
+            files.set_edit(address.clone(), bytes.clone());
+        }
+        Self {
+            directory: PathBuf::new(),
+            data_dir: data_dir.to_path_buf(),
+            files,
+            modules: ModuleGraph::default(),
+            catalog: ModuleDataCatalog::default(),
+            overlays: None,
+            backgrounds: None,
+            actors: None,
+            sprite_object_ids: None,
+            textures: TextureStore::default(),
+            watched: Vec::new(),
+        }
+    }
+
     /// Layers in the order `docs/lua-actors.md`, `docs/lua-tiles.md` and `docs/lua-backgrounds.md` give: the project's own, each enabled module's
     /// in module order, then the shipped directory.
     fn layers(&self, kind: &str, bare: bool) -> Vec<(String, PathBuf)> {
-        let mut layers = vec![(format!("project bigstar/{kind}"), self.directory.join("bigstar").join(kind))];
-        if bare {
-            layers.push((format!("project {kind}"), self.directory.join(kind)));
+        let mut layers = Vec::new();
+        if !self.directory.as_os_str().is_empty() {
+            layers.push((format!("project bigstar/{kind}"), self.directory.join("bigstar").join(kind)));
+            if bare {
+                layers.push((format!("project {kind}"), self.directory.join(kind)));
+            }
         }
         for module in self.modules.modules.iter().filter(|module| module.enabled) {
             layers.push((format!("{} bigstar/{kind}", module.key), module.dir.join("bigstar").join(kind)));
@@ -287,6 +313,11 @@ impl ProjectGraphics {
     }
 
     /// A file as the active variant has it: the module's copy when there is one, else the ROM's.
+    /// What `address` reads as from now on, for a ROM edited directly.
+    pub fn set_edit(&mut self, address: String, bytes: Vec<u8>) {
+        self.files.set_edit(address, bytes);
+    }
+
     pub fn read_file(&mut self, address: &str) -> Result<Vec<u8>> {
         self.files.read(address)
     }

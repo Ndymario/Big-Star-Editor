@@ -429,7 +429,7 @@ fn prompts(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView) {
         let mut answer = None;
         dialogs::modal(ui.ctx(), ("message-remove", &doc.path), "Remove message", 440.0, |ui| {
             ui.label(format!(
-                "Remove message {row}? Every later message shifts down one index, which breaks any code that indexes this file directly."
+                "Remove message {row}? Every message after it moves up by one, which breaks any code that refers to these messages by number."
             ));
             dialogs::actions(ui, |ui| {
                 if Button::new("Remove").danger().show(ui).clicked() {

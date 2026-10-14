@@ -137,3 +137,130 @@ fn walks_nested_directories() {
     let files = parse_fnt(&fnt).unwrap();
     assert_eq!(files, vec![NitroFileEntry { id: 0, path: "dir/a".to_owned() }]);
 }
+
+fn header_checksum_holds(rom: &[u8]) -> bool {
+    crc16(&rom[..0x15E], 0xFFFF) == u16::from_le_bytes([rom[0x15E], rom[0x15F]])
+}
+
+fn file_bytes(rom: &[u8], id: usize) -> Vec<u8> {
+    let header = parse_rom_header(rom).unwrap();
+    let entry = parse_fat(slice(rom, header.fat)).unwrap()[id];
+    rom[entry.start_address as usize..entry.end_address as usize].to_vec()
+}
+
+#[test]
+fn a_writer_with_nothing_staged_returns_the_rom_untouched() {
+    let rom = make_test_rom();
+    let writer = NdsRomWriter::new(rom.clone()).unwrap();
+    assert!(!writer.dirty());
+    assert_eq!(writer.commit().unwrap(), rom);
+}
+
+#[test]
+fn a_file_that_still_fits_stays_in_its_extent() {
+    let rom = make_test_rom();
+    let mut writer = NdsRomWriter::new(rom.clone()).unwrap();
+    writer.set_file(0, b"LEVEL-EDITED".to_vec()).unwrap();
+    let out = writer.commit().unwrap();
+
+    assert_eq!(out.len(), rom.len());
+    let header = parse_rom_header(&out).unwrap();
+    let fat = parse_fat(slice(&out, header.fat)).unwrap();
+    assert_eq!(fat[0], FatEntry { start_address: 0x9000, end_address: 0x9000 + 12 });
+    assert_eq!(file_bytes(&out, 0), b"LEVEL-EDITED");
+    assert_eq!(header.total_used_rom_size, rom.len() as u32);
+    assert!(header_checksum_holds(&out));
+    // The binaries and the name table are where they were, byte for byte.
+    let before = parse_rom_header(&rom).unwrap();
+    assert_eq!(out[0x4000..0x8500], rom[0x4000..0x8500]);
+    assert_eq!(slice(&out, header.fnt), slice(&rom, before.fnt));
+    assert_eq!(parse_fnt(slice(&out, header.fnt)).unwrap()[0].path, "course.bin");
+}
+
+#[test]
+fn a_file_that_outgrows_its_extent_is_appended_after_the_used_rom() {
+    let rom = make_test_rom();
+    let mut writer = NdsRomWriter::new(rom.clone()).unwrap();
+    writer.set_file(0, vec![0xDD; 0x400]).unwrap();
+    let out = writer.commit().unwrap();
+
+    let header = parse_rom_header(&out).unwrap();
+    let fat = parse_fat(slice(&out, header.fat)).unwrap();
+    assert_eq!(fat[0], FatEntry { start_address: 0x9200, end_address: 0x9600 });
+    assert_eq!(header.total_used_rom_size, 0x9600);
+    assert_eq!(out.len(), 0x9600);
+    assert_eq!(file_bytes(&out, 0), vec![0xDD; 0x400]);
+    // The abandoned extent is left as it was, as NCPatcher leaves it.
+    assert_eq!(&out[0x9000..0x9005], b"LEVEL");
+    assert_eq!(header.device_capacity, 7);
+    assert!(header_checksum_holds(&out));
+}
+
+#[test]
+fn appending_past_the_chip_size_raises_the_device_capacity() {
+    let mut rom = make_test_rom();
+    rom[0x014] = 0;
+    let mut writer = NdsRomWriter::new(rom).unwrap();
+    writer.set_file(0, vec![0xAB; 0x20000]).unwrap();
+    let out = writer.commit().unwrap();
+    let header = parse_rom_header(&out).unwrap();
+    assert_eq!(header.total_used_rom_size, 0x9200 + 0x20000);
+    assert_eq!(header.device_capacity, 1);
+    assert!(header_checksum_holds(&out));
+}
+
+#[test]
+fn the_writer_refuses_unknown_files_and_banners_of_another_size() {
+    let mut writer = NdsRomWriter::new(make_test_rom()).unwrap();
+    assert!(writer.set_file(1, vec![1]).is_err());
+    assert!(writer.set_banner(vec![0; 0xA00]).is_err(), "this ROM has no banner");
+
+    let mut rom = make_test_rom();
+    put_u32(&mut rom, 0x068, 0x8600);
+    put_u16(&mut rom, 0x8600, 1);
+    let mut writer = NdsRomWriter::new(rom).unwrap();
+    assert_eq!(writer.banner_size(), 0xA00);
+    assert!(writer.set_banner(vec![0; 0x840]).is_err());
+    let mut banner = vec![0x11; 0xA00];
+    banner[..2].copy_from_slice(&1u16.to_le_bytes());
+    writer.set_banner(banner.clone()).unwrap();
+    let out = writer.commit().unwrap();
+    assert_eq!(out[0x8600..0x9000], banner[..]);
+    assert_eq!(file_bytes(&out, 0), b"LEVEL");
+    assert!(header_checksum_holds(&out));
+}
+
+/// Against a real ROM, named by `BIGSTAR_NSMB_ROM`: an untouched write is the same file, and a grown level comes back
+/// out of the written ROM while every other file stays put. Skipped without one.
+#[test]
+fn rewrites_a_real_rom() {
+    let Some(path) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let rom = std::fs::read(path).unwrap();
+    assert_eq!(NdsRomWriter::new(rom.clone()).unwrap().commit().unwrap(), rom);
+
+    let header = parse_rom_header(&rom).unwrap();
+    let files = parse_fnt(slice(&rom, header.fnt)).unwrap();
+    let course = files.iter().find(|file| file.path == "course/A01_1.bin").expect("the ROM holds course/A01_1.bin");
+    let id = usize::from(course.id);
+    let mut grown = file_bytes(&rom, id);
+    grown.extend_from_slice(&[0x5A; 0x1000]);
+    let mut shrunk = file_bytes(&rom, id + 1);
+    shrunk.truncate(shrunk.len() / 2);
+
+    let mut writer = NdsRomWriter::new(rom.clone()).unwrap();
+    writer.set_file(course.id, grown.clone()).unwrap();
+    writer.set_file(course.id + 1, shrunk.clone()).unwrap();
+    let out = writer.commit().unwrap();
+
+    assert!(header_checksum_holds(&out));
+    assert_eq!(file_bytes(&out, id), grown);
+    assert_eq!(file_bytes(&out, id + 1), shrunk);
+    let fat = parse_fat(slice(&rom, header.fat)).unwrap();
+    for other in (0..fat.len()).filter(|&i| i != id && i != id + 1) {
+        assert_eq!(file_bytes(&out, other), file_bytes(&rom, other), "file {other} changed");
+    }
+    let written = parse_rom_header(&out).unwrap();
+    assert_eq!(parse_fnt(slice(&out, written.fnt)).unwrap(), files);
+    let arm9 = |arm: RomArmBinary| RomRegion { rom_offset: arm.rom_offset, size: arm.size };
+    assert_eq!(slice(&out, arm9(written.arm9)), slice(&rom, arm9(header.arm9)));
+}

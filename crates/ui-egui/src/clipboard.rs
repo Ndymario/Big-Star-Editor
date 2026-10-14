@@ -155,19 +155,19 @@ pub fn copy(view: &LevelView) -> Result<Option<String>, String> {
 /// What pasting `text` adds, each thing one tile (16 pixels) along from where it was copied, so a paste never lands
 /// exactly on its original. Every value is range-checked; one bad value refuses the whole paste.
 pub fn paste(text: &str) -> Result<LevelEntityInsertions, String> {
-    let payload = text.strip_prefix(HEADER).ok_or("Clipboard does not contain Big Star entities")?;
+    let payload = text.strip_prefix(HEADER).ok_or("The clipboard holds nothing copied from a Big Star level")?;
     if payload.len() > PAYLOAD_LIMIT {
-        return Err("Clipboard entity payload is too large".to_owned());
+        return Err("What was copied is too large to paste".to_owned());
     }
-    let encoded = base64_decode(payload).filter(|bytes| base64_encode(bytes) == payload).ok_or("Clipboard entity payload is not valid Base64")?;
+    let encoded = base64_decode(payload).filter(|bytes| base64_encode(bytes) == payload).ok_or("What was copied is damaged and cannot be pasted")?;
     let json = decompress_nitro_lz(&encoded).map_err(|e| e.message)?;
-    let invalid = || "Clipboard entity payload is invalid".to_owned();
+    let invalid = || "What was copied cannot be read".to_owned();
     let root: Value = serde_json::from_slice(&json).map_err(|_| invalid())?;
     let entities = root.get("entities").and_then(Value::as_array).ok_or_else(invalid)?;
     if root.get("schema").and_then(Value::as_str) != Some(SCHEMA) || entities.len() > ENTITY_LIMIT {
         return Err(invalid());
     }
-    let bad = || "Clipboard entity values are invalid".to_owned();
+    let bad = || "What was copied holds values a level cannot have".to_owned();
     let number = |values: &[Value], i: usize, low: i64, high: i64| values.get(i).and_then(Value::as_i64).filter(|n| (low..=high).contains(n));
     let mut items = LevelEntityInsertions::default();
     for entry in entities {
@@ -329,17 +329,17 @@ mod tests {
 
     #[test]
     fn foreign_text_and_damaged_payloads_are_refused() {
-        assert_eq!(paste("hello").unwrap_err(), "Clipboard does not contain Big Star entities");
-        assert_eq!(paste("BigStar-Entities/1\n!!!!").unwrap_err(), "Clipboard entity payload is not valid Base64");
+        assert_eq!(paste("hello").unwrap_err(), "The clipboard holds nothing copied from a Big Star level");
+        assert_eq!(paste("BigStar-Entities/1\n!!!!").unwrap_err(), "What was copied is damaged and cannot be pasted");
         let wrap = |json: &str| format!("{HEADER}{}", base64_encode(&compress_nitro_lz10(json.as_bytes()).unwrap()));
-        assert_eq!(paste(&wrap(r#"{"entities":[],"schema":"other"}"#)).unwrap_err(), "Clipboard entity payload is invalid");
+        assert_eq!(paste(&wrap(r#"{"entities":[],"schema":"other"}"#)).unwrap_err(), "What was copied cannot be read");
         assert_eq!(
             paste(&wrap(r#"{"entities":[{"kind":1,"v":[1,0,2,3,0,1]}],"schema":"bigstar.entity-clipboard/1"}"#)).unwrap_err(),
-            "Clipboard entity values are invalid"
+            "What was copied holds values a level cannot have"
         );
         assert_eq!(
             paste(&wrap(r#"{"entities":[{"kind":9,"v":[]}],"schema":"bigstar.entity-clipboard/1"}"#)).unwrap_err(),
-            "Clipboard entity values are invalid"
+            "What was copied holds values a level cannot have"
         );
         let ok = paste(&wrap(r#"{"entities":[{"kind":1,"v":[1,0,2,3,1,1]},{"hash":"0000abcd","kind":2,"v":[326,4,5,1,2,4294967295]}],"schema":"bigstar.entity-clipboard/1"}"#)).unwrap();
         assert_eq!((ok.objects[0].x, ok.objects[0].y), (3, 4));

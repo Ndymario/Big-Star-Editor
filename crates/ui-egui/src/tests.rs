@@ -160,8 +160,9 @@ impl Connection for Shared {
     }
 }
 
-static CONNECTED: std::sync::LazyLock<ConnectionState> =
-    std::sync::LazyLock::new(|| ConnectionState::Connected(HostInfo { host_version: "test".to_owned(), workspace_name: "Test".to_owned() }));
+static CONNECTED: std::sync::LazyLock<ConnectionState> = std::sync::LazyLock::new(|| {
+    ConnectionState::Connected(HostInfo { host_version: "test".to_owned(), workspace_name: "Test".to_owned(), has_workspace: true })
+});
 
 fn last_request(script: &std::sync::Arc<std::sync::Mutex<Scripted>>, matches: impl Fn(&Request) -> bool) -> RequestId {
     script.lock().unwrap().sent.iter().rev().find(|(_, r)| matches(r)).map(|(id, _)| *id).expect("request sent")
@@ -1060,7 +1061,7 @@ fn copy_and_paste_go_through_the_system_clipboard() {
     harness.event(egui::Event::Paste("hello".to_owned()));
     harness.run();
     let session = harness.state().session().unwrap();
-    assert_eq!(session.notice.as_ref().map(|n| n.text.as_str()), Some("Clipboard does not contain Big Star entities"));
+    assert_eq!(session.notice.as_ref().map(|n| n.text.as_str()), Some("The clipboard holds nothing copied from a Big Star level"));
     // Cut is a copy and a delete.
     select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
     harness.event(egui::Event::Cut);
@@ -1168,7 +1169,7 @@ fn closing_a_document_with_unsaved_edits_asks_first() {
         workspace.close_document(session, level);
     }
     harness.run();
-    harness.get_by_label("This level has changes that were not saved. Closing it drops them.");
+    harness.get_by_label("This level has changes that were not saved. Closing it loses them.");
     harness.get_by_label("Stay").click();
     harness.run();
     assert!(harness.state().workspace.is_document(level), "staying keeps it");
@@ -1365,7 +1366,7 @@ fn autosaves_an_interrupted_session_left_are_offered_back() {
     harness.run();
     harness.state_mut().session_mut().unwrap().open_project("demo");
     harness.run();
-    harness.get_by_label("Big Star found 1 autosaved level(s) from an interrupted or unsaved session. Recover them?");
+    harness.get_by_label("Big Star found 1 autosaved level(s) from a session that ended without saving. Recover them?");
     harness.get_by_label("Recover").click();
     harness.run();
     harness.run();
@@ -1427,7 +1428,7 @@ fn files_are_added_under_z_new_replaced_and_removed_through_the_module() {
     let added = listing.entries.iter().find(|e| e.path == "z_new/hello.bin").expect("added");
     assert_eq!((added.status, added.from_module, added.id_is_planned), (bigstar_protocol::FileStatus::Pending, true, true));
     assert!(listing.pending);
-    harness.get_by_label_contains("Module files differ from the last build");
+    harness.get_by_label_contains("Module files have changed since the last build");
 
     // Replacing a file the ROM holds writes the module's copy over it.
     harness.state_mut().files.expanded.insert("message".to_owned());
@@ -1609,7 +1610,7 @@ fn a_touch_layout_and_the_rom_metadata_open_as_pages_of_the_graphics_editor() {
     harness.get_by_label("ROM User Metadata…").click();
     harness.run();
     harness.run();
-    harness.get_by_label_contains("Per-ROM names and object notes");
+    harness.get_by_label_contains("Names and object notes for this ROM");
     let doc = harness.state().workspace.files.values().find(|doc| doc.path == "NSMBeUD").unwrap();
     let crate::workspace::FileView::Resource { doc, .. } = &doc.view else { panic!("not a resource page") };
     assert_eq!(doc.sections.len(), 2);
@@ -1690,7 +1691,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     assert!(listing.entries.iter().any(|e| e.path == "BG_pnl/demo_t1_pnl.bin" && e.from_module));
     assert!(listing.entries.iter().all(|e| e.path != "BG_ncg/demo_t1_ncg.bin" || !e.from_module), "untouched files stay the ROM's");
     let log = &harness.state().session().unwrap().log;
-    assert!(log.iter().any(|line| line.text == "Saved 1 edited graphics resource(s) to module targets."));
+    assert!(log.iter().any(|line| line.text == "Saved 1 edited graphics file(s) to the modules."));
 }
 
 #[test]
@@ -1764,7 +1765,7 @@ fn module_changes_export_as_a_patch_and_a_mismatched_one_asks_first() {
     harness.run();
     harness.get_by_label("Import .nsmbpatch…").click();
     harness.run();
-    harness.get_by_label_contains("One or more file IDs differ");
+    harness.get_by_label_contains("Some file IDs in this ROM differ");
     harness.get_by_label("Apply").click();
     harness.run();
     harness.run();
@@ -1885,4 +1886,98 @@ fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on
     assert_eq!((settings.autosave_minutes, settings.backups_kept), (5, 3));
     let again = BigStarApp::new(Box::new(stored.sharing_values()));
     assert_eq!(again.language, crate::Language::Dutch);
+}
+
+/// The app on `connection`, with the shelf that stands for its file dialogs.
+fn harness_with_shelf(connection: DemoConnection) -> (Harness<'static, BigStarApp>, std::sync::Arc<std::sync::Mutex<crate::services::FileShelf>>) {
+    let services = MemoryServices::default();
+    let shelf = services.shelf.clone();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(connection));
+    let harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    (harness, shelf)
+}
+
+#[test]
+fn a_rom_opened_directly_has_no_builds_variants_or_glue() {
+    let (mut harness, shelf) = harness_with_shelf(DemoConnection::without_workspace());
+    harness.run();
+    // As the desktop's Open ROM leaves it: a ROM on this machine, by the path the file dialog gave, on a host with no
+    // workspace.
+    harness.state_mut().session_mut().unwrap().open_rom("/roms/rom.nds");
+    harness.run();
+    harness.run();
+    assert!(harness.state().session().unwrap().rom_mode());
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness.run();
+
+    // The ROM is the whole connection: one button closes it, and there is no workspace to go back to.
+    assert_eq!(harness.get_all_by_label("Close ROM").count(), 1);
+    for absent in
+        ["Run Patcher", "Variant:", "Build", "Distribution", "Level Data", "Save to module", "Download ROM", "Close Workspace", "Disconnect"]
+    {
+        assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for a ROM edited directly");
+    }
+    assert!(harness.get_all_by_label("Properties").next().is_some());
+
+    // Save ROM As asks the file dialog where, and the title follows the new file.
+    shelf.lock().unwrap().paths.push_back("/roms/copy.nds".to_owned());
+    harness.get_by_label("Save ROM As…").click();
+    harness.run();
+    harness.run();
+    assert_eq!(harness.state().session().unwrap().project.as_ref().map(|p| p.name.as_str()), Some("copy.nds"));
+
+    // Closing the ROM ends the connection rather than leaving a page with nothing on it.
+    harness.get_by_label("Close ROM").click();
+    harness.run();
+    assert!(harness.state().session().is_none());
+}
+
+#[test]
+fn a_connection_without_a_workspace_uploads_a_rom_and_downloads_it_again() {
+    let (mut harness, shelf) = harness_with_shelf(DemoConnection::without_workspace());
+    harness.run();
+    // No projects to list: the screen offers an upload, and there is nothing to close yet but the connection.
+    assert!(harness.query_by_label("Import ROM…").is_none());
+    harness.get_by_label("Disconnect");
+    shelf.lock().unwrap().to_open.push_back(("My Game.nds".to_owned(), vec![7; 10]));
+    harness.get_by_label("Upload ROM…").click();
+    harness.run();
+    harness.run();
+    let session = harness.state().session().unwrap();
+    assert!(session.uploaded() && session.upload.is_none());
+    assert_eq!(session.project.as_ref().map(|p| p.name.as_str()), Some("My Game.nds"));
+    // An uploaded ROM has no path on the host, but it is a ROM: its levels open.
+    assert!(harness.query_by_label("This project has no ROM, so no level can be opened.").is_none());
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness.run();
+    for absent in ["Run Patcher", "Save ROM As…", "Distribution", "Save to module"] {
+        assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for an uploaded ROM");
+    }
+
+    // A save lives only in the host's memory until a download takes it.
+    harness.state_mut().session_mut().unwrap().save_level(1);
+    harness.run();
+    harness.run();
+    assert!(harness.state().session().unwrap().undownloaded);
+    harness.get_by_label("Download ROM •").click();
+    harness.run();
+    harness.run();
+    harness.run();
+    assert_eq!(shelf.lock().unwrap().saved.pop(), Some(("rom.nds".to_owned(), b"DEMO ROM BYTES".to_vec())));
+    assert!(!harness.state().session().unwrap().undownloaded);
+    harness.get_by_label("Download ROM");
+}
+
+#[test]
+fn a_module_project_keeps_its_builds_and_variants() {
+    let harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    for present in ["Run Patcher", "Variant:", "Build", "Level Data", "Close Workspace", "Close project"] {
+        harness.get_by_label(present);
+    }
+    for absent in ["Save ROM As…", "Close ROM", "Disconnect"] {
+        assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for a module project");
+    }
 }

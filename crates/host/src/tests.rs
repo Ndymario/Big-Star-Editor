@@ -377,7 +377,9 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     assert!(resources.tilesets.iter().all(|slot| !slot.map16.bytes.is_empty()));
     assert!(!resources.background.screen.bytes.is_empty());
     assert_eq!(resources.references, snapshot.tileset_references);
-    assert_eq!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_yakata.bin", "1-1's tileset id 1");
+    // 1-1 is grassland: its header names tileset 8, which the game's table makes the nohara set.
+    assert_eq!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_nohara.bin", "1-1's own tileset, in slot 1");
+    assert_eq!(resources.tilesets[2].map16.rom_path, "BG_pnl/d_2d_PA_I_S_nohara.bin");
 }
 
 #[test]
@@ -833,6 +835,9 @@ return {
         let (fixture, mut session) = Fixture::with_project("host-watch");
         let project = fixture.root.path().join("proj");
         let Response::ActorCatalog(before) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+        // The directory exists before the script does: a watch reaches a new directory only after it appears, so a file
+        // written into one at once may be reported only as its directory.
+        std::fs::create_dir_all(project.join("bigstar/actors")).unwrap();
         // Let the watcher settle so the import's own writes are not mistaken for this change.
         std::thread::sleep(Duration::from_millis(600));
         session.drain_events();
@@ -1006,7 +1011,9 @@ fn xdelta_runs_on_paths_under_the_workspace() {
     let fixture = Fixture::new("host-xdelta");
     let root = fixture.root.path();
     let script = root.join("xdelta.sh");
-    let text = format!("#!/bin/sh\necho \"$@\" > '{}/args'\n[ \"$1\" = -d ] && {{ echo 'bad patch' >&2; exit 1; }}\nexit 0\n", root.display());
+    // `printf`, not `echo`: a shell's `echo` may take the leading `-e` as its own option and drop it.
+    let text =
+        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/args'\n[ \"$1\" = -d ] && {{ echo 'bad patch' >&2; exit 1; }}\nexit 0\n", root.display());
     write_bytes(&script, text.as_bytes());
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let options = crate::HostOptions { xdelta: script, ..crate::HostOptions::default() };
@@ -1074,10 +1081,10 @@ fn real_backgrounds_and_foregrounds_draw() {
     let (graphics, opaque) = drawn(&mut session, "A01_1");
     assert!(graphics.background.error.is_none() && graphics.foreground.error.is_none(), "{graphics:?}");
     assert_eq!(opaque.len(), 2);
-    assert_eq!(opaque[0], 100, "the castle wall fills the background");
-    assert!((10..100).contains(&opaque[1]), "the pillars stand over a see-through foreground: {}%", opaque[1]);
-    // 1-1's second area has no foreground: nothing is drawn for it, and nothing is wrong.
-    let (graphics, _) = drawn(&mut session, "A01_2");
+    assert_eq!(opaque[0], 100, "the sky fills the background");
+    assert!((10..100).contains(&opaque[1]), "the hills stand over a see-through foreground: {}%", opaque[1]);
+    // 1-1's bonus room names no foreground: nothing is drawn for it, and nothing is wrong.
+    let (graphics, _) = drawn(&mut session, "A01_3");
     assert!(graphics.background.texture.is_some());
     assert_eq!((graphics.foreground.texture.as_ref(), graphics.foreground.error.as_ref()), (None, None));
 }
@@ -1137,4 +1144,404 @@ fn real_backgrounds_are_named_and_animated() {
     assert_eq!(animated.get(&(BackgroundLayer::Foreground, 1)), Some(&(8, 8, 40)));
     assert_eq!(animated.get(&(BackgroundLayer::Foreground, 15)), Some(&(2, 40, 448)));
     assert_eq!(animated.get(&(BackgroundLayer::Background, 7)), Some(&(8, 8, 128)));
+}
+
+/// A ROM holding 1-1 and the Field download-play area.
+fn small_rom() -> Vec<u8> {
+    let (course, bgdat) = level_files();
+    let narc = make_narc(&[("J01_1.bin", &course), ("J01_1_bgdat.bin", &bgdat)]);
+    make_rom(
+        &[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat), RomFile::new("dat/Dat_Field.narc", &narc)],
+        &[0; 32],
+    )
+}
+
+impl Fixture {
+    /// The full path of `relative` under the fixture, as a file dialog would give it.
+    fn full(&self, relative: &str) -> String {
+        self.root.path().join(relative).to_string_lossy().into_owned()
+    }
+
+    /// A session on the desktop app's host for ROMs on this machine, which has no workspace.
+    fn rom_session(&self) -> HostSession {
+        Host::for_local_roms(crate::HostOptions::default()).session()
+    }
+}
+
+/// `roms/game.nds`, the small ROM, opened to edit directly by its full path.
+fn with_rom(label: &str) -> (Fixture, HostSession, Vec<u8>) {
+    let fixture = Fixture::new(label);
+    let rom = small_rom();
+    write_bytes(&fixture.root.path().join("roms/game.nds"), &rom);
+    let mut session = fixture.rom_session();
+    match session.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap() {
+        Response::Project(info) => {
+            assert_eq!(info.mode, bigstar_protocol::ProjectMode::Rom);
+            assert_eq!((info.path, info.name.as_str()), (fixture.full("roms/game.nds"), "game.nds"));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    (fixture, session, rom)
+}
+
+fn rom_file(fixture: &Fixture, path: &str, inside: &str) -> Vec<u8> {
+    rom_member(std::fs::read(fixture.root.path().join(path)).unwrap(), inside)
+}
+
+fn rom_member(rom: Vec<u8>, inside: &str) -> Vec<u8> {
+    let mut reader = bigstar_project::RomReader::from_bytes("rom.nds", rom.into()).unwrap();
+    match inside.split_once('!') {
+        Some((container, member)) => reader.read_member(container, member).unwrap(),
+        None => reader.read(inside).unwrap(),
+    }
+}
+
+#[test]
+fn a_rom_edited_directly_saves_levels_into_itself() {
+    let (fixture, mut session, original) = with_rom("host-rom-level");
+    let snapshot = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &snapshot, 42);
+    // Nothing touches the file until a save.
+    assert_eq!(std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap(), original);
+
+    let (saved, _) = edited(session.handle(Request::SaveLevel { level: moved.level }).unwrap());
+    assert!(!saved.dirty);
+    let course = rom_file(&fixture, "roms/game.nds", "course/A01_1.bin");
+    let bgdat = rom_file(&fixture, "roms/game.nds", "course/A01_1_bgdat.bin");
+    assert_eq!(EditableLevel::load(&course, &bgdat, None).unwrap().objects()[0].x, 42);
+    // The first save kept the ROM it overwrote, untouched.
+    let backups: Vec<_> = std::fs::read_dir(fixture.root.path().join("roms/.big-star-backups")).unwrap().flatten().collect();
+    assert_eq!(backups.len(), 1);
+    assert_eq!(std::fs::read(backups[0].path().join("game.nds")).unwrap(), original);
+
+    // A second save rebuilds from the original again, so the file does not grow with every save.
+    let again = move_first_object(&mut session, &saved, 7);
+    let (saved, _) = edited(session.handle(Request::SaveLevel { level: again.level }).unwrap());
+    let size = std::fs::metadata(fixture.root.path().join("roms/game.nds")).unwrap().len();
+    let third = move_first_object(&mut session, &saved, 9);
+    session.handle(Request::SaveLevel { level: third.level }).unwrap();
+    assert_eq!(std::fs::metadata(fixture.root.path().join("roms/game.nds")).unwrap().len(), size);
+    assert_eq!(std::fs::read_dir(fixture.root.path().join("roms/.big-star-backups")).unwrap().count(), 1);
+
+    // Reopened from disk, the level is what was saved.
+    let mut fresh = fixture.rom_session();
+    fresh.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
+    assert_eq!(open_level(&mut fresh, "A01_1").objects[0].x, 9);
+}
+
+#[test]
+fn a_rom_edited_directly_replaces_files_and_members_but_adds_none() {
+    let (fixture, mut session, _) = with_rom("host-rom-files");
+    session.handle(Request::WriteFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
+    assert_eq!(rom_file(&fixture, "roms/game.nds", "dat/Dat_Field.narc!J01_1_bgdat.bin"), b"MEMBER");
+    // The edit is what the host reads back, and what the ROM's other member still is.
+    match session.handle(Request::ReadFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into() }).unwrap() {
+        Response::FileBytes { bytes, .. } => assert_eq!(bytes, b"MEMBER"),
+        other => panic!("unexpected {other:?}"),
+    }
+    let (course, _) = level_files();
+    assert_eq!(rom_file(&fixture, "roms/game.nds", "dat/Dat_Field.narc!J01_1.bin"), course);
+
+    let refused = session.handle(Request::WriteFile { path: "z_new/fresh.bin".into(), bytes: vec![1] }).unwrap_err();
+    assert!(refused.message.contains("files can be replaced but not added"), "{}", refused.message);
+    // A refused write leaves nothing behind to fail the next one.
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: course.clone() }).unwrap();
+}
+
+#[test]
+fn a_rom_edited_directly_refuses_what_needs_a_module_project() {
+    let (_fixture, mut session, _) = with_rom("host-rom-refusals");
+    for request in [
+        Request::Build { verbose: false },
+        Request::SetActiveVariant { variant: "fr".into() },
+        Request::SetActiveModule { module: "coop".into() },
+        Request::ExportPatch,
+        Request::RemoveFile { path: "course/A01_1.bin".into() },
+    ] {
+        let error = session.handle(request.clone()).unwrap_err();
+        assert!(error.message.contains("editing a ROM directly"), "{request:?}: {}", error.message);
+    }
+    match session.handle(Request::ProjectSettings).unwrap() {
+        Response::Settings(settings) => assert!(settings.variants.is_empty() && settings.modules.is_empty() && settings.patcher_error.is_none()),
+        other => panic!("unexpected {other:?}"),
+    }
+    assert!(matches!(session.handle(Request::FileTargets { path: "course/A01_1.bin".into() }).unwrap(), Response::FileTargets(t) if t.is_empty()));
+    assert!(matches!(session.handle(Request::Filesystem).unwrap(), Response::Filesystem(listing) if !listing.entries.is_empty()));
+    // There is no workspace behind a ROM on this machine.
+    for request in [Request::ListProjects, Request::BrowseDirectory { path: String::new() }, Request::OpenProject { path: "proj".into() }] {
+        let error = session.handle(request.clone()).unwrap_err();
+        assert!(error.message.contains("no workspace"), "{request:?}: {}", error.message);
+    }
+}
+
+#[test]
+fn a_rom_saved_as_another_takes_later_saves_with_it() {
+    let (fixture, mut session, original) = with_rom("host-rom-save-as");
+    let snapshot = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &snapshot, 5);
+    session.handle(Request::SaveLevel { level: moved.level }).unwrap();
+    match session.handle(Request::SaveRomAs { path: fixture.full("roms/copy.nds") }).unwrap() {
+        Response::Project(info) => assert_eq!((info.path, info.name.as_str()), (fixture.full("roms/copy.nds"), "copy.nds")),
+        other => panic!("unexpected {other:?}"),
+    }
+    let current = open_level(&mut session, "A01_1");
+    let again = move_first_object(&mut session, &current, 11);
+    session.handle(Request::SaveLevel { level: again.level }).unwrap();
+    let x = |path: &str| {
+        let course = rom_file(&fixture, path, "course/A01_1.bin");
+        let bgdat = rom_file(&fixture, path, "course/A01_1_bgdat.bin");
+        EditableLevel::load(&course, &bgdat, None).unwrap().objects()[0].x
+    };
+    assert_eq!((x("roms/game.nds"), x("roms/copy.nds")), (5, 11));
+    assert_ne!(std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap(), original);
+}
+
+#[test]
+fn roms_are_opened_by_path_only_by_the_desktop_host() {
+    let fixture = Fixture::new("host-rom-paths");
+    write_bytes(&fixture.root.path().join("roms/game.nds"), &small_rom());
+    // A workspace host, served or not, never opens a ROM by path: not inside its root, and not outside it.
+    let mut session = fixture.session();
+    for path in [fixture.full("roms/game.nds"), "roms/game.nds".to_owned()] {
+        let error = session.handle(Request::OpenRom { path }).unwrap_err();
+        assert!(error.message.contains("does not open ROMs by path"), "{}", error.message);
+    }
+    // The desktop host does, by the full path a file dialog gives.
+    let mut local = fixture.rom_session();
+    assert!(local.handle(Request::OpenRom { path: "roms/game.nds".into() }).unwrap_err().message.contains("full path"));
+    write_bytes(&fixture.root.path().join("other.nds"), b"not a ROM at all");
+    assert!(local.handle(Request::OpenRom { path: fixture.full("other.nds") }).is_err());
+    let mut renamed = small_rom();
+    renamed[0x0C..0x10].copy_from_slice(b"AMKE");
+    write_bytes(&fixture.root.path().join("kart.nds"), &renamed);
+    let error = local.handle(Request::OpenRom { path: fixture.full("kart.nds") }).unwrap_err();
+    assert!(error.message.contains("not New Super Mario Bros."), "{}", error.message);
+}
+
+/// Sends `rom` to the host in pieces of `piece` bytes, and gives back what the last one answered.
+fn upload(session: &mut HostSession, name: &str, rom: &[u8], piece: usize) -> bigstar_core::Result<Response> {
+    let mut last = Err(bigstar_core::Error::new(ErrorCode::InvalidArgument, "nothing sent"));
+    for (index, bytes) in rom.chunks(piece).enumerate() {
+        let request = Request::UploadRom { name: name.into(), offset: (index * piece) as u64, total: rom.len() as u64, bytes: bytes.to_vec() };
+        last = session.handle(request);
+        if last.is_err() {
+            break;
+        }
+    }
+    last
+}
+
+/// The uploaded ROM with its edits, fetched a piece at a time as a frontend would.
+fn download(session: &mut HostSession) -> (String, Vec<u8>) {
+    let mut bytes = Vec::new();
+    loop {
+        match session.handle(Request::DownloadRom { offset: bytes.len() as u64 }).unwrap() {
+            Response::RomChunk { name, total, offset, bytes: piece } => {
+                assert_eq!(offset, bytes.len() as u64);
+                bytes.extend_from_slice(&piece);
+                if bytes.len() as u64 == total {
+                    return (name, bytes);
+                }
+                assert!(!piece.is_empty());
+            }
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+}
+
+fn entries(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir(root).unwrap().flatten() {
+        found.push(entry.path());
+        if entry.path().is_dir() {
+            found.extend(entries(&entry.path()));
+        }
+    }
+    found.sort();
+    found
+}
+
+#[test]
+fn an_uploaded_rom_is_edited_in_memory_and_leaves_as_a_download() {
+    let fixture = Fixture::new("host-upload");
+    let rom = small_rom();
+    let mut session = fixture.session();
+    let before = entries(fixture.root.path());
+
+    match upload(&mut session, "../My Game.nds", &rom, 1000).unwrap() {
+        Response::Project(info) => {
+            assert_eq!(info.mode, bigstar_protocol::ProjectMode::Uploaded);
+            // A name is only ever a name: what an upload calls itself never names a place.
+            assert_eq!((info.name.as_str(), info.rom_path), ("My Game.nds", None));
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+    let snapshot = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &snapshot, 33);
+    let (saved, _) = edited(session.handle(Request::SaveLevel { level: moved.level }).unwrap());
+    assert!(!saved.dirty);
+    session.handle(Request::WriteFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
+    assert!(matches!(session.handle(Request::Recovery).unwrap(), Response::Recovery(levels) if levels.is_empty()));
+    session.shared().write_recovery_snapshots();
+
+    let (name, downloaded) = download(&mut session);
+    assert_eq!(name, "My Game.nds");
+    let course = rom_member(downloaded.clone(), "course/A01_1.bin");
+    let bgdat = rom_member(downloaded.clone(), "course/A01_1_bgdat.bin");
+    assert_eq!(EditableLevel::load(&course, &bgdat, None).unwrap().objects()[0].x, 33);
+    assert_eq!(rom_member(downloaded, "dat/Dat_Field.narc!J01_1_bgdat.bin"), b"MEMBER");
+    // Not a byte of it went to disk: no save, no backup, no autosave.
+    assert_eq!(entries(fixture.root.path()), before);
+    // A path is nothing to an uploaded ROM.
+    assert!(session.handle(Request::SaveRomAs { path: fixture.full("out.nds") }).is_err());
+    assert!(!fixture.root.path().join("out.nds").exists());
+
+    // Closing it puts it away, and the workspace is there again.
+    session.handle(Request::CloseProject).unwrap();
+    assert!(session.handle(Request::ListLevels).is_err());
+    assert!(matches!(session.handle(Request::ListProjects).unwrap(), Response::Projects(_)));
+}
+
+#[test]
+fn uploaded_roms_are_each_their_own_connections() {
+    let fixture = Fixture::new("host-upload-private");
+    let host = Host::new(fixture.root.path()).unwrap();
+    let (mut first, mut second) = (host.session(), host.guest_session());
+    upload(&mut first, "a.nds", &small_rom(), 4096).unwrap();
+    assert!(second.handle(Request::ListLevels).is_err(), "the second connection has no ROM yet");
+    upload(&mut second, "b.nds", &small_rom(), 4096).unwrap();
+    first.drain_events();
+    second.drain_events();
+
+    let mine = open_level(&mut first, "A01_1");
+    let theirs = open_level(&mut second, "A01_1");
+    assert_eq!(mine.level, theirs.level, "each has its own numbering");
+    let moved = move_first_object(&mut first, &mine, 70);
+    first.handle(Request::SaveLevel { level: moved.level }).unwrap();
+    assert!(first.drain_events().iter().any(|event| matches!(event, Event::LevelChanged { .. })));
+    assert!(second.drain_events().is_empty(), "nothing of the first connection's reaches the second");
+    assert_eq!(open_level(&mut second, "A01_1").objects[0].x, theirs.objects[0].x);
+    assert_eq!(download(&mut second).0, "b.nds");
+}
+
+#[test]
+fn a_guest_reaches_nothing_but_what_it_uploads() {
+    let fixture = Fixture::new("host-guest");
+    write_bytes(&fixture.root.path().join("roms/game.nds"), &small_rom());
+    let host = Host::new(fixture.root.path()).unwrap();
+    let mut member = host.session();
+    let mut guest = host.guest_session();
+    let workspace_requests = [
+        Request::ListProjects,
+        Request::BrowseDirectory { path: String::new() },
+        Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "p".into(), name: None },
+        Request::OpenProject { path: "p".into() },
+        Request::Xdelta { create: true, source: "roms/game.nds".into(), target: "roms/game.nds".into(), output: "x.xdelta".into() },
+    ];
+    for request in workspace_requests.iter().cloned().chain([Request::ListLevels, Request::CloseProject]) {
+        assert!(guest.handle(request.clone()).unwrap_err().message.contains("only edit a ROM it uploads"), "{request:?}");
+    }
+    upload(&mut guest, "game.nds", &small_rom(), 50_000).unwrap();
+    for request in workspace_requests {
+        assert!(guest.handle(request.clone()).is_err(), "{request:?}");
+    }
+    assert!(!fixture.root.path().join("p").exists());
+    // And the workspace's own events are not the guest's to hear.
+    member.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "p".into(), name: None }).unwrap();
+    assert!(!guest.drain_events().iter().any(|event| matches!(event, Event::Log { message, .. } if message.contains("Imported"))));
+}
+
+#[test]
+fn uploads_are_bounded() {
+    let rom = small_rom();
+    let options = crate::HostOptions { max_rom_bytes: rom.len(), max_uploaded_roms: 1, ..crate::HostOptions::default() };
+    let host = Host::for_uploads(options);
+    assert!(!host.has_workspace());
+    let mut first = host.guest_session();
+
+    let mut too_big = rom.clone();
+    too_big.push(0);
+    assert!(upload(&mut first, "big.nds", &too_big, 4096).unwrap_err().message.contains("up to"));
+    // Pieces out of order are refused, and the upload with them.
+    let piece = |offset: usize, len: usize| Request::UploadRom {
+        name: "g.nds".into(),
+        offset: offset as u64,
+        total: rom.len() as u64,
+        bytes: rom[offset..offset + len].to_vec(),
+    };
+    assert!(matches!(first.handle(piece(0, 100)).unwrap(), Response::Uploaded { received: 100 }));
+    assert!(first.handle(piece(200, 100)).is_err());
+    assert!(first.handle(piece(100, 100)).unwrap_err().message.contains("starts at offset 0"));
+    let mut kart = rom.clone();
+    kart[0x0C..0x10].copy_from_slice(b"AMKE");
+    assert_eq!(upload(&mut first, "kart.nds", &kart, 4096).unwrap_err().code, ErrorCode::Unsupported);
+
+    // The host holds as many as it was told to, and a connection that ends gives its place back.
+    upload(&mut first, "g.nds", &rom, 4096).unwrap();
+    let mut second = host.guest_session();
+    assert!(upload(&mut second, "g.nds", &rom, 4096).unwrap_err().message.contains("as many uploaded ROMs"));
+    drop(first);
+    upload(&mut second, "g.nds", &rom, 4096).unwrap();
+    // A host with no workspace has nothing else to offer even a full session.
+    let mut member = host.session();
+    assert!(member.handle(Request::ListProjects).unwrap_err().message.contains("no workspace"));
+}
+
+/// A real ROM, named by `BIGSTAR_NSMB_ROM`, edited directly: its levels draw from the ROM in memory with the shipped
+/// scripts -- tilesets, backgrounds and actors alike -- and a saved edit is in the file when it is opened again.
+/// Skipped without one.
+#[test]
+fn a_real_rom_edited_directly_draws_and_saves() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-rom-mode");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(&rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let original = std::fs::read(&rom).unwrap();
+    let mut session = fixture.rom_session();
+    session.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
+
+    let snapshot = open_level(&mut session, "A01_1");
+    let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else { panic!() };
+    assert!(graphics.error.is_none(), "{:?}", graphics.error);
+    assert!(graphics.tilesets.iter().any(|tileset| tileset.error.is_none() && !tileset.objects.is_empty()));
+    assert!(graphics.background.texture.is_some());
+    let inputs: Vec<bigstar_protocol::ActorInput> = snapshot
+        .course
+        .sprites
+        .iter()
+        .map(|sprite| bigstar_protocol::ActorInput {
+            sprite_type: sprite.id,
+            x: i32::from(sprite.x),
+            y: i32::from(sprite.y),
+            pixel_x: f64::from(sprite.x) * 16.0,
+            pixel_y: f64::from(sprite.y) * 16.0,
+            settings: sprite.settings,
+            ..Default::default()
+        })
+        .collect();
+    let Response::ActorDraws { draws, .. } = session.handle(Request::RenderActors { inputs }).unwrap() else { panic!() };
+    assert!(draws.iter().any(|draw| draw.found && draw.error.is_none() && !draw.commands.is_empty()), "no actor drew itself");
+
+    let moved = move_first_object(&mut session, &snapshot, snapshot.objects[0].x + 3);
+    session.handle(Request::SaveLevel { level: moved.level }).unwrap();
+    let saved = std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap();
+    assert_ne!(saved, original);
+    let mut fresh = fixture.rom_session();
+    fresh.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
+    assert_eq!(open_level(&mut fresh, "A01_1").objects[0].x, snapshot.objects[0].x + 3);
+    // The other levels are untouched.
+    assert_eq!(open_level(&mut fresh, "A01_2").objects, open_level(&mut session, "A01_2").objects);
+}
+
+/// A real ROM, named by `BIGSTAR_NSMB_ROM`, uploaded and downloaded in pieces of the size frontends send: untouched, it
+/// comes back byte for byte. Skipped without one.
+#[test]
+fn a_real_rom_uploads_and_downloads_in_pieces() {
+    let Some(path) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let rom = std::fs::read(path).unwrap();
+    assert!(rom.len() > bigstar_protocol::ROM_CHUNK_BYTES, "the ROM fits one piece, so this proves nothing");
+    let mut session = Host::for_uploads(crate::HostOptions::default()).guest_session();
+    assert!(matches!(upload(&mut session, "real.nds", &rom, bigstar_protocol::ROM_CHUNK_BYTES).unwrap(), Response::Project(_)));
+    assert!(!open_level(&mut session, "A01_1").objects.is_empty());
+    assert!(download(&mut session).1 == rom);
 }

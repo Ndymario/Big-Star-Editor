@@ -305,7 +305,7 @@ fn sprites(ui: &mut Ui, view: &mut LevelView, filter: &str, art: &mut Art<'_>) {
 fn custom(ui: &mut Ui, view: &mut LevelView, modules: Option<&ModuleDataCatalog>, filter: &str, art: &mut Art<'_>) {
     let tree = modules.map(custom_entries).unwrap_or_default();
     if tree.is_empty() {
-        ui.weak("The project's modules declare no actors.");
+        ui.weak("No actors are defined in this project's modules.");
         return;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

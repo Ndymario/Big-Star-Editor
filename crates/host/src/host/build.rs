@@ -247,7 +247,7 @@ impl Shared {
         if !rom.is_file() {
             return Err(invalid("This project has no built ROM yet. Run NCPatcher first."));
         }
-        let output = self.workspace.resolve(target)?;
+        let output = self.workspace()?.resolve(target)?;
         let client = NCPatcherClient::new(&self.options.ncpatcher);
         let extracted = client.extract_rom(&directory, &output, &rom)?;
         if !extracted.succeeded() {
@@ -329,7 +329,8 @@ impl Shared {
     }
 
     pub(super) fn xdelta(&self, create: bool, source: &str, target: &str, output: &str) -> Result<Response> {
-        let paths = [self.workspace.resolve(source)?, self.workspace.resolve(target)?, self.workspace.resolve(output)?];
+        let workspace = self.workspace()?;
+        let paths = [workspace.resolve(source)?, workspace.resolve(target)?, workspace.resolve(output)?];
         let mode = if create { "-e" } else { "-d" };
         let mut arguments = vec![mode.to_owned(), "-f".to_owned(), "-s".to_owned()];
         arguments.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));

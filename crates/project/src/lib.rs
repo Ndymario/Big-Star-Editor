@@ -15,6 +15,7 @@ mod module_data;
 mod patch_apply;
 mod paths;
 mod project;
+mod rom_edit;
 mod rom_reader;
 mod tile_overlays;
 
@@ -51,6 +52,7 @@ pub use patch_apply::{
 };
 pub use paths::lexically_normal;
 pub use project::{GameFile, Project, Rom, create_empty_project};
+pub use rom_edit::write_edited_rom;
 pub use rom_reader::{ArchiveMember, RomReader};
 pub use tile_overlays::{TileOverlay, TileOverlayCatalog, TileOverlayScript, overlay_map16_images, overlay_map16_sheet};
 

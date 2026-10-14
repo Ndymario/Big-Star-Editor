@@ -974,3 +974,40 @@ fn a_layers_screen_is_read_from_where_the_game_loads_it() {
     // Read from zero, every entry names a tile and palette the layer does not hold.
     assert_eq!(render_tilemap(&parse_tilemap(&files, 0, 0, 0).unwrap()).unwrap().pixels[3], 0);
 }
+
+/// Against a real ROM, named by `BIGSTAR_NSMB_ROM`: every archive in it, plain or LZ-wrapped, is written back byte
+/// for byte when nothing in it changed -- the cheapest evidence that repacking one edited member disturbs nothing
+/// else. Skipped without one.
+#[test]
+fn real_rom_archives_write_back_unchanged() {
+    let Some(path) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let rom = std::fs::read(path).unwrap();
+    let header = bigstar_nds::parse_rom_header(&rom).unwrap();
+    let region = |offset: u32, size: u32| &rom[offset as usize..(offset + size) as usize];
+    let fat = bigstar_nds::parse_fat(region(header.fat.rom_offset, header.fat.size)).unwrap();
+    let files = bigstar_nds::parse_fnt(region(header.fnt.rom_offset, header.fnt.size)).unwrap();
+    let mut checked = 0;
+    for file in files {
+        let entry = fat[usize::from(file.id)];
+        let data = region(entry.start_address, entry.size());
+        let Some((_, plain)) = unwrap_narc(data) else { continue };
+        assert_eq!(write_narc(&parse_narc(&plain).unwrap()).unwrap(), plain, "{} changed on a round trip", file.path);
+        checked += 1;
+    }
+    assert!(checked > 0, "the ROM holds no archives");
+}
+
+#[test]
+fn an_archive_goes_back_in_the_wrapper_it_came_in() {
+    let archive = NarcArchive { name_table: vec![8, 0, 0, 0, 0, 0, 1, 0, 1, b'a', 0], files: vec![b"member".to_vec()] };
+    let plain = write_narc(&archive).unwrap();
+    assert_eq!(unwrap_narc(&plain), Some((NarcWrapper::None, plain.clone())));
+    for (wrapper, first) in [(NarcWrapper::Lz10, 0x10), (NarcWrapper::Lz11, 0x11)] {
+        let wrapped = write_wrapped_narc(&archive, wrapper).unwrap();
+        assert_eq!(wrapped[0], first);
+        assert_eq!(unwrap_narc(&wrapped), Some((wrapper, plain.clone())));
+    }
+    // Starts like an LZ10 stream, but is not an archive underneath.
+    assert_eq!(unwrap_narc(&compress_nitro_lz10(b"not an archive").unwrap()), None);
+    assert_eq!(unwrap_narc(b"plain"), None);
+}

@@ -795,7 +795,7 @@ fn save_tilesets(session: &mut Session, doc: &TilesetDoc) -> bool {
     }
     session.log.push(crate::session::LogLine {
         level: bigstar_protocol::LogLevel::Info,
-        text: format!("Saved {count} edited graphics resource(s) to module targets."),
+        text: format!("Saved {count} edited graphics file(s) to the modules."),
     });
     true
 }
@@ -906,9 +906,9 @@ fn preview(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, shown: Op
         if session.project.is_none() {
             "Open a project to list and preview levels.".to_owned()
         } else if areas == 0 {
-            "No level entries are available for this project.".to_owned()
+            "This project has no levels.".to_owned()
         } else {
-            format!("Select a level. {areas} catalog areas, {available} available in project files.")
+            format!("Select a level. {available} of {areas} areas are in this project.")
         }
     };
     match shown.and_then(|level| session.levels.get_mut(&level)) {

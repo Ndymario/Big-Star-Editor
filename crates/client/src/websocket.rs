@@ -78,13 +78,13 @@ impl WebSocket {
     fn receive(&mut self, message: WsMessage, out: &mut Vec<Incoming>) {
         let WsMessage::Binary(bytes) = message else { return };
         match decode_server_frame(&bytes) {
-            Ok(ServerFrame::Welcome { protocol_version, host_version, workspace_name }) => {
+            Ok(ServerFrame::Welcome { protocol_version, host_version, workspace_name, has_workspace }) => {
                 if protocol_version != PROTOCOL_VERSION {
                     let reason = format!("the host speaks protocol {protocol_version}, this frontend {PROTOCOL_VERSION}");
                     self.set_state(ConnectionState::Refused(reason), out);
                     return;
                 }
-                self.set_state(ConnectionState::Connected(HostInfo { host_version, workspace_name }), out);
+                self.set_state(ConnectionState::Connected(HostInfo { host_version, workspace_name, has_workspace }), out);
                 for (id, request) in std::mem::take(&mut self.queued) {
                     self.transmit(id, request);
                 }

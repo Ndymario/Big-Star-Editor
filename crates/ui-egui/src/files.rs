@@ -344,17 +344,20 @@ impl FilesDock {
             ui.add(controls::Spinner::new());
             return;
         };
+        let rom_mode = session.rom_mode();
         ui.horizontal(|ui| {
-            // Where add and replace write, not what the tree shows.
-            ui.label("Save to module");
-            let current = listing.modules.iter().find(|m| m.key == listing.active_module).map_or("(none)".to_owned(), |m| m.name.clone());
-            controls::drop_down("active-module").selected_text(current).show_ui(ui, |ui| {
-                for module in &listing.modules {
-                    if ui.choice(module.key == listing.active_module, &module.name).clicked() {
-                        session.set_active_module(&module.key);
+            // Where add and replace write, not what the tree shows. A ROM edited directly is written into itself.
+            if !rom_mode {
+                ui.label("Save to module");
+                let current = listing.modules.iter().find(|m| m.key == listing.active_module).map_or("(none)".to_owned(), |m| m.name.clone());
+                controls::drop_down("active-module").selected_text(current).show_ui(ui, |ui| {
+                    for module in &listing.modules {
+                        if ui.choice(module.key == listing.active_module, &module.name).clicked() {
+                            session.set_active_module(&module.key);
+                        }
                     }
-                }
-            });
+                });
+            }
             ui.menu_button("Columns", |ui| {
                 for (column, name) in COLUMNS {
                     let mut shown = self.columns.contains(&column);
@@ -370,7 +373,10 @@ impl FilesDock {
             });
         });
         if listing.pending {
-            controls::warning_text(ui, "Module files differ from the last build. Run NCPatcher to assign IDs and rebuild the ROM.");
+            controls::warning_text(
+                ui,
+                "Module files have changed since the last build. Run Patcher to give new files their IDs and rebuild the ROM.",
+            );
         }
         if let Some(error) = &listing.error {
             ui.weak(format!("NCPatcher: {error}"));
@@ -525,9 +531,9 @@ impl FilesDock {
                     let response = ui.label(id_text(entry));
                     if entry.inside_archive() {
                         let container = entry.path.split('!').next().unwrap_or_default();
-                        response.on_hover_text(format!("Its file ID inside {container}, from that archive's own name table — not a NitroFS ID."));
+                        response.on_hover_text(format!("Its ID inside {container}, which is not the same as a ROM file ID."));
                     } else if entry.id_is_planned {
-                        response.on_hover_text("The ID the next build would assign. Nothing holds it yet.");
+                        response.on_hover_text("The ID the next build will give this file. It has none yet.");
                     }
                 }
                 Column::Size => {
@@ -584,7 +590,7 @@ impl FilesDock {
             }
             Prompt::Overwrite { path, bytes, holding } => {
                 let names: Vec<&str> = holding.iter().map(|v| if v.is_empty() { "(base)" } else { v.as_str() }).collect();
-                ui.label(format!("This path already exists in: {}. Replace the active variant?", names.join(", ")));
+                ui.label(format!("This file already exists in: {}. Replace it in the active variant?", names.join(", ")));
                 dialogs::actions(ui, |ui| {
                     if Button::new("Replace").primary().show(ui).clicked() {
                         session.write_file(path, std::mem::take(bytes));

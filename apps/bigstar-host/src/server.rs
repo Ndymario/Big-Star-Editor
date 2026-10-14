@@ -31,6 +31,8 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 struct AppState {
     host: Host,
     token: Arc<String>,
+    /// Whether a frontend without the token is let in, to edit a ROM it uploads and nothing else.
+    rom_sessions: bool,
 }
 
 #[derive(Deserialize)]
@@ -64,8 +66,12 @@ pub fn has_web_bundle() -> bool {
     bundle::WEB_FILES.iter().any(|(name, _)| *name == "index.html")
 }
 
-pub fn router(host: Host, token: String) -> Router {
-    Router::new().route("/", get(index)).route("/ws", get(upgrade)).route("/{file}", get(asset)).with_state(AppState { host, token: Arc::new(token) })
+pub fn router(host: Host, token: String, rom_sessions: bool) -> Router {
+    Router::new().route("/", get(index)).route("/ws", get(upgrade)).route("/{file}", get(asset)).with_state(AppState {
+        host,
+        token: Arc::new(token),
+        rom_sessions,
+    })
 }
 
 fn content_type(name: &str) -> &'static str {
@@ -89,8 +95,8 @@ async fn asset(Path(file): Path<String>) -> Response {
 }
 
 /// Serves until the future is dropped.
-pub async fn serve(listener: TcpListener, host: Host, token: String) -> std::io::Result<()> {
-    axum::serve(listener, router(host, token)).await
+pub async fn serve(listener: TcpListener, host: Host, token: String, rom_sessions: bool) -> std::io::Result<()> {
+    axum::serve(listener, router(host, token, rom_sessions)).await
 }
 
 /// Binds, then serves; the bound address is reported first because the port may have been chosen by the system.
@@ -112,8 +118,8 @@ async fn index() -> Response {
 }
 
 async fn upgrade(State(state): State<AppState>, Query(query): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
-    // Checked before the upgrade, so a stranger gets no socket at all.
-    if !query.token.as_deref().is_some_and(|given| tokens_match(given, &state.token)) {
+    // Checked before the upgrade, so a stranger gets no socket at all -- unless strangers may edit ROMs they upload.
+    if !state.rom_sessions && !query.token.as_deref().is_some_and(|given| tokens_match(given, &state.token)) {
         return (StatusCode::UNAUTHORIZED, "wrong token").into_response();
     }
     upgrade.max_message_size(MAX_MESSAGE_BYTES).on_upgrade(move |socket| connection(socket, state))
@@ -146,7 +152,8 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         send_frame(&mut socket, &ServerFrame::Refused { reason: "the first message must be a Hello".to_owned() }).await;
         return;
     };
-    if !tokens_match(&token, &state.token) {
+    let member = tokens_match(&token, &state.token);
+    if !member && !state.rom_sessions {
         send_frame(&mut socket, &ServerFrame::Refused { reason: "wrong token".to_owned() }).await;
         return;
     }
@@ -155,8 +162,14 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         send_frame(&mut socket, &ServerFrame::Refused { reason }).await;
         return;
     }
-    let welcome =
-        ServerFrame::Welcome { protocol_version: PROTOCOL_VERSION, host_version: VERSION.to_owned(), workspace_name: state.host.workspace_name() };
+    let has_workspace = member && state.host.has_workspace();
+    let workspace_name = if has_workspace { state.host.workspace_name() } else { String::new() };
+    let welcome = ServerFrame::Welcome {
+        protocol_version: PROTOCOL_VERSION,
+        host_version: VERSION.to_owned(),
+        workspace_name: workspace_name.clone(),
+        has_workspace,
+    };
     if !send_frame(&mut socket, &welcome).await {
         return;
     }
@@ -166,8 +179,9 @@ async fn connection(mut socket: WebSocket, state: AppState) {
         let notify = Arc::clone(&notify);
         Arc::new(move || notify.notify_one())
     };
-    let info = HostInfo { host_version: VERSION.to_owned(), workspace_name: state.host.workspace_name() };
-    let mut worker = InProcess::spawn(state.host.session(), info, Some(waker));
+    let info = HostInfo { host_version: VERSION.to_owned(), workspace_name, has_workspace };
+    let session = if member { state.host.session() } else { state.host.guest_session() };
+    let mut worker = InProcess::spawn(session, info, Some(waker));
 
     // The worker numbers requests itself; the client's own ids are kept beside them until the answers return.
     let mut client_ids: HashMap<u64, u64> = HashMap::new();
@@ -219,7 +233,10 @@ mod tests {
 
     /// A server on a free local port, running on a thread of its own for as long as the test process lives.
     fn start(root: &std::path::Path, token: &str) -> String {
-        let host = Host::new(root).unwrap();
+        start_host(Host::new(root).unwrap(), token, false)
+    }
+
+    fn start_host(host: Host, token: &str, rom_sessions: bool) -> String {
         let token = token.to_owned();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -227,7 +244,7 @@ mod tests {
             runtime.block_on(async {
                 let (listener, address) = bind("127.0.0.1:0".parse().unwrap()).await.unwrap();
                 sender.send(address).unwrap();
-                let _ = serve(listener, host, token).await;
+                let _ = serve(listener, host, token, rom_sessions).await;
             });
         });
         format!("ws://{}", receiver.recv_timeout(Duration::from_secs(5)).unwrap())
@@ -330,6 +347,45 @@ mod tests {
         let mut other = WebSocket::connect(&websocket_url(&base, "secret"), "secret", None);
         answer(&mut other, Request::OpenProject { path: "p".into() }).unwrap();
         wait_for(&mut connection, |m| matches!(m, Incoming::Event(Event::Log { message, .. }) if message.contains("Opened project")));
+    }
+
+    #[test]
+    fn rom_sessions_let_a_stranger_edit_only_what_it_uploads() {
+        let root = TempDir::new("host-rom-sessions");
+        let rom = make_rom(&[RomFile::new("a.bin", b"x")], &[0; 32]);
+        write_bytes(&root.path().join("roms/game.nds"), &rom);
+        let base = start_host(Host::new(root.path()).unwrap(), "secret", true);
+
+        let mut stranger = WebSocket::connect(&websocket_url(&base, ""), "", None);
+        let first = stranger.send(Request::ListProjects);
+        let seen = wait_for(&mut stranger, |m| matches!(m, Incoming::Response { id, .. } if *id == first));
+        assert!(
+            seen.iter()
+                .any(|m| matches!(m, Incoming::State(ConnectionState::Connected(info)) if !info.has_workspace && info.workspace_name.is_empty()))
+        );
+        assert!(matches!(seen.last(), Some(Incoming::Response { result: Err(_), .. })));
+        let upload = Request::UploadRom { name: "game.nds".into(), offset: 0, total: rom.len() as u64, bytes: rom.clone() };
+        let Ok(Response::Project(info)) = answer(&mut stranger, upload) else { panic!("the upload did not open") };
+        assert_eq!(info.mode, bigstar_protocol::ProjectMode::Uploaded);
+        let Ok(Response::RomChunk { bytes, total, .. }) = answer(&mut stranger, Request::DownloadRom { offset: 0 }) else { panic!() };
+        assert_eq!((bytes, total), (rom.clone(), rom.len() as u64));
+
+        // The token still opens the workspace.
+        let mut member = WebSocket::connect(&websocket_url(&base, "secret"), "secret", None);
+        assert!(matches!(answer(&mut member, Request::ListProjects), Ok(Response::Projects(_))));
+        assert!(matches!(member.state(), ConnectionState::Connected(info) if info.has_workspace));
+    }
+
+    #[test]
+    fn a_host_without_a_workspace_serves_uploads_to_anyone() {
+        let base = start_host(Host::for_uploads(bigstar_host::HostOptions::default()), "secret", true);
+        let mut stranger = WebSocket::connect(&websocket_url(&base, ""), "", None);
+        let error = answer(&mut stranger, Request::BrowseDirectory { path: String::new() }).unwrap_err();
+        assert!(error.message.contains("uploads"), "{}", error.message);
+        // Even with the token there is no workspace to reach.
+        let mut member = WebSocket::connect(&websocket_url(&base, "secret"), "secret", None);
+        assert!(answer(&mut member, Request::ListProjects).is_err());
+        assert!(matches!(member.state(), ConnectionState::Connected(info) if !info.has_workspace));
     }
 
     #[test]

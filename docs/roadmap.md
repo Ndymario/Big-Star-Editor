@@ -220,3 +220,22 @@ in [the port plan](rust-port-plan.md), whose Status table records what each phas
   `Cancelled` stage rather than a failure.
 - Bounded `.big-star-backups/`: the ten most recent of each kind, swept on
   project open and whenever a write adds one.
+
+## M17: editing a ROM directly
+
+- Added ROM mode next to module projects. On the desktop, **Open ROM...** on the connect screen picks a `.nds` with
+  the system's file dialog and edits it with a host that has no workspace, as NSMB Editor does; every save writes
+  into it, **Save ROM As...** moves later saves to another file, and **Close ROM** ends that connection. Reads go through the same `EffectiveFilesystem`,
+  with the session's edits answering first, so the level canvas, file editors, tileset editor and Lua actors work
+  unchanged.
+- Uploaded ROMs for the browser: `UploadRom`/`DownloadRom` in pieces, one private host per uploaded ROM that dies with
+  its connection and never touches disk, limits on size and count, and `serve --rom-sessions` for guests without the
+  token (or, without a root, a host that serves only uploads). The browser saves downloads through a Blob and reads
+  uploads through the page's file picker.
+- Ported the in-place half of NCPatcher's `NdsRom::commit` as `NdsRomWriter` (`crates/nds`): replaced files go back
+  into their extent when they fit and are appended otherwise; the FAT, used size, device capacity and header CRC are
+  updated, and a commit with nothing staged returns the input unchanged. Archives go back in the wrapper they came in.
+- `RomReader::from_bytes` reads a ROM held in memory, so neither kind of ROM has to be read from disk again.
+- Hid what needs a module project in ROM mode -- Build, Run Patcher, the variant selector, the Distribution menu, the
+  module picker and the Level Data (glue) tab -- and made the host refuse it.
+

@@ -29,6 +29,10 @@ use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
 
 mod build;
+mod rom;
+mod uploads;
+
+use rom::Backing;
 
 /// What a host needs besides its root: where the shipped actor, tile and background scripts are, and which NCPatcher to ask.
 #[derive(Debug, Clone)]
@@ -37,11 +41,26 @@ pub struct HostOptions {
     pub ncpatcher: PathBuf,
     /// The xdelta3 executable the patch tools run.
     pub xdelta: PathBuf,
+    /// The largest ROM a connection may upload.
+    pub max_rom_bytes: usize,
+    /// How many uploaded ROMs the host holds at once, across every connection; each one is a whole ROM in memory.
+    pub max_uploaded_roms: usize,
 }
+
+/// A retail NSMB ROM is 8 MiB and an expanded one rarely passes 32; this leaves room without letting one connection
+/// take the host's memory.
+pub const DEFAULT_MAX_ROM_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_MAX_UPLOADED_ROMS: usize = 8;
 
 impl Default for HostOptions {
     fn default() -> Self {
-        Self { data_dir: default_data_dir(), ncpatcher: PathBuf::from("ncpatcher"), xdelta: PathBuf::from("xdelta3") }
+        Self {
+            data_dir: default_data_dir(),
+            ncpatcher: PathBuf::from("ncpatcher"),
+            xdelta: PathBuf::from("xdelta3"),
+            max_rom_bytes: DEFAULT_MAX_ROM_BYTES,
+            max_uploaded_roms: DEFAULT_MAX_UPLOADED_ROMS,
+        }
     }
 }
 
@@ -102,6 +121,7 @@ struct OpenProject {
     /// Where an edited ROM banner goes, from NCPatcher's configuration; asked with the rest of it.
     banner: BannerTarget,
     _watcher: Option<ProjectWatcher>,
+    backing: Backing,
 }
 
 /// What NCPatcher's configuration says about the ROM banner.
@@ -122,7 +142,10 @@ struct State {
 }
 
 pub(crate) struct Shared {
-    workspace: Workspace,
+    /// The folder of module projects this host serves. A host that only edits ROMs has none.
+    workspace: Option<Workspace>,
+    /// Whether ROMs may be opened and saved by their path on this machine: the desktop app's own host, never a served one.
+    local_files: bool,
     options: HostOptions,
     state: Mutex<State>,
     subscribers: Mutex<Vec<Sender<Event>>>,
@@ -130,6 +153,8 @@ pub(crate) struct Shared {
     generation: AtomicU64,
     /// The running build's cancel token, while one runs.
     build: Mutex<Option<Arc<bigstar_patching::ProcessCancel>>>,
+    /// How many uploaded ROMs the connections to this host hold, finished or arriving.
+    uploads: std::sync::atomic::AtomicUsize,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -148,14 +173,20 @@ impl Host {
     }
 
     pub fn with_options(root: &Path, options: HostOptions) -> Result<Self> {
-        let shared = Arc::new(Shared {
-            workspace: Workspace::new(root)?,
-            options,
-            state: Mutex::new(State::default()),
-            subscribers: Mutex::new(Vec::new()),
-            generation: AtomicU64::new(1),
-            build: Mutex::new(None),
-        });
+        Ok(Self::start(Shared::new(Some(Workspace::new(root)?), false, options)))
+    }
+
+    /// The desktop app's host for a ROM picked on this machine: no workspace, and ROMs opened and saved by their path.
+    pub fn for_local_roms(options: HostOptions) -> Self {
+        Self::start(Shared::new(None, true, options))
+    }
+
+    /// A served host with no workspace: every connection edits only the ROM it uploads.
+    pub fn for_uploads(options: HostOptions) -> Self {
+        Self::start(Shared::new(None, false, options))
+    }
+
+    fn start(shared: Arc<Shared>) -> Self {
         // Every few minutes, as the project's preference says, the levels with unsaved edits are written where the next
         // session can offer them back. The thread holds the host weakly and ends with it.
         let weak = Arc::downgrade(&shared);
@@ -170,24 +201,37 @@ impl Host {
                 }
             }
         });
-        Ok(Self { shared })
+        Self { shared }
     }
 
+    /// The workspace's folder name; empty for a host without one.
     pub fn workspace_name(&self) -> String {
-        self.shared.workspace.name()
+        self.shared.workspace.as_ref().map(Workspace::name).unwrap_or_default()
+    }
+
+    pub fn has_workspace(&self) -> bool {
+        self.shared.workspace.is_some()
     }
 
     /// A new connection's view of the host. Events from all connections reach every session.
     pub fn session(&self) -> HostSession {
-        let (sender, events) = channel();
-        lock(&self.shared.subscribers).push(sender);
-        HostSession { shared: Arc::clone(&self.shared), events }
+        HostSession { shared: Arc::clone(&self.shared), events: Some(self.shared.subscribe()), guest: false, uploads: uploads::Uploads::default() }
+    }
+
+    /// A connection that did not give the workspace token: it may upload a ROM and edit that, and reaches nothing of the
+    /// workspace, its events included.
+    pub fn guest_session(&self) -> HostSession {
+        HostSession { shared: Arc::clone(&self.shared), events: None, guest: true, uploads: uploads::Uploads::default() }
     }
 }
 
 pub struct HostSession {
     shared: Arc<Shared>,
-    events: Receiver<Event>,
+    /// The workspace's events; a guest hears none.
+    events: Option<Receiver<Event>>,
+    guest: bool,
+    /// The ROM this connection uploaded, and one arriving.
+    uploads: uploads::Uploads,
 }
 
 #[cfg(test)]
@@ -199,15 +243,45 @@ impl HostSession {
 
 impl Service for HostSession {
     fn handle(&mut self, request: Request) -> Result<Response> {
-        Shared::handle(&self.shared, request)
+        self.route(request)
     }
 
     fn drain_events(&mut self) -> Vec<Event> {
-        self.events.try_iter().collect()
+        let mut events: Vec<Event> = self.events.as_ref().map(|events| events.try_iter().collect()).unwrap_or_default();
+        events.extend(self.uploads.drain_events());
+        events
     }
 }
 
 impl Shared {
+    fn new(workspace: Option<Workspace>, local_files: bool, options: HostOptions) -> Arc<Self> {
+        Arc::new(Shared {
+            workspace,
+            local_files,
+            options,
+            state: Mutex::new(State::default()),
+            subscribers: Mutex::new(Vec::new()),
+            generation: AtomicU64::new(1),
+            build: Mutex::new(None),
+            uploads: std::sync::atomic::AtomicUsize::new(0),
+        })
+    }
+
+    fn subscribe(&self) -> Receiver<Event> {
+        let (sender, events) = channel();
+        lock(&self.subscribers).push(sender);
+        events
+    }
+
+    /// The workspace, or why there is none to reach.
+    fn workspace(&self) -> Result<&Workspace> {
+        self.workspace.as_ref().ok_or_else(|| invalid("This host has no workspace. It only edits ROMs."))
+    }
+
+    fn has_unsaved_levels(&self) -> bool {
+        lock(&self.state).open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty()))
+    }
+
     fn emit(&self, event: Event) {
         lock(&self.subscribers).retain(|subscriber| subscriber.send(event.clone()).is_ok());
     }
@@ -223,6 +297,10 @@ impl Shared {
             Request::CreateProject { path, name } => self.create_project(&path, &name),
             Request::ImportRom { rom_path, project_path, name } => self.import_rom(&rom_path, &project_path, name.as_deref()),
             Request::OpenProject { path } => self.open_project(&path),
+            Request::OpenRom { path } => self.open_rom(&path),
+            Request::SaveRomAs { path } => self.save_rom_as(&path),
+            Request::UploadRom { .. } => Err(invalid("a ROM is uploaded through a connection")),
+            Request::DownloadRom { offset } => self.download_rom(offset),
             Request::CloseProject => self.close_project(),
             Request::ListLevels => self.list_levels(),
             Request::OpenLevel { area } => self.open_level(&area),
@@ -236,8 +314,8 @@ impl Shared {
             Request::ActorCatalog => self.actor_catalog(),
             Request::RenderActors { inputs } => self.render_actors(&inputs),
             Request::ProjectSettings => self.project_settings(),
-            Request::SetActiveVariant { variant } => self.set_active_variant(variant),
-            Request::SetActiveModule { module } => self.set_active_module(module),
+            Request::SetActiveVariant { variant } => self.module_only().and_then(|()| self.set_active_variant(variant)),
+            Request::SetActiveModule { module } => self.module_only().and_then(|()| self.set_active_module(module)),
             Request::ProjectData => self.project_data(),
             Request::LevelBytes { level } => self.level_bytes(level),
             Request::FindEntities { sprites, id } => self.find_entities(sprites, id),
@@ -248,26 +326,28 @@ impl Shared {
             Request::ReadFile { path } => self.read_file(&path),
             Request::WriteFile { path, bytes } => self.write_file(&path, &bytes),
             Request::FileTargets { path } => self.file_targets(&path),
-            Request::RemoveFile { path } => self.remove_file(&path),
+            Request::RemoveFile { path } => self.module_only().and_then(|()| self.remove_file(&path)),
             Request::Banner => self.banner(),
             Request::WriteBanner { bytes } => self.write_banner(&bytes),
             Request::TilesetResources { level } => self.tileset_resources(level),
             Request::WriteFiles { files } => self.write_files(&files),
-            Request::BuildConfig => self.build_config(),
-            Request::SetPreferences { autosave_minutes, backups_kept } => self.set_preferences(autosave_minutes, backups_kept),
-            Request::MigrateConfig => self.migrate_config(),
-            Request::Build { verbose } => self.build(verbose),
+            Request::BuildConfig => self.module_only().and_then(|()| self.build_config()),
+            Request::SetPreferences { autosave_minutes, backups_kept } => {
+                self.module_only().and_then(|()| self.set_preferences(autosave_minutes, backups_kept))
+            }
+            Request::MigrateConfig => self.module_only().and_then(|()| self.migrate_config()),
+            Request::Build { verbose } => self.module_only().and_then(|()| self.build(verbose)),
             Request::CancelBuild => self.cancel_build(),
-            Request::ExtractRom { directory } => self.extract_rom(&directory),
-            Request::ExportPatch => self.export_patch(),
-            Request::ImportPatch { bytes, accept_id_mismatch } => self.import_patch(&bytes, accept_id_mismatch),
+            Request::ExtractRom { directory } => self.module_only().and_then(|()| self.extract_rom(&directory)),
+            Request::ExportPatch => self.module_only().and_then(|()| self.export_patch()),
+            Request::ImportPatch { bytes, accept_id_mismatch } => self.module_only().and_then(|()| self.import_patch(&bytes, accept_id_mismatch)),
             Request::Xdelta { create, source, target, output } => self.xdelta(create, &source, &target, &output),
         }
     }
 
     fn list_projects(&self) -> Result<Response> {
         let mut found = Vec::new();
-        self.scan(self.workspace.root(), 0, &mut found);
+        self.scan(self.workspace()?.root(), 0, &mut found);
         found.sort_by(|a: &ProjectSummary, b| a.path.cmp(&b.path));
         Ok(Response::Projects(found))
     }
@@ -279,7 +359,7 @@ impl Shared {
         }
         let manifest = directory.join(MANIFEST_FILE_NAME);
         if manifest.is_file() {
-            if let Some(path) = self.workspace.relative(directory) {
+            if let Some(path) = self.workspace.as_ref().and_then(|workspace| workspace.relative(directory)) {
                 let name = load_manifest(&manifest)
                     .map(|project| project.name().to_owned())
                     .unwrap_or_else(|_| directory.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
@@ -297,7 +377,8 @@ impl Shared {
     }
 
     fn browse(&self, path: &str) -> Result<Response> {
-        let directory = self.workspace.resolve(path)?;
+        let workspace = self.workspace()?;
+        let directory = workspace.resolve(path)?;
         let read = std::fs::read_dir(&directory).map_err(|_| not_found("that directory cannot be read"))?;
         let mut entries = Vec::new();
         for entry in read.flatten() {
@@ -306,11 +387,10 @@ impl Shared {
                 continue;
             }
             // A link that points out of the root is not shown, rather than shown and then refused.
-            let Some(child) = self.workspace.relative(&directory).map(|base| if base.is_empty() { name.clone() } else { format!("{base}/{name}") })
-            else {
+            let Some(child) = workspace.relative(&directory).map(|base| if base.is_empty() { name.clone() } else { format!("{base}/{name}") }) else {
                 continue;
             };
-            if self.workspace.resolve(&child).is_err() {
+            if workspace.resolve(&child).is_err() {
                 continue;
             }
             let Ok(metadata) = std::fs::metadata(entry.path()) else { continue };
@@ -318,7 +398,7 @@ impl Shared {
             entries.push(DirectoryEntry { name, kind, size: if metadata.is_dir() { 0 } else { metadata.len() } });
         }
         entries.sort_by(|a, b| (a.kind == DirectoryEntryKind::File, &a.name).cmp(&(b.kind == DirectoryEntryKind::File, &b.name)));
-        let path = self.workspace.relative(&directory).unwrap_or_default();
+        let path = workspace.relative(&directory).unwrap_or_default();
         Ok(Response::Directory(DirectoryListing { path, entries }))
     }
 
@@ -327,8 +407,9 @@ impl Shared {
         if name.is_empty() {
             return Err(invalid("a project needs a name"));
         }
-        let directory = self.workspace.resolve(path)?;
-        if directory == self.workspace.root() {
+        let workspace = self.workspace()?;
+        let directory = workspace.resolve(path)?;
+        if directory == workspace.root() {
             return Err(invalid("a project needs a directory of its own"));
         }
         let manifest = directory.join(MANIFEST_FILE_NAME);
@@ -339,13 +420,14 @@ impl Shared {
         let project = create_empty_project(name, &directory)?;
         save_manifest(&project, &manifest)?;
         self.log(LogLevel::Info, format!("Created project \"{name}\""));
-        Ok(Response::Project(project_info(&self.workspace, &directory, &project, None, 0)))
+        Ok(Response::Project(project_info(workspace, &directory, &project, None, 0)))
     }
 
     fn import_rom(&self, rom_path: &str, project_path: &str, name: Option<&str>) -> Result<Response> {
-        let rom = self.workspace.resolve(rom_path)?;
-        let directory = self.workspace.resolve(project_path)?;
-        if directory == self.workspace.root() {
+        let workspace = self.workspace()?;
+        let rom = workspace.resolve(rom_path)?;
+        let directory = workspace.resolve(project_path)?;
+        if directory == workspace.root() {
             return Err(invalid("a project needs a directory of its own"));
         }
         let manifest = directory.join(MANIFEST_FILE_NAME);
@@ -374,19 +456,20 @@ impl Shared {
         index_rom_files_from(&mut project, &reader);
         save_manifest(&project, &manifest)?;
         self.log(LogLevel::Info, format!("Imported the ROM into \"{}\" ({} files)", project.name(), project.game_files().len()));
-        Ok(Response::Project(project_info(&self.workspace, &directory, &project, Some(INPUT_ROM_FILE_NAME.to_owned()), reader.files().len())))
+        Ok(Response::Project(project_info(workspace, &directory, &project, Some(INPUT_ROM_FILE_NAME.to_owned()), reader.files().len())))
     }
 
     fn open_project(self: &Arc<Self>, path: &str) -> Result<Response> {
-        let directory = self.workspace.resolve(path)?;
+        let workspace = self.workspace()?;
+        let directory = workspace.resolve(path)?;
         let mut state = lock(&self.state);
         // Another frontend opening the project that is open joins it, as a level opened twice is one session: reopening
         // would close everyone's levels.
-        if let Some(open) = state.open.as_ref().filter(|open| open.directory == directory) {
+        if let Some(open) = state.open.as_ref().filter(|open| !open.backing.is_rom() && open.directory == directory) {
             let project = load_manifest(&directory.join(MANIFEST_FILE_NAME))?;
             let rom_path = open.rom_file.as_ref().map(|file| file.strip_prefix(&directory).unwrap_or(file).to_string_lossy().replace('\\', "/"));
             let file_count = open.rom.as_ref().map_or(0, |rom| rom.files().len());
-            return Ok(Response::Project(project_info(&self.workspace, &directory, &project, rom_path, file_count)));
+            return Ok(Response::Project(project_info(workspace, &directory, &project, rom_path, file_count)));
         }
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
             return Err(invalid("save or close the open levels before opening another project"));
@@ -408,7 +491,7 @@ impl Shared {
         let catalog = load_module_data_catalog(&directory, Path::new(&settings.generated_path))?;
         let index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
         let file_count = rom.as_ref().map_or(0, |rom| rom.files().len());
-        let info = project_info(&self.workspace, &directory, &project, rom_path.clone(), file_count);
+        let info = project_info(workspace, &directory, &project, rom_path.clone(), file_count);
         let had_project = state.open.is_some();
         // A watcher that cannot start costs live refreshes, not the project.
         let watcher =
@@ -428,6 +511,7 @@ impl Shared {
             graphics: None,
             own_writes: std::collections::HashSet::new(),
             _watcher: watcher,
+            backing: Backing::Module,
         });
         drop(state);
         if had_project {
@@ -556,6 +640,18 @@ impl Shared {
                 .map_err(|e| Error::new(ErrorCode::ParseError, format!("serialized level failed validation: {}", e.message)))?;
             (course, bgdat, address(&session.files.course)?, address(&session.files.bgdat)?)
         };
+        if open.backing.is_rom() {
+            self.commit_rom(open, vec![(course_address, course), (bgdat_address, bgdat)], None)?;
+            let session = open.levels.get_mut(&id).ok_or_else(unknown_level)?;
+            session.level.mark_clean();
+            session.revision += 1;
+            let (snapshot, event) = snapshot_and_event(id, session);
+            let message = format!("Saved {} into the ROM", session.title);
+            drop(state);
+            self.emit(event);
+            self.log(LogLevel::Info, message);
+            return Ok(Response::Edited { snapshot: Box::new(snapshot), outcome: EditOutcome::None });
+        }
         // Into the module that supplies each file, or the active one, as every other file edit; never the ROM.
         self.ensure_filesystem(open)?;
         let variant = open.settings.active_variant.clone();
@@ -597,6 +693,11 @@ impl Shared {
         if open.patcher.is_some() {
             return;
         }
+        // A ROM edited directly has no configuration, modules or plan to ask about.
+        if open.backing.is_rom() {
+            open.patcher = Some(Default::default());
+            return;
+        }
         let client = NCPatcherClient::new(&self.options.ncpatcher);
         let mut errors = Vec::new();
         let config = client.dump_config(&open.directory).map_err(|e| errors.push(e.message)).ok();
@@ -632,6 +733,12 @@ impl Shared {
     }
 
     fn ensure_graphics<'a>(&self, open: &'a mut OpenProject) -> Result<&'a mut ProjectGraphics> {
+        if open.graphics.is_none()
+            && let Backing::Rom(doc) = &open.backing
+        {
+            let rom = RomReader::from_bytes(&doc.name, Arc::clone(&doc.original))?;
+            open.graphics = Some(ProjectGraphics::for_rom(&self.options.data_dir, rom, &doc.edits));
+        }
         if open.graphics.is_none() {
             self.ensure_patcher(open);
             let (modules, plan) = open.patcher.clone().unwrap_or_default();
@@ -758,7 +865,7 @@ impl Shared {
     pub(crate) fn write_recovery_snapshots(&self) {
         let mut state = lock(&self.state);
         let Some(open) = state.open.as_mut() else { return };
-        let root = open.directory.join(AUTOSAVE_DIR);
+        let Some(root) = recovery_root(open) else { return };
         let mut keep = std::collections::BTreeSet::new();
         for session in open.levels.values().filter(|session| session.level.dirty()) {
             let written = (|| -> Result<String> {
@@ -793,7 +900,7 @@ impl Shared {
     fn recovery(&self) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
-        let root = open.directory.join(AUTOSAVE_DIR);
+        let Some(root) = recovery_root(open) else { return Ok(Response::Recovery(Vec::new())) };
         let mut levels = Vec::new();
         for (name, _) in recovery_files(&root) {
             let Some(area) = recovery_area(&name) else { continue };
@@ -810,8 +917,9 @@ impl Shared {
     fn recover(&self, accept: bool) -> Result<Response> {
         let root = {
             let state = lock(&self.state);
-            state.open.as_ref().ok_or_else(no_project)?.directory.join(AUTOSAVE_DIR)
+            recovery_root(state.open.as_ref().ok_or_else(no_project)?)
         };
+        let Some(root) = root else { return Ok(Response::Recovered(Vec::new())) };
         let files = recovery_files(&root);
         if !accept {
             for (_, path) in files {
@@ -855,8 +963,7 @@ impl Shared {
             let generated =
                 if open.settings.generated_path.is_empty() { DEFAULT_GENERATED_DIR.to_owned() } else { open.settings.generated_path.clone() };
             let manifest_file = open.directory.join(generated).join("files.json");
-            let manifest = manifest_file
-                .is_file()
+            let manifest = (!open.backing.is_rom() && manifest_file.is_file())
                 .then(|| read_file(&manifest_file).ok())
                 .flatten()
                 .and_then(|bytes| String::from_utf8(bytes).ok().and_then(|text| bigstar_patching::parse_file_manifest(&text).ok()));
@@ -964,6 +1071,19 @@ impl Shared {
     fn write_files(&self, files: &[bigstar_protocol::FileWrite]) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        if open.backing.is_rom() {
+            self.commit_rom(open, files.iter().map(|file| (file.path.clone(), file.bytes.clone())).collect(), None)?;
+            // What the dock shows and what graphics read from have both changed.
+            open.filesystem = None;
+            open.graphics = None;
+            drop(state);
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.emit(Event::GraphicsChanged { generation });
+            for file in files {
+                self.log(LogLevel::Info, format!("Wrote {} into the ROM", file.path));
+            }
+            return Ok(Response::Done);
+        }
         self.ensure_filesystem(open)?;
         let mut written = Vec::new();
         let mut failure = None;
@@ -1021,6 +1141,9 @@ impl Shared {
     fn file_targets(&self, path: &str) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        if open.backing.is_rom() {
+            return Ok(Response::FileTargets(Vec::new()));
+        }
         self.ensure_filesystem(open)?;
         let module = Self::target_module(open, path)?;
         let variants = std::iter::once(String::new()).chain(open.settings.variants.iter().cloned());
@@ -1078,6 +1201,14 @@ impl Shared {
     fn banner(&self) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        if let Backing::Rom(doc) = &open.backing {
+            let target = doc.file.as_ref().map(|file| file.display().to_string()).unwrap_or_else(|| doc.name.clone());
+            let bytes = match doc.banner.clone() {
+                Some(bytes) => bytes,
+                None => open.rom.as_mut().ok_or_else(|| not_found("no ROM is open"))?.read_banner()?,
+            };
+            return Ok(Response::Banner { bytes, target });
+        }
         let target = self.banner_target(open)?;
         let bytes =
             if target.is_file() { read_file(&target)? } else { open.rom.as_mut().ok_or_else(|| not_found("no built ROM is open"))?.read_banner()? };
@@ -1088,6 +1219,12 @@ impl Shared {
     fn write_banner(&self, bytes: &[u8]) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        if open.backing.is_rom() {
+            self.commit_rom(open, Vec::new(), Some(bytes.to_vec()))?;
+            drop(state);
+            self.log(LogLevel::Info, "Saved the ROM banner into the ROM");
+            return Ok(Response::Done);
+        }
         let target = self.banner_target(open)?;
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "Could not create the configured banner directory."))?;
@@ -1169,7 +1306,8 @@ impl Shared {
             open.patcher = None;
         }
         drop(state);
-        let mut relative: Vec<String> = paths.iter().filter_map(|path| self.workspace.relative(path)).collect();
+        let mut relative: Vec<String> =
+            paths.iter().filter_map(|path| self.workspace.as_ref().and_then(|workspace| workspace.relative(path))).collect();
         relative.sort();
         relative.dedup();
         if !relative.is_empty() {
@@ -1244,6 +1382,16 @@ pub(crate) const TRASH_DIR: &str = ".big-star-trash";
 
 /// Where autosaves live, relative to the project.
 pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";
+
+/// Where an open project's autosaves go: under the project, or for a ROM edited directly, a folder of that ROM's own
+/// beside it, so two ROMs in one directory do not offer each other's levels back. An uploaded ROM has nowhere: the host
+/// writes nothing of it to disk.
+fn recovery_root(open: &OpenProject) -> Option<PathBuf> {
+    match &open.backing {
+        Backing::Module => Some(open.directory.join(AUTOSAVE_DIR)),
+        Backing::Rom(doc) => doc.file.as_ref().map(|file| open.directory.join(AUTOSAVE_DIR).join(file.file_name().unwrap_or_default())),
+    }
+}
 
 /// An autosave is named for its area, hex-encoded so any token makes a file name.
 fn recovery_name(area: &str) -> String {
@@ -1327,6 +1475,7 @@ fn project_info(workspace: &Workspace, directory: &Path, project: &Project, rom_
         game_title: header.map(|h| h.game_title.clone()),
         game_code: header.map(|h| h.game_code.clone()),
         file_count,
+        mode: bigstar_protocol::ProjectMode::Module,
     }
 }
 

@@ -30,6 +30,22 @@ pub trait Services {
         None
     }
 
+    /// Starts a host in this process for ROMs on this machine, with no workspace, and connects to it (desktop only).
+    fn connect_local_roms(&self, _waker: Waker) -> Result<Box<dyn Connection>, String> {
+        Err("this build cannot open a ROM on this machine".to_owned())
+    }
+
+    /// Asks the person for a `.nds` on this machine: its full path, or `None` when they cancel or there is no dialog.
+    fn pick_rom(&self) -> Option<String> {
+        None
+    }
+
+    /// Asks the person where on this machine to write a file named like `suggested`, of type `extension`: the full
+    /// path, or `None` when they cancel or there is no dialog.
+    fn pick_save_path(&self, _title: &str, _suggested: &str, _extension: &str) -> Option<String> {
+        None
+    }
+
     /// The address offered when connecting to a host; the browser offers the host that served the page.
     fn default_host(&self) -> String {
         "ws://127.0.0.1:7878".to_owned()
@@ -52,6 +68,17 @@ pub trait Services {
     fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
         None
     }
+
+    /// Starts asking the person for a file whose bytes arrive later, from `take_picked_file`: a browser's file picker
+    /// answers only after the frame that opened it. `false` where there is no such picker.
+    fn pick_file_later(&self, _extension: Option<&str>) -> bool {
+        false
+    }
+
+    /// A file `pick_file_later` asked for, once it has been read: its name and its bytes.
+    fn take_picked_file(&self) -> Option<Result<(String, Vec<u8>), String>> {
+        None
+    }
 }
 
 /// Files a test hands the frontend, and the ones it saved.
@@ -61,6 +88,8 @@ pub struct FileShelf {
     pub to_open: std::collections::VecDeque<(String, Vec<u8>)>,
     /// Every file saved, by suggested name.
     pub saved: Vec<(String, Vec<u8>)>,
+    /// What the next "pick a ROM" and "save to" dialogs return, first first.
+    pub paths: std::collections::VecDeque<String>,
 }
 
 /// Keeps values and files in memory; for tests and screenshots.
@@ -106,5 +135,13 @@ impl Services for MemoryServices {
 
     fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
         self.shelf.lock().ok()?.to_open.pop_front().map(Ok)
+    }
+
+    fn pick_rom(&self) -> Option<String> {
+        self.shelf.lock().ok()?.paths.pop_front()
+    }
+
+    fn pick_save_path(&self, _title: &str, _suggested: &str, _extension: &str) -> Option<String> {
+        self.shelf.lock().ok()?.paths.pop_front()
     }
 }

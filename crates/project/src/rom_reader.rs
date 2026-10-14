@@ -1,12 +1,13 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result};
-use bigstar_formats::{NarcArchive, decompress_blz_overlay, decompress_nitro_lz, is_narc, parse_narc};
+use bigstar_formats::{NarcArchive, decompress_blz_overlay, parse_narc, unwrap_narc};
 use bigstar_nds::{
-    DS_CARTRIDGE_HEADER_SIZE, FatEntry, NitroFileEntry, OverlayTableEntry, RomHeader, banner_region_limit, banner_size_from_version, parse_fat,
-    parse_fnt, parse_overlay_table, parse_rom_header,
+    DS_CARTRIDGE_HEADER_SIZE, FatEntry, NitroFileEntry, OverlayTableEntry, RomHeader, banner_size, parse_fat, parse_fnt, parse_overlay_table,
+    parse_rom_header,
 };
 use serde::{Deserialize, Serialize};
 
@@ -51,9 +52,17 @@ impl<K: PartialEq, V> Cache<K, V> {
 /// single time.
 ///
 /// Reads are not `&self`: the stream position and the caches both move. One reader belongs to one thread.
+/// Where a reader's bytes come from: a `.nds` read in place, or a whole ROM somebody handed over -- an upload, or a ROM
+/// being edited directly, which never touches the disk until it is saved.
+enum RomSource {
+    File(File),
+    Memory(Arc<[u8]>),
+}
+
 pub struct RomReader {
+    /// The file, or the name a ROM in memory was given; only ever shown.
     path: PathBuf,
-    stream: File,
+    source: RomSource,
     size: u64,
     header: RomHeader,
     fat: Vec<FatEntry>,
@@ -73,10 +82,19 @@ impl RomReader {
         let size =
             std::fs::metadata(&path).map_err(|_| Error::new(ErrorCode::NotFound, format!("could not measure the ROM {}", path.display())))?.len();
         let stream = File::open(&path).map_err(|_| Error::new(ErrorCode::IoError, format!("could not open the ROM {}", path.display())))?;
+        Self::from_source(path, RomSource::File(stream), size)
+    }
 
+    /// A ROM held whole in memory. `name` is only for messages.
+    pub fn from_bytes(name: impl Into<PathBuf>, bytes: Arc<[u8]>) -> Result<Self> {
+        let size = bytes.len() as u64;
+        Self::from_source(name.into(), RomSource::Memory(bytes), size)
+    }
+
+    fn from_source(path: PathBuf, source: RomSource, size: u64) -> Result<Self> {
         let mut reader = Self {
             path,
-            stream,
+            source,
             size,
             header: RomHeader::default(),
             fat: Vec::new(),
@@ -121,8 +139,17 @@ impl RomReader {
             return Ok(data);
         }
         let failed = || Error::new(ErrorCode::IoError, format!("could not read {what} from {}", self.path.display()));
-        self.stream.seek(SeekFrom::Start(offset)).map_err(|_| failed())?;
-        self.stream.read_exact(&mut data).map_err(|_| failed())?;
+        match &mut self.source {
+            RomSource::File(stream) => {
+                stream.seek(SeekFrom::Start(offset)).map_err(|_| failed())?;
+                stream.read_exact(&mut data).map_err(|_| failed())?;
+            }
+            RomSource::Memory(bytes) => {
+                let start = usize::try_from(offset).map_err(|_| failed())?;
+                let end = start + data.len();
+                data.copy_from_slice(bytes.get(start..end).ok_or_else(failed)?);
+            }
+        }
         Ok(data)
     }
 
@@ -204,22 +231,18 @@ impl RomReader {
         // A banner does not declare its own length. Its version implies one, and whatever region comes next bounds
         // it; the implied length wins only when it fits.
         let rom_size = usize::try_from(self.size).map_err(|_| Error::new(ErrorCode::OutOfBounds, "ROM is too large"))?;
-        let limit = banner_region_limit(&self.header, &self.fat, rom_size);
-        let available = limit.saturating_sub(usize::try_from(offset).map_err(|_| Error::new(ErrorCode::OutOfBounds, "banner offset"))?);
-        let implied = banner_size_from_version(&self.read_region(offset, 2, "banner version")?);
-        let size = if implied != 0 && implied <= available { implied } else { available };
+        let version = self.read_region(offset, 2, "banner version")?;
+        let size = banner_size(&self.header, &self.fat, rom_size, &version);
         self.read_region(offset, u32::try_from(size).map_err(|_| Error::new(ErrorCode::OutOfBounds, "banner size"))?, "banner")
     }
 
     fn archive(&mut self, rom_path: &str) -> Result<&NarcArchive> {
         let key = rom_path.to_owned();
         if self.archive_cache.promote(&key).is_none() {
-            let mut data = self.read(rom_path)?;
             // A container may have arrived compressed -- Mario Kart DS names those `.carc` -- and is an ordinary NARC
             // underneath. What decides is what the bytes decode to, never the extension.
-            if !is_narc(&data) {
-                data = decompress_nitro_lz(&data).map_err(|_| Error::new(ErrorCode::Unsupported, format!("{rom_path} is not a Nitro archive")))?;
-            }
+            let (_, data) =
+                unwrap_narc(&self.read(rom_path)?).ok_or_else(|| Error::new(ErrorCode::Unsupported, format!("{rom_path} is not a Nitro archive")))?;
             let parsed = parse_narc(&data)?;
             self.archive_cache.remember(key, parsed);
         }

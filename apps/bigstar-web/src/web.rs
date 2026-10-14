@@ -1,14 +1,54 @@
-//! The browser shell: storage in `localStorage`, the host that served the page as the default, and the eframe web runner.
+//! The browser shell: storage in `localStorage`, the host that served the page as the default, files picked and
+//! downloaded through the page, and the eframe web runner.
+
+use std::cell::RefCell;
+use std::rc::Rc;
 
 use bigstar_ui_egui::{BigStarApp, Services};
 use wasm_bindgen::JsCast as _;
+use wasm_bindgen::closure::Closure;
 
 const CANVAS_ID: &str = "bigstar_canvas";
 const LOADING_ID: &str = "bigstar_loading";
 
+type Picked = Option<Result<(String, Vec<u8>), String>>;
+
 struct WebServices {
     /// The system's accent colour, as the browser gave it when the page loaded.
     accent: Option<[u8; 3]>,
+    /// A file the page's picker read, until the frontend takes it.
+    picked: Rc<RefCell<Picked>>,
+    /// Asked to repaint when a picked file has been read, so the frontend sees it without waiting for input.
+    ctx: egui::Context,
+}
+
+fn document() -> Result<web_sys::Document, String> {
+    web_sys::window().and_then(|window| window.document()).ok_or_else(|| "the page has no document".to_owned())
+}
+
+/// A download of `bytes` named `name`, as a link to them clicked.
+fn download(name: &str, bytes: &[u8]) -> Result<(), String> {
+    let parts = js_sys::Array::of1(&js_sys::Uint8Array::from(bytes));
+    let options = web_sys::BlobPropertyBag::new();
+    options.set_type("application/octet-stream");
+    let blob = web_sys::Blob::new_with_u8_array_sequence_and_options(&parts, &options).map_err(|_| "could not make the download".to_owned())?;
+    let url = web_sys::Url::create_object_url_with_blob(&blob).map_err(|_| "could not make the download".to_owned())?;
+    let anchor = document()?
+        .create_element("a")
+        .ok()
+        .and_then(|element| element.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+        .ok_or_else(|| "could not make the download".to_owned())?;
+    anchor.set_href(&url);
+    anchor.set_download(name);
+    anchor.click();
+    // The browser has the bytes once the download starts; the link to them can go a little later.
+    let revoke = Closure::once_into_js(move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    if let Some(window) = web_sys::window() {
+        let _ = window.set_timeout_with_callback_and_timeout_and_arguments_0(revoke.unchecked_ref(), 60_000);
+    }
+    Ok(())
 }
 
 /// CSS's `AccentColor`, where the browser knows it: the colour an element given it comes out in.
@@ -56,6 +96,43 @@ impl Services for WebServices {
         self.accent
     }
 
+    /// There is no asking where: the browser saves a download where it saves them all.
+    fn save_file(&self, _title: &str, suggested: &str, _extension: &str, bytes: &[u8]) -> Result<bool, String> {
+        download(suggested, bytes).map(|()| true)
+    }
+
+    fn pick_file_later(&self, extension: Option<&str>) -> bool {
+        let Some(input) = document()
+            .ok()
+            .and_then(|document| document.create_element("input").ok())
+            .and_then(|element| element.dyn_into::<web_sys::HtmlInputElement>().ok())
+        else {
+            return false;
+        };
+        input.set_type("file");
+        if let Some(extension) = extension {
+            input.set_accept(&format!(".{extension}"));
+        }
+        let (picked, ctx, chosen) = (Rc::clone(&self.picked), self.ctx.clone(), input.clone());
+        let changed = Closure::once_into_js(move || {
+            let Some(file) = chosen.files().and_then(|files| files.get(0)) else { return };
+            let name = file.name();
+            wasm_bindgen_futures::spawn_local(async move {
+                let read = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await;
+                let result = read.map(|buffer| (name, js_sys::Uint8Array::new(&buffer).to_vec())).map_err(|_| "could not read the file".to_owned());
+                *picked.borrow_mut() = Some(result);
+                ctx.request_repaint();
+            });
+        });
+        input.set_onchange(Some(changed.unchecked_ref()));
+        input.click();
+        true
+    }
+
+    fn take_picked_file(&self) -> Option<Result<(String, Vec<u8>), String>> {
+        self.picked.borrow_mut().take()
+    }
+
     /// `?token=…` in the page's address, which is how `bigstar-host serve` prints its link.
     fn default_token(&self) -> Option<String> {
         let search = web_sys::window()?.location().search().ok()?;
@@ -96,7 +173,10 @@ pub fn start() {
             .start(
                 canvas,
                 eframe::WebOptions::default(),
-                Box::new(|_cc| Ok(Box::new(Shell(BigStarApp::new(Box::new(WebServices { accent: accent_color() })))))),
+                Box::new(|cc| {
+                    let services = WebServices { accent: accent_color(), picked: Rc::default(), ctx: cc.egui_ctx.clone() };
+                    Ok(Box::new(Shell(BigStarApp::new(Box::new(services)))))
+                }),
             )
             .await;
         if let Some(el) = document.get_element_by_id(LOADING_ID) {

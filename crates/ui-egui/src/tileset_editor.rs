@@ -590,7 +590,7 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
     });
     ui.add(
         egui::Label::new(
-            "These IDs select the level's graphics slots. Resource edits below apply to the resources currently loaded; changed IDs take effect when the level is saved and reloaded.",
+            "These IDs choose the level's graphics. Edits below change the graphics loaded now; a changed ID takes effect once the level is saved and opened again.",
         )
         .wrap(),
     );
@@ -669,10 +669,10 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     }
     let before = (doc.composed, doc.solid3d);
     controls::checkbox(ui, &mut doc.composed, "Show the other tilesets’ graphics").on_hover_text(
-        "A Map16 entry can name a tile another tileset supplies. Checked, the sheet draws those against all three tilesets, the way the game loads them; unchecked, it shows only what this tileset carries.",
+        "A Map16 entry can use tiles from another tileset. When checked, those tiles are drawn the way the game loads them; when unchecked, only this tileset's own tiles are shown.",
     );
     controls::checkbox(ui, &mut doc.solid3d, "Show 3D tiles").on_hover_text(
-        "The game hands some blocks to the 3D engine and draws nothing from their Map16. Checked, the sheet shows the texture the game shows; unchecked, it shows the bytes the file holds, which is what you want when editing them.",
+        "The game draws some blocks with its 3D engine instead of from their Map16. When checked, they show the texture the game shows; when unchecked, they show what the file holds, which is what you want when editing them.",
     );
     if before != (doc.composed, doc.solid3d) {
         doc.version += 1;

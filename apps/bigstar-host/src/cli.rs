@@ -17,7 +17,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
     );
 }
 
@@ -198,18 +198,24 @@ fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: 
     0
 }
 
-/// `serve <root> [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]`: hosts a workspace until
-/// interrupted. `--data` is where the shipped actor, tile and background scripts are, `--ncpatcher` which NCPatcher builds and is asked about
-/// variants, modules and plans, `--xdelta` which xdelta3 the patch tools run.
+/// `serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]`: hosts a
+/// workspace until interrupted. `--rom-sessions` also lets in a browser without the token, to upload a ROM and edit that and nothing
+/// else; without a root it is all the host does. `--data` is where the shipped actor, tile and background scripts are, `--ncpatcher`
+/// which NCPatcher builds and is asked about variants, modules and plans, `--xdelta` which xdelta3 the patch tools run.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let Some((root, flags)) = args.split_first() else {
-        usage(err);
-        return 1;
+    let (root, flags) = match args.split_first() {
+        Some((first, rest)) if !first.starts_with("--") => (Some(*first), rest),
+        _ => (None, args),
     };
     let (mut bind, mut port) = ("127.0.0.1".to_owned(), DEFAULT_PORT);
     let mut options = HostOptions::default();
+    let mut rom_sessions = false;
     let mut flags = flags.iter();
     while let Some(flag) = flags.next() {
+        if *flag == "--rom-sessions" {
+            rom_sessions = true;
+            continue;
+        }
         let value = flags.next();
         match (*flag, value) {
             ("--bind", Some(value)) => bind = (*value).to_owned(),
@@ -236,11 +242,18 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             return 1;
         }
     };
-    let host = match Host::with_options(Path::new(root), options) {
-        Ok(host) => host,
-        Err(e) => {
-            let _ = writeln!(err, "{}", e.message);
-            return 2;
+    let host = match root {
+        Some(root) => match Host::with_options(Path::new(root), options) {
+            Ok(host) => host,
+            Err(e) => {
+                let _ = writeln!(err, "{}", e.message);
+                return 2;
+            }
+        },
+        None if rom_sessions => Host::for_uploads(options),
+        None => {
+            usage(err);
+            return 1;
         }
     };
     let token = match server::generate_token() {
@@ -265,17 +278,27 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
                 return 2;
             }
         };
-        let _ = writeln!(out, "Serving \"{}\" on ws://{bound}/ws", host.workspace_name());
-        let _ = writeln!(out, "Token: {token}");
-        if server::has_web_bundle() {
-            let _ = writeln!(out, "Open http://{bound}/?token={token} in a browser");
+        if host.has_workspace() {
+            let _ = writeln!(out, "Serving \"{}\" on ws://{bound}/ws", host.workspace_name());
+            let _ = writeln!(out, "Token: {token}");
+            if server::has_web_bundle() {
+                let _ = writeln!(out, "Open http://{bound}/?token={token} in a browser");
+            }
+            if rom_sessions && server::has_web_bundle() {
+                let _ = writeln!(out, "Without the token, http://{bound}/ edits an uploaded ROM and nothing of the workspace");
+            }
+        } else {
+            let _ = writeln!(out, "Serving uploaded ROMs on ws://{bound}/ws");
+            if server::has_web_bundle() {
+                let _ = writeln!(out, "Open http://{bound}/ in a browser");
+            }
         }
         if !bound.ip().is_loopback() {
             let _ = writeln!(err, "warning: {bound} is not a loopback address; the connection is not encrypted");
         }
         let _ = out.flush();
         tokio::select! {
-            result = server::serve(listener, host, token) => match result {
+            result = server::serve(listener, host, token, rom_sessions) => match result {
                 Ok(()) => 0,
                 Err(e) => {
                     let _ = writeln!(err, "the server stopped: {e}");
@@ -383,6 +406,10 @@ mod tests {
         let dir = TempDir::new("cli-serve");
         let root = dir.path().to_string_lossy().into_owned();
         assert_eq!(invoke(&["serve"]).0, 1);
+        // Without a root there is nothing to serve but uploaded ROMs, which has to be asked for.
+        assert_eq!(invoke(&["serve", "--port", "0"]).0, 1);
+        assert_eq!(invoke(&["serve", "--rom-sessions", "--port", "99999"]).0, 1);
+        assert_eq!(invoke(&["serve", &root, "--rom-sessions", "--bind", "not-an-address"]).0, 1);
         assert_eq!(invoke(&["serve", &root, "--port", "99999"]).0, 1);
         assert_eq!(invoke(&["serve", &root, "--port"]).0, 1);
         assert_eq!(invoke(&["serve", &root, "--bind", "not-an-address"]).0, 1);

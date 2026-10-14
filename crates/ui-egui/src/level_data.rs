@@ -78,7 +78,7 @@ pub fn set_flag(snapshot: &LevelSnapshot, hash: u32, on: bool) -> Option<LevelEd
 
 /// Sets a value's bytes from hex text, adding the value after the others when the level does not hold it yet.
 pub fn set_value(snapshot: &LevelSnapshot, hash: u32, text: &str) -> Result<LevelEdit, String> {
-    let bytes = parse_hex(text).ok_or("Values must contain a non-empty, even number of hexadecimal digits.")?;
+    let bytes = parse_hex(text).ok_or("Enter an even number of hexadecimal digits, at least two.")?;
     let mut glue = snapshot.glue.clone();
     match glue.values.iter_mut().find(|v| v.hash == hash) {
         Some(value) => value.payload = bytes,
@@ -116,12 +116,12 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
     let mut outcome = None;
     let read_only = snapshot.glue_error.is_some() || busy;
     if let Some(error) = &snapshot.glue_error {
-        controls::error_text(ui, format!("Malformed glue data: {error}\nThis block is read-only and will be preserved byte-for-byte."));
+        controls::error_text(ui, format!("This glue data cannot be read: {error}\nIt is read-only and is saved back exactly as it was."));
     }
     ui.label(RichText::new("Level data").strong());
     let rows = rows(snapshot, modules);
     if rows.is_empty() {
-        ui.weak("This level holds no level data, and no module declares any.");
+        ui.weak("This level has no level data, and no module defines any.");
     }
     egui::Grid::new("level-data").num_columns(3).striped(true).show(ui, |ui| {
         ui.weak("Key");
@@ -220,7 +220,7 @@ mod tests {
         let Ok(LevelEdit::SetGlue { glue, .. }) = set_value(&level, 9, "01") else { panic!() };
         assert_eq!((glue.values[1].hash, glue.values[1].payload_order), (9, 4));
         for bad in ["", "abc", "zz"] {
-            assert_eq!(set_value(&level, 2, bad).unwrap_err(), "Values must contain a non-empty, even number of hexadecimal digits.");
+            assert_eq!(set_value(&level, 2, bad).unwrap_err(), "Enter an even number of hexadecimal digits, at least two.");
         }
     }
 }

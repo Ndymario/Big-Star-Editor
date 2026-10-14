@@ -79,6 +79,9 @@ enum Action {
     Browse(String),
     ChooseRom { path: String, name: String },
     Import { rom: String, project: String, name: String },
+    SaveRomAs,
+    UploadRom,
+    DownloadRom,
     CancelImport,
 }
 
@@ -129,6 +132,10 @@ pub struct BigStarApp {
     side: Side,
     /// The canvas toolbar's switches, the same on every canvas.
     canvas_options: CanvasOptions,
+    /// The connection is the desktop's own host for a ROM on this machine, which holds nothing but that ROM.
+    local_rom: bool,
+    /// A ROM to upload has been asked for from a picker that answers later.
+    awaiting_upload: bool,
     /// Level-data value cells being typed in.
     data_drafts: level_data::Drafts,
 }
@@ -197,6 +204,8 @@ impl BigStarApp {
             side: Side::default(),
             canvas_options,
             data_drafts: level_data::Drafts::new(),
+            local_rom: false,
+            awaiting_upload: false,
         }
     }
 
@@ -335,8 +344,35 @@ impl BigStarApp {
     fn start(&mut self, conn: Box<dyn Connection>, host_key: String) {
         self.form.error = None;
         self.host_key = host_key;
+        self.local_rom = false;
         self.workspace = Workspace::default();
         self.session = Some(Session::new(conn));
+    }
+
+    /// Asks for a `.nds` on this machine and opens it to edit directly, as NSMB Editor's Open ROM does: with the
+    /// desktop's own host for it, which has no workspace.
+    pub fn open_local_rom(&mut self, ctx: &egui::Context) {
+        let Some(path) = self.services.pick_rom() else { return };
+        match self.services.connect_local_roms(waker(ctx)) {
+            Ok(conn) => {
+                self.start(conn, format!("rom:{path}"));
+                self.local_rom = true;
+                if let Some(session) = &mut self.session {
+                    session.open_rom(&path);
+                }
+            }
+            Err(message) => self.form.error = Some(message),
+        }
+    }
+
+    /// Asks for a ROM to send to the host and edit there.
+    fn upload_rom(&mut self) {
+        let Some(session) = &mut self.session else { return };
+        match self.services.open_file("Upload ROM", Some("nds")) {
+            Some(Ok((name, bytes))) => session.upload_rom(&name, &bytes),
+            Some(Err(error)) => session.report(error),
+            None => self.awaiting_upload = self.services.pick_file_later(Some("nds")),
+        }
     }
 
     fn connect_remote(&mut self, ctx: &egui::Context) {
@@ -376,7 +412,30 @@ impl BigStarApp {
             self.form.error = Some(format!("Disconnected: {reason}"));
             self.session = None;
         }
+        // A ROM picked on this machine that would not open leaves nothing to show but the start screen and why.
+        if self.local_rom
+            && let Some(session) = &self.session
+            && session.project.is_none()
+            && let Some(notice) = session.notice.as_ref().filter(|notice| notice.error)
+        {
+            self.form.error = Some(notice.text.clone());
+            self.session = None;
+        }
         let Some(session) = &mut self.session else { return };
+        if self.awaiting_upload
+            && let Some(picked) = self.services.take_picked_file()
+        {
+            self.awaiting_upload = false;
+            match picked {
+                Ok((name, bytes)) => session.upload_rom(&name, &bytes),
+                Err(error) => session.report(error),
+            }
+        }
+        if let Some((name, bytes)) = session.downloaded.take()
+            && let Err(error) = self.services.save_file("Download ROM", &name, "nds", &bytes)
+        {
+            session.report(error);
+        }
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
         self.tools.open_metadata(session);
@@ -442,8 +501,10 @@ impl BigStarApp {
             } else if session.project.is_some() {
                 self.workspace.language = self.language;
                 self.workspace.show(ui, session, &mut self.textures, keyboard, &*self.services);
-            } else {
+            } else if session.has_workspace() {
                 self.workspace_screen(ui);
+            } else {
+                self.rom_screen(ui);
             }
         });
         if let Some(session) = &mut self.session {
@@ -483,12 +544,22 @@ impl BigStarApp {
                     ui.set_width(WIDTH.min(ui.available_width()));
                     ui.add_space(56.0);
                     ui.heading("Big Star Editor");
-                    ui.weak("Open a folder of projects, or connect to a host that holds them.");
-                    ui.add_space(16.0);
-                    let (mut embedded, mut remote) = (false, false);
                     if self.services.can_embed() {
-                        controls::section(ui, "This computer", |ui| {
-                            ui.weak("Open a folder of projects with the editor's own host.");
+                        ui.weak("Open a ROM or a folder of projects, or connect to a host that has them.");
+                    } else {
+                        ui.weak("Connect to a host to edit its projects, or a ROM you upload to it.");
+                    }
+                    ui.add_space(16.0);
+                    let (mut embedded, mut remote, mut rom) = (false, false, false);
+                    if self.services.can_embed() {
+                        controls::section(ui, "A ROM", |ui| {
+                            ui.weak("Edit a .nds file directly. Every save writes to the file, and no project is needed.");
+                            ui.add_space(4.0);
+                            rom = Button::new("Open ROM…").with_icon(icons::FILE).primary().show(ui).clicked();
+                        });
+                        ui.add_space(12.0);
+                        controls::section(ui, "Module projects", |ui| {
+                            ui.weak("Open a folder of projects on this computer.");
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 let edit = TextField::new(&mut self.form.root).hint("Workspace folder").width(Width::Rest(170.0)).show(ui);
@@ -504,7 +575,7 @@ impl BigStarApp {
                         ui.add_space(12.0);
                     }
                     controls::section(ui, "A host", |ui| {
-                        ui.weak("Connect to a running bigstar-host, on this computer or another.");
+                        ui.weak("Connect to a bigstar-host running on this computer or another one.");
                         ui.add_space(4.0);
                         egui::Grid::new("remote").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                             ui.label("Address");
@@ -532,7 +603,9 @@ impl BigStarApp {
                         ui.add_space(10.0);
                         controls::error_text(ui, error);
                     }
-                    if embedded {
+                    if rom {
+                        self.open_local_rom(ctx);
+                    } else if embedded {
                         self.connect_embedded(ctx);
                     } else if remote {
                         self.connect_remote(ctx);
@@ -555,25 +628,40 @@ impl BigStarApp {
             let actions = &mut self.actions;
             ui.add_space(2.0);
             ui.horizontal(|ui| {
+                let mut named = false;
                 match &session.state {
-                    ConnectionState::Connected(info) => {
+                    ConnectionState::Connected(info) if info.has_workspace => {
                         ui.label(RichText::new(&info.workspace_name).strong());
                         ui.weak(format!("host {}", info.host_version));
+                        named = true;
                     }
+                    ConnectionState::Connected(_) => {}
                     _ => {
                         ui.label("Connecting…");
+                        named = true;
                     }
                 }
                 if let Some(project) = &session.project {
-                    ui.separator();
-                    ui.label(&project.name);
+                    if named {
+                        ui.separator();
+                    }
+                    ui.label(RichText::new(&project.name).strong()).on_hover_text(&project.path);
                     if let Some(title) = &project.game_title {
                         ui.weak(title);
                     }
+                    let rom_mode = session.rom_mode();
+                    if session.uploaded() {
+                        ui.weak("Uploaded ROM")
+                            .on_hover_text("The host keeps this ROM only while you are connected. Saves stay there until you download it");
+                    } else if rom_mode {
+                        ui.weak("ROM").on_hover_text("Every save writes straight into this ROM file");
+                    }
                     ui.separator();
                     ui.menu_button(language.tr("Tools"), |ui| tools::menu(ui, tools, session, services, language));
-                    ui.menu_button("Build", |ui| builds.build_menu(ui, session));
-                    ui.menu_button(language.tr("Distribution"), |ui| builds.distribution_menu(ui, session, services));
+                    if !rom_mode {
+                        ui.menu_button("Build", |ui| builds.build_menu(ui, session));
+                        ui.menu_button(language.tr("Distribution"), |ui| builds.distribution_menu(ui, session, services));
+                    }
                     ui.menu_button(language.tr("View"), |ui| {
                         if Button::menu("Preview").show(ui).clicked() {
                             workspace.show_preview_tab();
@@ -596,24 +684,50 @@ impl BigStarApp {
                         }
                     });
                     ui.separator();
-                    // A rebuild-and-test loop should not mean digging through a menu.
-                    if Button::new("Run Patcher")
-                        .with_icon(icons::PLAY)
-                        .primary()
-                        .enabled(!session.build.running)
-                        .show(ui)
-                        .on_hover_text("Saves the edited levels, builds the active variant with NCPatcher, and reads the ROM it makes")
-                        .clicked()
-                    {
-                        builds.run(session);
+                    if session.uploaded() {
+                        let download = Button::new(if session.undownloaded { "Download ROM •" } else { "Download ROM" })
+                            .with_icon(icons::SAVE)
+                            .primary()
+                            .enabled(!session.downloading())
+                            .show(ui)
+                            .on_hover_text("Saves a copy of the ROM, with your saved edits, to this computer");
+                        if download.clicked() {
+                            actions.push(Action::DownloadRom);
+                        }
+                    } else if rom_mode {
+                        if Button::new("Save ROM As…").with_icon(icons::FILE).show(ui).clicked() {
+                            actions.push(Action::SaveRomAs);
+                        }
+                    } else {
+                        // A rebuild-and-test loop should not mean digging through a menu.
+                        if Button::new("Run Patcher")
+                            .with_icon(icons::PLAY)
+                            .primary()
+                            .enabled(!session.build.running)
+                            .show(ui)
+                            .on_hover_text("Saves your levels, builds the selected variant with NCPatcher, and loads the new ROM")
+                            .clicked()
+                        {
+                            builds.run(session);
+                        }
+                        crate::builds::Builds::variant_selector(ui, session);
                     }
-                    crate::builds::Builds::variant_selector(ui, session);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if Button::new("Disconnect").quiet().show(ui).clicked() {
+                    // A ROM opened without a workspace is the whole connection, so closing it ends the connection.
+                    let close = if session.has_workspace() {
+                        "Close Workspace"
+                    } else if session.project.is_some() {
+                        "Close ROM"
+                    } else {
+                        "Disconnect"
+                    };
+                    if Button::new(close).quiet().show(ui).clicked() {
                         actions.push(Action::Leave(Leave::Host));
                     }
-                    if session.project.is_some() && Button::new("Close project").quiet().show(ui).clicked() {
+                    // Within a workspace, closing what is open goes back to its projects.
+                    let back = if session.rom_mode() { "Close ROM" } else { "Close project" };
+                    if session.has_workspace() && session.project.is_some() && Button::new(back).quiet().show(ui).clicked() {
                         actions.push(Action::Leave(Leave::Project));
                     }
                 });
@@ -752,11 +866,18 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         let Some(level) = session.active else { return };
         let busy = session.busy();
+        let rom_mode = session.rom_mode();
         let mut edit = None;
         let mut error = None;
         egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
             let Some(view) = session.levels.get_mut(&level) else { return };
-            controls::tabs(ui, "side", &mut self.side, &[(Side::Properties, "Properties"), (Side::LevelData, "Level Data")]);
+            // The Level Data tab edits glue, which only the module's code reads; a ROM edited directly keeps it as it is.
+            if rom_mode {
+                self.side = Side::Properties;
+                controls::tabs(ui, "side", &mut self.side, &[(Side::Properties, "Properties")]);
+            } else {
+                controls::tabs(ui, "side", &mut self.side, &[(Side::Properties, "Properties"), (Side::LevelData, "Level Data")]);
+            }
             ui.add_space(2.0);
             match self.side {
                 Side::Properties => {
@@ -786,12 +907,23 @@ impl BigStarApp {
     fn workspace_screen(&mut self, ui: &mut Ui) {
         let Some(session) = &self.session else { return };
         let actions = &mut self.actions;
+        // Only a host elsewhere needs a ROM sent to it; this computer's own opens one from the connect screen.
+        let remote = !self.host_key.starts_with("embedded:");
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.heading("Projects");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if Button::new("Import ROM…").with_icon(icons::PLUS).primary().show(ui).clicked() {
                     actions.push(Action::BeginImport);
+                }
+                if remote
+                    && Button::new("Upload ROM…")
+                        .with_icon(icons::FILE)
+                        .show(ui)
+                        .on_hover_text("Edit a ROM from this computer without making a project. Download it when you are done")
+                        .clicked()
+                {
+                    actions.push(Action::UploadRom);
                 }
                 if Button::new("Refresh").with_icon(icons::REFRESH).show(ui).clicked() {
                     actions.push(Action::Refresh);
@@ -800,7 +932,7 @@ impl BigStarApp {
         });
         ui.add_space(4.0);
         if session.projects.is_empty() {
-            controls::notice(ui, icons::FOLDER, "No projects here yet", "Import a ROM that is inside the workspace folder to make one.");
+            controls::notice(ui, icons::FOLDER, "No projects here yet", "To make one, import a ROM from the workspace folder.");
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for project in &session.projects {
@@ -814,6 +946,31 @@ impl BigStarApp {
                 });
             }
         });
+    }
+
+    /// What a connection with no workspace shows with no ROM open: a way to upload one.
+    fn rom_screen(&mut self, ui: &mut Ui) {
+        let Some(session) = &self.session else { return };
+        ui.add_space(8.0);
+        if let Some((done, total)) = session.upload {
+            ui.heading("Uploading ROM");
+            ui.add_space(8.0);
+            ui.add(egui::ProgressBar::new(done as f32 / total.max(1) as f32).show_percentage());
+            return;
+        }
+        // A ROM picked on this machine is opening, and one that fails goes back to the start screen: there is no page
+        // for a desktop ROM connection without its ROM.
+        if !self.local_rom {
+            controls::notice(
+                ui,
+                icons::FILE,
+                "Edit a ROM",
+                "Upload a New Super Mario Bros. ROM to edit it here. The host keeps it only while you are connected, so download it when you are done.",
+            );
+            if Button::new("Upload ROM…").with_icon(icons::FILE).primary().show(ui).clicked() {
+                self.actions.push(Action::UploadRom);
+            }
+        }
     }
 
     fn import_window(&mut self, ctx: &egui::Context) {
@@ -883,7 +1040,7 @@ impl BigStarApp {
         let Some(levels) = &session.recovery_offer else { return };
         let mut answer = None;
         dialogs::modal(ctx, "recovery", "Recover Autosaved Levels", 440.0, |ui| {
-            ui.label(format!("Big Star found {} autosaved level(s) from an interrupted or unsaved session. Recover them?", levels.len()));
+            ui.label(format!("Big Star found {} autosaved level(s) from a session that ended without saving. Recover them?", levels.len()));
             for level in levels {
                 ui.weak(format!("• {}", level.title));
             }
@@ -918,16 +1075,16 @@ impl BigStarApp {
                 ui.end_row();
                 ui.label("Recovery snapshots");
                 ui.add_enabled(project, controls::number(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
-                    .on_hover_text("How often unsaved level edits are written to a recovery snapshot.");
+                    .on_hover_text("How often unsaved level edits are backed up, in case the editor closes unexpectedly.");
                 ui.end_row();
                 ui.label("Backups kept");
                 ui.add_enabled(project, controls::number(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
-                    "How many level-save and patch-import backups are kept, of each kind. Older ones are removed when a project opens and whenever one is added.",
+                    "How many backups of each kind (level saves and patch imports) are kept. Older ones are deleted when a project opens and when a new backup is made.",
                 );
                 ui.end_row();
             });
             if !project {
-                ui.weak("The snapshot interval and the backups kept belong to a project: open one to change them.");
+                ui.weak("These settings are kept per project. Open a project to change them.");
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -980,10 +1137,17 @@ impl BigStarApp {
 
     fn confirm_window(&mut self, ctx: &egui::Context) {
         let Some(question) = self.confirm else { return };
+        let undownloaded = self.session.as_ref().is_some_and(|session| session.undownloaded);
         let (text, leave) = match question {
-            Confirm::Close(_) => ("This level has changes that were not saved. Closing it drops them.", "Close without saving"),
-            Confirm::Quit => ("Some levels have changes that were not saved. Quitting drops them.", "Quit without saving"),
-            Confirm::Leave(_) => ("Some levels have changes that were not saved. Leaving drops them.", "Leave without saving"),
+            Confirm::Close(_) => ("This level has changes that were not saved. Closing it loses them.", "Close without saving"),
+            Confirm::Quit if undownloaded => {
+                ("The uploaded ROM has edits that were not downloaded. Quitting loses them.", "Quit without downloading")
+            }
+            Confirm::Leave(_) if undownloaded => {
+                ("The uploaded ROM has edits that were not downloaded. Leaving loses them.", "Leave without downloading")
+            }
+            Confirm::Quit => ("Some levels have changes that were not saved. Quitting loses them.", "Quit without saving"),
+            Confirm::Leave(_) => ("Some levels have changes that were not saved. Leaving loses them.", "Leave without saving"),
         };
         let mut decision = None;
         let (_, dismissed) = dialogs::modal(ctx, "unsaved", "Unsaved changes", 420.0, |ui| {
@@ -1045,6 +1209,19 @@ impl BigStarApp {
     }
 
     fn apply(&mut self, action: Action) {
+        match action {
+            Action::UploadRom => return self.upload_rom(),
+            Action::SaveRomAs => {
+                let suggested = self.session.as_ref().and_then(|s| s.project.as_ref()).map_or_else(|| "rom.nds".to_owned(), |p| p.name.clone());
+                if let Some(path) = self.services.pick_save_path("Save ROM As", &suggested, "nds")
+                    && let Some(session) = &mut self.session
+                {
+                    session.save_rom_as(&path);
+                }
+                return;
+            }
+            _ => {}
+        }
         let Some(session) = &mut self.session else { return };
         match action {
             Action::Undo => session.undo(),
@@ -1068,7 +1245,9 @@ impl BigStarApp {
                 }
             }
             Action::Import { rom, project, name } => session.import_rom(&rom, &project, &name),
+            Action::DownloadRom => session.download_rom(),
             Action::CancelImport => session.browser = None,
+            Action::UploadRom | Action::SaveRomAs => {}
         }
     }
 
@@ -1132,7 +1311,9 @@ fn level_groups(worlds: &[bigstar_protocol::LevelWorld]) -> Group<'_> {
 /// The project's levels by world. Picking an area shows it in the Preview tab; Edit (or a double-click) opens it as a
 /// document. A level of one area is one row. Returns a file to show in the Filesystem dock, when asked for.
 fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) -> Option<String> {
+    // A ROM edited directly is its own ROM, though an uploaded one has no path to give.
     if let Some(project) = &session.project
+        && !project.mode.is_rom()
         && project.rom_path.is_none()
     {
         controls::error_text(ui, "This project has no ROM, so no level can be opened.");

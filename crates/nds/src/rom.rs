@@ -95,7 +95,7 @@ pub struct OverlayTableEntry {
     pub reserved: u32,
 }
 
-mod header_offset {
+pub(crate) mod header_offset {
     pub const GAME_TITLE: usize = 0x000;
     pub const GAME_CODE: usize = 0x00C;
     pub const MAKER_CODE: usize = 0x010;
@@ -182,6 +182,18 @@ pub fn banner_region_limit(header: &RomHeader, fat: &[FatEntry], rom_size: usize
         consider(entry.start_address);
     }
     next
+}
+
+/// How many bytes the banner at `header.banner_rom_offset` occupies: the length its version implies when that fits
+/// before the next region, else all the room there is. `version` is the banner's first two bytes.
+pub fn banner_size(header: &RomHeader, fat: &[FatEntry], rom_size: usize, version: &[u8]) -> usize {
+    let Ok(offset) = usize::try_from(header.banner_rom_offset) else { return 0 };
+    if offset == 0 || offset >= rom_size {
+        return 0;
+    }
+    let available = banner_region_limit(header, fat, rom_size).saturating_sub(offset);
+    let implied = banner_size_from_version(version);
+    if implied != 0 && implied <= available { implied } else { available }
 }
 
 pub fn crc16(data: &[u8], initial: u16) -> u16 {

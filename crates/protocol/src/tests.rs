@@ -3,8 +3,8 @@ use bigstar_formats::NsmbLevelObject;
 use bigstar_level::{IndexedLevelValue, LevelEntityUpdates};
 
 use crate::{
-    ClientFrame, EditOutcome, Event, LevelEdit, LogLevel, PROTOCOL_VERSION, Request, Response, ServerFrame, decode_client_frame, decode_server_frame,
-    encode_client_frame, encode_server_frame,
+    ClientFrame, EditOutcome, Event, LevelEdit, LogLevel, PROTOCOL_VERSION, ROM_CHUNK_BYTES, Request, Response, ServerFrame, decode_client_frame,
+    decode_server_frame, encode_client_frame, encode_server_frame,
 };
 
 fn client_round_trip(frame: ClientFrame) {
@@ -33,8 +33,23 @@ fn client_frames_survive_the_wire() {
 }
 
 #[test]
+fn a_rom_piece_travels_as_raw_bytes() {
+    // Encoded as an array of integers, a piece would come out up to twice its size and past a socket's limit.
+    let request = Request::UploadRom { name: "game.nds".to_owned(), offset: 0, total: 1 << 24, bytes: vec![0xAB; ROM_CHUNK_BYTES] };
+    let frame = ClientFrame::Request { id: 1, request };
+    let bytes = encode_client_frame(&frame).expect("encodes");
+    assert!(bytes.len() < ROM_CHUNK_BYTES + 128, "{}", bytes.len());
+    assert_eq!(decode_client_frame(&bytes).expect("decodes"), frame);
+}
+
+#[test]
 fn server_frames_survive_the_wire() {
-    server_round_trip(ServerFrame::Welcome { protocol_version: PROTOCOL_VERSION, host_version: "0.1.0".to_owned(), workspace_name: "w".to_owned() });
+    server_round_trip(ServerFrame::Welcome {
+        protocol_version: PROTOCOL_VERSION,
+        host_version: "0.1.0".to_owned(),
+        workspace_name: "w".to_owned(),
+        has_workspace: true,
+    });
     server_round_trip(ServerFrame::Refused { reason: "wrong token".to_owned() });
     server_round_trip(ServerFrame::Response { id: 3, result: Ok(Response::Done) });
     server_round_trip(ServerFrame::Response { id: 4, result: Err(Error::new(ErrorCode::NotFound, "no such level")) });

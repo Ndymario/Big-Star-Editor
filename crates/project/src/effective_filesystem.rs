@@ -5,9 +5,11 @@
 //! editor renders. Archive addresses resolve the same way and per member, so a module supplying one member of an
 //! archive does not stop the others coming from the ROM.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use bigstar_core::{Error, ErrorCode, Result, read_file, read_file_prefix};
+use bigstar_formats::{parse_narc, unwrap_narc};
 use bigstar_patching::FileManifest;
 
 use crate::RomReader;
@@ -50,6 +52,9 @@ pub struct EffectiveFilesystem {
     rom: Option<RomReader>,
     plan: Option<FileManifest>,
     project_dir: PathBuf,
+    /// Files changed in memory, by address, when a ROM is edited directly: they answer before anything else, and
+    /// are what saving that ROM writes into it.
+    edits: BTreeMap<String, Vec<u8>>,
 }
 
 impl EffectiveFilesystem {
@@ -70,6 +75,37 @@ impl EffectiveFilesystem {
         self.rom = None;
         self.plan = None;
         self.project_dir = PathBuf::new();
+        self.edits.clear();
+    }
+
+    /// Replaces what `address` reads as, in memory only.
+    pub fn set_edit(&mut self, address: impl Into<String>, bytes: Vec<u8>) {
+        self.edits.insert(address.into(), bytes);
+    }
+
+    pub fn edits(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.edits
+    }
+
+    pub fn clear_edits(&mut self) {
+        self.edits.clear();
+    }
+
+    /// An edit that answers `address`: its own, or for an archive member, the member inside an edited container.
+    fn edited(&self, address: &str) -> Option<Result<Vec<u8>>> {
+        if let Some(bytes) = self.edits.get(address) {
+            return Some(Ok(bytes.clone()));
+        }
+        let split = split_rom_address(address);
+        let container = self.edits.get(&split.container).filter(|_| split.inside_archive())?;
+        let member = || -> Result<Vec<u8>> {
+            let (_, plain) =
+                unwrap_narc(container).ok_or_else(|| Error::new(ErrorCode::Unsupported, format!("{} is not a Nitro archive", split.container)))?;
+            let archive = parse_narc(&plain)?;
+            let index = archive.find(&split.member)?;
+            archive.files.get(index).cloned().ok_or_else(|| Error::new(ErrorCode::NotFound, format!("{address} is not in its archive")))
+        };
+        Some(member())
     }
 
     pub fn has_rom(&self) -> bool {
@@ -108,6 +144,9 @@ impl EffectiveFilesystem {
     }
 
     pub fn read(&mut self, address: &str) -> Result<Vec<u8>> {
+        if let Some(edited) = self.edited(address) {
+            return edited;
+        }
         if let Some(path) = self.source(address) {
             return read_file(&path);
         }
@@ -121,6 +160,12 @@ impl EffectiveFilesystem {
     /// The head of what [`EffectiveFilesystem::read`] would return, for callers that only need to recognise a format.
     /// A member still costs its container a parse, because an archive does not hand out a member without one.
     pub fn read_prefix(&mut self, address: &str, maximum: usize) -> Result<Vec<u8>> {
+        if let Some(edited) = self.edited(address) {
+            return edited.map(|mut data| {
+                data.truncate(maximum);
+                data
+            });
+        }
         if let Some(path) = self.source(address) {
             return read_file_prefix(&path, maximum);
         }

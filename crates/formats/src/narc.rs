@@ -1,5 +1,7 @@
 use bigstar_core::{Error, ErrorCode, LittleEndianReader, Result};
 use bigstar_nds::parse_fnt;
+
+use crate::{compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +31,40 @@ fn invalid(message: &str) -> Error {
 
 pub fn is_narc(data: &[u8]) -> bool {
     data.starts_with(b"NARC")
+}
+
+/// What an archive was wrapped in when it was read. Part of the file's identity, not a size choice to be made again on
+/// the way out: a game that reads an archive through its decompressor will not take a raw one in its place, so an
+/// archive that arrived compressed goes back compressed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NarcWrapper {
+    None,
+    Lz10,
+    Lz11,
+}
+
+/// The wrapper `data` carries and the archive inside it, or `None` when it is not an archive at all. Decided by what
+/// the bytes decode to, never by the file's name: `.carc` is a naming habit, not a format.
+pub fn unwrap_narc(data: &[u8]) -> Option<(NarcWrapper, Vec<u8>)> {
+    if is_narc(data) {
+        return Some((NarcWrapper::None, data.to_vec()));
+    }
+    let wrapper = match data.first() {
+        Some(0x10) => NarcWrapper::Lz10,
+        Some(0x11) => NarcWrapper::Lz11,
+        _ => return None,
+    };
+    decompress_nitro_lz(data).ok().filter(|plain| is_narc(plain)).map(|plain| (wrapper, plain))
+}
+
+/// `archive` written and put back in the wrapper it was read with.
+pub fn write_wrapped_narc(archive: &NarcArchive, wrapper: NarcWrapper) -> Result<Vec<u8>> {
+    let plain = write_narc(archive)?;
+    match wrapper {
+        NarcWrapper::None => Ok(plain),
+        NarcWrapper::Lz10 => compress_nitro_lz10(&plain),
+        NarcWrapper::Lz11 => compress_nitro_lz11(&plain),
+    }
 }
 
 pub fn parse_narc(data: &[u8]) -> Result<NarcArchive> {

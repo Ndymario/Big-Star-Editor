@@ -32,7 +32,7 @@ fn level_files() -> (Vec<u8>, Vec<u8>) {
 }
 
 fn frontend(host: &Host) -> Session {
-    let info = HostInfo { host_version: "test".to_owned(), workspace_name: host.workspace_name() };
+    let info = HostInfo { host_version: "test".to_owned(), workspace_name: host.workspace_name(), has_workspace: true };
     Session::new(Box::new(InProcess::spawn(host.session(), info, None)))
 }
 

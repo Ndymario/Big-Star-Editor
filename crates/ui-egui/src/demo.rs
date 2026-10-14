@@ -17,8 +17,8 @@ use bigstar_level::{
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FileEntry, FileIcon,
     FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit, LevelGraphics, LevelId, LevelSnapshot, LevelSummary,
-    LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult,
-    TextureData, TilesetGraphics,
+    LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode, ProjectSummary, RecoverableLevel, Request, RequestId, Response,
+    ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
@@ -495,6 +495,14 @@ impl DemoConnection {
         Self::with_level(sample_items())
     }
 
+    /// The demo host as a connection with no workspace sees it: one let in to edit a ROM it uploads.
+    pub fn without_workspace() -> Self {
+        let mut connection = Self::new();
+        connection.state =
+            ConnectionState::Connected(HostInfo { host_version: "demo".to_owned(), workspace_name: String::new(), has_workspace: false });
+        connection
+    }
+
     /// The demo host with its art and a level holding just `items`.
     pub fn with_level(items: LevelEntityInsertions) -> Self {
         let first = level_with(items).or_else(|_| level_with(LevelEntityInsertions::default()));
@@ -507,7 +515,11 @@ impl DemoConnection {
             _ => Vec::new(),
         };
         let mut connection = Self {
-            state: ConnectionState::Connected(HostInfo { host_version: "demo".to_owned(), workspace_name: "Demo workspace".to_owned() }),
+            state: ConnectionState::Connected(HostInfo {
+                host_version: "demo".to_owned(),
+                workspace_name: "Demo workspace".to_owned(),
+                has_workspace: true,
+            }),
             next_id: 1,
             inbox: Vec::new(),
             events: Vec::new(),
@@ -797,17 +809,45 @@ impl DemoConnection {
         }
     }
 
+    /// A project, or a ROM edited directly from `path` (the uploaded ones' name).
+    fn project_info(mode: ProjectMode, path: &str) -> ProjectInfo {
+        let name = path.rsplit('/').next().unwrap_or(path).to_owned();
+        ProjectInfo {
+            path: path.to_owned(),
+            name: if mode == ProjectMode::Module { "Demo".to_owned() } else { name },
+            rom_path: (mode != ProjectMode::Uploaded).then(|| "rom.nds".to_owned()),
+            game_title: Some("NEW SUPER MARIO BROS".to_owned()),
+            game_code: Some("A2DE".to_owned()),
+            file_count: 1204,
+            mode,
+        }
+    }
+
     fn answer(&mut self, request: Request) -> ResponseResult {
         match request {
             Request::ListProjects => Ok(Response::Projects(vec![ProjectSummary { path: "demo".to_owned(), name: "Demo".to_owned() }])),
-            Request::OpenProject { .. } => Ok(Response::Project(ProjectInfo {
-                path: "demo".to_owned(),
-                name: "Demo".to_owned(),
-                rom_path: Some("rom.nds".to_owned()),
-                game_title: Some("NEW SUPER MARIO BROS".to_owned()),
-                game_code: Some("A2DE".to_owned()),
-                file_count: 1204,
-            })),
+            Request::OpenProject { .. } => Ok(Response::Project(Self::project_info(ProjectMode::Module, "demo"))),
+            Request::OpenRom { path } | Request::SaveRomAs { path } => Ok(Response::Project(Self::project_info(ProjectMode::Rom, &path))),
+            Request::UploadRom { name, offset, total, bytes } => {
+                let received = offset + bytes.len() as u64;
+                if received < total {
+                    Ok(Response::Uploaded { received })
+                } else {
+                    Ok(Response::Project(Self::project_info(ProjectMode::Uploaded, &name)))
+                }
+            }
+            // The demo's ROM is a handful of bytes, sent in two pieces as a large one would be in many.
+            Request::DownloadRom { offset } => {
+                let rom = b"DEMO ROM BYTES";
+                let start = (offset as usize).min(rom.len());
+                let end = (start + 8).min(rom.len());
+                Ok(Response::RomChunk {
+                    name: "rom.nds".to_owned(),
+                    total: rom.len() as u64,
+                    offset,
+                    bytes: rom.get(start..end).unwrap_or_default().to_vec(),
+                })
+            }
             Request::CloseProject => Ok(Response::Done),
             Request::ListLevels => {
                 let area = |token: &str, display: &str, available: bool| AreaSummary {

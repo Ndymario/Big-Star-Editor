@@ -131,9 +131,7 @@ impl Builds {
                 }
             })
             .response
-            .on_hover_text(
-                "Which configured build variant the editor is working in.\nSwitching reloads levels and graphics from that variant's module layers.",
-            );
+            .on_hover_text("The build variant you are editing.\nSwitching reloads the levels and graphics for that variant.");
         if chosen != current {
             session.set_active_variant(&chosen);
         }
@@ -148,9 +146,7 @@ impl Builds {
                 if session.build.running
                     && ui
                         .add(Button::new("Cancel").small().enabled(!session.build.cancelling))
-                        .on_hover_text(
-                            "Ask NCPatcher to stop. The project is left as it was, and the next build starts from the same place this one did.",
-                        )
+                        .on_hover_text("Stops NCPatcher. The project is left as it was before this build.")
                         .clicked()
                 {
                     session.cancel_build();
@@ -215,7 +211,7 @@ impl Builds {
             let mut answer = None;
             dialogs::modal(ctx, "migrate-config", "Legacy NCPatcher Project", 480.0, |ui| {
                 ui.label(format!(
-                    "This project still uses the legacy ncpatcher.json:\n\n{file}\n\nNCPatcher 2 builds from ncpatcher.yaml. Convert it now?\nThe original ncpatcher.json is left in place."
+                    "This project still uses the old ncpatcher.json:\n\n{file}\n\nNCPatcher 2 needs ncpatcher.yaml. Convert it now?\nThe original ncpatcher.json is kept."
                 ));
                 dialogs::actions(ui, |ui| {
                     if Button::new("Convert").primary().show(ui).clicked() {
@@ -242,7 +238,7 @@ impl Builds {
         if let Some(bytes) = session.patch_ids_differ.clone() {
             let mut answer = None;
             dialogs::modal(ctx, "patch-ids", "Import Patch", 440.0, |ui| {
-                ui.label("One or more file IDs differ from the patch's source ROM. Apply by path anyway?");
+                ui.label("Some file IDs in this ROM differ from the ROM the patch was made from. Apply it by file path anyway?");
                 dialogs::actions(ui, |ui| {
                     if Button::new("Apply").primary().show(ui).clicked() {
                         answer = Some(true);
@@ -273,7 +269,7 @@ impl Builds {
             let mut open = true;
             let mut run = false;
             dialogs::window("Extract ROM").open(&mut open).show(ctx, |ui| {
-                ui.label("NCPatcher writes the project's built ROM into this folder, under the workspace.");
+                ui.label("The folder in the workspace that the built ROM's files are extracted to.");
                 ui.add(TextField::new(folder).name("Folder").width(Width::Px(360.0)));
                 run = dialogs::actions(ui, |ui| Button::new("Extract").primary().show(ui).clicked());
             });
@@ -289,7 +285,7 @@ impl Builds {
             let mut run = false;
             let title = if xdelta.create { "Create xdelta" } else { "Apply xdelta" };
             dialogs::window(title).open(&mut open).show(ctx, |ui| {
-                ui.label("Paths are under the workspace; xdelta3 runs on the host.");
+                ui.label("Paths are inside the workspace folder.");
                 let labels = if xdelta.create {
                     ["Clean ROM", "Modified ROM", "Patch to write"]
                 } else {

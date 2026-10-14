@@ -286,7 +286,9 @@ pub fn decode_4bpp_tiles(data: &[u8]) -> Result<Vec<IndexedTile4Bpp>> {
         return Err(err(ErrorCode::ParseError, "4bpp tile data must be a multiple of 32 bytes"));
     }
     Ok(data
-        .chunks_exact(32)
+        .as_chunks::<32>()
+        .0
+        .iter()
         .map(|chunk| {
             let mut tile = IndexedTile4Bpp::default();
             for (pair, packed) in tile.pixels.as_chunks_mut::<2>().0.iter_mut().zip(chunk) {

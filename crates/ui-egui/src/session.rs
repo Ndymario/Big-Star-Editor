@@ -8,8 +8,8 @@ use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
     ActorCatalog, DirectoryListing, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld,
-    LogLevel, ProjectData, ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
-    TextureId, TilesetResources,
+    LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request, RequestId,
+    Response, ResponseResult, TextureData, TextureId, TilesetResources,
 };
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
@@ -22,6 +22,10 @@ enum Pending {
     Browse,
     OpenProject,
     ImportRom,
+    SaveRomAs,
+    /// A piece of a ROM being uploaded; the last one's answer is the ROM opened.
+    Upload,
+    Download,
     ListLevels,
     OpenLevel(Opening),
     Edit(LevelId),
@@ -208,6 +212,14 @@ pub struct Session {
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
+    /// How much of a ROM being uploaded the host holds, and of how much.
+    pub upload: Option<(u64, u64)>,
+    /// A download of the uploaded ROM under way: what has arrived of it.
+    downloading: Option<Vec<u8>>,
+    /// A finished download, the name to suggest for it and its bytes, until it is taken.
+    pub downloaded: Option<(String, Vec<u8>)>,
+    /// The uploaded ROM holds saved edits that no download has taken yet; they live only in the host's memory.
+    pub undownloaded: bool,
     /// Set once the host is gone: why.
     pub ended: Option<String>,
     /// `ProjectClosed` events still to come that this frontend caused itself and has already acted on.
@@ -260,6 +272,10 @@ impl Session {
             log: Vec::new(),
             notice: None,
             browser: None,
+            upload: None,
+            downloading: None,
+            downloaded: None,
+            undownloaded: false,
             ended: None,
             own_closes: 0,
             graphics_generation: 0,
@@ -334,6 +350,65 @@ impl Session {
 
     pub fn open_project(&mut self, path: &str) {
         self.request(Request::OpenProject { path: path.to_owned() }, Pending::OpenProject);
+    }
+
+    /// Opens a `.nds` on this machine, by the full path a file dialog gave, to edit directly.
+    pub fn open_rom(&mut self, path: &str) {
+        self.request(Request::OpenRom { path: path.to_owned() }, Pending::OpenProject);
+    }
+
+    /// Writes the ROM being edited to another file on this machine, which later saves then go to.
+    pub fn save_rom_as(&mut self, path: &str) {
+        self.request(Request::SaveRomAs { path: path.to_owned() }, Pending::SaveRomAs);
+    }
+
+    /// Sends a ROM to the host to edit, in pieces; the last piece's answer opens it.
+    pub fn upload_rom(&mut self, name: &str, bytes: &[u8]) {
+        let total = bytes.len() as u64;
+        self.upload = Some((0, total));
+        let mut offset = 0usize;
+        loop {
+            let piece = bytes.get(offset..bytes.len().min(offset + ROM_CHUNK_BYTES)).unwrap_or_default();
+            let request = Request::UploadRom { name: name.to_owned(), offset: offset as u64, total, bytes: piece.to_vec() };
+            self.request(request, Pending::Upload);
+            offset += piece.len();
+            if offset >= bytes.len() || piece.is_empty() {
+                break;
+            }
+        }
+    }
+
+    /// Fetches the uploaded ROM with its edits; it lands in `downloaded`.
+    pub fn download_rom(&mut self) {
+        if self.downloading.is_none() {
+            self.downloading = Some(Vec::new());
+            self.request(Request::DownloadRom { offset: 0 }, Pending::Download);
+        }
+    }
+
+    pub fn downloading(&self) -> bool {
+        self.downloading.is_some()
+    }
+
+    /// Whether the open project is a ROM edited directly, which has no modules, variants or builds.
+    pub fn rom_mode(&self) -> bool {
+        self.project.as_ref().is_some_and(|project| project.mode.is_rom())
+    }
+
+    /// Whether the open project is a ROM this frontend uploaded, which leaves as a download.
+    pub fn uploaded(&self) -> bool {
+        self.project.as_ref().is_some_and(|project| project.mode == ProjectMode::Uploaded)
+    }
+
+    /// Whether this connection reaches a workspace of module projects.
+    pub fn has_workspace(&self) -> bool {
+        matches!(&self.state, ConnectionState::Connected(info) if info.has_workspace)
+    }
+
+    fn list_projects_if_any(&mut self) {
+        if self.has_workspace() {
+            self.list_projects();
+        }
     }
 
     pub fn import_rom(&mut self, rom_path: &str, project_path: &str, name: &str) {
@@ -557,7 +632,7 @@ impl Session {
 
     /// Whether any open level has edits that were not saved.
     pub fn dirty(&self) -> bool {
-        self.levels.values().any(|view| view.snapshot.dirty)
+        self.undownloaded || self.levels.values().any(|view| view.snapshot.dirty)
     }
 
     /// Tells the person something went wrong.
@@ -577,7 +652,7 @@ impl Session {
         let was_connected = self.connected();
         self.state = state;
         match &self.state {
-            ConnectionState::Connected(_) if !was_connected => self.list_projects(),
+            ConnectionState::Connected(_) if !was_connected => self.list_projects_if_any(),
             ConnectionState::Refused(reason) | ConnectionState::Closed(reason) => {
                 self.ended.get_or_insert_with(|| reason.clone());
             }
@@ -634,6 +709,13 @@ impl Session {
                     self.build.running = false;
                     self.build.status = format!("Failed: {}", error.message);
                 }
+                if kind == Pending::Download {
+                    self.downloading = None;
+                }
+                // The pieces after one the host refused are refused too; one notice is enough.
+                if kind == Pending::Upload && self.upload.take().is_none() {
+                    return;
+                }
                 self.fail(&error);
                 // The host's version of the level is the truth; fetch it again.
                 if let Pending::Edit(level) | Pending::History(level) | Pending::Save(level) = kind {
@@ -653,18 +735,35 @@ impl Session {
                     browser.listing = Some(listing);
                 }
             }
-            (Pending::OpenProject, Response::Project(info)) => {
-                // Replacing an open project makes the host announce that the old one closed, to us as well.
-                if self.project.is_some() {
-                    self.own_closes += 1;
+            (Pending::OpenProject, Response::Project(info)) => self.opened_project(info),
+            (Pending::Upload, Response::Uploaded { received }) => {
+                if let Some((done, _)) = &mut self.upload {
+                    *done = received;
                 }
-                self.forget_project();
+            }
+            (Pending::Upload, Response::Project(info)) => {
+                self.upload = None;
+                self.opened_project(info);
+            }
+            (Pending::Download, Response::RomChunk { name, total, offset, bytes }) => {
+                let Some(mut arrived) = self.downloading.take() else { return };
+                if offset != arrived.len() as u64 {
+                    self.report("The download arrived out of order; try again.".to_owned());
+                    return;
+                }
+                arrived.extend_from_slice(&bytes);
+                if arrived.len() as u64 >= total || bytes.is_empty() {
+                    self.undownloaded = false;
+                    self.downloaded = Some((name, arrived));
+                } else {
+                    let next = arrived.len() as u64;
+                    self.downloading = Some(arrived);
+                    self.request(Request::DownloadRom { offset: next }, Pending::Download);
+                }
+            }
+            (Pending::SaveRomAs, Response::Project(info)) => {
+                self.browser = None;
                 self.project = Some(info);
-                self.request(Request::ListLevels, Pending::ListLevels);
-                self.request(Request::ProjectSettings, Pending::Settings);
-                self.request(Request::ProjectData, Pending::ProjectData);
-                self.request(Request::Recovery, Pending::Recovery);
-                self.refresh_filesystem();
             }
             (Pending::ImportRom, Response::Project(info)) => {
                 self.browser = None;
@@ -675,6 +774,9 @@ impl Session {
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
             (pending @ (Pending::Edit(_) | Pending::History(_) | Pending::Save(_)), Response::Edited { snapshot, outcome }) => {
                 let level = snapshot.level;
+                if matches!(pending, Pending::Save(_)) {
+                    self.note_saved();
+                }
                 // An edit, an undo or a redo that changes which tilesets, layers or palettes the level names leaves its
                 // graphics out of date.
                 let renamed = self.levels.get(&level).is_some_and(|view| view.snapshot.tileset_references != snapshot.tileset_references);
@@ -699,7 +801,7 @@ impl Session {
                 self.own_closes += 1;
                 self.project = None;
                 self.forget_project();
-                self.list_projects();
+                self.list_projects_if_any();
             }
             (Pending::LevelBytes(level, purpose), Response::LevelBytes(bytes)) => self.level_bytes = Some((level, purpose, *bytes)),
             (Pending::Find { sprites, id }, Response::Found(entities)) => self.found = Some(Found { sprites, id, entities }),
@@ -718,10 +820,13 @@ impl Session {
                 }
             }
             (Pending::ReadFile(purpose), Response::FileBytes { path, bytes }) => self.file_reads.push((path, purpose, bytes)),
-            (Pending::FileChange, Response::Done) => self.refresh_filesystem(),
+            (Pending::FileChange, Response::Done) => {
+                self.note_saved();
+                self.refresh_filesystem();
+            }
             (Pending::FileTargets(path), Response::FileTargets(holding)) => self.file_targets = Some((path, holding)),
             (Pending::Banner, Response::Banner { bytes, target }) => self.banner = Some((bytes, target)),
-            (Pending::BannerWrite, Response::Done) => {}
+            (Pending::BannerWrite, Response::Done) => self.note_saved(),
             (Pending::TilesetResources, Response::TilesetResources(resources)) => self.tileset_resources = Some(*resources),
             (Pending::BuildConfig, Response::BuildConfig(kind)) => self.build_config = Some(kind),
             (Pending::Migrate, Response::Done) => self.migrated = true,
@@ -833,7 +938,31 @@ impl Session {
     }
 
     /// Everything that belonged to the project that just closed.
+    /// Something was saved: into the ROM's file, or for an uploaded ROM into the host's memory only, until downloaded.
+    fn note_saved(&mut self) {
+        if self.uploaded() {
+            self.undownloaded = true;
+        }
+    }
+
+    fn opened_project(&mut self, info: ProjectInfo) {
+        // Replacing an open project makes the host announce that the old one closed, to us as well.
+        if self.project.is_some() {
+            self.own_closes += 1;
+        }
+        self.forget_project();
+        self.browser = None;
+        self.project = Some(info);
+        self.request(Request::ListLevels, Pending::ListLevels);
+        self.request(Request::ProjectSettings, Pending::Settings);
+        self.request(Request::ProjectData, Pending::ProjectData);
+        self.request(Request::Recovery, Pending::Recovery);
+        self.refresh_filesystem();
+    }
+
     fn forget_project(&mut self) {
+        self.undownloaded = false;
+        self.downloading = None;
         self.worlds.clear();
         self.levels.clear();
         self.active = None;
@@ -989,7 +1118,7 @@ impl Session {
             Event::ProjectClosed => {
                 self.project = None;
                 self.forget_project();
-                self.list_projects();
+                self.list_projects_if_any();
             }
         }
     }

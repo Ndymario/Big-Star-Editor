@@ -26,7 +26,7 @@ impl Service for Echo {
 }
 
 fn info() -> HostInfo {
-    HostInfo { host_version: "test".to_owned(), workspace_name: "w".to_owned() }
+    HostInfo { host_version: "test".to_owned(), workspace_name: "w".to_owned(), has_workspace: true }
 }
 
 fn collect(connection: &mut impl Connection, wanted: usize) -> Vec<Incoming> {

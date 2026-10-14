@@ -587,7 +587,9 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
             }
         }
         Some(Page::Metadata(_)) => {
-            ui.label("Per-ROM names and object notes stored in NitroFS file ID 131. Numeric section names are tileset object-note lists.");
+            ui.label(
+                "Names and object notes for this ROM, kept in file 131. A section named with a number holds the notes for that tileset's objects.",
+            );
             metadata_page(ui, doc);
         }
         None => {}
