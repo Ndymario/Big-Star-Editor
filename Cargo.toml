@@ -44,7 +44,10 @@ notify = { version = "8", default-features = false, features = ["macos_fsevent"]
 mlua = { version = "0.11", features = ["lua54", "vendored", "send"] }
 
 [workspace.lints.rust]
-unsafe_code = "forbid"
+# Denied rather than forbidden so that the one place that has to hand
+# pointers between Wayland libraries (bigstar's toplevel_icon.rs) can
+# allow it for itself.
+unsafe_code = "deny"
 
 [workspace.lints.clippy]
 unwrap_used = "deny"

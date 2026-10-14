@@ -34,3 +34,15 @@ bigstar-level.workspace = true
 bigstar-project = { workspace = true, features = ["test-support"] }
 bigstar-protocol.workspace = true
 egui_kittest = { workspace = true, features = ["wgpu"] }
+
+# The window's icon on Wayland, where winit sets none (toplevel_icon.rs).
+# The same versions eframe's winit already runs on.
+[target.'cfg(target_os = "linux")'.dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland"] }
+wayland-client = { version = "0.31", features = ["system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+rustix = { version = "1", features = ["fs"] }
+
+# The icon and version details of the Windows executable (build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"

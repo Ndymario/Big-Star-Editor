@@ -5,6 +5,8 @@ mod accent;
 mod services;
 #[cfg(test)]
 mod tests;
+#[cfg(target_os = "linux")]
+mod toplevel_icon;
 
 use bigstar_ui_egui::{BigStarApp, EMBEDDED_ROOT_KEY, Services};
 use services::NativeServices;
@@ -25,10 +27,25 @@ fn main() -> eframe::Result {
         services.store(EMBEDDED_ROOT_KEY, &root);
     }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_title("Big Star Editor").with_inner_size([1280.0, 800.0]).with_min_inner_size([640.0, 400.0]),
+        viewport: egui::ViewportBuilder::default().with_title("Big Star Editor").with_app_id("bigstar").with_icon(icon()).with_inner_size([1280.0, 800.0]).with_min_inner_size([640.0, 400.0]),
         ..Default::default()
     };
-    eframe::run_native("Big Star Editor", options, Box::new(move |_cc| Ok(Box::new(Shell(BigStarApp::new(Box::new(services)))))))
+    eframe::run_native("Big Star Editor", options, Box::new(move |cc| {
+            #[cfg(target_os = "linux")]
+            if let Some(window) = cc.winit_window() {
+                toplevel_icon::set(window, &icon());
+            }
+            #[cfg(not(target_os = "linux"))]
+            let _ = cc;
+            Ok(Box::new(Shell(BigStarApp::new(Box::new(services)))))
+        }),
+    )
+}
+
+/// The window's icon. On Wayland winit drops it and the compositor looks for
+/// the desktop entry named by the app id; `toplevel_icon` hands it over too.
+fn icon() -> egui::IconData {
+    eframe::icon_data::from_png_bytes(include_bytes!("../../../packaging/bigstar.png")).unwrap_or_default()
 }
 
 /// Logging goes to the terminal at `RUST_LOG`'s level; there is no logger crate in the tree, so a minimal one.
