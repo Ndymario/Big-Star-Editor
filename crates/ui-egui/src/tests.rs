@@ -7,7 +7,7 @@ use bigstar_formats::{
 };
 use bigstar_level::{LevelEntityInsertions, SpriteInsertion};
 use bigstar_protocol::{Event, LevelEdit, LevelGraphics, LevelSnapshot, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics};
-use egui::{Key, Modifiers, PointerButton, Pos2, Vec2};
+use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
@@ -607,15 +607,26 @@ fn containers_yield_the_click_to_what_they_enclose() {
     // Over the object all three overlap, and the object wins; clear of it the zone beats the larger view.
     assert_eq!(view(&harness).hit_test(Pos2::new(260.0, 260.0)).map(|i| i.kind), Some(Kind::Object));
     assert_eq!(view(&harness).hit_test(Pos2::new(700.0, 600.0)).map(|i| i.kind), Some(Kind::Zone));
-    // A view is reachable wherever nothing else covers it.
+    // A view is not taken by its area, even where nothing else covers it...
     view_mut(&mut harness).snapshot.course.zones[0].width = 64;
     view_mut(&mut harness).snapshot.course.zones[0].height = 64;
-    assert_eq!(view(&harness).hit_test(Pos2::new(700.0, 600.0)).map(|i| i.kind), Some(Kind::View));
-    // And a click there selects it.
-    let at = screen(&harness, Pos2::new(700.0, 600.0));
-    view_mut(&mut harness).snapshot.course.zones[0].width = 64;
-    click(&mut harness, at, PointerButton::Primary, Modifiers::NONE);
-    assert!(view(&harness).selection.iter().all(|i| i.kind != Kind::Object));
+    assert_eq!(view(&harness).hit_test(Pos2::new(700.0, 600.0)), None);
+    // ...only by the tab at its top-left corner, which is over the zone there.
+    let area = Rect::from_min_size(Pos2::ZERO, Vec2::new(1024.0, 768.0));
+    let tab = view(&harness).view_tab(0, area).unwrap();
+    assert_eq!(tab.min, screen(&harness, Pos2::ZERO));
+    click(&mut harness, tab.center(), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::View, 0)]);
+    // Scrolled away from that corner, the tab keeps to the canvas's corner for as long as the view is on the canvas.
+    view_mut(&mut harness).selection.clear();
+    view_mut(&mut harness).pan = Vec2::new(300.0, 200.0);
+    harness.run();
+    let tab = view(&harness).view_tab(0, area).unwrap();
+    assert_eq!(tab.min, view(&harness).canvas.min);
+    click(&mut harness, tab.center(), PointerButton::Primary, Modifiers::NONE);
+    assert_eq!(view(&harness).selection, [Item::new(Kind::View, 0)]);
+    view_mut(&mut harness).pan = Vec2::new(2000.0, 200.0);
+    assert_eq!(view(&harness).view_tab(0, area), None, "nothing to hold a tab once the view is off the canvas");
 }
 
 #[test]

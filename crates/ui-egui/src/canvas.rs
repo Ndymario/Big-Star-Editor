@@ -18,7 +18,7 @@ use egui::{
 
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
-use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
+use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, VIEW_TAB_TEXT, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
 /// The textures the host has sent, uploaded the first time something draws them.
@@ -1082,11 +1082,20 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     ] {
         for index in 0..count {
             let rect = frame.rect(placed(kind, index));
-            if selected(kind, index, None) {
+            let chosen = selected(kind, index, None);
+            if chosen {
                 painter.rect_stroke(rect, 0.0, Stroke::new(3.0, accent), StrokeKind::Middle);
                 knobs(painter, rect, colors);
             } else {
                 painter.rect_stroke(rect, 0.0, hairline(color), StrokeKind::Middle);
+            }
+            // A view is picked up by its tab, which follows it through a drag.
+            if live
+                && kind == Kind::View
+                && let (Some(tab), Some(label)) = (view.view_tab(index, placed(kind, index)), view.view_tab_label(index))
+            {
+                painter.rect_filled(tab, CornerRadius { se: 3, ..CornerRadius::ZERO }, if chosen { accent } else { color });
+                painter.text(tab.center(), Align2::CENTER_CENTER, label, FontId::monospace(VIEW_TAB_TEXT), Color32::WHITE);
             }
         }
     }

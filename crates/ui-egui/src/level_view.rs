@@ -502,6 +502,9 @@ fn entrance_rect(entrance: &NsmbLevelEntrance) -> Rect {
     rect(f32::from(entrance.x), f32::from(entrance.y), TILE, TILE)
 }
 
+/// The size of the label on a view's tab, in screen points.
+pub const VIEW_TAB_TEXT: f32 = 11.0;
+
 fn view_rect(view: &NsmbLevelView) -> Rect {
     rect(f32::from(view.x), f32::from(view.y), f32::from(view.width.max(1)), f32::from(view.height.max(1)))
 }
@@ -720,9 +723,41 @@ impl LevelView {
         entities
     }
 
+    /// The tab view `index` is picked up by, in screen points, with the view at `rect` (level pixels): a box at the
+    /// view's top-left corner that keeps to the canvas's top and left edges while any of the view is on the canvas.
+    /// `None` when none of it is.
+    pub fn view_tab(&self, index: usize, rect: Rect) -> Option<Rect> {
+        let label = self.view_tab_label(index)?;
+        let shown = self.screen_rect(rect).intersect(self.canvas);
+        if !shown.is_positive() {
+            return None;
+        }
+        // The label is set in the monospace face, whose letters are all 0.6 of its size across.
+        let size = Vec2::new(label.chars().count() as f32 * VIEW_TAB_TEXT * 0.6 + 10.0, VIEW_TAB_TEXT + 6.0);
+        Some(Rect::from_min_size(shown.min, size))
+    }
+
+    /// What view `index`'s tab says.
+    pub fn view_tab_label(&self, index: usize) -> Option<String> {
+        self.snapshot.course.views.get(index).map(|v| format!("View {}", v.id))
+    }
+
+    /// What a click or a marquee can take, back to front: every entity's own box, except that a view is taken only by
+    /// its tab, which is drawn over everything else. A view's area is where the rest of the level is edited, so it
+    /// would otherwise be in the way of every click that misses.
+    fn pick_rects(&self) -> Vec<(Item, Rect)> {
+        let mut rects: Vec<(Item, Rect)> = self.entity_rects().into_iter().filter(|(item, _)| item.kind != Kind::View).collect();
+        for (index, v) in self.snapshot.course.views.iter().enumerate() {
+            if let Some(tab) = self.view_tab(index, view_rect(v)) {
+                rects.push((Item::new(Kind::View, index), Rect::from_min_max(self.to_world(tab.min), self.to_world(tab.max))));
+            }
+        }
+        rects
+    }
+
     /// What a click at `point` grabs: front to back, across every layer.
     pub fn hit_test(&self, point: Pos2) -> Option<Item> {
-        self.entity_rects().into_iter().rev().find(|(_, rect)| rect.expand(HIT_SLACK).contains(point)).map(|(item, _)| item)
+        self.pick_rects().into_iter().rev().find(|(_, rect)| rect.expand(HIT_SLACK).contains(point)).map(|(item, _)| item)
     }
 
     /// The box around everything in the level, with room around it. A sprite counts as the tile it sits on, not as
@@ -1329,7 +1364,7 @@ impl LevelView {
     /// Everything a marquee from `a` to `b` (level pixels) touches, added to the selection.
     pub fn select_within(&mut self, a: Pos2, b: Pos2) {
         let area = Rect::from_two_pos(a, b);
-        for (item, rect) in self.entity_rects() {
+        for (item, rect) in self.pick_rects() {
             if area.intersects(rect) && !self.selection.contains(&item) {
                 self.selection.push(item);
             }
