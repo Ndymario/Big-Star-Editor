@@ -191,6 +191,92 @@ fn paths(snapshot: &LevelSnapshot, kind: Kind) -> &Vec<NsmbLevelPath> {
     if kind == Kind::ProgressPath { &snapshot.course.progress_paths } else { &snapshot.course.paths }
 }
 
+/// What each of the game's 76 level tilesets looks like, as NSMB Editor names them. Several look alike; the number
+/// tells them apart. Its tables have room for no more.
+pub(crate) const TILESET_NAMES: [&str; 76] = [
+    "Grassland",
+    "Castle",
+    "Desert",
+    "Underground (with ice)",
+    "Sky/mushrooms (World 7 style)",
+    "Underwater",
+    "Desert",
+    "Volcano (brown)",
+    "Grassland",
+    "Beach (blue)",
+    "Beach (blue)",
+    "Forest",
+    "Grassland",
+    "Sky/mushrooms (with flowers and bushes)",
+    "Sky/mushrooms (with flowers and bushes)",
+    "Volcano (black)",
+    "Volcano (black 2) [unused]",
+    "Snow (with ice)",
+    "Snow",
+    "Forest",
+    "Oasis in desert",
+    "Bonus room [unused]",
+    "Volcano (black 2) [unused]",
+    "Ghost house",
+    "Cliffs",
+    "Cliffs",
+    "Snow (with ice)",
+    "Grassland",
+    "Snow (with ice)",
+    "Factory (W7-A)",
+    "Sewer (W2-3)",
+    "Volcano (yellow)",
+    "Castle",
+    "Sky/mushrooms (with flowers and bushes)",
+    "Grassland",
+    "Underground",
+    "Underground (dark blue) [unused]",
+    "Dark world (purple)",
+    "Dark world (brown)",
+    "Tower",
+    "Ghost house exit",
+    "Final castle",
+    "Toad house 1",
+    "Toad house 2",
+    "Toad house 3",
+    "Final castle",
+    "Toad house 4",
+    "Bowser Jr. battle",
+    "Beach (blue)",
+    "Boss battle",
+    "Sky/mushrooms (with flowers and bushes)",
+    "Forest",
+    "Desert",
+    "Desert",
+    "Forest",
+    "Final boss battle",
+    "Volcano (black)",
+    "Underwater",
+    "Light grey castle (W8 castle 1)",
+    "Sky/mushrooms (yellowish)",
+    "Beach (turquoise, without moss)",
+    "Lakithunder and Monty Tank battles",
+    "Boss battle",
+    "Mummy-Pokey battle",
+    "Oasis in desert",
+    "Desert",
+    "Oasis in desert",
+    "Bonus room [unused]",
+    "Bonus room [unused]",
+    "Bonus room [unused]",
+    "Bonus room [unused]",
+    "Bonus room [unused]",
+    "Bonus room [unused]",
+    "Underground (gold) [unused]",
+    "Bonus room",
+    "Grassland",
+];
+
+/// The tileset IDs a level can choose, each with its name.
+pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
+    (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned())).collect()
+}
+
 /// What the game calls each entrance type, in the order it numbers them. Its tables end at `Vine`; the four after it
 /// are in Nintendo's own levels all the same, and NSMB Editor names them.
 const ENTRANCE_TYPES: [&str; 26] = [
@@ -401,6 +487,12 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 ("FG palette", r.foreground_palette_id, Some(BackgroundLayer::Foreground)),
             ] {
                 full(rows, label, Some(i64::from(value)), 0, 255);
+                if layer.is_none()
+                    && let Some(row) = rows.last_mut()
+                {
+                    row.representable = usize::from(value) < TILESET_NAMES.len();
+                    row.editor = Editor::Choice(tileset_choices());
+                }
                 // The game's tables hold a background's graphics, palette and screen at the same number, so the name
                 // the project's scripts give that number names all three.
                 let named = view.art.graphics.as_ref().zip(layer).map(|(graphics, layer)| graphics.backgrounds.layer(layer)).unwrap_or_default();
@@ -1369,6 +1461,10 @@ mod tests {
         // The course tab edits the tileset references; the banks name their overlay.
         let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 3, 7) else { panic!() };
         assert_eq!(references.background_screen_id, 7);
+        // The tileset is picked by name, with its number.
+        let tileset = &rows(&view, &view.panel, None).rows[1];
+        let Editor::Choice(choices) = &tileset.editor else { panic!("{:?}", tileset.editor) };
+        assert_eq!((tileset.label.as_str(), choices.len(), &choices[1]), ("Tileset", 76, &(1, "Castle".to_owned())));
         view.panel_tab(Tab::Banks);
         view.snapshot.course.object_banks[0] = 3;
         let mut overlays = [[0; 10]; 16];

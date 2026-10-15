@@ -4,6 +4,7 @@
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::icons;
+use crate::properties::TILESET_NAMES;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -584,7 +585,11 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
             ("Foreground palette", &mut references.foreground_palette_id),
         ] {
             ui.label(label);
-            ui.add(controls::number(value).range(0..=255));
+            if label == "Level tileset" {
+                tileset_choice(ui, value);
+            } else {
+                ui.add(controls::number(value).range(0..=255));
+            }
             ui.end_row();
         }
     });
@@ -594,6 +599,22 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
         )
         .wrap(),
     );
+}
+
+/// The level tileset, picked by name. A number the game's tables have no room for stays as it is until another is
+/// picked.
+fn tileset_choice(ui: &mut Ui, value: &mut u16) {
+    let label = |id: u16| match TILESET_NAMES.get(usize::from(id)) {
+        Some(name) => format!("{id} — {name}"),
+        None => format!("{id} — not listed"),
+    };
+    controls::drop_down("tileset-choice").width(260.0).truncate().selected_text(label(*value)).show_ui(ui, |ui| {
+        for id in (0u16..).take(TILESET_NAMES.len()) {
+            if ui.choice(*value == id, label(id)).clicked() {
+                *value = id;
+            }
+        }
+    });
 }
 
 fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: &dyn Services) {
