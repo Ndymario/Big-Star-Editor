@@ -380,6 +380,7 @@ impl ProjectGraphics {
                 atlas: atlas(&decoded.map16_tiles).map(|image| self.textures.add_owned(image)),
                 blocks: decoded.map16_tiles.len() as u32,
                 objects: decoded.objects,
+                behaviors: decoded.behaviors,
                 error: (!error.is_empty()).then_some(error),
             };
         }

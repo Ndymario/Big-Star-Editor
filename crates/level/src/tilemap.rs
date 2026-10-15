@@ -21,6 +21,8 @@ pub const LEVEL_CHUNK_CELLS: usize = 16;
 pub struct DecodedTileset {
     pub map16_tiles: Vec<RgbaImage>,
     pub objects: Vec<ObjectLayout>,
+    /// Each Map16 block's behaviour word; empty when the tileset has no behaviour table.
+    pub behaviors: Vec<u32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

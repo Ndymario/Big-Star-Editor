@@ -915,7 +915,7 @@ fn an_object_in_front_culls_the_one_behind() {
     let mut blocks = vec![blank; 7];
     blocks.push(red);
     let layout = |tile| ObjectLayout { rows: vec![vec![ObjectLayoutTile::new(tile, 0)]], ..Default::default() };
-    let tileset = DemoTileset { blocks, objects: vec![layout(7), layout(OBJECT_LAYOUT_EMPTY_TILE)] };
+    let tileset = DemoTileset { blocks, objects: vec![layout(7), layout(OBJECT_LAYOUT_EMPTY_TILE)], behaviors: Vec::new() };
     let items = LevelEntityInsertions { objects: vec![object(0, 4, 4, 4, 4), object(1, 5, 5, 2, 2)], ..Default::default() };
     let connection = DemoConnection::with_level(items).without_background().with_tileset(0, Some(tileset));
     let mut harness = drawn(connection, Vec2::new(1300.0, 600.0));

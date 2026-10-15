@@ -408,7 +408,7 @@ impl LevelArt {
     pub fn set_graphics(&mut self, graphics: LevelGraphics) {
         for (target, slot) in self.tilesets.iter_mut().zip(&graphics.tilesets) {
             // A slot that did not decode keeps nothing, and its objects show as plain rectangles.
-            *target = slot.error.is_none().then(|| DecodedTileset { map16_tiles: Vec::new(), objects: slot.objects.clone() });
+            *target = slot.error.is_none().then(|| DecodedTileset { objects: slot.objects.clone(), ..DecodedTileset::default() });
         }
         self.graphics = Some(graphics);
         self.serial += 1;
@@ -2003,7 +2003,7 @@ mod tests {
     fn the_tile_array_follows_the_gesture_and_is_cached() {
         let mut view = LevelView::new(snapshot());
         let layout = bigstar_formats::ObjectLayout { rows: vec![vec![bigstar_formats::ObjectLayoutTile::new(7, 0)]], ..Default::default() };
-        view.art.tilesets[0] = Some(DecodedTileset { map16_tiles: Vec::new(), objects: vec![layout.clone(), layout] });
+        view.art.tilesets[0] = Some(DecodedTileset { objects: vec![layout.clone(), layout], ..DecodedTileset::default() });
         let first = view.tilemap();
         assert!(Arc::ptr_eq(&first, &view.tilemap()));
         assert!(first.cell_at(2, 3).draws());

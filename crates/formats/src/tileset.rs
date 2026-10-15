@@ -541,6 +541,66 @@ pub fn tile_behavior_parameter_kind(value: TileBehaviorParts) -> TileBehaviorPar
     }
 }
 
+/// What a question block or a brick gives up when it is hit, as far as an editor need tell them apart at a glance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BlockContents {
+    /// A mushroom, or a fire flower for a player who is already big.
+    PowerUp,
+    Mushroom,
+    FireFlower,
+    Star,
+    OneUp,
+    MiniMushroom,
+    MegaMushroom,
+    Coin,
+    /// More than one coin: a brick's run of them, or five floating ones.
+    Coins,
+    Vine,
+    Springboard,
+    Boo,
+    BlueShell,
+}
+
+/// What a block with behaviour `value` holds, read off the parameter its question or brick flag gives it. `None` for
+/// any other block, and for an empty or unknown parameter. Invisible and thrown variants hold what their visible
+/// ones do.
+pub fn block_contents(value: u32) -> Option<BlockContents> {
+    use BlockContents as C;
+    let parts = decode_tile_behavior(value);
+    if parts.flags & 4 != 0 {
+        return match parts.parameter {
+            0 | 0x10 | 0x30 => Some(C::PowerUp),
+            1 | 2 | 0x31 => Some(C::Star),
+            3 | 0x32 => Some(C::OneUp),
+            4 => Some(C::Springboard),
+            5 => Some(C::MiniMushroom),
+            6 => Some(C::Coins),
+            7 | 0x11 | 0x33 => Some(C::Coin),
+            8 | 0x34 => Some(C::Vine),
+            9 | 10 | 0x35 => Some(C::Mushroom),
+            12 => Some(C::Boo),
+            13 => Some(C::MegaMushroom),
+            _ => None,
+        };
+    }
+    if parts.flags & 0x10 != 0 {
+        return match parts.parameter {
+            1 => Some(C::PowerUp),
+            2 => Some(C::Star),
+            3 => Some(C::OneUp),
+            4 => Some(C::Coin),
+            5 | 0x45 => Some(C::Coins),
+            6 => Some(C::Vine),
+            0x34 => Some(C::FireFlower),
+            0x35 => Some(C::BlueShell),
+            0x95 => Some(C::MiniMushroom),
+            0x97 => Some(C::MegaMushroom),
+            _ => None,
+        };
+    }
+    None
+}
+
 const PIPE_DOOR_NAMES: [&str; 32] = [
     "Up left / door bottom-left",
     "Up right / door bottom-right",

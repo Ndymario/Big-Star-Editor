@@ -104,7 +104,13 @@ fn graphics_messages_survive_the_wire() {
         level: 3,
         generation: 9,
         tilesets: [
-            TilesetGraphics { atlas: Some("a".into()), blocks: 256, objects: vec![bigstar_formats::ObjectLayout::default()], error: None },
+            TilesetGraphics {
+                atlas: Some("a".into()),
+                blocks: 256,
+                objects: vec![bigstar_formats::ObjectLayout::default()],
+                behaviors: vec![4 << 16],
+                error: None,
+            },
             TilesetGraphics::default(),
             TilesetGraphics { error: Some("no".into()), ..TilesetGraphics::default() },
         ],

@@ -471,7 +471,7 @@ mod tilemap {
     #[test]
     fn tileset_objects_render_from_map16_images() {
         let red = bigstar_formats::RgbaImage { width: 16, height: 16, pixels: [255, 0, 0, 255].repeat(256) };
-        let tileset = DecodedTileset { map16_tiles: vec![red], objects: vec![flat(0), flat(OBJECT_LAYOUT_EMPTY_TILE)] };
+        let tileset = DecodedTileset { map16_tiles: vec![red], objects: vec![flat(0), flat(OBJECT_LAYOUT_EMPTY_TILE)], behaviors: Vec::new() };
         let image = render_tileset_object(&tileset, 0, 2, 1).unwrap();
         assert_eq!((image.width, image.height), (32, 16));
         assert_eq!(&image.pixels[..4], &[255, 0, 0, 255]);

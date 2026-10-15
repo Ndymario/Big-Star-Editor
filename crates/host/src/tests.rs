@@ -1080,6 +1080,11 @@ fn real_backgrounds_and_foregrounds_draw() {
     };
     let (graphics, opaque) = drawn(&mut session, "A01_1");
     assert!(graphics.background.error.is_none() && graphics.foreground.error.is_none(), "{graphics:?}");
+    // The shared tileset's question blocks say what they hold, so the canvas can show it.
+    let held: std::collections::HashSet<_> = graphics.tilesets[0].behaviors.iter().filter_map(|&b| bigstar_formats::block_contents(b)).collect();
+    for contents in [bigstar_formats::BlockContents::PowerUp, bigstar_formats::BlockContents::Coin, bigstar_formats::BlockContents::Star] {
+        assert!(held.contains(&contents), "{contents:?} in {held:?}");
+    }
     assert_eq!(opaque.len(), 2);
     assert_eq!(opaque[0], 100, "the sky fills the background");
     assert!((10..100).contains(&opaque[1]), "the hills stand over a see-through foreground: {}%", opaque[1]);

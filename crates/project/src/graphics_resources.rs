@@ -34,6 +34,8 @@ pub struct NsmbGraphicsProfile {
     pub foreground_palette: usize,
     pub foreground_screen: usize,
     pub sprite_object_ids: usize,
+    /// The shared tileset's behaviour table, held in the overlay itself rather than in a file: 256 words, one a block.
+    pub shared_behaviors: usize,
 }
 
 /// One resource, named the way the game names it and carrying what the editor would read there now -- the module's
@@ -140,7 +142,7 @@ pub fn find_object_bank_overlays(arm9: &[u8]) -> Result<ObjectBankOverlayTable> 
     Err(Error::new(ErrorCode::NotFound, "could not locate the object-bank overlay table in ARM9"))
 }
 
-const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 13]) -> NsmbGraphicsProfile {
+const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 14]) -> NsmbGraphicsProfile {
     NsmbGraphicsProfile {
         game_code,
         file_id_offset,
@@ -157,15 +159,38 @@ const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 1
         foreground_palette: tables[10],
         foreground_screen: tables[11],
         sprite_object_ids: tables[12],
+        shared_behaviors: tables[13],
     }
 }
 
+// The shared behaviours sit right after the level tilesets' animation table, two 76-entry tables past their
+// behaviour table, in every release; NSMB Editor's Korean and Chinese offsets for them do not, and are not used.
 const PROFILES: [NsmbGraphicsProfile; 5] = [
-    profile("A2DE", 131, [0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8]),
-    profile("A2DP", 135, [0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4]),
-    profile("A2DJ", 131, [0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008]),
-    profile("A2DK", 131, [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0]),
-    profile("A2DC", 131, [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC]),
+    profile(
+        "A2DE",
+        131,
+        [0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4],
+    ),
+    profile(
+        "A2DP",
+        135,
+        [0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8],
+    ),
+    profile(
+        "A2DJ",
+        131,
+        [0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4],
+    ),
+    profile(
+        "A2DK",
+        131,
+        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264],
+    ),
+    profile(
+        "A2DC",
+        131,
+        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264],
+    ),
 ];
 
 pub fn nsmb_graphics_profile(game_code: &str) -> Option<&'static NsmbGraphicsProfile> {
@@ -180,6 +205,9 @@ fn unwrap_resource(data: &[u8]) -> Result<Vec<u8>> {
         _ => Ok(data.to_vec()),
     }
 }
+
+/// The shared tileset's behaviour table: a word for each of its 256 blocks.
+const SHARED_BEHAVIORS_SIZE: usize = 256 * 4;
 
 /// What the game's tables hold where a slot has no file. The game checks for it before every load and skips the
 /// resource.
@@ -251,6 +279,10 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     fill(files, &mut jyotyu.map16, map16)?;
     fill(files, &mut jyotyu.objects, objects)?;
     fill(files, &mut jyotyu.object_index, index)?;
+    // Its behaviours are in the overlay, so they come with no file to write them back to.
+    if let Some(table) = overlay.get(profile.shared_behaviors..profile.shared_behaviors + SHARED_BEHAVIORS_SIZE) {
+        jyotyu.behaviors = ResourceFile { rom_path: String::new(), data: table.to_vec() };
+    }
 
     level_tileset.tile_offset = 192;
     level_tileset.palette_offset = 2;
@@ -398,6 +430,7 @@ pub fn load_level_tilesets(files: &[TilesetResourceFiles; 3], tileset_id: u16, o
     for ((tileset, target), error) in parsed.into_iter().zip(&mut result.tilesets).zip(&mut result.errors) {
         let Some(tileset) = tileset else { continue };
         target.objects = tileset.objects;
+        target.behaviors = tileset.behaviors;
         target.map16_tiles.reserve(tileset.map16.len());
         for block in &tileset.map16 {
             let mut absolute = block.tiles;

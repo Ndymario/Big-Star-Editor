@@ -29,6 +29,9 @@ pub struct TilesetGraphics {
     pub atlas: Option<TextureId>,
     pub blocks: u32,
     pub objects: Vec<ObjectLayout>,
+    /// Each Map16 block's behaviour word, which says what a question block or a brick holds. Empty when the tileset
+    /// has no behaviour table.
+    pub behaviors: Vec<u32>,
     /// Why this slot did not decode. The other slots still render.
     pub error: Option<String>,
 }

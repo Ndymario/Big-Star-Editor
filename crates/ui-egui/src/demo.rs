@@ -34,6 +34,8 @@ pub const SIGNPOST: u32 = 0x5157_0001;
 pub struct DemoTileset {
     pub blocks: Vec<RgbaImage>,
     pub objects: Vec<ObjectLayout>,
+    /// Each block's behaviour word, or none.
+    pub behaviors: Vec<u32>,
 }
 
 struct DemoLevel {
@@ -419,7 +421,7 @@ pub fn sample_tileset() -> DemoTileset {
         ObjectLayout { rows: vec![row(&[(15, 3)])], ..Default::default() },
         ObjectLayout { rows: vec![row(&[(OBJECT_LAYOUT_EMPTY_TILE, 3)])], ..Default::default() },
     ];
-    DemoTileset { blocks, objects }
+    DemoTileset { blocks, objects, behaviors: Vec::new() }
 }
 
 /// Every block of a slot packed into one atlas, `ATLAS_COLUMNS` to a row.
@@ -696,6 +698,7 @@ impl DemoConnection {
                 atlas: Some(format!("demo-tileset-{slot}")),
                 blocks: tileset.blocks.len() as u32,
                 objects: tileset.objects.clone(),
+                behaviors: tileset.behaviors.clone(),
                 error: None,
             },
             None => TilesetGraphics::default(),

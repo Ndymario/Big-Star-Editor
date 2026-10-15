@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bigstar_formats::{NsmbLevelCourse, entrance_flags};
+use bigstar_formats::{NsmbLevelCourse, block_contents, entrance_flags};
 use bigstar_level::{
     BackgroundLayer, BackgroundMotion, BackgroundSwap, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, still_quarter,
     strip_offsets,
@@ -16,6 +16,7 @@ use egui::{
     StrokeKind, Ui, Vec2, ViewportCommand,
 };
 
+use crate::block_icons;
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
 use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, VIEW_TAB_TEXT, fit_zoom, handle_centres, node_rect};
@@ -1111,6 +1112,9 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
         .collect();
     let cells = LEVEL_CHUNK_CELLS as i32;
     let side = TILE * LEVEL_CHUNK_CELLS as f32;
+    // What question blocks and bricks hold, once a block is big enough on screen for its icon to read.
+    let mut icons = Vec::new();
+    let show_contents = TILE * frame.zoom >= CONTENTS_MIN_BLOCK;
     for chunk in &tilemap.chunks {
         let corner = Pos2::new(chunk.x as f32 * side, chunk.y as f32 * side);
         if !Rect::from_min_size(corner, Vec2::splat(side)).intersects(visible) {
@@ -1130,6 +1134,12 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
             let (x, y) = ((offset as i32 % cells) as f32, (offset as i32 / cells) as f32);
             let world = Rect::from_min_size(corner + Vec2::new(x, y) * TILE, Vec2::splat(TILE));
             mesh.add_rect_with_uv(frame.rect(world), uv, Color32::WHITE);
+            if show_contents
+                && let Some(contents) =
+                    graphics.tilesets.get(usize::from(cell.slot)).and_then(|slot| slot.behaviors.get(block as usize)).and_then(|&b| block_contents(b))
+            {
+                icons.push((frame.rect(world), contents));
+            }
         }
     }
     for (mesh, _, _) in meshes.into_iter().flatten() {
@@ -1137,7 +1147,13 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
             painter.add(Shape::mesh(mesh));
         }
     }
+    for (block, contents) in icons {
+        block_icons::paint(painter, block_icons::icon_rect(block), contents);
+    }
 }
+
+/// How many screen points a block must cover before the canvas puts what it holds on it.
+const CONTENTS_MIN_BLOCK: f32 = 14.0;
 
 fn command_color(packed: u32, opacity: f32) -> Color32 {
     let [r, g, b, a] = packed.to_be_bytes();

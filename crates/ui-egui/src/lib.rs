@@ -2,6 +2,7 @@
 //! nothing about files, ROMs or how the host is reached. Wasm-safe.
 
 mod app;
+mod block_icons;
 mod builds;
 mod canvas;
 mod clipboard;
