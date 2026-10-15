@@ -747,7 +747,6 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         && let Some(row) = rows.last_mut()
                     {
                         row.editor = Editor::Choice(music_choices());
-                        row.note = "Some actors depend on the music. Every Boo Nintendo placed plays to Ghost House (16), and one under MvsL Stage (0) did not appear.".to_owned();
                     }
                     // A view names a block of the layer, and the block says which screen scrolls there and how.
                     let (layer, blocks) = match label {
