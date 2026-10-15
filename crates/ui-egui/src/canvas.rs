@@ -549,6 +549,7 @@ fn keys(ui: &Ui, view: &mut LevelView, busy: bool, out: &mut CanvasOutput) {
                     view.selection.clear();
                 }
             }
+            Key::A if modifiers.command && !modifiers.shift && !modifiers.alt && view.gesture.is_none() => view.select_all(),
             Key::D if modifiers.command && !modifiers.shift && !modifiers.alt => {
                 send(view.clone_edit());
             }

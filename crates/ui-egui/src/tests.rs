@@ -641,6 +641,28 @@ fn shift_click_adds_and_removes_and_a_marquee_selects_what_it_touches() {
 }
 
 #[test]
+fn ctrl_a_selects_everything_and_a_alone_still_pans() {
+    let mut harness = level_with(LevelEntityInsertions {
+        objects: vec![object(1, 2, 3, 1, 1), object(2, 30, 30, 1, 1)],
+        entrances: vec![NsmbLevelEntrance { x: 32, y: 48, ..Default::default() }],
+        ..Default::default()
+    });
+    let pan = view(&harness).pan;
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::A);
+    harness.run();
+    let selection = view(&harness).selection.clone();
+    for item in [Item::new(Kind::Object, 0), Item::new(Kind::Object, 1), Item::new(Kind::Entrance, 0)] {
+        assert!(selection.contains(&item), "{item:?} is selected");
+    }
+    assert_eq!(selection.len(), view(&harness).entity_rects().len());
+    assert_eq!(view(&harness).pan, pan, "Ctrl+A does not scroll the way A does");
+    // Everything selected moves together, as one step.
+    harness.key_press(Key::ArrowRight);
+    harness.run();
+    assert_eq!((view(&harness).snapshot.objects[0].x, view(&harness).snapshot.objects[1].x), (3, 31));
+}
+
+#[test]
 fn ctrl_drag_clones_and_ctrl_d_and_page_keys_are_one_step_each() {
     let mut harness = level_with(LevelEntityInsertions {
         objects: vec![object(1, 2, 3, 1, 1), object(2, 5, 6, 1, 1)],

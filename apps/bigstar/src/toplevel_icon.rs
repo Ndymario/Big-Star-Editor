@@ -30,15 +30,7 @@ use winit::raw_window_handle::{HasDisplayHandle as _, RawDisplayHandle};
 struct State;
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(
-        _: &mut Self,
-        _: &wl_registry::WlRegistry,
-        _: wl_registry::Event,
-        _: &GlobalListContents,
-        _: &Connection,
-        _: &QueueHandle<Self>,
-    ) {
-    }
+    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
 }
 
 delegate_noop!(State: ignore wl_shm::WlShm);
@@ -61,9 +53,7 @@ fn try_set(window: &winit::window::Window, icon: &egui::IconData) -> Result<(), 
     let Some(toplevel) = window.xdg_toplevel() else {
         return Ok(());
     };
-    let RawDisplayHandle::Wayland(display) =
-        window.display_handle().map_err(|e| e.to_string())?.as_raw()
-    else {
+    let RawDisplayHandle::Wayland(display) = window.display_handle().map_err(|e| e.to_string())?.as_raw() else {
         return Ok(());
     };
     let side = icon.width as i32;
@@ -73,20 +63,13 @@ fn try_set(window: &winit::window::Window, icon: &egui::IconData) -> Result<(), 
 
     // SAFETY: the display and the toplevel belong to the window, which
     // outlives this connection (both last until the process ends).
-    let conn = Connection::from_backend(unsafe {
-        Backend::from_foreign_display(display.display.as_ptr().cast())
-    });
-    let toplevel =
-        unsafe { ObjectId::from_ptr(XdgToplevel::interface(), toplevel.as_ptr().cast()) }
-            .map_err(|e| e.to_string())?;
+    let conn = Connection::from_backend(unsafe { Backend::from_foreign_display(display.display.as_ptr().cast()) });
+    let toplevel = unsafe { ObjectId::from_ptr(XdgToplevel::interface(), toplevel.as_ptr().cast()) }.map_err(|e| e.to_string())?;
     let toplevel = XdgToplevel::from_id(&conn, toplevel).map_err(|e| e.to_string())?;
 
-    let (globals, mut queue): (_, EventQueue<State>) =
-        registry_queue_init(&conn).map_err(|e| e.to_string())?;
+    let (globals, mut queue): (_, EventQueue<State>) = registry_queue_init(&conn).map_err(|e| e.to_string())?;
     let qh = queue.handle();
-    let manager: XdgToplevelIconManagerV1 = globals
-        .bind(&qh, 1..=1, ())
-        .map_err(|_| "the compositor has no toplevel icons")?;
+    let manager: XdgToplevelIconManagerV1 = globals.bind(&qh, 1..=1, ()).map_err(|_| "the compositor has no toplevel icons")?;
     let shm: wl_shm::WlShm = globals.bind(&qh, 1..=1, ()).map_err(|e| e.to_string())?;
 
     // wl_shm's ARGB8888: premultiplied, little-endian, so B G R A in memory.
@@ -100,8 +83,7 @@ fn try_set(window: &winit::window::Window, icon: &egui::IconData) -> Result<(), 
             [mul(b), mul(g), mul(r), a]
         })
         .collect();
-    let fd = rustix::fs::memfd_create("bigstar-icon", rustix::fs::MemfdFlags::CLOEXEC)
-        .map_err(|e| e.to_string())?;
+    let fd = rustix::fs::memfd_create("bigstar-icon", rustix::fs::MemfdFlags::CLOEXEC).map_err(|e| e.to_string())?;
     let mut file = std::fs::File::from(fd);
     file.write_all(&pixels).map_err(|e| e.to_string())?;
 

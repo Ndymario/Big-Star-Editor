@@ -1334,6 +1334,11 @@ impl LevelView {
         }
     }
 
+    /// Selects everything a marquee around the whole level would: every kind, each path node on its own.
+    pub fn select_all(&mut self) {
+        self.selection = self.entity_rects().into_iter().map(|(item, _)| item).collect();
+    }
+
     // --- the properties panel ---------------------------------------------------------------------------------------
 
     /// Brings the panel in line with a selection or create kind that changed elsewhere: the canvas, its toolbar or a
