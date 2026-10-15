@@ -285,6 +285,72 @@ pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
     (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned())).collect()
 }
 
+/// The game's music by sequence number, as NSMB Editor names it. The rest are sound effects, unused or a mod's own.
+const MUSIC_NAMES: [(u8, &str); 52] = [
+    (0, "MvsL Stage"),
+    (1, "Tower"),
+    (2, "Starman"),
+    (3, "Mega Mario"),
+    (4, "End of Level"),
+    (5, "Death"),
+    (6, "Desert"),
+    (7, "Boss"),
+    (8, "VS Lose"),
+    (9, "Underground"),
+    (10, "Bonus room"),
+    (11, "Underwater"),
+    (12, "Lava"),
+    (13, "End Credits"),
+    (14, "Beach"),
+    (15, "Bowser Jr. Battle"),
+    (16, "Ghost House"),
+    (17, "Castle"),
+    (18, "Timer"),
+    (19, "End of game fanfare"),
+    (20, "Game Over"),
+    (21, "Final Boss"),
+    (22, "Boss Beaten"),
+    (24, "Mushrooms (athletic)"),
+    (25, "Toad House"),
+    (26, "Grassland"),
+    (27, "Title Screen"),
+    (28, "SMB End of Level"),
+    (29, "Toad House Fanfare"),
+    (30, "MvsL Stage 2"),
+    (31, "MvsL Title Screen"),
+    (32, "MvsL Results Screen"),
+    (33, "MvsL Win"),
+    (34, "MvsL Lose"),
+    (80, "Lava ambient (Castle)"),
+    (81, "Desert ambient (Castle)"),
+    (82, "Water ambient (Castle)"),
+    (83, "Underground ambient (Castle)"),
+    (86, "Wind ambient (Castle)"),
+    (99, "Early grassland (unused)"),
+    (100, "World 1"),
+    (101, "World 2"),
+    (102, "World 3"),
+    (103, "World 4"),
+    (104, "World 5"),
+    (105, "World 6"),
+    (106, "World 7"),
+    (107, "World 8"),
+    (108, "Ending"),
+    (109, "Intro 1"),
+    (110, "Intro 2"),
+    (111, "Peach Fanfare"),
+];
+
+/// Every music number a view can name, each with its name where it has one.
+fn music_choices() -> Vec<(i64, String)> {
+    (0..=u8::MAX)
+        .map(|id| {
+            let name = MUSIC_NAMES.iter().find(|(number, _)| *number == id).map_or("unnamed", |(_, name)| name);
+            (i64::from(id), name.to_owned())
+        })
+        .collect()
+}
+
 /// What the game calls each entrance type, in the order it numbers them. Its tables end at `Vine`; the four after it
 /// are in Nintendo's own levels all the same, and NSMB Editor names them.
 const ENTRANCE_TYPES: [&str; 26] = [
@@ -677,6 +743,12 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Progress path", v.progress_path_id),
                 ] {
                     full(rows, label, Some(i64::from(value)), 0, 255);
+                    if label == "BGM"
+                        && let Some(row) = rows.last_mut()
+                    {
+                        row.editor = Editor::Choice(music_choices());
+                        row.note = "Some actors depend on the music. Every Boo Nintendo placed plays to Ghost House (16), and one under MvsL Stage (0) did not appear.".to_owned();
+                    }
                     // A view names a block of the layer, and the block says which screen scrolls there and how.
                     let (layer, blocks) = match label {
                         "Background" => (BackgroundLayer::Background, &course.backgrounds),
@@ -1308,6 +1380,9 @@ mod tests {
         let row = |label: &str| shown.rows.iter().position(|row| row.label == label).unwrap();
         assert_eq!(row("Camera top offset"), VIEW_CAMERA_ROW);
         assert_eq!(shown.rows[row("Camera bottom offset")].value, Some(16));
+        // The music is picked by name, and a number nobody named is still there to pick.
+        let Editor::Choice(music) = &shown.rows[row("BGM")].editor else { panic!() };
+        assert_eq!((music.len(), &music[16], &music[200]), (256, &(16, "Ghost House".to_owned()), &(200, "unnamed".to_owned())));
         // Changing one writes the block the view names and leaves the view alone.
         match apply(&view, &view.panel, &shown, row("Camera bottom offset"), -32) {
             Some(LevelEdit::SetCameras { cameras, .. }) => {
