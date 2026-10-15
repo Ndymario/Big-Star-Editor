@@ -745,6 +745,7 @@ impl DemoConnection {
             generation: 0,
             actors: vec![actor(walker, true), actor(definition(55, "Shell walker", "Enemies"), false), actor(definition(64, "Coin", "Items"), true)],
             sprite_object_ids: (0..400).collect(),
+            sprite_banks: Vec::new(),
         }
     }
 

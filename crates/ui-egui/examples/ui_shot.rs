@@ -31,6 +31,8 @@ fn build(app: BigStarApp) -> Harness<'static, BigStarApp> {
 }
 
 /// `ui_shot <out-dir> <host> <token>`: connects to a real host instead, opens its first project and writes `remote-levels.png`, `remote.png` (A01_1 fitted) and `remote-100.png` (at 100%).
+/// `BIGSTAR_SHOT_AREA` names another level to open; at 100% a sprite the level's object banks leave out is shown
+/// selected, if there is one.
 fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> {
     let mut harness = build(BigStarApp::new(Box::new(MemoryServices::default())));
     harness.run();
@@ -58,7 +60,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     until(&mut harness, &|app| app.session().is_some_and(|s| !s.worlds.is_empty()));
     shot(&mut harness, dir, "remote-levels.png")?;
     if let Some(session) = harness.state_mut().session_mut() {
-        session.open_level("A01_1");
+        session.open_level(&std::env::var("BIGSTAR_SHOT_AREA").unwrap_or_else(|_| "A01_1".to_owned()));
     }
     // The level, then its graphics, draw lists and textures, each a round trip.
     let drawn = |app: &BigStarApp| {
@@ -76,6 +78,9 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         view.zoom_about(1.0, view.canvas.min);
         view.pan = egui::Vec2::new(0.0, 160.0);
         view.selection = vec![Item::new(Kind::Sprite, 0), Item::new(Kind::Object, 3)];
+        if let Some(missing) = (0..view.snapshot.course.sprites.len()).find(|&index| view.missing_bank(index).is_some()) {
+            view.pick(Item::new(Kind::Sprite, missing), false);
+        }
     }
     shot(&mut harness, dir, "remote-100.png")?;
     // The DS screen: where the first entrance opens the camera, and another under the pointer further along.

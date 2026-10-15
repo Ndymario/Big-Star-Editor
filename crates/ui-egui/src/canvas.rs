@@ -129,6 +129,9 @@ fn object_color(slot: u8) -> Color32 {
 
 const ZONE_COLOR: Color32 = Color32::from_rgb(84, 154, 110);
 const VIEW_COLOR: Color32 = Color32::from_rgb(65, 122, 180);
+/// Over a sprite the level's object banks leave out of the game.
+const MISSING_BANK_TINT: Color32 = Color32::from_rgba_premultiplied(120, 10, 10, 120);
+const MISSING_BANK_EDGE: Color32 = Color32::from_rgb(230, 40, 40);
 const OUT_OF_BOUNDS: Color32 = Color32::from_rgb(198, 74, 74);
 /// Knobs are a screen-space affordance, so they keep their size at any zoom.
 const KNOB: f32 = 9.0;
@@ -1022,6 +1025,11 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
                 };
                 painter.text(Pos2::new(r.right() + 2.0 * frame.zoom, r.top() - 2.0 * frame.zoom), Align2::LEFT_TOP, label, font, colors.label_text);
             }
+        }
+        // A sprite whose object bank the level does not load is not in the game at all: red, as NSMB Editor shows it.
+        if view.missing_bank(index).is_some() {
+            let tinted = frame.rect(render.union(grab));
+            painter.rect(tinted, 0.0, MISSING_BANK_TINT, Stroke::new(1.5, MISSING_BANK_EDGE), StrokeKind::Inside);
         }
         if moving {
             painter.rect_stroke(frame.rect(grab.expand(3.0)), 0.0, marker_stroke(colors), StrokeKind::Middle);

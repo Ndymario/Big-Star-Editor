@@ -19,7 +19,9 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
 
 - **Levels**: objects, sprites, entrances, zones, views, paths and progress paths on a canvas with real tilesets and
   actor graphics, with selection, marquee, resize, Ctrl-drag clone, snapping, copy/paste compatible with the
-  earlier Qt editor, named undo history, the property panels, the actor picker and the level-data tables. Several levels open
+  earlier Qt editor, named undo history, the property panels, the actor picker and the level-data tables. Question
+  blocks and bricks show what they hold, and a sprite whose object bank the level does not load is tinted red, with
+  a button in its properties that loads the bank. Several levels open
   as documents, in tabs or windows of their own; a workspace is remembered per host and project.
 - **Files**: the Filesystem dock lists the ROM as the active variant's modules change it, opens NARCs like folders,
   and adds, replaces, extracts and removes module files. Files open in the editor that understands them, through

@@ -1550,3 +1550,36 @@ fn a_real_rom_uploads_and_downloads_in_pieces() {
     assert!(!open_level(&mut session, "A01_1").objects.is_empty());
     assert!(download(&mut session).1 == rom);
 }
+
+/// The table of which object bank each sprite needs, against a real ROM: the levels Nintendo shipped load what their
+/// sprites need, so a right table finds nothing missing in them. The unused ones, left over from development, do not.
+#[test]
+fn real_levels_load_the_banks_their_sprites_need() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-sprite-banks");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.session();
+    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::ActorCatalog(catalog) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
+    assert_eq!(catalog.sprite_banks.len(), 326);
+    assert!(catalog.sprite_banks.iter().any(|&[_, bank]| bank != 0), "some sprites need a bank");
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.into_iter().flat_map(|world| world.levels).flat_map(|level| level.areas).collect();
+    let (mut sprites, mut missing) = (0, Vec::new());
+    for area in areas.iter().filter(|area| area.available) {
+        let Ok(Response::Level(snapshot)) = session.handle(Request::OpenLevel { area: area.token.clone() }) else { continue };
+        for sprite in &snapshot.course.sprites {
+            sprites += 1;
+            let [slot, bank] = catalog.sprite_banks[usize::from(sprite.id)];
+            if bank != 0 && snapshot.course.object_banks[usize::from(slot)] != bank {
+                missing.push((area.course_path.clone(), sprite.id));
+            }
+        }
+    }
+    assert!(sprites > 1000, "{sprites}");
+    let shipped: Vec<_> = missing.iter().filter(|(course, _)| !course.starts_with("course/J")).collect();
+    assert!(shipped.is_empty(), "{shipped:?}");
+    assert!(missing.iter().any(|(course, _)| course == "course/J06_1.bin"), "the unused grassland level is missing some");
+}

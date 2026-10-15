@@ -110,6 +110,13 @@ fn draw_kind(kind: LuaActorDrawKind) -> DrawKind {
     }
 }
 
+/// Per sprite type: the class id it maps to, and the tileset slot and object bank it needs.
+#[derive(Debug, Clone, Default)]
+struct SpriteTables {
+    object_ids: Vec<u32>,
+    banks: Vec<[u8; 2]>,
+}
+
 /// What the host knows about one open project's graphics. Rebuilt whole when a watched file changes.
 pub(crate) struct ProjectGraphics {
     directory: PathBuf,
@@ -120,7 +127,8 @@ pub(crate) struct ProjectGraphics {
     overlays: Option<TileOverlayCatalog>,
     backgrounds: Option<BackgroundCatalog>,
     actors: Option<LuaActorCatalog>,
-    sprite_object_ids: Option<Vec<u32>>,
+    /// The class id and the object bank of each sprite type, read once.
+    sprite_tables: Option<SpriteTables>,
     pub textures: TextureStore,
     /// Files whose change changes what this has served.
     pub watched: Vec<PathBuf>,
@@ -149,7 +157,7 @@ impl ProjectGraphics {
             overlays: None,
             backgrounds: None,
             actors: None,
-            sprite_object_ids: None,
+            sprite_tables: None,
             textures: TextureStore::default(),
             watched: Vec::new(),
         })
@@ -172,7 +180,7 @@ impl ProjectGraphics {
             overlays: None,
             backgrounds: None,
             actors: None,
-            sprite_object_ids: None,
+            sprite_tables: None,
             textures: TextureStore::default(),
             watched: Vec::new(),
         }
@@ -415,20 +423,26 @@ impl ProjectGraphics {
         self.actors = Some(catalog);
     }
 
-    /// The class id each sprite type maps to, out of the ROM's own table.
+    /// The class id each sprite type maps to and the object bank it needs, out of the ROM's own tables.
+    fn sprite_tables(&mut self) -> &SpriteTables {
+        let files = &mut self.files;
+        self.sprite_tables.get_or_insert_with(|| {
+            resolve_level_graphics(files, LevelTilesetReferences::default())
+                .map(|resources| SpriteTables {
+                    object_ids: resources.actors.iter().map(|actor| actor.object_id).collect(),
+                    banks: resources.sprite_banks,
+                })
+                .unwrap_or_default()
+        })
+    }
+
     fn sprite_object_ids(&mut self) -> &[u32] {
-        if self.sprite_object_ids.is_none() {
-            let references = LevelTilesetReferences::default();
-            let ids =
-                resolve_level_graphics(&mut self.files, references).map(|resources| resources.actors.iter().map(|actor| actor.object_id).collect());
-            self.sprite_object_ids = Some(ids.unwrap_or_default());
-        }
-        self.sprite_object_ids.as_deref().unwrap_or_default()
+        &self.sprite_tables().object_ids
     }
 
     pub fn actor_catalog(&mut self, generation: u64) -> ActorCatalog {
         self.ensure_actors();
-        let sprite_object_ids = self.sprite_object_ids().to_vec();
+        let SpriteTables { object_ids: sprite_object_ids, banks: sprite_banks } = self.sprite_tables().clone();
         let mut actors: Vec<ActorInfo> = self
             .actors
             .as_ref()
@@ -452,7 +466,7 @@ impl ProjectGraphics {
                 SpriteDefinition { object_id: object.object_id, hash: Some(object.hash), name: object.name.clone(), ..SpriteDefinition::default() };
             actors.push(ActorInfo { definition, has_renderer: false, init_error: None });
         }
-        ActorCatalog { generation, actors, sprite_object_ids }
+        ActorCatalog { generation, actors, sprite_object_ids, sprite_banks }
     }
 
     pub fn render_actors(&mut self, inputs: &[ActorInput]) -> Vec<ActorDraw> {

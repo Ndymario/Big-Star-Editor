@@ -166,6 +166,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
     view.sync_panel();
     let reveal = std::mem::take(&mut view.panel.reveal);
     let mut edit = None;
+    let mut bank_edit = None;
     ui.horizontal_wrapped(|ui| {
         for (tab, name) in TABS {
             if ui.choice(view.panel.tab == tab, name).clicked() && view.panel.tab != tab {
@@ -181,6 +182,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if tab == Tab::Entity(Kind::Sprite) {
             sprite_header(ui, view, &shown);
+            bank_edit = missing_banks(ui, view, &shown, busy);
         }
 
         match tab {
@@ -270,7 +272,7 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
         }
     });
     actor_info(ui.ctx(), view, &shown);
-    edit
+    edit.or(bank_edit)
 }
 
 /// Everything of the tab's kind, one line each, the selected ones lit. NSMB Editor's list: picking a line selects it
@@ -382,6 +384,36 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows) {
         });
     });
     ui.add_space(4.0);
+}
+
+/// A warning for each object bank the selected sprites need that the level does not load, with a button that loads
+/// it. Loading one bank in a slot unloads the one there, so it says what that would leave out instead.
+fn missing_banks(ui: &mut Ui, view: &LevelView, shown: &Rows, busy: bool) -> Option<LevelEdit> {
+    let mut needed: Vec<(u8, u8)> = shown.indices.iter().filter_map(|&index| view.missing_bank(index)).collect();
+    needed.sort_unstable();
+    needed.dedup();
+    let mut edit = None;
+    for (slot, bank) in needed {
+        let loaded = view.snapshot.course.object_banks.get(usize::from(slot)).copied().unwrap_or(0);
+        let what = if shown.multi() { "A selected sprite" } else { "This sprite" };
+        let mut text = if loaded == 0 {
+            format!("{what} needs object bank {bank} in slot {slot}, which this level leaves empty, so the game leaves it out.")
+        } else {
+            format!("{what} needs object bank {bank} in slot {slot}, where this level loads bank {loaded}, so the game leaves it out.")
+        };
+        let displaced = view.sprites_needing_other_bank(slot, bank);
+        if displaced > 0 {
+            let sprites = if displaced == 1 { "sprite" } else { "sprites" };
+            text.push_str(&format!(" Loading it would leave out the {displaced} {sprites} that need bank {loaded} instead."));
+        }
+        controls::warning_text(ui, text);
+        let button = Button::new(format!("Load bank {bank} in slot {slot}")).enabled(!busy);
+        if ui.add(button).on_hover_text("Changes the level's object bank for this slot, as the Banks tab does").clicked() {
+            edit = Some(LevelEdit::SetObjectBank { slot: usize::from(slot), value: bank });
+        }
+        ui.add_space(4.0);
+    }
+    edit
 }
 
 /// What the actor is, and what all of its fields do, read off the same declarations the rows are built from.

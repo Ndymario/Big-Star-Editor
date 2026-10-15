@@ -86,6 +86,9 @@ pub struct ActorCatalog {
     /// `sprite_object_ids[type]` is the runtime class id of sprite type `type`, read from the ROM's own table. Empty
     /// when the ROM has no table the host knows.
     pub sprite_object_ids: Vec<u32>,
+    /// `sprite_banks[type]` is the tileset slot and object bank sprite type `type` needs loaded to appear, bank 0 for
+    /// none. Empty when the ROM has no table the host knows.
+    pub sprite_banks: Vec<[u8; 2]>,
 }
 
 /// One sprite as an actor script sees it. The host finds the actor: by `hash` for a module sprite, otherwise by the

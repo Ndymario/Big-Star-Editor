@@ -36,6 +36,8 @@ pub struct NsmbGraphicsProfile {
     pub sprite_object_ids: usize,
     /// The shared tileset's behaviour table, held in the overlay itself rather than in a file: 256 words, one a block.
     pub shared_behaviors: usize,
+    /// Which object bank each sprite type needs: a tileset slot and a bank number for each, 0 for none.
+    pub sprite_banks: usize,
 }
 
 /// One resource, named the way the game names it and carrying what the editor would read there now -- the module's
@@ -86,6 +88,9 @@ pub struct LevelGraphicsResources {
     pub background: BackgroundResourceFiles,
     pub foreground: BackgroundResourceFiles,
     pub actors: Vec<ActorResourceFiles>,
+    /// `sprite_banks[type]` is the tileset slot and object bank sprite type `type` needs, bank 0 for none. Empty when
+    /// the ROM's table is not where this release keeps it.
+    pub sprite_banks: Vec<[u8; 2]>,
     /// Files on disk that, if they change, change these resources: the module sources supplying them, and the ROM
     /// everything else comes from. There is nothing to watch inside the ROM, so it is watched whole.
     pub watched_files: Vec<PathBuf>,
@@ -142,7 +147,7 @@ pub fn find_object_bank_overlays(arm9: &[u8]) -> Result<ObjectBankOverlayTable> 
     Err(Error::new(ErrorCode::NotFound, "could not locate the object-bank overlay table in ARM9"))
 }
 
-const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 14]) -> NsmbGraphicsProfile {
+const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 15]) -> NsmbGraphicsProfile {
     NsmbGraphicsProfile {
         game_code,
         file_id_offset,
@@ -160,6 +165,7 @@ const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 1
         foreground_screen: tables[11],
         sprite_object_ids: tables[12],
         shared_behaviors: tables[13],
+        sprite_banks: tables[14],
     }
 }
 
@@ -169,27 +175,27 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DE",
         131,
-        [0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4],
+        [0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4, 0x2C930],
     ),
     profile(
         "A2DP",
         135,
-        [0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8],
+        [0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8, 0x2BDF0],
     ),
     profile(
         "A2DJ",
         131,
-        [0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4],
+        [0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4, 0x2BD30],
     ),
     profile(
         "A2DK",
         131,
-        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264],
+        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264, 0x2BDF0],
     ),
     profile(
         "A2DC",
         131,
-        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264],
+        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264, 0x2BDF0],
     ),
 ];
 
@@ -384,10 +390,20 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
             name: format!("Actor {actor_type} (class {class_id})"),
         });
     }
+    result.sprite_banks = sprite_banks(&overlay, profile.sprite_banks, usize::from(ACTOR_TYPE_COUNT));
     result.watched_files.extend(watched);
     result.watched_files.sort();
     result.watched_files.dedup();
     Ok(result)
+}
+
+/// The table of which object bank each sprite type needs, as NSMB Editor reads it. A table that names a slot the game
+/// has no banks for, or a bank past the ten a slot has, is not the table, and none is returned.
+fn sprite_banks(overlay: &[u8], offset: usize, count: usize) -> Vec<[u8; 2]> {
+    let Some(table) = overlay.get(offset..offset + count * 2) else { return Vec::new() };
+    let banks: Vec<[u8; 2]> = table.as_chunks::<2>().0.to_vec();
+    let plausible = banks.iter().all(|&[slot, bank]| bank == 0 || ((slot <= 9 || slot == 15) && bank <= 10));
+    if plausible { banks } else { Vec::new() }
 }
 
 fn parse_resource_tileset(files: &TilesetResourceFiles) -> Result<EditableTileset> {

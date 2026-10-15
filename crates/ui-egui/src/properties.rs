@@ -1209,6 +1209,7 @@ mod tests {
             generation: 0,
             actors: vec![actor(definition(42, "Synthetic actor", fields)), actor(definition(43, "Another actor", Vec::new()))],
             sprite_object_ids: ids,
+            sprite_banks: Vec::new(),
         };
         view.art.actors = ActorIndex::new(Arc::new(catalog));
         view.selection = vec![Item::new(Kind::Sprite, 0)];

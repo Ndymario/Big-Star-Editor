@@ -652,6 +652,25 @@ fn shift_click_adds_and_removes_and_a_marquee_selects_what_it_touches() {
 }
 
 #[test]
+fn a_sprite_missing_its_bank_says_so_and_a_button_loads_it() {
+    let mut harness = level_with(LevelEntityInsertions {
+        sprites: vec![SpriteInsertion { value: NsmbLevelStageObject { id: 20, x: 6, y: 6, ..Default::default() }, hash: None }],
+        ..Default::default()
+    });
+    let mut catalog = (*view(&harness).art.actors.catalog).clone();
+    catalog.sprite_banks = vec![[0, 0]; 30];
+    catalog.sprite_banks[20] = [2, 5];
+    view_mut(&mut harness).art.actors = crate::level_view::ActorIndex::new(std::sync::Arc::new(catalog));
+    select(&mut harness, &[Item::new(Kind::Sprite, 0)]);
+    assert_eq!(view(&harness).missing_bank(0), Some((2, 5)));
+    harness.get_by_label("Load bank 5 in slot 2").click();
+    harness.run();
+    assert_eq!(view(&harness).snapshot.course.object_banks[2], 5);
+    assert_eq!(view(&harness).missing_bank(0), None);
+    assert!(harness.query_by_label("Load bank 5 in slot 2").is_none(), "nothing left to warn about");
+}
+
+#[test]
 fn ctrl_a_selects_everything_and_a_alone_still_pans() {
     let mut harness = level_with(LevelEntityInsertions {
         objects: vec![object(1, 2, 3, 1, 1), object(2, 30, 30, 1, 1)],

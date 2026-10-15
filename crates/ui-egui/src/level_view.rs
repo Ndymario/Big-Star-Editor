@@ -617,6 +617,29 @@ impl LevelView {
         self.placing = false;
     }
 
+    /// The tileset slot and object bank sprite `index` needs that the level does not load: without it the game
+    /// leaves the sprite out. `None` when it needs none, when the level loads it, for a module's own actor, and when
+    /// the ROM's table is not known.
+    pub fn missing_bank(&self, index: usize) -> Option<(u8, u8)> {
+        let sprite = self.snapshot.course.sprites.get(index)?;
+        if self.sprite_hash(index).is_some() {
+            return None;
+        }
+        let &[slot, bank] = self.art.actors.catalog.sprite_banks.get(usize::from(sprite.id))?;
+        let loaded = *self.snapshot.course.object_banks.get(usize::from(slot))?;
+        (bank != 0 && loaded != bank).then_some((slot, bank))
+    }
+
+    /// The sprites a change of slot `slot` to `bank` would leave out that are in the game now.
+    pub fn sprites_needing_other_bank(&self, slot: u8, bank: u8) -> usize {
+        let banks = &self.art.actors.catalog.sprite_banks;
+        (0..self.snapshot.course.sprites.len())
+            .filter(|&index| self.sprite_hash(index).is_none() && self.missing_bank(index).is_none())
+            .filter_map(|index| banks.get(usize::from(self.snapshot.course.sprites.get(index)?.id)))
+            .filter(|&&[needs_slot, needs_bank]| needs_slot == slot && needs_bank != 0 && needs_bank != bank)
+            .count()
+    }
+
     pub fn sprite_hash(&self, index: usize) -> Option<u32> {
         self.snapshot.sprite_hashes.get(index).copied().flatten()
     }
@@ -1967,6 +1990,28 @@ mod tests {
     }
 
     #[test]
+    fn a_sprite_whose_bank_the_level_does_not_load_is_missing() {
+        let mut view = LevelView::new(snapshot());
+        view.snapshot.course.sprites = vec![
+            NsmbLevelStageObject { id: 1, ..Default::default() },
+            NsmbLevelStageObject { id: 2, ..Default::default() },
+            NsmbLevelStageObject { id: 3, ..Default::default() },
+        ];
+        view.snapshot.sprite_hashes = vec![None; 3];
+        // Type 1 needs nothing, 2 needs bank 4 of slot 1, 3 needs bank 6 of slot 1.
+        let catalog = ActorCatalog { sprite_banks: vec![[0, 0], [0, 0], [1, 4], [1, 6]], ..Default::default() };
+        view.art.actors = ActorIndex::new(Arc::new(catalog));
+        view.snapshot.course.object_banks[1] = 4;
+        assert_eq!([view.missing_bank(0), view.missing_bank(1), view.missing_bank(2)], [None, None, Some((1, 6))]);
+        // Loading bank 6 there would leave out the one sprite that needs bank 4.
+        assert_eq!(view.sprites_needing_other_bank(1, 6), 1);
+        assert_eq!(view.sprites_needing_other_bank(1, 4), 0);
+        // A module's own actor is its module's business.
+        view.snapshot.sprite_hashes[2] = Some(0x1234);
+        assert_eq!(view.missing_bank(2), None);
+    }
+
+    #[test]
     fn sprite_definitions_drive_grab_bounds() {
         let mut view = LevelView::new(snapshot());
         view.snapshot.course.sprites[0] = NsmbLevelStageObject { id: 7, x: 10, y: 10, settings: 0xffff_fff0, ..Default::default() };
@@ -1979,8 +2024,12 @@ mod tests {
         };
         let mut ids = vec![0; 8];
         ids[7] = 42;
-        let catalog =
-            ActorCatalog { generation: 0, actors: vec![ActorInfo { definition, has_renderer: false, init_error: None }], sprite_object_ids: ids };
+        let catalog = ActorCatalog {
+            generation: 0,
+            actors: vec![ActorInfo { definition, has_renderer: false, init_error: None }],
+            sprite_object_ids: ids,
+            sprite_banks: Vec::new(),
+        };
         view.art.actors = ActorIndex::new(Arc::new(catalog));
         assert_eq!(view.hit_test(Pos2::new(130.0, 150.0)).map(|i| i.kind), Some(Kind::Sprite));
         // A bounds function's answer, once the host has given it, wins.
