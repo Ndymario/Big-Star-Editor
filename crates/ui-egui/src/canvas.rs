@@ -358,7 +358,7 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                 if *button == PointerButton::Secondary {
                     // Right-click creates whatever is chosen; left-click never does. An object waits for the button
                     // to come up, so it can be dragged out to its size.
-                    if view.begin_place(press.world, modifiers.alt) {
+                    if view.begin_place(press.world) {
                         continue;
                     }
                     if let Some(edit) = view.placement_edit(press.world, modifiers.alt) {
@@ -421,7 +421,7 @@ fn pointer(ui: &Ui, response: &egui::Response, view: &mut LevelView, busy: bool,
                     }
                     Some(Gesture::Place { submitted: false, .. }) => {
                         let at = view.to_world(*pos);
-                        view.drag_place(at, free);
+                        view.drag_place(at);
                     }
                     Some(Gesture::Marquee { to, .. }) => *to = *pos,
                     _ => {}

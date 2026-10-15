@@ -1112,9 +1112,10 @@ impl LevelView {
     }
 
     /// The cell a right-click at level point `point` puts an object in.
-    fn place_cell(&self, point: Pos2, free: bool) -> (i16, i16) {
-        let snap = |v: f32| if self.options.snap && !free { (v / TILE).round() * TILE } else { v };
-        let cell = |v: f32| (round(snap(v)).clamp(0, i32::from(u16::MAX)) / 16) as i16;
+    /// The one under the pointer, whichever part of it was pressed, snapping or not: an object is only ever whole
+    /// tiles.
+    fn place_cell(point: Pos2) -> (i16, i16) {
+        let cell = |v: f32| ((v / TILE).floor() as i32).clamp(0, i32::from(u16::MAX) / 16) as i16;
         (cell(point.x), cell(point.y))
     }
 
@@ -1132,18 +1133,18 @@ impl LevelView {
 
     /// A right-press at `point`. An object is not created yet: it is dragged out to its size first, as in NSMB
     /// Editor, and `false` says the chosen kind is one a press creates outright.
-    pub fn begin_place(&mut self, point: Pos2, free: bool) -> bool {
+    pub fn begin_place(&mut self, point: Pos2) -> bool {
         if self.placement.kind != Kind::Object {
             return false;
         }
-        let cell = self.place_cell(point, free);
+        let cell = Self::place_cell(point);
         self.gesture = Some(Gesture::Place { from: cell, to: cell, submitted: false });
         true
     }
 
     /// The pointer moved to `point` with an object being dragged out.
-    pub fn drag_place(&mut self, point: Pos2, free: bool) {
-        let cell = self.place_cell(point, free);
+    pub fn drag_place(&mut self, point: Pos2) {
+        let cell = Self::place_cell(point);
         if let Some(Gesture::Place { to, submitted: false, .. }) = &mut self.gesture {
             *to = cell;
         }
@@ -1172,7 +1173,8 @@ impl LevelView {
         let mut point = point;
         if self.options.snap && !free {
             let grid = if kind.tiled() { TILE } else { self.options.snap_size };
-            point = Pos2::new((point.x / grid).round() * grid, (point.y / grid).round() * grid);
+            // The grid square that was clicked, not the grid line nearest the click.
+            point = Pos2::new((point.x / grid).floor() * grid, (point.y / grid).floor() * grid);
         }
         if kind.unsigned() && (point.x < 0.0 || point.y < 0.0) {
             return None;
@@ -1783,11 +1785,12 @@ mod tests {
     }
 
     #[test]
-    fn placing_snaps_and_refuses_unsigned_kinds_out_of_bounds() {
+    fn placing_fills_the_clicked_square_and_refuses_unsigned_kinds_out_of_bounds() {
         let mut view = LevelView::new(snapshot());
         let Some(LevelEdit::Add { items, name }) = view.placement_edit(Pos2::new(100.0, 41.0), false) else { panic!() };
         assert_eq!(name, "Add object");
-        assert_eq!((items.objects[0].x, items.objects[0].y, items.objects[0].width), (6, 3, 1));
+        // 100 by 41 is in the square from 96 by 32, though it is nearer the corner at 96 by 48.
+        assert_eq!((items.objects[0].x, items.objects[0].y, items.objects[0].width), (6, 2, 1));
         for kind in [Kind::Sprite, Kind::Entrance, Kind::Zone, Kind::View] {
             view.placement.kind = kind;
             assert_eq!(view.placement_edit(Pos2::new(-80.0, 32.0), false), None, "{kind:?}");
@@ -1797,20 +1800,20 @@ mod tests {
         let Some(LevelEdit::Add { items, .. }) = view.placement_edit(Pos2::new(-80.0, 32.0), false) else { panic!() };
         assert_eq!((items.objects[0].x, items.objects[0].y, items.objects[0].tileset_slot, items.objects[0].object_id), (0, 2, 1, 12));
         // A right-press on an object's kind drags it out instead, from either corner, and creates it on release.
-        assert!(view.begin_place(Pos2::new(100.0, 41.0), false));
+        assert!(view.begin_place(Pos2::new(100.0, 41.0)));
         assert_eq!(view.preview_objects().len(), view.snapshot.objects.len() + 1, "shown before it exists");
-        view.drag_place(Pos2::new(36.0, 84.0), false);
+        view.drag_place(Pos2::new(36.0, 84.0));
         let Some(LevelEdit::Add { items, name }) = view.finish_place() else { panic!() };
         let o = &items.objects[0];
-        assert_eq!((name.as_str(), o.x, o.y, o.width, o.height, o.object_id), ("Add object", 2, 3, 5, 3, 12));
+        assert_eq!((name.as_str(), o.x, o.y, o.width, o.height, o.object_id), ("Add object", 2, 2, 5, 4, 12));
         assert_eq!(view.finish_place(), None, "once");
         view.settled();
         assert_eq!(view.gesture, None);
         view.placement.kind = Kind::Entrance;
-        assert!(!view.begin_place(Pos2::new(13.0, 27.0), false));
+        assert!(!view.begin_place(Pos2::new(13.0, 27.0)));
         view.options.snap_size = 8.0;
         let Some(LevelEdit::Add { items, .. }) = view.placement_edit(Pos2::new(13.0, 27.0), false) else { panic!() };
-        assert_eq!((items.entrances[0].x, items.entrances[0].y), (16, 24));
+        assert_eq!((items.entrances[0].x, items.entrances[0].y), (8, 24));
         view.placement.set_custom_sprite(0xf46a_44b9);
         let Some(LevelEdit::Add { items, name }) = view.placement_edit(Pos2::new(40.0, 40.0), false) else { panic!() };
         assert_eq!((name.as_str(), items.sprites[0].hash), ("Add custom sprite", Some(0xf46a_44b9)));
