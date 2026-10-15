@@ -9,7 +9,8 @@ use bigstar_level::{LevelObjectEffect, ModuleDataCatalog, level_object_effect};
 use bigstar_protocol::{ATLAS_COLUMNS, TilesetGraphics};
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 
-use crate::canvas::{Art, Frame, paint_command};
+use crate::block_icons;
+use crate::canvas::{Art, CONTENTS_MIN_BLOCK, Frame, paint_command};
 use crate::controls::{self, Choice as _, Row, Width};
 use crate::level_view::{ActorKey, Kind, LevelView, TILE};
 
@@ -226,6 +227,8 @@ fn object_preview(painter: &egui::Painter, icon: Rect, entry: &ObjectEntry, tile
     let cell = (icon.width() / width as f32).min(icon.height() / height as f32);
     let origin = icon.center() - Vec2::new(width as f32, height as f32) * cell / 2.0;
     let mut mesh = egui::Mesh::with_texture(texture);
+    // What a question block or a brick holds, over it, as the canvas shows it.
+    let mut icons = if cell >= CONTENTS_MIN_BLOCK { art.contents_sheet().map(egui::Mesh::with_texture) } else { None };
     for (index, &block) in cells.iter().enumerate() {
         if block == OBJECT_LAYOUT_UNWRITTEN || block == OBJECT_LAYOUT_EMPTY_TILE || block < 0 || block as u32 >= tileset.blocks {
             continue;
@@ -233,10 +236,16 @@ fn object_preview(painter: &egui::Painter, icon: Rect, entry: &ObjectEntry, tile
         let block = block as u32;
         let (column, row) = ((block % ATLAS_COLUMNS) as f32, (block / ATLAS_COLUMNS) as f32);
         let uv = Rect::from_min_size(Pos2::new(column * TILE / size.x, row * TILE / size.y), Vec2::new(TILE / size.x, TILE / size.y));
-        let at = origin + Vec2::new((index % width) as f32, (index / width) as f32) * cell;
-        mesh.add_rect_with_uv(Rect::from_min_size(at, Vec2::splat(cell)), uv, Color32::WHITE);
+        let at = Rect::from_min_size(origin + Vec2::new((index % width) as f32, (index / width) as f32) * cell, Vec2::splat(cell));
+        mesh.add_rect_with_uv(at, uv, Color32::WHITE);
+        if let (Some(icons), Some(contents)) = (icons.as_mut(), tileset.behaviors.get(block as usize).and_then(|&b| block_icons::contents_cell(b))) {
+            block_icons::add(icons, at, contents);
+        }
     }
     painter.add(Shape::mesh(mesh));
+    if let Some(icons) = icons.filter(|icons| !icons.is_empty()) {
+        painter.add(Shape::mesh(icons));
+    }
 }
 
 /// A pencil eraser, tilted, rubbing edge down.

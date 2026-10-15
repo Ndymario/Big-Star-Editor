@@ -83,6 +83,19 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         }
     }
     shot(&mut harness, dir, "remote-100.png")?;
+    // The object palette, on the shared tileset's page, filtered to where its question blocks are.
+    if let Some(tab) = harness.query_by_label("Palette") {
+        tab.click();
+    }
+    harness.step();
+    if let Some(filter) = harness.query_by_role(egui::accesskit::Role::TextInput) {
+        filter.click();
+        filter.type_text("0:3");
+    }
+    shot(&mut harness, dir, "remote-palette.png")?;
+    if let Some(tab) = harness.query_by_label("Levels") {
+        tab.click();
+    }
     // The DS screen: where the first entrance opens the camera, and another under the pointer further along.
     let mut pointer = egui::Pos2::ZERO;
     if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {

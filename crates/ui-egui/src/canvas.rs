@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use bigstar_formats::{NsmbLevelCourse, block_contents, entrance_flags};
+use bigstar_formats::{NsmbLevelCourse, entrance_flags};
 use bigstar_level::{
     BackgroundLayer, BackgroundMotion, BackgroundSwap, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, still_quarter,
     strip_offsets,
@@ -27,6 +27,7 @@ use crate::properties::Tab;
 pub struct TexturePool {
     uploaded: HashMap<TextureId, egui::TextureHandle>,
     entrances: Option<egui::TextureHandle>,
+    contents: Option<egui::TextureHandle>,
 }
 
 /// NSMB Editor's entrance icons: a 16-pixel cell per type, and under each the same entrance as one that can be entered.
@@ -59,13 +60,22 @@ impl TexturePool {
     }
 
     fn entrance_sheet(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
-        if self.entrances.is_none() {
-            let sheet = image::load_from_memory_with_format(ENTRANCE_SHEET, image::ImageFormat::Png).ok()?.into_rgba8();
-            let image = egui::ColorImage::from_rgba_unmultiplied([sheet.width() as usize, sheet.height() as usize], sheet.as_raw());
-            self.entrances = Some(ctx.load_texture("bigstar:entrances", image, egui::TextureOptions::NEAREST));
-        }
-        self.entrances.as_ref().map(egui::TextureHandle::id)
+        embedded(ctx, &mut self.entrances, "bigstar:entrances", ENTRANCE_SHEET)
     }
+
+    fn contents_sheet(&mut self, ctx: &egui::Context) -> Option<egui::TextureId> {
+        embedded(ctx, &mut self.contents, "bigstar:block-contents", block_icons::SHEET)
+    }
+}
+
+/// A sheet built into the editor, uploaded the first time something draws from it.
+fn embedded(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>, name: &str, png: &[u8]) -> Option<egui::TextureId> {
+    if slot.is_none() {
+        let sheet = image::load_from_memory_with_format(png, image::ImageFormat::Png).ok()?.into_rgba8();
+        let image = egui::ColorImage::from_rgba_unmultiplied([sheet.width() as usize, sheet.height() as usize], sheet.as_raw());
+        *slot = Some(ctx.load_texture(name, image, egui::TextureOptions::NEAREST));
+    }
+    slot.as_ref().map(egui::TextureHandle::id)
 }
 
 /// The canvas paints itself, so every chrome colour is derived from the active theme.
@@ -177,6 +187,11 @@ pub(crate) struct Art<'a> {
 impl Art<'_> {
     pub(crate) fn texture(&mut self, id: Option<&TextureId>) -> Option<(egui::TextureId, Vec2)> {
         self.pool.get(self.ctx, self.store, id?)
+    }
+
+    /// NSMB Editor's icons for what question blocks and bricks hold. See `block_icons`.
+    pub(crate) fn contents_sheet(&mut self) -> Option<egui::TextureId> {
+        self.pool.contents_sheet(self.ctx)
     }
 }
 
@@ -1143,8 +1158,11 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
             let world = Rect::from_min_size(corner + Vec2::new(x, y) * TILE, Vec2::splat(TILE));
             mesh.add_rect_with_uv(frame.rect(world), uv, Color32::WHITE);
             if show_contents
-                && let Some(contents) =
-                    graphics.tilesets.get(usize::from(cell.slot)).and_then(|slot| slot.behaviors.get(block as usize)).and_then(|&b| block_contents(b))
+                && let Some(contents) = graphics
+                    .tilesets
+                    .get(usize::from(cell.slot))
+                    .and_then(|slot| slot.behaviors.get(block as usize))
+                    .and_then(|&b| block_icons::contents_cell(b))
             {
                 icons.push((frame.rect(world), contents));
             }
@@ -1155,13 +1173,17 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
             painter.add(Shape::mesh(mesh));
         }
     }
-    for (block, contents) in icons {
-        block_icons::paint(painter, block_icons::icon_rect(block), contents);
+    if let Some(sheet) = art.contents_sheet().filter(|_| !icons.is_empty()) {
+        let mut mesh = Mesh::with_texture(sheet);
+        for (block, cell) in icons {
+            block_icons::add(&mut mesh, block, cell);
+        }
+        painter.add(Shape::mesh(mesh));
     }
 }
 
 /// How many screen points a block must cover before the canvas puts what it holds on it.
-const CONTENTS_MIN_BLOCK: f32 = 14.0;
+pub(crate) const CONTENTS_MIN_BLOCK: f32 = 10.0;
 
 fn command_color(packed: u32, opacity: f32) -> Color32 {
     let [r, g, b, a] = packed.to_be_bytes();

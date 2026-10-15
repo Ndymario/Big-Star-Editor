@@ -1011,18 +1011,3 @@ fn an_archive_goes_back_in_the_wrapper_it_came_in() {
     assert_eq!(unwrap_narc(&compress_nitro_lz10(b"not an archive").unwrap()), None);
     assert_eq!(unwrap_narc(b"plain"), None);
 }
-
-#[test]
-fn a_question_block_or_a_brick_says_what_it_holds() {
-    let block = |flags: u32, parameter: u8| encode_tile_behavior(TileBehaviorParts { flags, subtype: 0, parameter });
-    // Solid and question, solid and brick, as the game's own blocks are flagged.
-    assert_eq!(block_contents(block(1 | 4, 0)), Some(BlockContents::PowerUp));
-    assert_eq!(block_contents(block(1 | 4, 7)), Some(BlockContents::Coin));
-    assert_eq!(block_contents(block(1 | 4, 0x33)), Some(BlockContents::Coin), "an invisible coin block holds a coin too");
-    assert_eq!(block_contents(block(1 | 4, 14)), None, "unknown");
-    assert_eq!(block_contents(block(1 | 0x10, 0x34)), Some(BlockContents::FireFlower));
-    assert_eq!(block_contents(block(1 | 0x10, 5)), Some(BlockContents::Coins));
-    assert_eq!(block_contents(block(1 | 0x10, 0)), None, "an empty brick");
-    assert_eq!(block_contents(block(2, 0)), None, "a coin is not a block holding one");
-    assert_eq!(block_contents(block(1, 7)), None);
-}

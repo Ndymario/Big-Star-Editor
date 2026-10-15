@@ -1081,9 +1081,16 @@ fn real_backgrounds_and_foregrounds_draw() {
     let (graphics, opaque) = drawn(&mut session, "A01_1");
     assert!(graphics.background.error.is_none() && graphics.foreground.error.is_none(), "{graphics:?}");
     // The shared tileset's question blocks say what they hold, so the canvas can show it.
-    let held: std::collections::HashSet<_> = graphics.tilesets[0].behaviors.iter().filter_map(|&b| bigstar_formats::block_contents(b)).collect();
-    for contents in [bigstar_formats::BlockContents::PowerUp, bigstar_formats::BlockContents::Coin, bigstar_formats::BlockContents::Star] {
-        assert!(held.contains(&contents), "{contents:?} in {held:?}");
+    let held: std::collections::HashSet<u8> = graphics.tilesets[0]
+        .behaviors
+        .iter()
+        .map(|&b| bigstar_formats::decode_tile_behavior(b))
+        .filter(|parts| parts.flags & 4 != 0)
+        .map(|parts| parts.parameter)
+        .collect();
+    // A mushroom or flower, a star and a coin.
+    for parameter in [0, 1, 7] {
+        assert!(held.contains(&parameter), "{parameter} in {held:?}");
     }
     assert_eq!(opaque.len(), 2);
     assert_eq!(opaque[0], 100, "the sky fills the background");
