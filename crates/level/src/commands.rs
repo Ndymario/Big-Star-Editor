@@ -156,6 +156,7 @@ pub(crate) struct Tileset {
     after: LevelTilesetReferences,
     had_background: bool,
     had_foreground: bool,
+    had_tileset: bool,
 }
 
 impl Tileset {
@@ -165,6 +166,7 @@ impl Tileset {
             after,
             had_background: !state.course.backgrounds.is_empty(),
             had_foreground: !state.course.foregrounds.is_empty(),
+            had_tileset: !state.course.tilesets.is_empty(),
         }
     }
 }
@@ -182,6 +184,11 @@ fn set_first_screen(screens: &mut Vec<NsmbLevelScreen>, screen_id: u16, palette_
 impl Tileset {
     fn apply(target: &mut LevelState, value: LevelTilesetReferences) {
         target.course.header.tileset_theme[0] = value.tileset_id;
+        // The tileset block names no screen; only its palette is the level's to choose.
+        match target.course.tilesets.first_mut() {
+            Some(block) => block.palette_id = value.tileset_palette_id,
+            None => target.course.tilesets.push(NsmbLevelScreen { palette_id: value.tileset_palette_id, ..NsmbLevelScreen::default() }),
+        }
         target.course.header.background_theme[0] = value.background_graphics_id;
         set_first_screen(&mut target.course.backgrounds, value.background_screen_id, value.background_palette_id);
         target.course.header.foreground_theme[0] = value.foreground_graphics_id;
@@ -206,6 +213,9 @@ impl Command<LevelState> for Tileset {
         }
         if !self.had_foreground {
             target.course.foregrounds.clear();
+        }
+        if !self.had_tileset {
+            target.course.tilesets.clear();
         }
         Ok(())
     }

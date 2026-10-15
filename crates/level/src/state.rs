@@ -19,6 +19,8 @@ pub struct LevelTilesetReferences {
     /// The game loads a layer's palette by its first block's palette id, not by the graphics id beside it.
     pub background_palette_id: u16,
     pub foreground_palette_id: u16,
+    /// And the level tileset's by the tileset block's. Nintendo's levels name the tileset there again, all but two.
+    pub tileset_palette_id: u16,
 }
 
 /// Everything the history edits.
@@ -137,6 +139,7 @@ impl LevelState {
             foreground_screen_id: self.course.foregrounds.first().map_or(0, |screen| screen.screen_id),
             background_palette_id: self.course.backgrounds.first().map_or(0, |screen| screen.palette_id),
             foreground_palette_id: self.course.foregrounds.first().map_or(0, |screen| screen.palette_id),
+            tileset_palette_id: self.course.tilesets.first().map_or(0, |screen| screen.palette_id),
         }
     }
 
@@ -240,6 +243,9 @@ impl LevelState {
         }
         if let Some(screen) = self.course.backgrounds.first() {
             patch_screen_ids(&mut blocks[2], screen)?;
+        }
+        if let Some(screen) = self.course.tilesets.first() {
+            patch_screen_ids(&mut blocks[3], screen)?;
         }
         if let Some(screen) = self.course.foregrounds.first() {
             patch_screen_ids(&mut blocks[4], screen)?;

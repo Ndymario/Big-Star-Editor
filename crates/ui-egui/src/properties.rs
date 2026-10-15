@@ -272,6 +272,14 @@ pub(crate) const TILESET_NAMES: [&str; 76] = [
     "Grassland",
 ];
 
+/// A tileset picked anew brings its own colours, as NSMB Editor has it: the game takes them from the tileset block,
+/// which the level must name the tileset in again. Another palette can be chosen after.
+pub(crate) fn follow_tileset(references: &mut LevelTilesetReferences, before: LevelTilesetReferences) {
+    if references.tileset_id != before.tileset_id {
+        references.tileset_palette_id = references.tileset_id;
+    }
+}
+
 /// The tileset IDs a level can choose, each with its name.
 pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
     (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned())).collect()
@@ -476,13 +484,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         Tab::Course => {
             let r = snapshot.tileset_references;
             // In the order the game's own structures hold them, which is the order `apply` reads them back in: the
-            // header's three graphics, then the first background block's screen and palette, then the foreground's.
+            // header's three graphics, then the first background block's screen and palette, the tileset block's
+            // palette, then the foreground's.
             for (label, value, layer) in [
                 ("BG graphics", r.background_graphics_id, Some(BackgroundLayer::Background)),
                 ("Tileset", r.tileset_id, None),
                 ("FG graphics", r.foreground_graphics_id, Some(BackgroundLayer::Foreground)),
                 ("BG screen", r.background_screen_id, Some(BackgroundLayer::Background)),
                 ("BG palette", r.background_palette_id, Some(BackgroundLayer::Background)),
+                ("Tileset palette", r.tileset_palette_id, None),
                 ("FG screen", r.foreground_screen_id, Some(BackgroundLayer::Foreground)),
                 ("FG palette", r.foreground_palette_id, Some(BackgroundLayer::Foreground)),
             ] {
@@ -864,11 +874,13 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
                 2 => &mut r.foreground_graphics_id,
                 3 => &mut r.background_screen_id,
                 4 => &mut r.background_palette_id,
-                5 => &mut r.foreground_screen_id,
-                6 => &mut r.foreground_palette_id,
+                5 => &mut r.tileset_palette_id,
+                6 => &mut r.foreground_screen_id,
+                7 => &mut r.foreground_palette_id,
                 _ => return None,
             };
             *target = narrow(value, *target);
+            follow_tileset(&mut r, snapshot.tileset_references);
             Some(LevelEdit::SetTilesetReferences { references: r })
         }
         Tab::Banks => {
@@ -1462,10 +1474,18 @@ mod tests {
         // The course tab edits the tileset references; the banks name their overlay.
         let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 3, 7) else { panic!() };
         assert_eq!(references.background_screen_id, 7);
-        // The tileset is picked by name, with its number.
-        let tileset = &rows(&view, &view.panel, None).rows[1];
-        let Editor::Choice(choices) = &tileset.editor else { panic!("{:?}", tileset.editor) };
-        assert_eq!((tileset.label.as_str(), choices.len(), &choices[1]), ("Tileset", 76, &(1, "Castle".to_owned())));
+        // The tileset is picked by name, with its number, and so are its colours.
+        let shown_rows = rows(&view, &view.panel, None);
+        for (row, label) in [(1, "Tileset"), (5, "Tileset palette")] {
+            let tileset = &shown_rows.rows[row];
+            let Editor::Choice(choices) = &tileset.editor else { panic!("{:?}", tileset.editor) };
+            assert_eq!((tileset.label.as_str(), choices.len(), &choices[1]), (label, 76, &(1, "Castle".to_owned())));
+        }
+        // A tileset picked anew brings its colours along, as the game needs; the colours alone can be another's.
+        let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 1, 23) else { panic!() };
+        assert_eq!((references.tileset_id, references.tileset_palette_id), (23, 23));
+        let Some(LevelEdit::SetTilesetReferences { references }) = apply(&view, &view.panel, &shown(&view), 5, 50) else { panic!() };
+        assert_eq!((references.tileset_id, references.tileset_palette_id), (view.snapshot.tileset_references.tileset_id, 50));
         view.panel_tab(Tab::Banks);
         view.snapshot.course.object_banks[0] = 3;
         let mut overlays = [[0; 10]; 16];

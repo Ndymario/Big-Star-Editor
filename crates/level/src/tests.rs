@@ -173,6 +173,7 @@ fn every_entity_kind_survives_a_save_and_load() {
             foreground_screen_id: 5,
             background_palette_id: 4,
             foreground_palette_id: 3,
+            tileset_palette_id: 2,
         })
         .unwrap();
     assert_eq!(level.course().header.tileset_theme[0], 9);
@@ -187,6 +188,7 @@ fn every_entity_kind_survives_a_save_and_load() {
     assert_eq!(round_trip.course().header.tileset_theme[0], 9);
     assert_eq!(round_trip.course().foregrounds[0].screen_id, 5);
     assert_eq!((round_trip.course().backgrounds[0].palette_id, round_trip.course().foregrounds[0].palette_id), (4, 3));
+    assert_eq!(round_trip.course().tilesets[0].palette_id, 2, "the tileset block's palette, which the game loads the tileset's colours by");
     assert_eq!(round_trip.course().sprites.len(), 1);
     assert_eq!(round_trip.course().sprites[0], sprite(3, 10, 20, [1, 2], 0x06050403));
     assert_eq!(round_trip.course().entrances.len(), 1);
@@ -209,7 +211,7 @@ fn tileset_references_undo_removes_the_screens_they_created() {
     level.set_tileset_references(LevelTilesetReferences { foreground_screen_id: 5, ..Default::default() }).unwrap();
     assert_eq!(level.course().foregrounds.len(), 1);
     level.undo().unwrap();
-    assert!(level.course().foregrounds.is_empty());
+    assert!(level.course().foregrounds.is_empty() && level.course().tilesets.is_empty());
     assert_eq!(level.tileset_references(), LevelTilesetReferences::default());
 }
 

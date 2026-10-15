@@ -380,6 +380,19 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     // 1-1 is grassland: its header names tileset 8, which the game's table makes the nohara set.
     assert_eq!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_nohara.bin", "1-1's own tileset, in slot 1");
     assert_eq!(resources.tilesets[2].map16.rom_path, "BG_pnl/d_2d_PA_I_S_nohara.bin");
+    assert_eq!(resources.tilesets[0].palette.rom_path, "BG_ncl/d_2d_A_J_jyotyu_ncl.bin", "grassland's blocks are the usual colours");
+    let grassland_colours = resources.tilesets[1].palette.rom_path.clone();
+
+    // A ghost house's graphics and background with the tileset block still naming grassland, as a level whose header
+    // alone was changed has: the shared blocks turn ghost-house grey, the tileset keeps grassland's colours.
+    let mut references = snapshot.tileset_references;
+    (references.tileset_id, references.background_graphics_id, references.background_screen_id, references.background_palette_id) = (23, 23, 23, 23);
+    let edit = LevelEdit::SetTilesetReferences { references };
+    edited(session.handle(Request::EditLevel { level: snapshot.level, base_revision: snapshot.revision, edit }).unwrap());
+    let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
+    assert_eq!(resources.tilesets[0].palette.rom_path, "BG_ncl/d_2d_A_J_jyotyu_W_ncl.bin");
+    assert_eq!(resources.tilesets[1].palette.rom_path, grassland_colours);
+    assert_ne!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_nohara.bin");
 }
 
 #[test]

@@ -573,6 +573,7 @@ fn sheet(
 }
 
 fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
+    let before = doc.references;
     egui::Grid::new("tileset-references").num_columns(2).show(ui, |ui| {
         let references = &mut doc.references;
         for (label, value) in [
@@ -581,18 +582,20 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
             ("Foreground graphics", &mut references.foreground_graphics_id),
             ("Background screen", &mut references.background_screen_id),
             ("Background palette", &mut references.background_palette_id),
+            ("Level tileset palette", &mut references.tileset_palette_id),
             ("Foreground screen", &mut references.foreground_screen_id),
             ("Foreground palette", &mut references.foreground_palette_id),
         ] {
             ui.label(label);
-            if label == "Level tileset" {
-                tileset_choice(ui, value);
+            if label.starts_with("Level tileset") {
+                tileset_choice(ui, label, value);
             } else {
                 ui.add(controls::number(value).range(0..=255));
             }
             ui.end_row();
         }
     });
+    crate::properties::follow_tileset(&mut doc.references, before);
     ui.add(
         egui::Label::new(
             "These IDs choose the level's graphics. Edits below change the graphics loaded now; a changed ID takes effect once the level is saved and opened again.",
@@ -603,12 +606,12 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
 
 /// The level tileset, picked by name. A number the game's tables have no room for stays as it is until another is
 /// picked.
-fn tileset_choice(ui: &mut Ui, value: &mut u16) {
+fn tileset_choice(ui: &mut Ui, id: &str, value: &mut u16) {
     let label = |id: u16| match TILESET_NAMES.get(usize::from(id)) {
         Some(name) => format!("{id} — {name}"),
         None => format!("{id} — not listed"),
     };
-    controls::drop_down("tileset-choice").width(260.0).truncate().selected_text(label(*value)).show_ui(ui, |ui| {
+    controls::drop_down(("tileset-choice", id)).width(260.0).truncate().selected_text(label(*value)).show_ui(ui, |ui| {
         for id in (0u16..).take(TILESET_NAMES.len()) {
             if ui.choice(*value == id, label(id)).clicked() {
                 *value = id;

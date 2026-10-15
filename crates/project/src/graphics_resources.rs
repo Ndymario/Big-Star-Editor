@@ -38,6 +38,8 @@ pub struct NsmbGraphicsProfile {
     pub shared_behaviors: usize,
     /// Which object bank each sprite type needs: a tileset slot and a bank number for each, 0 for none.
     pub sprite_banks: usize,
+    /// Which of the shared tileset's four palettes each background loads, a byte for each.
+    pub shared_palettes: usize,
 }
 
 /// One resource, named the way the game names it and carrying what the editor would read there now -- the module's
@@ -147,7 +149,7 @@ pub fn find_object_bank_overlays(arm9: &[u8]) -> Result<ObjectBankOverlayTable> 
     Err(Error::new(ErrorCode::NotFound, "could not locate the object-bank overlay table in ARM9"))
 }
 
-const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 15]) -> NsmbGraphicsProfile {
+const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 16]) -> NsmbGraphicsProfile {
     NsmbGraphicsProfile {
         game_code,
         file_id_offset,
@@ -166,6 +168,7 @@ const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 1
         sprite_object_ids: tables[12],
         shared_behaviors: tables[13],
         sprite_banks: tables[14],
+        shared_palettes: tables[15],
     }
 }
 
@@ -175,27 +178,42 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DE",
         131,
-        [0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4, 0x2C930],
+        [
+            0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4, 0x2C930,
+            0x30CD8,
+        ],
     ),
     profile(
         "A2DP",
         135,
-        [0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8, 0x2BDF0],
+        [
+            0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8, 0x2BDF0,
+            0x304EC,
+        ],
     ),
     profile(
         "A2DJ",
         131,
-        [0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4, 0x2BD30],
+        [
+            0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4, 0x2BD30,
+            0x300D8,
+        ],
     ),
     profile(
         "A2DK",
         131,
-        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264, 0x2BDF0],
+        [
+            0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264, 0x2BDF0,
+            0x30198,
+        ],
     ),
     profile(
         "A2DC",
         131,
-        [0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264, 0x2BDF0],
+        [
+            0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264, 0x2BDF0,
+            0x30198,
+        ],
     ),
 ];
 
@@ -209,6 +227,19 @@ fn unwrap_resource(data: &[u8]) -> Result<Vec<u8>> {
     match data.first() {
         Some(0x10 | 0x11) => decompress_nitro_lz(data),
         _ => Ok(data.to_vec()),
+    }
+}
+
+/// The shared tileset's palette the game loads under background `background_screen_id`, as NSMB Editor picks it:
+/// ghost houses grey its blocks, castles blue them, and so on. A background past the table's 76 gets the usual one.
+fn shared_palette(overlay: &[u8], profile: &NsmbGraphicsProfile, background_screen_id: u16) -> &'static str {
+    let id = usize::from(background_screen_id);
+    let choice = if id < 76 { overlay.get(profile.shared_palettes + id) } else { None };
+    match choice {
+        Some(1) => "d_2d_A_J_jyotyu_B_ncl.bin",
+        Some(2) => "d_2d_A_J_jyotyu_R_ncl.bin",
+        Some(3) => "d_2d_A_J_jyotyu_W_ncl.bin",
+        _ => "d_2d_A_J_jyotyu_ncl.bin",
     }
 }
 
@@ -274,7 +305,7 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     let [jyotyu, level_tileset, nohara] = &mut result.tilesets;
     let addresses = [
         named(files, "d_2d_A_J_jyotyu_ncg.bin"),
-        named(files, "d_2d_A_J_jyotyu_ncl.bin"),
+        named(files, shared_palette(&overlay, profile, references.background_screen_id)),
         named(files, "d_2d_PA_A_J_jyotyu.bin"),
         named(files, "A_J_jyotyu.bin"),
         named(files, "A_J_jyotyu_hd.bin"),
@@ -296,7 +327,8 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     let id = references.tileset_id;
     let addresses = [
         table(files, profile.tileset_graphics, id),
-        table(files, profile.tileset_palette, id),
+        // The game takes the tileset's colours from the tileset block, which nearly always names the same tileset.
+        table(files, profile.tileset_palette, references.tileset_palette_id),
         table(files, profile.tileset_map16, id),
         table(files, profile.tileset_objects, id),
         table(files, profile.tileset_index, id),
