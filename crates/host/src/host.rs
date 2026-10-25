@@ -1211,10 +1211,14 @@ impl Shared {
         save_settings(&open.directory, &open.settings)?;
         self.ensure_patcher(open);
         // Each variant builds to a ROM of its own.
-        select_rom(open)?;
+        let changed = select_rom(open)?;
+        let announce = self.project_changed(open, changed);
         let settings = open.settings.clone();
         drop(state);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(event) = announce {
+            self.emit(event);
+        }
         self.emit(Event::SettingsChanged(settings.clone()));
         self.emit(Event::GraphicsChanged { generation });
         Ok(Response::Settings(settings))
@@ -1250,6 +1254,12 @@ impl Shared {
         Ok(Response::Settings(settings))
     }
 
+    /// What frontends are told when the open project reads another ROM; `None` when there is nothing to tell.
+    fn project_changed(&self, open: &OpenProject, changed: bool) -> Option<Event> {
+        let workspace = self.workspace.as_ref().filter(|_| changed)?;
+        Some(Event::ProjectChanged(project_info(workspace, &open.directory, open.rom.as_ref(), open.rom_file.as_deref())))
+    }
+
     /// NCPatcher, handed the open project's clean ROM when it has a usable one.
     fn ncpatcher(&self, open: &OpenProject) -> NCPatcherClient {
         let client = NCPatcherClient::new(&self.options.ncpatcher);
@@ -1283,11 +1293,15 @@ impl Shared {
         open.graphics = None;
         open.banner = BannerTarget::Unreported;
         self.ensure_patcher(open);
-        select_rom(open)?;
+        let changed = select_rom(open)?;
+        let announce = self.project_changed(open, changed);
         let settings = open.settings.clone();
         drop(state);
         self.log(LogLevel::Info, format!("The clean ROM is now {}", settings.clean_rom));
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Some(event) = announce {
+            self.emit(event);
+        }
         self.emit(Event::SettingsChanged(settings.clone()));
         self.emit(Event::GraphicsChanged { generation });
         Ok(Response::Settings(settings))
@@ -1474,11 +1488,11 @@ fn snapshot_and_event(id: LevelId, session: &LevelSession) -> (LevelSnapshot, Ev
 
 /// Reads the project's ROM: the active variant's build, or before there is one the clean ROM. A different ROM closes the
 /// levels open on the old one, so callers refuse unsaved edits first.
-fn select_rom(open: &mut OpenProject) -> Result<()> {
+fn select_rom(open: &mut OpenProject) -> Result<bool> {
     let clean_rom = clean_rom_file(&open.directory, &open.settings).filter(|_| open.settings.clean_rom_problem.is_none());
     let rom_file = project_rom(open.built_rom.as_deref(), clean_rom.as_deref());
     if rom_file == open.rom_file && open.rom.is_some() == rom_file.is_some() {
-        return Ok(());
+        return Ok(false);
     }
     let rom = rom_file.as_deref().map(RomReader::open).transpose()?;
     open.index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
@@ -1487,7 +1501,7 @@ fn select_rom(open: &mut OpenProject) -> Result<()> {
     open.levels.clear();
     open.filesystem = None;
     open.graphics = None;
-    Ok(())
+    Ok(true)
 }
 
 fn project_info(workspace: &Workspace, directory: &Path, rom: Option<&RomReader>, rom_file: Option<&Path>) -> ProjectInfo {

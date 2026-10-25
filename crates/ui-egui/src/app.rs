@@ -1002,7 +1002,7 @@ impl BigStarApp {
         let mut open = true;
         dialogs::window("Clean ROM").open(&mut open).default_width(460.0).show(ctx, |ui| {
             ui.label(problem.as_deref().unwrap_or("Choose the clean ROM this project is built from."));
-            ui.weak("It is kept with the project's editor settings, not in ncpatcher.yaml.");
+            ui.weak("An unmodified New Super Mario Bros. ROM. Every build starts from it, and it is never changed.");
             ui.add_space(4.0);
             // The desktop's own host takes a ROM anywhere on this machine, so the system's dialog picks it.
             if local_files {

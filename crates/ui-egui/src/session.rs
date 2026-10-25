@@ -782,12 +782,10 @@ impl Session {
                 self.browser = None;
                 self.project = Some(info);
             }
-            // Another ROM: before a first build it is the one being edited, so what it holds is asked again.
+            // When it is the ROM being edited, `ProjectChanged` follows and the project is read again.
             (Pending::CleanRom, Response::Settings(settings)) => {
                 self.browser = None;
                 self.settings = Some(settings);
-                self.request(Request::ListLevels, Pending::ListLevels);
-                self.refresh_filesystem();
             }
             (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
@@ -1141,6 +1139,15 @@ impl Session {
                 }
             }
             Event::Build(event) => self.follow_build(event),
+            // Another ROM under the same project: what it holds is asked again. The levels open on the old one
+            // reopen with the `SettingsChanged` that comes with it.
+            Event::ProjectChanged(info) => {
+                if self.project.as_ref().is_some_and(|project| project.path == info.path) {
+                    self.project = Some(info);
+                    self.request(Request::ListLevels, Pending::ListLevels);
+                    self.refresh_filesystem();
+                }
+            }
             Event::ProjectClosed if self.own_closes > 0 => self.own_closes -= 1,
             Event::ProjectClosed => {
                 self.project = None;

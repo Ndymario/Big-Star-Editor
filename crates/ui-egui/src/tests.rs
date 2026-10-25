@@ -2039,6 +2039,7 @@ fn an_ncpatcher_project_keeps_its_builds_and_variants() {
 fn a_project_without_a_clean_rom_asks_for_one() {
     let mut harness = canvas_on(DemoConnection::without_clean_rom(), Vec2::new(1500.0, 800.0));
     harness.get_by_label("This project has no clean ROM to build from yet.");
+    assert_eq!(harness.state().session().unwrap().project.as_ref().unwrap().rom_path, None);
     harness.get_by_label("clean.nds").click();
     harness.run();
     harness.get_by_label("Use This ROM").click();
@@ -2047,4 +2048,8 @@ fn a_project_without_a_clean_rom_asks_for_one() {
     let settings = harness.state().session().unwrap().settings.clone().unwrap();
     assert_eq!((settings.clean_rom.as_str(), settings.clean_rom_problem), ("demo/clean.nds", None));
     assert!(harness.query_by_label("Use This ROM").is_none(), "the question closes once it is answered");
+    // The project reads the ROM now, rather than going on as if none had been chosen.
+    let project = harness.state().session().unwrap().project.clone().unwrap();
+    assert_eq!(project.rom_path.as_deref(), Some("demo/clean.nds"));
+    assert!(harness.query_by_label("This project has no ROM, so no level can be opened.").is_none());
 }

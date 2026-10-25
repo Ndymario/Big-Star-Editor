@@ -226,8 +226,12 @@ impl Shared {
         open.filesystem = None;
         open.graphics = None;
         open.banner = BannerTarget::Unreported;
+        let announce = self.project_changed(open, true);
         let settings = open.settings.clone();
         drop(state);
+        if let Some(event) = announce {
+            self.emit(event);
+        }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.emit(Event::GraphicsChanged { generation });
         self.emit(Event::SettingsChanged(settings));

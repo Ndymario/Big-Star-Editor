@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 17;
+pub const PROTOCOL_VERSION: u32 = 18;
 
 pub type RequestId = u64;
 
@@ -594,6 +594,9 @@ pub enum Event {
         dirty: bool,
     },
     ProjectClosed,
+    /// The open project now reads another ROM: a clean ROM was chosen, the variant switched, or a build applied. Its
+    /// levels and files are read again.
+    ProjectChanged(ProjectInfo),
     /// Files under the workspace changed on disk, debounced, relative to the root.
     FilesChanged {
         paths: Vec<String>,

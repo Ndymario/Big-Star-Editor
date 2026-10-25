@@ -213,7 +213,11 @@ fn the_clean_rom_is_asked_for_and_remembered() {
     // Outside the project it is kept as it is; inside, relative to the project.
     let stored = fixture.root.path().join("roms/game.nds").to_string_lossy().replace('\\', "/");
     assert_eq!(settings.clean_rom, stored);
-    assert!(session.drain_events().iter().any(|event| matches!(event, Event::SettingsChanged(s) if s.clean_rom == stored)));
+    let events = session.drain_events();
+    assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(s) if s.clean_rom == stored)));
+    // Every frontend hears that the project reads a ROM now, not only the one that chose it.
+    assert!(events.iter().any(|event| matches!(event, Event::ProjectChanged(info)
+        if info.rom_path.as_deref() == Some(stored.as_str()) && info.file_count == 1)));
     // Before a first build it is what the editor reads.
     let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
     assert_eq!((info.rom_path.as_deref(), info.file_count), (Some(stored.as_str()), 1));

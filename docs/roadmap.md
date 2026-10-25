@@ -246,10 +246,12 @@ in [the port plan](rust-port-plan.md), whose Status table records what each phas
   legacy `ncpatcher.json` offered for migration -- named after its directory. Big Star edits those, or a ROM directly,
   and nothing else; "module projects" are now called NCPatcher projects throughout.
 - Dropped `CreateProject`, `ImportRom`, the workspace's **Import ROM...** and the CLI's `import-rom`: setting up a
-  project is `ncpatcher init`'s job. The `oracle` verb takes a ROM instead of a project. Protocol 17.
+  project is `ncpatcher init`'s job. The `oracle` verb takes a ROM instead of a project. Protocol 18.
 - Moved the clean ROM out of `ncpatcher.yaml` into the project's `.big-star-workspace.json` (`clean_rom`), passed to
   every NCPatcher command as `--rom`. NCPatcher now accepts a `rom:` section without `file` or `dir` when `--rom` is
   given. A project without a usable clean ROM opens and asks for one (`SetCleanRom`, **Build > Clean ROM...**).
+  `Event::ProjectChanged` tells every frontend when the project reads another ROM -- a clean ROM chosen, a variant
+  switched, a build applied -- so its levels and files are read again.
 - The desktop app's own host takes a clean ROM outside the workspace by its full path, chosen with the system's file
   dialog; a served host keeps to the workspace browser. A project with no clean ROM in its settings takes the
   `rom.file` its `ncpatcher.yaml` names, when that file is there.

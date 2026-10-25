@@ -837,7 +837,14 @@ impl DemoConnection {
     fn answer(&mut self, request: Request) -> ResponseResult {
         match request {
             Request::ListProjects => Ok(Response::Projects(vec![ProjectSummary { path: "demo".to_owned(), name: "Demo".to_owned() }])),
-            Request::OpenProject { .. } => Ok(Response::Project(Self::project_info(ProjectMode::NcPatcher, "demo"))),
+            Request::OpenProject { .. } => {
+                let mut info = Self::project_info(ProjectMode::NcPatcher, "demo");
+                // Without a clean ROM, and never built, there is no ROM to read.
+                if self.settings.clean_rom_problem.is_some() {
+                    info.rom_path = None;
+                }
+                Ok(Response::Project(info))
+            }
             Request::OpenRom { path } | Request::SaveRomAs { path } => Ok(Response::Project(Self::project_info(ProjectMode::Rom, &path))),
             Request::UploadRom { name, offset, total, bytes } => {
                 let received = offset + bytes.len() as u64;
@@ -1044,8 +1051,10 @@ impl DemoConnection {
                 Ok(Response::Directory(DirectoryListing { path, entries }))
             }
             Request::SetCleanRom { path } => {
+                let info = ProjectInfo { rom_path: Some(path.clone()), ..Self::project_info(ProjectMode::NcPatcher, "demo") };
                 self.settings.clean_rom = path;
                 self.settings.clean_rom_problem = None;
+                self.events.push(Incoming::Event(Event::ProjectChanged(info)));
                 self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
                 Ok(Response::Settings(self.settings.clone()))
             }
