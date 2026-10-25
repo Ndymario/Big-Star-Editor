@@ -1,16 +1,12 @@
-//! Interchange files: NSMB Editor's exported level (`.nml`), Big Star's `.nsmbpatch`, and level recovery snapshots.
+//! Interchange files: NSMB Editor's exported level (`.nml`) and level recovery snapshots.
 //! Port of `libs/nsmb-project/src/level_exchange.cpp`; pure, so either side of the connection can read them.
 
-use std::collections::HashSet;
-
 use bigstar_core::{Error, ErrorCode, Result};
-use bigstar_formats::{compress_nitro_lz10, decompress_nitro_lz};
 use serde::{Deserialize, Serialize};
 
 const MAX_BLOB_SIZE: usize = 128 * 1024 * 1024;
 const NML_HEADER: &str = "NSMBe5 Exported Level";
 const OLD_NML_HEADER: &str = "NSMBe4 Exported Level";
-const PATCH_HEADER: [u8; 16] = *b"BIGSTAR-PATCH\0\0\x01";
 const RECOVERY_HEADER: [u8; 16] = *b"BIGSTAR-RECOVER\x01";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -19,19 +15,6 @@ pub struct LevelPackage {
     pub bgdat_file_id: u16,
     pub course: Vec<u8>,
     pub bgdat: Vec<u8>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct NsmbPatchEntry {
-    pub path: String,
-    pub expected_file_id: i32,
-    pub contents: Vec<u8>,
-}
-
-impl Default for NsmbPatchEntry {
-    fn default() -> Self {
-        Self { path: String::new(), expected_file_id: -1, contents: Vec::new() }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -196,59 +179,6 @@ pub fn decode_nml(bytes: &[u8]) -> Result<LevelPackage> {
     let result = read_package_body(&mut reader)?;
     if !reader.done() {
         return Err(Error::new(ErrorCode::ParseError, "exported level has trailing data"));
-    }
-    Ok(result)
-}
-
-pub fn encode_nsmbpatch(entries: &[NsmbPatchEntry]) -> Result<Vec<u8>> {
-    if entries.len() > 65535 {
-        return Err(Error::new(ErrorCode::InvalidArgument, "patch has too many files"));
-    }
-    let mut paths = HashSet::new();
-    let mut result = PATCH_HEADER.to_vec();
-    put_u32(&mut result, entries.len() as u32);
-    for entry in entries {
-        if !safe_patch_path(&entry.path) || !paths.insert(entry.path.as_str()) {
-            return Err(Error::new(ErrorCode::InvalidArgument, "patch contains an unsafe or duplicate path"));
-        }
-        if entry.contents.len() > 0xffffff {
-            return Err(Error::new(ErrorCode::InvalidArgument, format!("{} is too large for LZ10", entry.path)));
-        }
-        let compressed = compress_nitro_lz10(&entry.contents)?;
-        put_string(&mut result, &entry.path);
-        put_u32(&mut result, entry.expected_file_id as u32);
-        put_u32(&mut result, compressed.len() as u32);
-        result.extend_from_slice(&compressed);
-    }
-    Ok(result)
-}
-
-pub fn decode_nsmbpatch(bytes: &[u8]) -> Result<Vec<NsmbPatchEntry>> {
-    let mut reader = Reader::new(bytes);
-    if reader.take(PATCH_HEADER.len())? != PATCH_HEADER {
-        return Err(Error::new(ErrorCode::Unsupported, "file is not a Big Star patch"));
-    }
-    let count = reader.u32()?;
-    if count > 65535 {
-        return Err(Error::new(ErrorCode::ParseError, "patch has too many files"));
-    }
-    let mut result = Vec::with_capacity(count as usize);
-    let mut paths = HashSet::new();
-    for _ in 0..count {
-        let path = reader.string()?;
-        if !safe_patch_path(&path) || !paths.insert(path.clone()) {
-            return Err(Error::new(ErrorCode::ParseError, "patch contains an unsafe or duplicate path"));
-        }
-        let expected_file_id = reader.u32()? as i32;
-        let size = reader.u32()? as usize;
-        if size > MAX_BLOB_SIZE {
-            return Err(Error::new(ErrorCode::ParseError, "compressed patch entry is too large"));
-        }
-        let contents = decompress_nitro_lz(reader.take(size)?)?;
-        result.push(NsmbPatchEntry { path, expected_file_id, contents });
-    }
-    if !reader.done() {
-        return Err(Error::new(ErrorCode::ParseError, "patch has trailing data"));
     }
     Ok(result)
 }

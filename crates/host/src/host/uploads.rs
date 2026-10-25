@@ -80,12 +80,7 @@ impl Uploads {
 fn addresses_workspace(request: &Request) -> bool {
     matches!(
         request,
-        Request::ListProjects
-            | Request::BrowseDirectory { .. }
-            | Request::OpenProject { .. }
-            | Request::SetCleanRom { .. }
-            | Request::OpenRom { .. }
-            | Request::Xdelta { .. }
+        Request::ListProjects | Request::BrowseDirectory { .. } | Request::OpenProject { .. } | Request::SetCleanRom { .. } | Request::OpenRom { .. }
     )
 }
 

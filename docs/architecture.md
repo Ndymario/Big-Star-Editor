@@ -19,8 +19,8 @@ Wasm-safe (they build for `wasm32-unknown-unknown`, and `cargo xtask ci` checks 
 - `nds`: the DS ROM header, FNT/FAT, overlay tables, banner sizing.
 - `formats`: NSMB levels and glue, Nitro 2D (NCLR/NCGR/NSCR/NCER/NANR), TEX0, BMG, NARC, tilesets and tilemaps,
   uiStudio resources, banner, ROM user metadata, LZ10/LZ11/BLZ, quantisation, the 3D tile substitution.
-- `level`: `EditableLevel` and its commands, tileset references, module data catalogs, `.nml`, `.nsmbpatch` and
-  recovery snapshots. Pure: no filesystem.
+- `level`: `EditableLevel` and its commands, tileset references, module data catalogs, `.nml` and recovery
+  snapshots. Pure: no filesystem.
 - `protocol`: the requests, responses and events, MessagePack on the wire.
 - `client`: a connection to a host: `InProcess` (a host session on a worker thread) or `WebSocket`.
 - `ui-egui`: the frontend. It must not depend on `project`, `patching` or `host`, and nothing below it may depend on
@@ -91,7 +91,7 @@ ROM is written only for a download, and has no backups or autosaves.
 This is not a return of the ROM builder M16 removed. An NCPatcher project still never repacks anything: NCPatcher builds
 its ROM from the modules. A ROM edited directly has no modules to build from, so writing into it is the only way an
 edit can land. Only existing files can be replaced; adding or removing one would renumber file IDs. Variants, modules,
-builds, `.nsmbpatch` exchange and glue editing need an NCPatcher project, and the host refuses them by name.
+builds and glue editing need an NCPatcher project, and the host refuses them by name.
 
 ## Builds
 

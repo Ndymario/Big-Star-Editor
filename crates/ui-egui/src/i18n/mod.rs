@@ -19,7 +19,6 @@ pub const KEYS: &[&str] = &[
     "File",
     "Edit",
     "View",
-    "Distribution",
     "Save Project",
     "Cut",
     "Copy",

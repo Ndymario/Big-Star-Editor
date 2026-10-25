@@ -163,9 +163,6 @@ fn graphics_messages_survive_the_wire() {
         Request::Build { verbose: true },
         Request::CancelBuild,
         Request::ExtractRom { directory: "out".into() },
-        Request::ExportPatch,
-        Request::ImportPatch { bytes: vec![1], accept_id_mismatch: false },
-        Request::Xdelta { create: true, source: "a.nds".into(), target: "b.nds".into(), output: "p.xdelta".into() },
         Request::WriteFiles { files: vec![crate::FileWrite { path: "BG_ncg/a.bin".into(), bytes: vec![9] }] },
     ] {
         client_round_trip(ClientFrame::Request { id: 16, request });

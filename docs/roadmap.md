@@ -258,3 +258,8 @@ in [the port plan](rust-port-plan.md), whose Status table records what each phas
 - Dropped `big-star-build.nds`. A build lands on the variant's output from `config dump` -- `rom.output` with
   `_<variant>` before the extension, which NCPatcher now derives for a single `--variant` build as it did for
   `--all-variants` -- and that is the ROM the editor reads, or the clean ROM before the variant's first build.
+- Dropped distribution: the Distribution menu, `.nsmbpatch` export/import (`ExportPatch`, `ImportPatch`, the
+  `PatchIdsDiffer` question and the codec in `crates/level`), and xdelta create/apply (`Xdelta`, the host's
+  `--xdelta`). Protocol 19.
+- Replaced the top bar with a menu bar (File, Edit, View, Build, Tools, Help) over a toolbar of Undo, Redo, Save and
+  the project's main action; menu lines show their shortcuts, and the bar names only the open project.

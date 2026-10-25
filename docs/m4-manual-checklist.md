@@ -36,8 +36,8 @@ Use an imported ROM project with at least one available level. These checks inte
 32. Export a level as `.nml`, modify it, import the export, and undo once. Open the same export in NSMB Editor if available and confirm both course and BGDat data are accepted.
 33. Hex-edit both course and BGDat. Confirm malformed hex or malformed level bytes are refused and a valid edit is one undo step.
 34. Find a known object and sprite across the project, open a result, and confirm the correct entity is selected. Open Sprite Event Viewer and confirm both event bytes are represented.
-35. Export changed module files as `.nsmbpatch`, import into another compatible project, and confirm writes target the supplier/active module. Exercise a file-ID mismatch, existing-file backup, and failed-write rollback.
-36. Create and apply an xdelta3 patch using paths containing spaces. Confirm the output boots and no shell interpretation occurs.
+35. (Dropped: `.nsmbpatch` export and import were removed.)
+36. (Dropped: xdelta create and apply were removed.)
 37. Leave a dirty level open for over one minute, terminate the process without closing normally, reopen the project, and recover it. Confirm Save clears the snapshot; repeat and choose Discard/No to confirm it is removed.
 38. Restart once in each of English, Dutch, Portuguese, Spanish, and French. Confirm the Project Hub and core menu vocabulary change without altering project data.
 39. Open representative BNBL, BNCL, BNCD, and ENPG resources from the Filesystem dock. Edit coordinates, a cell/OAM field, pixels, and palette colours; build and boot the affected UI while confirming untouched padding and compressed wrappers survive.

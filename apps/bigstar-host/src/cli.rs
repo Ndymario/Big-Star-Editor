@@ -15,7 +15,7 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  run-patcher <project-dir> [--variant <name>] [--rom <clean-rom>]\n  patcher-info <project-dir> [--rom <clean-rom>]\n  oracle <rom> <data-dir>\n  serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  run-patcher <project-dir> [--variant <name>] [--rom <clean-rom>]\n  patcher-info <project-dir> [--rom <clean-rom>]\n  oracle <rom> <data-dir>\n  serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]\n"
     );
 }
 
@@ -128,10 +128,10 @@ fn patcher_info(executable: &str, project_dir: &Path, rom: Option<&Path>, out: &
     0
 }
 
-/// `serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]`: hosts a
+/// `serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>]`: hosts a
 /// workspace until interrupted. `--rom-sessions` also lets in a browser without the token, to upload a ROM and edit that and nothing
 /// else; without a root it is all the host does. `--data` is where the shipped actor, tile and background scripts are, `--ncpatcher`
-/// which NCPatcher builds and is asked about variants, modules and plans, `--xdelta` which xdelta3 the patch tools run.
+/// which NCPatcher builds and is asked about variants, modules and plans.
 fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let (root, flags) = match args.split_first() {
         Some((first, rest)) if !first.starts_with("--") => (Some(*first), rest),
@@ -151,7 +151,6 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             ("--bind", Some(value)) => bind = (*value).to_owned(),
             ("--data", Some(value)) => options.data_dir = PathBuf::from(value),
             ("--ncpatcher", Some(value)) => options.ncpatcher = PathBuf::from(value),
-            ("--xdelta", Some(value)) => options.xdelta = PathBuf::from(value),
             ("--port", Some(value)) => match value.parse::<u16>() {
                 Ok(parsed) => port = parsed,
                 Err(_) => {

@@ -1,25 +1,14 @@
-//! Builds and patch exchange in the frontend: the Output panel (status, progress, Cancel, the run's diagnostics and
-//! the log), the Build and Distribution menus, the variant selector, and the questions they ask. A port of
-//! `PatcherPanel` and of `MainWindow`'s `runPatcher`, `offerNcpatcherMigration`, `openDiagnosticLocation`,
-//! `extractRom`, `exportPatch`, `importPatch` and `runXdelta`; the work itself is the host's.
+//! Builds in the frontend: the Output panel (status, progress, Cancel, the run's diagnostics and the log), the Build
+//! menu, the variant selector, and the questions they ask. A port of `PatcherPanel` and of `MainWindow`'s `runPatcher`,
+//! `offerNcpatcherMigration`, `openDiagnosticLocation` and `extractRom`; the work itself is the host's.
 
 use bigstar_protocol::{BuildConfigKind, DiagnosticLevel, LogLevel};
 use egui::Ui;
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::dialogs;
-use crate::services::Services;
 use crate::session::Session;
 use crate::theme::Tokens;
-
-/// xdelta's three paths, under the workspace.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Xdelta {
-    pub create: bool,
-    pub source: String,
-    pub target: String,
-    pub output: String,
-}
 
 #[derive(Default)]
 pub struct Builds {
@@ -31,7 +20,6 @@ pub struct Builds {
     migrating: bool,
     /// The folder Extract ROM writes into, while its window is open.
     pub extract: Option<String>,
-    pub xdelta: Option<Xdelta>,
     /// A diagnostic's location, while it is being shown.
     location: Option<String>,
     pub show_output: bool,
@@ -51,7 +39,7 @@ impl Builds {
     }
 
     /// Follows what the host answered.
-    pub fn follow(&mut self, session: &mut Session, services: &dyn Services) {
+    pub fn follow(&mut self, session: &mut Session) {
         if self.waiting_config
             && let Some(kind) = session.build_config.take()
         {
@@ -66,11 +54,6 @@ impl Builds {
             self.migrating = false;
             session.migrated = false;
             session.start_build(true);
-        }
-        if let Some((name, bytes)) = session.patch.take()
-            && let Err(error) = services.save_file("Export Patch", &name, "nsmbpatch", &bytes)
-        {
-            session.report(error);
         }
     }
 
@@ -92,30 +75,6 @@ impl Builds {
         if Button::menu("Extract ROM…").show(ui).clicked() {
             let project = session.project.as_ref().map(|p| p.path.clone()).unwrap_or_default();
             self.extract = Some(if project.is_empty() { "extracted".to_owned() } else { format!("{project}/extracted") });
-            ui.close();
-        }
-    }
-
-    pub fn distribution_menu(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services) {
-        if Button::menu("Export .nsmbpatch…").show(ui).clicked() {
-            session.export_patch();
-            ui.close();
-        }
-        if Button::menu("Import .nsmbpatch…").show(ui).clicked() {
-            match services.open_file("Import Patch", Some("nsmbpatch")) {
-                Some(Ok((_, bytes))) => session.import_patch(bytes, false),
-                Some(Err(error)) => session.report(error),
-                None => {}
-            }
-            ui.close();
-        }
-        ui.separator();
-        if Button::menu("Create xdelta…").show(ui).clicked() {
-            self.xdelta = Some(Xdelta { create: true, ..Xdelta::default() });
-            ui.close();
-        }
-        if Button::menu("Apply xdelta…").show(ui).clicked() {
-            self.xdelta = Some(Xdelta::default());
             ui.close();
         }
     }
@@ -239,26 +198,6 @@ impl Builds {
                 None => {}
             }
         }
-        if let Some(bytes) = session.patch_ids_differ.clone() {
-            let mut answer = None;
-            dialogs::modal(ctx, "patch-ids", "Import Patch", 440.0, |ui| {
-                ui.label("Some file IDs in this ROM differ from the ROM the patch was made from. Apply it by file path anyway?");
-                dialogs::actions(ui, |ui| {
-                    if Button::new("Apply").primary().show(ui).clicked() {
-                        answer = Some(true);
-                    }
-                    if Button::new("Cancel").show(ui).clicked() {
-                        answer = Some(false);
-                    }
-                });
-            });
-            if let Some(apply) = answer {
-                session.patch_ids_differ = None;
-                if apply {
-                    session.import_patch(bytes, true);
-                }
-            }
-        }
         if let Some(text) = self.location.clone() {
             // Big Star has no YAML editor of its own, so the honest thing is to say exactly where the problem is.
             let (close, dismissed) = dialogs::modal(ctx, "diagnostic-location", "Diagnostic Location", 440.0, |ui| {
@@ -282,34 +221,6 @@ impl Builds {
             }
             if run || !open {
                 self.extract = None;
-            }
-        }
-        if let Some(xdelta) = &mut self.xdelta {
-            let mut open = true;
-            let mut run = false;
-            let title = if xdelta.create { "Create xdelta" } else { "Apply xdelta" };
-            dialogs::window(title).open(&mut open).show(ctx, |ui| {
-                ui.label("Paths are inside the workspace folder.");
-                let labels = if xdelta.create {
-                    ["Clean ROM", "Modified ROM", "Patch to write"]
-                } else {
-                    ["Clean ROM", "xdelta patch", "Patched ROM to write"]
-                };
-                egui::Grid::new("xdelta-paths").num_columns(2).show(ui, |ui| {
-                    for (label, value) in labels.into_iter().zip([&mut xdelta.source, &mut xdelta.target, &mut xdelta.output]) {
-                        ui.label(label);
-                        ui.add(TextField::new(value).width(Width::Px(320.0)));
-                        ui.end_row();
-                    }
-                });
-                let ready = [&xdelta.source, &xdelta.target, &xdelta.output].iter().all(|path| !path.trim().is_empty());
-                run = dialogs::actions(ui, |ui| Button::new("Run").primary().enabled(ready).show(ui).clicked());
-            });
-            if run {
-                session.xdelta(xdelta.create, xdelta.source.trim(), xdelta.target.trim(), xdelta.output.trim());
-            }
-            if run || !open {
-                self.xdelta = None;
             }
         }
     }

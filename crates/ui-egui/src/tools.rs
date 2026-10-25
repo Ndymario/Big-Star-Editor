@@ -261,8 +261,8 @@ impl Tools {
     }
 }
 
-/// The Level menu.
-pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services, language: crate::i18n::Language) {
+/// The Tools menu: the editors and the ROM's own details.
+pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, language: crate::i18n::Language) {
     let editing = session.active.is_some();
     let project = session.project.is_some();
     if Button::menu("Tilesets and Backgrounds…").enabled(editing).show(ui).clicked() {
@@ -271,32 +271,8 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dy
         }
         ui.close();
     }
-    ui.separator();
     if Button::menu(format!("{}…", language.tr("Hex Editor"))).enabled(editing).show(ui).clicked() {
         session.request_level_bytes(BytesFor::HexEditor);
-        ui.close();
-    }
-    if Button::menu("Export Level (.nml)…").enabled(editing).show(ui).clicked() {
-        session.request_level_bytes(BytesFor::Export);
-        ui.close();
-    }
-    if Button::menu("Import Level (.nml)…").enabled(editing).show(ui).clicked() {
-        tools.import(session, services);
-        ui.close();
-    }
-    ui.separator();
-    if Button::menu("Find Object…").enabled(project).show(ui).clicked() {
-        tools.finder = Some(Finder { sprites: false, id: 0 });
-        session.found = None;
-        ui.close();
-    }
-    if Button::menu("Find Sprite…").enabled(project).show(ui).clicked() {
-        tools.finder = Some(Finder { sprites: true, id: 0 });
-        session.found = None;
-        ui.close();
-    }
-    if Button::menu("Sprite Events…").enabled(editing).show(ui).clicked() {
-        tools.events = true;
         ui.close();
     }
     ui.separator();
@@ -307,6 +283,38 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dy
     if Button::menu("ROM User Metadata…").enabled(project).show(ui).clicked() {
         tools.metadata = true;
         session.refresh_filesystem_once();
+        ui.close();
+    }
+}
+
+/// The File menu's lines for the open level: writing it out to a file and reading one in over it.
+pub fn level_file_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services) {
+    let editing = session.active.is_some();
+    if Button::menu("Import Level (.nml)…").enabled(editing).show(ui).clicked() {
+        tools.import(session, services);
+        ui.close();
+    }
+    if Button::menu("Export Level (.nml)…").enabled(editing).show(ui).clicked() {
+        session.request_level_bytes(BytesFor::Export);
+        ui.close();
+    }
+}
+
+/// The Edit menu's lines for finding things across the levels and within the open one.
+pub fn find_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session) {
+    let project = session.project.is_some();
+    if Button::menu("Find Object…").enabled(project).show(ui).clicked() {
+        tools.finder = Some(Finder { sprites: false, id: 0 });
+        session.found = None;
+        ui.close();
+    }
+    if Button::menu("Find Sprite…").enabled(project).show(ui).clicked() {
+        tools.finder = Some(Finder { sprites: true, id: 0 });
+        session.found = None;
+        ui.close();
+    }
+    if Button::menu("Sprite Events…").enabled(session.active.is_some()).show(ui).clicked() {
+        tools.events = true;
         ui.close();
     }
 }

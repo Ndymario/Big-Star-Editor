@@ -203,7 +203,8 @@ fn main() -> Result<(), String> {
         session.open_level("A01_2");
     }
     harness.run();
-    if let Some(edit) = harness.query_all_by_label("Edit").next() {
+    // The first Edit is the menu bar's; the next is the first area's.
+    if let Some(edit) = harness.query_all_by_label("Edit").nth(1) {
         edit.click();
     }
     harness.run();
@@ -239,7 +240,7 @@ fn main() -> Result<(), String> {
     shot(&mut harness, &dir, "files-light.png")?;
     harness.state_mut().set_dark(true);
     // Preferences, with its themes, and the window in one of them with a system accent.
-    for label in ["View", "Preferences…"] {
+    for label in ["File", "Preferences…"] {
         if let Some(node) = harness.query_by_label(label) {
             node.click();
         }
@@ -293,7 +294,7 @@ fn main() -> Result<(), String> {
     }
     harness.run();
     shot(&mut harness, &dir, "build-output.png")?;
-    if let Some(menu) = harness.query_by_label("View") {
+    if let Some(menu) = harness.query_by_label("File") {
         menu.click();
     }
     harness.run();

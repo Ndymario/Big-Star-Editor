@@ -449,7 +449,7 @@ impl BigStarApp {
         self.workspace.sync(session);
         self.tools.take_bytes(session, &*self.services);
         self.tools.open_metadata(session);
-        self.builds.follow(session, &*self.services);
+        self.builds.follow(session);
         if let Some((bytes, target)) = session.banner.take() {
             self.workspace.open_banner(&bytes, &target);
         }
@@ -638,42 +638,89 @@ impl BigStarApp {
         egui::Panel::top("top").show(ui, |ui| {
             let Some(session) = &mut self.session else { return };
             let actions = &mut self.actions;
+            let ctx = ui.ctx().clone();
+            let idle = !session.busy();
+            let rom_mode = session.rom_mode();
+            let has_project = session.project.is_some();
+            // What undo and redo would take back, for the Edit menu and the toolbar both.
+            let (undo_names, redo_names, can_undo, can_redo, can_save) =
+                session.level().map_or((Vec::new(), Vec::new(), false, false, false), |view| {
+                    let s = &view.snapshot;
+                    (s.undo_names.clone(), s.redo_names.clone(), idle && s.can_undo, idle && s.can_redo, idle && s.dirty)
+                });
+            let named = |verb: &str, names: &[String]| names.first().map_or(verb.to_owned(), |n| format!("{verb} {n}"));
+            let (undo_label, redo_label) = (named("Undo", &undo_names), named("Redo", &redo_names));
+            // A ROM opened without a workspace is the whole connection, so closing it ends the connection.
+            let close_host = if session.has_workspace() {
+                "Close Workspace"
+            } else if has_project {
+                "Close ROM"
+            } else {
+                "Disconnect"
+            };
+            // Within a workspace, closing what is open goes back to its projects.
+            let close_project = (session.has_workspace() && has_project).then_some(if rom_mode { "Close ROM" } else { "Close project" });
+            let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
+
             ui.add_space(2.0);
-            ui.horizontal(|ui| {
-                let mut named = false;
-                match &session.state {
-                    ConnectionState::Connected(info) if info.has_workspace => {
-                        ui.label(RichText::new(&info.workspace_name).strong());
-                        ui.weak(format!("host {}", info.host_version));
-                        named = true;
-                    }
-                    ConnectionState::Connected(_) => {}
-                    _ => {
-                        ui.label("Connecting…");
-                        named = true;
-                    }
-                }
-                if let Some(project) = &session.project {
-                    if named {
+            egui::MenuBar::new().ui(ui, |ui| {
+                ui.menu_button(language.tr("File"), |ui| {
+                    if has_project {
+                        if Button::menu("Save").shortcut(&ctx, shortcut(Modifiers::COMMAND, Key::S)).enabled(can_save).show(ui).clicked() {
+                            actions.push(Action::Save);
+                            ui.close();
+                        }
+                        if session.uploaded() {
+                            let download =
+                                Button::menu(if session.undownloaded { "Download ROM •" } else { "Download ROM" }).enabled(!session.downloading());
+                            if download.show(ui).clicked() {
+                                actions.push(Action::DownloadRom);
+                                ui.close();
+                            }
+                        } else if rom_mode && Button::menu("Save ROM As…").show(ui).clicked() {
+                            actions.push(Action::SaveRomAs);
+                            ui.close();
+                        }
+                        ui.separator();
+                        tools::level_file_items(ui, tools, session, services);
                         ui.separator();
                     }
-                    ui.label(RichText::new(&project.name).strong()).on_hover_text(&project.path);
-                    if let Some(title) = &project.game_title {
-                        ui.weak(title);
-                    }
-                    let rom_mode = session.rom_mode();
-                    if session.uploaded() {
-                        ui.weak("Uploaded ROM")
-                            .on_hover_text("The host keeps this ROM only while you are connected. Saves stay there until you download it");
-                    } else if rom_mode {
-                        ui.weak("ROM").on_hover_text("Every save writes straight into this ROM file");
+                    if Button::menu("Preferences…").show(ui).clicked() {
+                        let settings = session.settings.as_ref();
+                        *preferences = Some(Preferences {
+                            language,
+                            theme,
+                            autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
+                            backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
+                        });
+                        ui.close();
                     }
                     ui.separator();
-                    ui.menu_button(language.tr("Tools"), |ui| tools::menu(ui, tools, session, services, language));
-                    if !rom_mode {
-                        ui.menu_button("Build", |ui| builds.build_menu(ui, session));
-                        ui.menu_button(language.tr("Distribution"), |ui| builds.distribution_menu(ui, session, services));
+                    if let Some(close) = close_project
+                        && Button::menu(close).show(ui).clicked()
+                    {
+                        actions.push(Action::Leave(Leave::Project));
+                        ui.close();
                     }
+                    if Button::menu(close_host).show(ui).clicked() {
+                        actions.push(Action::Leave(Leave::Host));
+                        ui.close();
+                    }
+                });
+                if has_project {
+                    ui.menu_button(language.tr("Edit"), |ui| {
+                        if Button::menu(&undo_label).shortcut(&ctx, shortcut(Modifiers::COMMAND, Key::Z)).enabled(can_undo).show(ui).clicked() {
+                            actions.push(Action::Undo);
+                            ui.close();
+                        }
+                        let redo = shortcut(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
+                        if Button::menu(&redo_label).shortcut(&ctx, redo).enabled(can_redo).show(ui).clicked() {
+                            actions.push(Action::Redo);
+                            ui.close();
+                        }
+                        ui.separator();
+                        tools::find_items(ui, tools, session);
+                    });
                     ui.menu_button(language.tr("View"), |ui| {
                         if Button::menu("Preview").show(ui).clicked() {
                             workspace.show_preview_tab();
@@ -683,22 +730,82 @@ impl BigStarApp {
                             builds.show_output = !builds.show_output;
                             ui.close();
                         }
-                        ui.separator();
-                        if Button::menu("Preferences…").show(ui).clicked() {
-                            let settings = session.settings.as_ref();
-                            *preferences = Some(Preferences {
-                                language,
-                                theme,
-                                autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
-                                backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
-                            });
-                            ui.close();
-                        }
                     });
-                    if Button::new("About").quiet().show(ui).clicked() {
+                    if !rom_mode {
+                        ui.menu_button("Build", |ui| builds.build_menu(ui, session));
+                    }
+                    ui.menu_button(language.tr("Tools"), |ui| tools::menu(ui, tools, session, language));
+                }
+                ui.menu_button("Help", |ui| {
+                    if Button::menu("About").show(ui).clicked() {
                         *about = true;
+                        ui.close();
+                    }
+                });
+
+                // What is open, at the far end of the bar; laid out from the right, so last first.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if !has_project {
+                        // Nothing open yet, so the way out stays in sight rather than only in the File menu.
+                        if Button::new(close_host).quiet().show(ui).clicked() {
+                            actions.push(Action::Leave(Leave::Host));
+                        }
+                    }
+                    if let Some(project) = &session.project {
+                        if session.uploaded() {
+                            ui.weak("Uploaded ROM")
+                                .on_hover_text("The host keeps this ROM only while you are connected. Saves stay there until you download it");
+                        } else if rom_mode {
+                            ui.weak("ROM").on_hover_text("Every save writes straight into this ROM file");
+                        }
+                        if let Some(title) = &project.game_title {
+                            ui.weak(title);
+                        }
+                        ui.label(RichText::new(&project.name).strong()).on_hover_text(&project.path);
+                    }
+                    if !matches!(session.state, ConnectionState::Connected(_)) {
+                        ui.label("Connecting…");
+                    }
+                });
+            });
+
+            // The row stays when no document is active (the Preview tab, say), so switching tabs does not move everything
+            // below it; its buttons just have nothing to act on.
+            if has_project {
+                let mut build = false;
+                ui.horizontal(|ui| {
+                    if Button::new(undo_label).with_icon(icons::UNDO).enabled(can_undo).show(ui).clicked() {
+                        actions.push(Action::Undo);
+                    }
+                    // Every step back, named; picking one undoes it and everything after it.
+                    ui.add_enabled_ui(can_undo, |ui| {
+                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Undo several steps", |ui| {
+                            for (index, name) in undo_names.iter().enumerate() {
+                                if Button::menu(name).show(ui).clicked() {
+                                    actions.push(Action::History { undo: true, steps: index + 1 });
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    if Button::new(redo_label).with_icon(icons::REDO).enabled(can_redo).show(ui).clicked() {
+                        actions.push(Action::Redo);
+                    }
+                    ui.add_enabled_ui(can_redo, |ui| {
+                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Redo several steps", |ui| {
+                            for (index, name) in redo_names.iter().enumerate() {
+                                if Button::menu(name).show(ui).clicked() {
+                                    actions.push(Action::History { undo: false, steps: index + 1 });
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
+                    if Button::new("Save").with_icon(icons::SAVE).enabled(can_save).show(ui).clicked() {
+                        actions.push(Action::Save);
                     }
                     ui.separator();
+                    // What this kind of project ends in, one press away: the ROM to take home, or the build to test.
                     if session.uploaded() {
                         let download = Button::new(if session.undownloaded { "Download ROM •" } else { "Download ROM" })
                             .with_icon(icons::SAVE)
@@ -714,82 +821,17 @@ impl BigStarApp {
                             actions.push(Action::SaveRomAs);
                         }
                     } else {
-                        // A rebuild-and-test loop should not mean digging through a menu.
-                        if Button::new("Run Patcher")
+                        build = Button::new("Run Patcher")
                             .with_icon(icons::PLAY)
                             .primary()
                             .enabled(!session.build.running)
                             .show(ui)
                             .on_hover_text("Saves your levels, builds the selected variant with NCPatcher, and loads the new ROM")
-                            .clicked()
-                        {
-                            builds.run(session);
-                        }
+                            .clicked();
                         crate::builds::Builds::variant_selector(ui, session);
                     }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    // A ROM opened without a workspace is the whole connection, so closing it ends the connection.
-                    let close = if session.has_workspace() {
-                        "Close Workspace"
-                    } else if session.project.is_some() {
-                        "Close ROM"
-                    } else {
-                        "Disconnect"
-                    };
-                    if Button::new(close).quiet().show(ui).clicked() {
-                        actions.push(Action::Leave(Leave::Host));
-                    }
-                    // Within a workspace, closing what is open goes back to its projects.
-                    let back = if session.rom_mode() { "Close ROM" } else { "Close project" };
-                    if session.has_workspace() && session.project.is_some() && Button::new(back).quiet().show(ui).clicked() {
-                        actions.push(Action::Leave(Leave::Project));
-                    }
-                });
-            });
-            let idle = !session.busy();
-            // The row stays when no document is active (the Preview tab, say), so switching tabs does not move everything
-            // below it; its buttons just have nothing to act on.
-            if session.project.is_some() {
-                let snapshot = session.level().map(|view| &view.snapshot);
-                let (can_undo, can_redo) = snapshot.map_or((false, false), |s| (idle && s.can_undo, idle && s.can_redo));
-                let undo_names = snapshot.map_or(&[][..], |s| &s.undo_names);
-                let redo_names = snapshot.map_or(&[][..], |s| &s.redo_names);
-                ui.horizontal(|ui| {
-                    let undo = undo_names.first().map_or("Undo".to_owned(), |n| format!("Undo {n}"));
-                    let redo = redo_names.first().map_or("Redo".to_owned(), |n| format!("Redo {n}"));
-                    if Button::new(undo).with_icon(icons::UNDO).enabled(can_undo).show(ui).clicked() {
-                        actions.push(Action::Undo);
-                    }
-                    // Every step back, named; picking one undoes it and everything after it.
-                    ui.add_enabled_ui(can_undo, |ui| {
-                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Undo several steps", |ui| {
-                            for (index, name) in undo_names.iter().enumerate() {
-                                if Button::menu(name).show(ui).clicked() {
-                                    actions.push(Action::History { undo: true, steps: index + 1 });
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
-                    if Button::new(redo).with_icon(icons::REDO).enabled(can_redo).show(ui).clicked() {
-                        actions.push(Action::Redo);
-                    }
-                    ui.add_enabled_ui(can_redo, |ui| {
-                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Redo several steps", |ui| {
-                            for (index, name) in redo_names.iter().enumerate() {
-                                if Button::menu(name).show(ui).clicked() {
-                                    actions.push(Action::History { undo: false, steps: index + 1 });
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
-                    if Button::new("Save").with_icon(icons::SAVE).enabled(idle && snapshot.is_some_and(|s| s.dirty)).show(ui).clicked() {
-                        actions.push(Action::Save);
-                    }
                     ui.separator();
-                    let Some(snapshot) = snapshot else {
+                    let Some(snapshot) = session.level().map(|view| &view.snapshot) else {
                         ui.weak("No level open for editing");
                         return;
                     };
@@ -805,6 +847,9 @@ impl BigStarApp {
                         controls::warning_text(ui, format!("Custom actor data unreadable: {error}"));
                     }
                 });
+                if build {
+                    builds.run(session);
+                }
             }
             ui.add_space(2.0);
         });
@@ -1142,7 +1187,7 @@ impl BigStarApp {
                 ui.end_row();
                 ui.label("Backups kept");
                 ui.add_enabled(project, controls::number(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
-                    "How many backups of each kind (level saves and patch imports) are kept. Older ones are deleted when a project opens and when a new backup is made.",
+                    "How many backups of level saves are kept. Older ones are deleted when a project opens and when a new backup is made.",
                 );
                 ui.end_row();
             });

@@ -496,16 +496,6 @@ fn exchange_files_round_trip() {
     old[6] = b'4';
     assert_eq!(decode_nml(&old).unwrap(), level, "an NSMBe4 export still opens");
 
-    let entries = vec![
-        NsmbPatchEntry { path: "root/course/A01_1.bin".into(), expected_file_id: 42, contents: vec![1, 1, 1, 2, 3, 5, 8] },
-        NsmbPatchEntry { path: "root/course/A01_1_bgdat.bin".into(), expected_file_id: -1, contents: vec![9, 8, 7] },
-    ];
-    let decoded = decode_nsmbpatch(&encode_nsmbpatch(&entries).unwrap()).unwrap();
-    assert_eq!(decoded, entries);
-    assert!(encode_nsmbpatch(&[NsmbPatchEntry { path: "../escape".into(), expected_file_id: -1, contents: vec![1] }]).is_err());
-    assert!(encode_nsmbpatch(&[NsmbPatchEntry { path: "/abs".into(), ..NsmbPatchEntry::default() }]).is_err());
-    assert!(encode_nsmbpatch(&[entries[0].clone(), entries[0].clone()]).is_err(), "duplicate patch path rejected");
-
     let recovery = LevelRecoverySnapshot {
         course_path: "extracted/root/course/A.bin".into(),
         bgdat_path: "extracted/root/course/A_bgdat.bin".into(),

@@ -1089,57 +1089,6 @@ fn with_plan(label: &str, planned: &[(&str, i64, &str)]) -> (Fixture, HostSessio
     (fixture, session)
 }
 
-#[cfg(unix)]
-#[test]
-fn module_changes_travel_as_a_patch_that_checks_file_ids() {
-    let (_fixture, mut session) = with_plan("host-patch-none", &[]);
-    assert_eq!(session.handle(Request::ExportPatch).unwrap_err().message, "There are no module changes to distribute.");
-
-    let (fixture, mut session) = with_plan("host-patch", &[("course/A01_1.bin", 0, "modules/mine/nitrofs/course/A01_1.bin")]);
-    let target = fixture.root.path().join("proj/modules/mine/nitrofs/course/A01_1.bin");
-    write_bytes(&target, &[1, 2, 3]);
-    let id = listing(&mut session).entries.iter().find(|e| e.path == "course/A01_1.bin").and_then(|e| e.id).unwrap();
-    let Response::Patch { name, bytes } = session.handle(Request::ExportPatch).unwrap() else { panic!() };
-    assert!(name.ends_with(".nsmbpatch"));
-    let mut entries = bigstar_level::decode_nsmbpatch(&bytes).unwrap();
-    assert_eq!(entries.len(), 1);
-    assert_eq!((entries[0].path.as_str(), entries[0].contents.as_slice()), ("course/A01_1.bin", &[1, 2, 3][..]));
-    assert_eq!(i64::from(entries[0].expected_file_id), id);
-
-    // A patch made against another ROM says so before anything is written.
-    entries[0].expected_file_id += 1;
-    entries[0].contents = vec![9];
-    let other = bigstar_level::encode_nsmbpatch(&entries).unwrap();
-    assert_eq!(session.handle(Request::ImportPatch { bytes: other.clone(), accept_id_mismatch: false }).unwrap(), Response::PatchIdsDiffer);
-    assert_eq!(std::fs::read(&target).unwrap(), [1, 2, 3]);
-    assert_eq!(session.handle(Request::ImportPatch { bytes: other, accept_id_mismatch: true }).unwrap(), Response::Done);
-    assert_eq!(std::fs::read(&target).unwrap(), [9]);
-}
-
-#[cfg(unix)]
-#[test]
-fn xdelta_runs_on_paths_under_the_workspace() {
-    use std::os::unix::fs::PermissionsExt;
-    let fixture = Fixture::new("host-xdelta");
-    let root = fixture.root.path();
-    let script = root.join("xdelta.sh");
-    // `printf`, not `echo`: a shell's `echo` may take the leading `-e` as its own option and drop it.
-    let text =
-        format!("#!/bin/sh\nprintf '%s\\n' \"$*\" > '{}/args'\n[ \"$1\" = -d ] && {{ echo 'bad patch' >&2; exit 1; }}\nexit 0\n", root.display());
-    write_bytes(&script, text.as_bytes());
-    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let options = crate::HostOptions { xdelta: script, ..crate::HostOptions::default() };
-    let mut session = Host::with_options(root, options).unwrap().session();
-    let request = |create| Request::Xdelta { create, source: "a.nds".into(), target: "b.nds".into(), output: "out/p.xdelta".into() };
-    assert_eq!(session.handle(request(true)).unwrap(), Response::Done);
-    let args = std::fs::read_to_string(root.join("args")).unwrap();
-    let real = std::fs::canonicalize(root).unwrap();
-    assert_eq!(args.trim(), format!("-e -f -s {0}/a.nds {0}/b.nds {0}/out/p.xdelta", real.display()));
-    assert_eq!(session.handle(request(false)).unwrap_err().message.trim(), "bad patch");
-    let outside = Request::Xdelta { create: true, source: "../a.nds".into(), target: "b".into(), output: "c".into() };
-    assert!(session.handle(outside).is_err(), "nothing outside the workspace");
-}
-
 #[test]
 fn preferences_persist_and_saves_keep_that_many_backups() {
     let (fixture, mut session) = with_module("host-preferences");
@@ -1375,7 +1324,6 @@ fn a_rom_edited_directly_refuses_what_needs_an_ncpatcher_project() {
         Request::Build { verbose: false },
         Request::SetActiveVariant { variant: "fr".into() },
         Request::SetActiveModule { module: "coop".into() },
-        Request::ExportPatch,
         Request::RemoveFile { path: "course/A01_1.bin".into() },
     ] {
         let error = session.handle(request.clone()).unwrap_err();
@@ -1556,7 +1504,6 @@ fn a_guest_reaches_nothing_but_what_it_uploads() {
         Request::BrowseDirectory { path: String::new() },
         Request::OpenProject { path: "p".into() },
         Request::SetCleanRom { path: "roms/game.nds".into() },
-        Request::Xdelta { create: true, source: "roms/game.nds".into(), target: "roms/game.nds".into(), output: "x.xdelta".into() },
     ];
     for request in workspace_requests.iter().cloned().chain([Request::ListLevels, Request::CloseProject]) {
         assert!(guest.handle(request.clone()).unwrap_err().message.contains("only edit a ROM it uploads"), "{request:?}");

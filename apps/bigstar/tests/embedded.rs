@@ -123,8 +123,9 @@ fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
 
     harness.get_by_label("World 1").click();
     harness.run();
-    // Several levels have an "Area 1"; only 1-1's is in the ROM, so only its Edit button is enabled.
-    harness.query_all_by_label("Edit").find(|button| !button.accesskit_node().is_disabled()).unwrap().click();
+    // Several levels have an "Area 1"; only 1-1's is in the ROM, so only its Edit button is enabled. The first Edit is
+    // the menu bar's.
+    harness.query_all_by_label("Edit").skip(1).find(|button| !button.accesskit_node().is_disabled()).unwrap().click();
     until(&mut harness, "the level", |app| app.session().is_some_and(|s| s.level().is_some()));
 
     let (grab, drop, x_before) = {

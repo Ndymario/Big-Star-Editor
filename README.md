@@ -38,13 +38,12 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
 - **ROMs directly**: **Open ROM…** on the desktop edits a `.nds` picked with the system's file dialog, as NSMB Editor
   does: no workspace, no project, and every save writes into the ROM, laid out the way NCPatcher lays out a replaced
   file. In the browser, a host started with `serve --rom-sessions` takes an uploaded ROM, keeps it in memory for that
-  connection alone, and gives it back as a download. Builds, variants and patches need an NCPatcher project.
+  connection alone, and gives it back as a download. Builds and variants need an NCPatcher project.
 - **NCPatcher projects** are folders with an `ncpatcher.yaml`; Big Star keeps no project file of its own. The clean
   ROM a project builds from is not in `ncpatcher.yaml` either: it is asked for when a project opens without one, kept
   in the project's `.big-star-workspace.json`, and passed to NCPatcher as `--rom`.
 - **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
-  and read the ROM a successful build writes to the `rom.output` `ncpatcher.yaml` configures. `.nsmbpatch` export/import and xdelta create/apply are in the
-  Distribution menu.
+  and read the ROM a successful build writes to the `rom.output` `ncpatcher.yaml` configures.
 - Recovery snapshots of unsaved levels, backups of what a save overwrites, and five interface languages (English,
   Dutch, Portuguese, Spanish, French), in Preferences.
 
@@ -74,7 +73,7 @@ Token: …
 Open http://127.0.0.1:7878/?token=… in a browser
 ```
 
-It binds `127.0.0.1` unless told otherwise (`--bind`, `--port`); `--ncpatcher` and `--xdelta` name the tools it
+It binds `127.0.0.1` unless told otherwise (`--bind`, `--port`); `--ncpatcher` names the NCPatcher it
 runs. A host built without the bundle still serves desktop frontends, and its page says how to add one.
 
 To let people edit ROMs they upload, without a workspace or the token, serve uploads only (or add `--rom-sessions`

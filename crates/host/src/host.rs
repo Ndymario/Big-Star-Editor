@@ -38,8 +38,6 @@ use rom::Backing;
 pub struct HostOptions {
     pub data_dir: PathBuf,
     pub ncpatcher: PathBuf,
-    /// The xdelta3 executable the patch tools run.
-    pub xdelta: PathBuf,
     /// The largest ROM a connection may upload.
     pub max_rom_bytes: usize,
     /// How many uploaded ROMs the host holds at once, across every connection; each one is a whole ROM in memory.
@@ -56,7 +54,6 @@ impl Default for HostOptions {
         Self {
             data_dir: default_data_dir(),
             ncpatcher: PathBuf::from("ncpatcher"),
-            xdelta: PathBuf::from("xdelta3"),
             max_rom_bytes: DEFAULT_MAX_ROM_BYTES,
             max_uploaded_roms: DEFAULT_MAX_UPLOADED_ROMS,
         }
@@ -345,9 +342,6 @@ impl Shared {
             Request::Build { verbose } => self.ncpatcher_only().and_then(|()| self.build(verbose)),
             Request::CancelBuild => self.cancel_build(),
             Request::ExtractRom { directory } => self.ncpatcher_only().and_then(|()| self.extract_rom(&directory)),
-            Request::ExportPatch => self.ncpatcher_only().and_then(|()| self.export_patch()),
-            Request::ImportPatch { bytes, accept_id_mismatch } => self.ncpatcher_only().and_then(|()| self.import_patch(&bytes, accept_id_mismatch)),
-            Request::Xdelta { create, source, target, output } => self.xdelta(create, &source, &target, &output),
         }
     }
 

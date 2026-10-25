@@ -12,7 +12,6 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("File", "Fichier"),
     ("Edit", "Édition"),
     ("View", "Affichage"),
-    ("Distribution", "Distribution"),
     ("Save Project", "Enregistrer le projet"),
     ("Cut", "Couper"),
     ("Copy", "Copier"),

@@ -60,8 +60,6 @@ enum Pending {
     Build,
     /// A request whose answer is only `Done`; what it did, the host logs.
     Quiet,
-    ExportPatch,
-    ImportPatch(Vec<u8>),
 }
 
 /// What the Output panel shows about the last build.
@@ -204,10 +202,6 @@ pub struct Session {
     pub build_config: Option<BuildConfigKind>,
     /// A legacy configuration was converted; the build it was converted for can start.
     pub migrated: bool,
-    /// An exported `.nsmbpatch` and the name to suggest for it.
-    pub patch: Option<(String, Vec<u8>)>,
-    /// A patch the host did not import because its file IDs differ from this ROM's, waiting for the person to say.
-    pub patch_ids_differ: Option<Vec<u8>>,
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
@@ -271,8 +265,6 @@ impl Session {
             build: BuildState::default(),
             build_config: None,
             migrated: false,
-            patch: None,
-            patch_ids_differ: None,
             log: Vec::new(),
             notice: None,
             browser: None,
@@ -613,19 +605,6 @@ impl Session {
         self.request(Request::ExtractRom { directory: directory.to_owned() }, Pending::Quiet);
     }
 
-    pub fn export_patch(&mut self) {
-        self.request(Request::ExportPatch, Pending::ExportPatch);
-    }
-
-    pub fn import_patch(&mut self, bytes: Vec<u8>, accept_id_mismatch: bool) {
-        self.request(Request::ImportPatch { bytes: bytes.clone(), accept_id_mismatch }, Pending::ImportPatch(bytes));
-    }
-
-    pub fn xdelta(&mut self, create: bool, source: &str, target: &str, output: &str) {
-        let request = Request::Xdelta { create, source: source.to_owned(), target: target.to_owned(), output: output.to_owned() };
-        self.request(request, Pending::Quiet);
-    }
-
     /// Writes several files into their modules in one request.
     pub fn write_files(&mut self, files: Vec<FileWrite>) {
         self.request(Request::WriteFiles { files }, Pending::FileChange);
@@ -848,9 +827,6 @@ impl Session {
             (Pending::BuildConfig, Response::BuildConfig(kind)) => self.build_config = Some(kind),
             (Pending::Migrate, Response::Done) => self.migrated = true,
             (Pending::Quiet | Pending::Build, Response::Done) => {}
-            (Pending::ExportPatch, Response::Patch { name, bytes }) => self.patch = Some((name, bytes)),
-            (Pending::ImportPatch(bytes), Response::PatchIdsDiffer) => self.patch_ids_differ = Some(bytes),
-            (Pending::ImportPatch(_), Response::Done) => self.refresh_filesystem(),
             (Pending::Settings, Response::Settings(settings)) => {
                 // A project that cannot be built until it has a clean ROM asks for one when it opens.
                 if settings.clean_rom_problem.is_some() && !self.clean_rom_asked {

@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 pub type RequestId = u64;
 
@@ -213,24 +213,6 @@ pub enum Request {
     ExtractRom {
         directory: String,
     },
-    /// The module files that differ from the ROM, as a `.nsmbpatch`, after saving the edited levels.
-    ExportPatch,
-    /// Writes a `.nsmbpatch` into the modules, all files or none. Without `accept_id_mismatch` a patch whose file IDs
-    /// disagree with this ROM's is answered with `PatchIdsDiffer` instead.
-    ImportPatch {
-        #[serde(with = "serde_bytes")]
-        bytes: Vec<u8>,
-        accept_id_mismatch: bool,
-    },
-    /// Runs xdelta3 on the host: with `create`, a patch (`output`) from a clean (`source`) and a modified ROM
-    /// (`target`); otherwise the patched ROM (`output`) from a clean ROM (`source`) and a patch (`target`). Paths are
-    /// under the workspace.
-    Xdelta {
-        create: bool,
-        source: String,
-        target: String,
-        output: String,
-    },
 }
 
 /// The project's NCPatcher configuration file, as far as building is concerned.
@@ -435,14 +417,6 @@ pub enum Response {
     },
     TilesetResources(Box<TilesetResources>),
     BuildConfig(BuildConfigKind),
-    /// A `.nsmbpatch` and the name to suggest for it.
-    Patch {
-        name: String,
-        #[serde(with = "serde_bytes")]
-        bytes: Vec<u8>,
-    },
-    /// The patch was not written: some of its file IDs differ from this ROM's.
-    PatchIdsDiffer,
     /// How much of an upload the host holds so far.
     Uploaded {
         received: u64,

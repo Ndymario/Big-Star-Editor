@@ -369,8 +369,8 @@ fn the_screens_lead_from_projects_to_the_preview_to_a_document() {
     // The editing row is already there, with nothing to act on, so opening a document does not shift the layout.
     assert!(egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Undo")).is_disabled());
     assert!(egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Save")).is_disabled());
-    // Edit opens it as a document of its own, which is what the panels and menus act on.
-    harness.get_all_by_label("Edit").next().unwrap().click();
+    // Edit opens it as a document of its own, which is what the panels and menus act on. The first Edit is the menu's.
+    harness.get_all_by_label("Edit").nth(1).unwrap().click();
     harness.run();
     let session = harness.state().session().unwrap();
     assert_eq!(session.active, Some(previewed), "the host hands back the same session");
@@ -1363,7 +1363,7 @@ fn a_level_exports_and_imports_as_nml() {
     // Importing it into 1-1 makes 1-1 hold 1-1 Area 2.
     open_document(&mut harness, "A01_1");
     shelf.lock().unwrap().to_open.push_back(("1-1 Area 2.nml".to_owned(), bytes));
-    harness.get_by_label("Tools").click();
+    harness.get_by_label("File").click();
     harness.run();
     harness.get_by_label("Import Level (.nml)…").click();
     harness.run();
@@ -1374,7 +1374,7 @@ fn a_level_exports_and_imports_as_nml() {
 #[test]
 fn the_finder_opens_the_level_and_selects_what_it_found() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
-    harness.get_by_label("Tools").click();
+    harness.get_by_label("Edit").click();
     harness.run();
     harness.get_by_label("Find Sprite…").click();
     harness.run();
@@ -1789,43 +1789,6 @@ fn the_variant_selector_switches_the_whole_window() {
     assert_eq!(harness.state().workspace.documents().len(), 1, "the open level follows into the variant");
 }
 
-#[test]
-fn module_changes_export_as_a_patch_and_a_mismatched_one_asks_first() {
-    let (mut harness, shelf) = filesystem();
-    harness.get_by_label("Distribution").click();
-    harness.run();
-    harness.get_by_label("Export .nsmbpatch…").click();
-    harness.run();
-    assert!(harness.state().session().unwrap().notice.as_ref().is_some_and(|n| n.text == "There are no module changes to distribute."));
-
-    harness.state_mut().session_mut().unwrap().write_file("message/msg.bmg", vec![1, 2, 3]);
-    harness.run();
-    harness.get_by_label("Distribution").click();
-    harness.run();
-    harness.get_by_label("Export .nsmbpatch…").click();
-    harness.run();
-    let (name, bytes) = shelf.lock().unwrap().saved.pop().unwrap();
-    assert_eq!(name, "Demo.nsmbpatch");
-    let mut entries = bigstar_level::decode_nsmbpatch(&bytes).unwrap();
-    assert_eq!(entries[0].path, "message/msg.bmg");
-
-    // Made against another ROM: the IDs differ, and nothing is written until the person says so.
-    entries[0].expected_file_id += 1;
-    entries[0].contents = vec![7];
-    shelf.lock().unwrap().to_open.push_back(("other.nsmbpatch".to_owned(), bigstar_level::encode_nsmbpatch(&entries).unwrap()));
-    harness.get_by_label("Distribution").click();
-    harness.run();
-    harness.get_by_label("Import .nsmbpatch…").click();
-    harness.run();
-    harness.get_by_label_contains("Some file IDs in this ROM differ");
-    harness.get_by_label("Apply").click();
-    harness.run();
-    harness.run();
-    harness.state_mut().session_mut().unwrap().read_file("message/msg.bmg", crate::session::FileRead::Extract);
-    harness.run();
-    assert_eq!(shelf.lock().unwrap().saved.pop().map(|(_, bytes)| bytes), Some(vec![7]));
-}
-
 /// The frontend on the demo host with Preferences open, and the values it stores.
 fn preferences_open(services: MemoryServices) -> (Harness<'static, BigStarApp>, MemoryServices) {
     let stored = services.sharing_values();
@@ -1835,7 +1798,7 @@ fn preferences_open(services: MemoryServices) -> (Harness<'static, BigStarApp>, 
     harness.run();
     harness.state_mut().session_mut().unwrap().open_project("demo");
     harness.run();
-    harness.get_by_label("View").click();
+    harness.get_by_label("File").click();
     harness.run();
     harness.get_by_label("Preferences…").click();
     harness.run();
@@ -1866,7 +1829,7 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     assert_eq!(*Tokens::get(&harness.ctx), default);
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), None);
 
-    harness.get_by_label("View").click();
+    harness.get_by_label("File").click();
     harness.run();
     harness.get_by_label("Preferences…").click();
     harness.run();
@@ -1910,7 +1873,7 @@ fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on
     harness.run();
     harness.state_mut().session_mut().unwrap().open_project("demo");
     harness.run();
-    harness.get_by_label("View").click();
+    harness.get_by_label("File").click();
     harness.run();
     harness.get_by_label("Preferences…").click();
     harness.run();
@@ -1964,11 +1927,14 @@ fn a_rom_opened_directly_has_no_builds_variants_or_glue() {
     harness.run();
     harness.run();
 
-    // The ROM is the whole connection: one button closes it, and there is no workspace to go back to.
+    // The ROM is the whole connection: one line of the File menu closes it, and there is no workspace to go back to.
+    harness.get_by_label("File").click();
+    harness.run();
     assert_eq!(harness.get_all_by_label("Close ROM").count(), 1);
-    for absent in
-        ["Run Patcher", "Variant:", "Build", "Distribution", "Level Data", "Save to module", "Download ROM", "Close Workspace", "Disconnect"]
-    {
+    assert!(harness.query_by_label("Close project").is_none());
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    for absent in ["Run Patcher", "Variant:", "Build", "Level Data", "Save to module", "Download ROM", "Close Workspace", "Disconnect"] {
         assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for a ROM edited directly");
     }
     assert!(harness.get_all_by_label("Properties").next().is_some());
@@ -1981,6 +1947,8 @@ fn a_rom_opened_directly_has_no_builds_variants_or_glue() {
     assert_eq!(harness.state().session().unwrap().project.as_ref().map(|p| p.name.as_str()), Some("copy.nds"));
 
     // Closing the ROM ends the connection rather than leaving a page with nothing on it.
+    harness.get_by_label("File").click();
+    harness.run();
     harness.get_by_label("Close ROM").click();
     harness.run();
     assert!(harness.state().session().is_none());
@@ -2004,7 +1972,7 @@ fn a_connection_without_a_workspace_uploads_a_rom_and_downloads_it_again() {
     harness.state_mut().session_mut().unwrap().open_level("A01_1");
     harness.run();
     harness.run();
-    for absent in ["Run Patcher", "Save ROM As…", "Distribution", "Save to module"] {
+    for absent in ["Run Patcher", "Save ROM As…", "Save to module"] {
         assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for an uploaded ROM");
     }
 
@@ -2024,7 +1992,9 @@ fn a_connection_without_a_workspace_uploads_a_rom_and_downloads_it_again() {
 
 #[test]
 fn an_ncpatcher_project_keeps_its_builds_and_variants() {
-    let harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("File").click();
+    harness.run();
     for present in ["Run Patcher", "Variant:", "Build", "Level Data", "Close Workspace", "Close project"] {
         harness.get_by_label(present);
     }

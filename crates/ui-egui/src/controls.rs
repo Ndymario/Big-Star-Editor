@@ -2,7 +2,7 @@
 //! state, in one set of sizes and colours. Screens ask for a control here rather than building egui's own, so two of
 //! a kind never differ; a test below holds them to it.
 
-use egui::{Color32, CornerRadius, Rect, Response, Sense, Stroke, Ui, Vec2, WidgetText, pos2, vec2};
+use egui::{Color32, CornerRadius, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, WidgetText, pos2, vec2};
 
 use crate::{
     icons::{self, Icon},
@@ -50,11 +50,22 @@ pub struct Button<'a> {
     selected: bool,
     quiet: bool,
     name: Option<&'a str>,
+    shortcut: Option<String>,
 }
 
 impl<'a> Button<'a> {
     pub fn new(text: impl Into<WidgetText>) -> Self {
-        Button { text: text.into(), icon: None, kind: Kind::Plain, small: false, enabled: true, selected: false, quiet: false, name: None }
+        Button {
+            text: text.into(),
+            icon: None,
+            kind: Kind::Plain,
+            small: false,
+            enabled: true,
+            selected: false,
+            quiet: false,
+            name: None,
+            shortcut: None,
+        }
     }
 
     /// A line of a menu: as wide as the menu, framed only under the pointer.
@@ -120,6 +131,12 @@ impl<'a> Button<'a> {
         self
     }
 
+    /// The keys that do the same, shown faint at the right of a menu line.
+    pub fn shortcut(mut self, ctx: &egui::Context, shortcut: egui::KeyboardShortcut) -> Self {
+        self.shortcut = Some(ctx.format_shortcut(&shortcut));
+        self
+    }
+
     pub fn show(self, ui: &mut Ui) -> Response {
         ui.add(self)
     }
@@ -153,8 +170,14 @@ impl egui::Widget for Button<'_> {
         if let Some(icon) = self.icon {
             atoms.push(image(icon).into());
         }
+        // The keys are no part of the button's name, so it is taken before they join the text.
+        let named = self.shortcut.is_some().then(|| text.text().to_owned());
         if !text.is_empty() {
             atoms.push(text.into());
+        }
+        if let Some(keys) = self.shortcut {
+            atoms.push(egui::Atom::grow());
+            atoms.push(RichText::new(keys).color(t.muted).into());
         }
         let mut button = egui::Button::new(egui::Atoms::from(atoms))
             .image_tint_follows_text_color(tint.is_none())
@@ -217,7 +240,7 @@ impl egui::Widget for Button<'_> {
             Pointer::Away
         };
         ui.data_mut(|data| data.insert_temp(key, state));
-        if let Some(name) = self.name {
+        if let Some(name) = self.name.or(named.as_deref()) {
             let enabled = self.enabled;
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
         }

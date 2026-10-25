@@ -15,8 +15,6 @@ Automated tests cover the exchange codecs, unsafe-path and duplicate refusal, co
 - Round-trip a level through `.nml`; when NSMB Editor is available, verify cross-editor import in both directions.
 - Refuse malformed hex and malformed `.nml` without changing the open level.
 - Find known objects and sprites across multiple levels, then follow Sprite Event Viewer rows back to their placements.
-- Export changed module files as `.nsmbpatch`; import into another project and verify file-ID warnings, backups, module routing, and rollback.
-- Create and apply an xdelta3 patch using file paths containing spaces, then boot the output ROM.
 
 ## Recovery and language
 

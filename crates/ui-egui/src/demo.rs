@@ -1069,7 +1069,7 @@ impl DemoConnection {
                 Ok(Response::Settings(self.settings.clone()))
             }
             Request::BuildConfig => Ok(Response::BuildConfig(bigstar_protocol::BuildConfigKind::Yaml)),
-            Request::MigrateConfig | Request::CancelBuild | Request::ExtractRom { .. } | Request::Xdelta { .. } => Ok(Response::Done),
+            Request::MigrateConfig | Request::CancelBuild | Request::ExtractRom { .. } => Ok(Response::Done),
             // A build that compiles two files, warns once and applies, all at once.
             Request::Build { .. } => {
                 use bigstar_protocol::{BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
@@ -1093,37 +1093,6 @@ impl DemoConnection {
                     self.events.push(Incoming::Event(Event::Build(event)));
                 }
                 self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
-                Ok(Response::Done)
-            }
-            Request::ExportPatch => {
-                let entries: Vec<bigstar_level::NsmbPatchEntry> = self
-                    .files
-                    .iter()
-                    .filter(|(_, file)| file.module.is_some())
-                    .map(|(path, file)| bigstar_level::NsmbPatchEntry {
-                        path: path.clone(),
-                        expected_file_id: file.id.and_then(|id| i32::try_from(id).ok()).unwrap_or(-1),
-                        contents: file.bytes.clone(),
-                    })
-                    .collect();
-                if entries.is_empty() {
-                    return Err(Error::new(ErrorCode::InvalidArgument, "There are no module changes to distribute."));
-                }
-                Ok(Response::Patch { name: "Demo.nsmbpatch".to_owned(), bytes: bigstar_level::encode_nsmbpatch(&entries)? })
-            }
-            Request::ImportPatch { bytes, accept_id_mismatch } => {
-                let entries = bigstar_level::decode_nsmbpatch(&bytes)?;
-                let differ = entries.iter().any(|entry| {
-                    let id = self.files.get(&entry.path).and_then(|file| file.id);
-                    entry.expected_file_id >= 0 && id.is_some_and(|id| id != i64::from(entry.expected_file_id))
-                });
-                if differ && !accept_id_mismatch {
-                    return Ok(Response::PatchIdsDiffer);
-                }
-                for entry in entries {
-                    let id = self.files.get(&entry.path).and_then(|f| f.id);
-                    self.files.insert(entry.path, DemoFile { id, member_id: None, bytes: entry.contents, module: Some("demo".to_owned()) });
-                }
                 Ok(Response::Done)
             }
             Request::Banner => Ok(Response::Banner { bytes: self.banner.clone(), target: "assets/banner.bin".to_owned() }),

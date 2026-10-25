@@ -1,14 +1,11 @@
-//! Builds and patch exchange: an NCPatcher build of the active variant run off the request thread and reported as
-//! `Event::Build`, the ROM it applies read in its place, the legacy-config migration, ROM extraction, `.nsmbpatch`
-//! export and import, and xdelta. A port of `PatcherRunner` and of `MainWindow`'s `runPatcher`,
-//! `offerNcpatcherMigration`, `onPatcherFinished`, `extractRom`, `exportPatch`, `importPatch` and `runXdelta`.
+//! Builds: an NCPatcher build of the active variant run off the request thread and reported as `Event::Build`, the ROM
+//! it applies read in its place, the legacy-config migration and ROM extraction. A port of `PatcherRunner` and of
+//! `MainWindow`'s `runPatcher`, `offerNcpatcherMigration`, `onPatcherFinished` and `extractRom`.
 
-use bigstar_level::{NsmbPatchEntry, decode_nsmbpatch, encode_nsmbpatch};
 use bigstar_patching::{
-    BuildObserver, DiagnosticLevel as PatcherLevel, NCPatcherStage, ProcessCancel, ProcessRequest, ProjectConfigKind, describe_stage,
-    detect_project_config, run_process,
+    BuildObserver, DiagnosticLevel as PatcherLevel, NCPatcherStage, ProcessCancel, ProjectConfigKind, describe_stage, detect_project_config,
 };
-use bigstar_project::{FilesystemStatus, PatchApplyOutcome, PatchApplyRequest, apply_patch_transactionally};
+use bigstar_project::{PatchApplyOutcome, PatchApplyRequest, apply_patch_transactionally};
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
 use super::*;
@@ -263,95 +260,6 @@ impl Shared {
             return Err(Error::new(ErrorCode::ExternalToolFailed, message));
         }
         self.log(LogLevel::Info, format!("Extracted ROM into {target}"));
-        Ok(Response::Done)
-    }
-
-    /// Every module file that differs from the ROM, with the file ID it replaces so an import can tell a different ROM.
-    pub(super) fn export_patch(&self) -> Result<Response> {
-        self.save_dirty_levels()?;
-        let mut state = lock(&self.state);
-        let open = state.open.as_mut().ok_or_else(no_project)?;
-        let directory = open.directory.clone();
-        let entries: Vec<_> = self
-            .ensure_filesystem(open)?
-            .entries
-            .iter()
-            .filter(|file| {
-                file.status != FilesystemStatus::Vanilla && file.status != FilesystemStatus::Orphaned && !file.source.as_os_str().is_empty()
-            })
-            .cloned()
-            .collect();
-        let name = project_name(&directory);
-        drop(state);
-        let mut patch = Vec::new();
-        for file in entries {
-            let source = if file.source.is_absolute() { file.source.clone() } else { directory.join(&file.source) };
-            let contents = read_file(&source)?;
-            let expected_file_id = file.id.and_then(|id| i32::try_from(id).ok()).unwrap_or(-1);
-            patch.push(NsmbPatchEntry { path: file.path.clone(), expected_file_id, contents });
-        }
-        if patch.is_empty() {
-            return Err(invalid("There are no module changes to distribute."));
-        }
-        let bytes = encode_nsmbpatch(&patch)?;
-        let name = if name.is_empty() { "patch".to_owned() } else { name };
-        Ok(Response::Patch { name: format!("{name}.nsmbpatch"), bytes })
-    }
-
-    /// Every file of the patch goes into the module that supplies it, or the active one, all or none.
-    pub(super) fn import_patch(&self, bytes: &[u8], accept_id_mismatch: bool) -> Result<Response> {
-        let patch = decode_nsmbpatch(bytes)?;
-        let mut state = lock(&self.state);
-        let open = state.open.as_mut().ok_or_else(no_project)?;
-        self.ensure_filesystem(open)?;
-        let mut targets = Vec::new();
-        let mut ids_differ = false;
-        for entry in &patch {
-            let current = open.filesystem.as_ref().and_then(|view| view.find(&entry.path));
-            if let Some(id) = current.and_then(|file| file.id)
-                && entry.expected_file_id >= 0
-                && id != i64::from(entry.expected_file_id)
-            {
-                ids_differ = true;
-            }
-            let module = Self::target_module(open, &entry.path).map_err(|_| invalid("Choose an active module in the Filesystem dock first."))?;
-            let target = module_file_target(&module, &open.settings.active_variant, &entry.path, &[])?;
-            targets.push((target, entry.contents.clone()));
-        }
-        if ids_differ && !accept_id_mismatch {
-            return Ok(Response::PatchIdsDiffer);
-        }
-        back_up(&open.directory, "import", &targets)?;
-        write_all_or_none(&targets)?;
-        prune_patch_backups(&open.directory, open_backups_kept(&open.settings));
-        open.filesystem = None;
-        open.patcher = None;
-        open.graphics = None;
-        drop(state);
-        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
-        self.emit(Event::GraphicsChanged { generation });
-        self.log(LogLevel::Info, format!("Imported {} patch file(s) transactionally.", patch.len()));
-        Ok(Response::Done)
-    }
-
-    pub(super) fn xdelta(&self, create: bool, source: &str, target: &str, output: &str) -> Result<Response> {
-        let workspace = self.workspace()?;
-        let paths = [workspace.resolve(source)?, workspace.resolve(target)?, workspace.resolve(output)?];
-        let mode = if create { "-e" } else { "-d" };
-        let mut arguments = vec![mode.to_owned(), "-f".to_owned(), "-s".to_owned()];
-        arguments.extend(paths.iter().map(|path| path.to_string_lossy().into_owned()));
-        let request = ProcessRequest { executable: self.options.xdelta.clone(), arguments, ..ProcessRequest::default() };
-        let mut errors = String::new();
-        let mut collect = |line: &str| {
-            errors.push_str(line);
-            errors.push('\n');
-        };
-        let result = run_process(&request, None, Some(&mut collect))?;
-        if result.exit_code != 0 {
-            return Err(Error::new(ErrorCode::ExternalToolFailed, if errors.is_empty() { "xdelta3 failed".to_owned() } else { errors }));
-        }
-        let message = if create { "Patch created successfully." } else { "Patched ROM created successfully." };
-        self.log(LogLevel::Info, message);
         Ok(Response::Done)
     }
 }
