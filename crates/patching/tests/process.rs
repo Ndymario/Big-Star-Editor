@@ -158,9 +158,18 @@ fn client_drives_the_fake_ncpatcher() {
 
     project.stage("modules-dump", r#"{"schema":"ncpatcher.modules/1","dir":"/p/modules","modules":[{"key":"coop","enabled":true}]}"#);
     assert!(client.dump_modules(&project.0).unwrap().find("coop").unwrap().enabled);
+    let passed_rom = || std::fs::read_to_string(project.0.join("fake-ncpatcher/rom.txt")).ok();
+    assert_eq!(passed_rom(), None, "a client with no clean ROM leaves it to the configuration");
+
+    // The clean ROM rides along on every command that reads the project, unless one names another ROM.
+    let clean = client.clone().with_rom("/roms/clean.nds");
+    assert!(clean.dump_modules(&project.0).is_ok());
+    assert_eq!(passed_rom().as_deref(), Some("/roms/clean.nds"));
 
     project.stage("rom-files", r#"{"schema":"ncpatcher.files/1","count":1,"files":[{"id":3,"path":"a.bin","size":4}]}"#);
     assert_eq!(client.rom_files(&project.0, Path::new("")).unwrap().files[0].id, 3);
+    assert!(clean.rom_files(&project.0, Path::new("/roms/built.nds")).is_ok());
+    assert_eq!(passed_rom().as_deref(), Some("/roms/built.nds"));
 
     // A plan that does not say it is one is refused; one that does is read.
     project.stage("files-plan", r#"{"schema":"ncpatcher.files/1","count":0,"files":[]}"#);

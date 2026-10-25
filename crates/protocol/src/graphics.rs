@@ -162,6 +162,11 @@ pub struct ProjectSettings {
     pub active_module: String,
     /// Where a build leaves its generated module data, relative to the project.
     pub generated_path: String,
+    /// The clean ROM NCPatcher builds from, as the settings store it: relative to the project when it is inside it.
+    pub clean_rom: String,
+    /// Why the clean ROM cannot be used -- none is set, it is not there, or it is not New Super Mario Bros. -- so a
+    /// frontend asks for one. `None` when it is fine.
+    pub clean_rom_problem: Option<String>,
     /// The variants NCPatcher reports the project configures, in declaration order. Empty when it configures none
     /// or NCPatcher could not be asked; `patcher_error` says which.
     pub variants: Vec<String>,

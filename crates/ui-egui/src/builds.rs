@@ -84,6 +84,10 @@ impl Builds {
             ui.close();
         }
         ui.separator();
+        if Button::menu("Clean ROM…").show(ui).clicked() {
+            session.choose_clean_rom();
+            ui.close();
+        }
         // NCPatcher's own extractor writes a directory it can read back, so that is the one that runs.
         if Button::menu("Extract ROM…").show(ui).clicked() {
             let project = session.project.as_ref().map(|p| p.path.clone()).unwrap_or_default();

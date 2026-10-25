@@ -56,7 +56,7 @@ and frontends ask again while keeping what is on screen until the replacement ar
 Level saves go to the project's edit targets, are parsed again before they are written, back up what they overwrite
 into `.big-star-backups/levels-…`, and write both files or neither. File and tileset edits go into the module that
 supplies the file, or the active one; new NitroFS files must be under `z_new/`; a member of an archive is written
-beside it for the next build to sweep back in. A module project never writes into the ROM. Backups are kept per kind,
+beside it for the next build to sweep back in. An NCPatcher project never writes into the ROM. Backups are kept per kind,
 as many as the project's preference says, and swept when a project opens and whenever one is added.
 
 Unsaved levels are written to `.big-star-autosave` as often as the project's preference says (every minute by
@@ -64,7 +64,7 @@ default). The next session offers them back.
 
 ## Editing a ROM directly
 
-A `.nds` can also be edited without a project, and without a workspace: a workspace is where module projects live, and
+A `.nds` can also be edited without a project, and without a workspace: a workspace is where NCPatcher projects live, and
 a ROM edited directly is not one. It comes from one of two places.
 
 - **On the desktop**, **Open ROM…** asks the system's file dialog for a `.nds` and starts `Host::for_local_roms`, a
@@ -88,10 +88,10 @@ once. A ROM on this machine is written into its file on every save; the first wr
 overwrites into `.big-star-backups/rom-…` beside it, and autosaves go to `.big-star-autosave/<rom name>/`. An uploaded
 ROM is written only for a download, and has no backups or autosaves.
 
-This is not a return of the ROM builder M16 removed. A module project still never repacks anything: NCPatcher builds
+This is not a return of the ROM builder M16 removed. An NCPatcher project still never repacks anything: NCPatcher builds
 its ROM from the modules. A ROM edited directly has no modules to build from, so writing into it is the only way an
 edit can land. Only existing files can be replaced; adding or removing one would renumber file IDs. Variants, modules,
-builds, `.nsmbpatch` exchange and glue editing need a module project, and the host refuses them by name.
+builds, `.nsmbpatch` exchange and glue editing need an NCPatcher project, and the host refuses them by name.
 
 ## Builds
 
@@ -134,7 +134,7 @@ moving files around.
 
 ## Project files
 
-Projects are opened by directory, so the project manifest does not serialize an absolute project root.
-`big-star-project.yaml` stores only project-relative paths such as `big-star-build.nds`, which keeps projects
-portable across machines and avoids leaking user filesystem paths. The host keeps its per-project choices (variant,
-module, autosave interval, backups kept) in `.big-star-workspace.json` beside it. See `docs/project-format.md`.
+A project is an NCPatcher project directory, found by its `ncpatcher.yaml`; Big Star writes no manifest of its own.
+The host keeps its per-project choices (variant, module, the clean ROM, autosave interval, backups kept) in
+`.big-star-workspace.json` in the project directory. The clean ROM is the one path that differs between machines, so
+it lives there rather than in `ncpatcher.yaml`, and reaches NCPatcher as `--rom`. See `docs/project-format.md`.

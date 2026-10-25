@@ -75,14 +75,13 @@ enum Action {
     Leave(Leave),
     OpenProject(String),
     Refresh,
-    BeginImport,
     Browse(String),
-    ChooseRom { path: String, name: String },
-    Import { rom: String, project: String, name: String },
+    ChooseRom(String),
+    UseCleanRom(String),
     SaveRomAs,
     UploadRom,
     DownloadRom,
-    CancelImport,
+    CancelCleanRom,
 }
 
 /// The left panel's tabs.
@@ -520,7 +519,7 @@ impl BigStarApp {
         if let Some(session) = &mut self.session {
             session.request_actor_draws();
         }
-        self.import_window(&ctx);
+        self.clean_rom_window(&ctx);
         self.recovery_window(&ctx);
         self.confirm_window(&ctx);
         for action in std::mem::take(&mut self.actions) {
@@ -562,8 +561,8 @@ impl BigStarApp {
                             rom = Button::new("Open ROM…").with_icon(icons::FILE).primary().show(ui).clicked();
                         });
                         ui.add_space(12.0);
-                        controls::section(ui, "Module projects", |ui| {
-                            ui.weak("Open a folder of projects on this computer.");
+                        controls::section(ui, "NCPatcher projects", |ui| {
+                            ui.weak("Open a folder of NCPatcher projects on this computer.");
                             ui.add_space(4.0);
                             ui.horizontal(|ui| {
                                 let edit = TextField::new(&mut self.form.root).hint("Workspace folder").width(Width::Rest(170.0)).show(ui);
@@ -921,9 +920,6 @@ impl BigStarApp {
         ui.horizontal(|ui| {
             ui.heading("Projects");
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if Button::new("Import ROM…").with_icon(icons::PLUS).primary().show(ui).clicked() {
-                    actions.push(Action::BeginImport);
-                }
                 if remote
                     && Button::new("Upload ROM…")
                         .with_icon(icons::FILE)
@@ -940,7 +936,12 @@ impl BigStarApp {
         });
         ui.add_space(4.0);
         if session.projects.is_empty() {
-            controls::notice(ui, icons::FOLDER, "No projects here yet", "To make one, import a ROM from the workspace folder.");
+            controls::notice(
+                ui,
+                icons::FOLDER,
+                "No projects here yet",
+                "A project is a folder with an ncpatcher.yaml. Make one with ncpatcher init in the workspace folder, then refresh.",
+            );
         }
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for project in &session.projects {
@@ -981,12 +982,18 @@ impl BigStarApp {
         }
     }
 
-    fn import_window(&mut self, ctx: &egui::Context) {
+    /// Choosing the clean ROM the project builds from, which `ncpatcher.yaml` does not name: asked for when a project
+    /// opens without a usable one, and from the Build menu.
+    fn clean_rom_window(&mut self, ctx: &egui::Context) {
         let Some(session) = &mut self.session else { return };
         let actions = &mut self.actions;
+        let problem = session.settings.as_ref().and_then(|settings| settings.clean_rom_problem.clone());
         let Some(browser) = &mut session.browser else { return };
         let mut open = true;
-        dialogs::window("Import ROM").open(&mut open).default_width(460.0).show(ctx, |ui| {
+        dialogs::window("Clean ROM").open(&mut open).default_width(460.0).show(ctx, |ui| {
+            ui.label(problem.as_deref().unwrap_or("Choose the clean ROM this project is built from."));
+            ui.weak("It is kept with the project's editor settings, not in ncpatcher.yaml.");
+            ui.add_space(4.0);
             ui.horizontal(|ui| {
                 if Button::new("Up").with_icon(icons::ARROW_UP).small().enabled(!browser.path.is_empty()).show(ui).clicked() {
                     actions.push(Action::Browse(parent(&browser.path)));
@@ -1010,8 +1017,7 @@ impl BigStarApp {
                             DirectoryEntryKind::File if entry.name.to_ascii_lowercase().ends_with(".nds") => {
                                 let chosen = browser.rom.as_deref() == Some(full.as_str());
                                 if Row::new(&entry.name).icon(icons::FILE).selected(chosen).show(ui).clicked() {
-                                    let stem = entry.name.rsplit_once('.').map_or(entry.name.as_str(), |(stem, _)| stem);
-                                    actions.push(Action::ChooseRom { path: full, name: stem.to_owned() });
+                                    actions.push(Action::ChooseRom(full));
                                 }
                             }
                             DirectoryEntryKind::File => {
@@ -1021,24 +1027,16 @@ impl BigStarApp {
                     }
                 }
             });
-            if let Some(rom) = browser.rom.clone() {
-                ui.separator();
-                ui.horizontal(|ui| {
-                    ui.label("Project name");
-                    TextField::new(&mut browser.project_name).name("Project name").show(ui);
-                });
-                let folder = join(&browser.path, browser.project_name.trim());
-                ui.weak(format!("Made in /{folder}"));
-                let ready = !browser.project_name.trim().is_empty();
-                dialogs::actions(ui, |ui| {
-                    if Button::new("Import").primary().enabled(ready).show(ui).clicked() {
-                        actions.push(Action::Import { rom, project: folder, name: browser.project_name.trim().to_owned() });
-                    }
-                });
-            }
+            dialogs::actions(ui, |ui| {
+                if Button::new("Use This ROM").primary().enabled(browser.rom.is_some()).show(ui).clicked()
+                    && let Some(rom) = browser.rom.clone()
+                {
+                    actions.push(Action::UseCleanRom(rom));
+                }
+            });
         });
         if !open {
-            actions.push(Action::CancelImport);
+            actions.push(Action::CancelCleanRom);
         }
     }
 
@@ -1274,22 +1272,20 @@ impl BigStarApp {
             Action::Leave(target) => self.request_leave(target),
             Action::OpenProject(path) => session.open_project(&path),
             Action::Refresh => session.list_projects(),
-            Action::BeginImport => session.browse(""),
             Action::Browse(path) => {
                 if let Some(browser) = &mut session.browser {
                     browser.listing = None;
                 }
                 session.browse(&path);
             }
-            Action::ChooseRom { path, name } => {
+            Action::ChooseRom(path) => {
                 if let Some(browser) = &mut session.browser {
                     browser.rom = Some(path);
-                    browser.project_name = name;
                 }
             }
-            Action::Import { rom, project, name } => session.import_rom(&rom, &project, &name),
+            Action::UseCleanRom(rom) => session.set_clean_rom(&rom),
             Action::DownloadRom => session.download_rom(),
-            Action::CancelImport => session.browser = None,
+            Action::CancelCleanRom => session.browser = None,
             Action::UploadRom | Action::SaveRomAs => {}
         }
     }

@@ -6,10 +6,18 @@ itself, invoke a shell, or change the editor process's working directory.
 
 ## Project contract
 
-The Big Star project directory is also the NCPatcher project directory. It
-contains `ncpatcher.yaml` (or `.yml`), the pristine input ROM, and `modules/`.
-The editor reads the built `.nds` where it lies -- `big-star-build.nds`, or the
-imported `rom.nds` before a first build. Nothing is unpacked. An extracted
+A Big Star project is an NCPatcher project directory: one with an
+`ncpatcher.yaml` (or `.yml`), and `modules/`. Big Star writes no project file of
+its own. `ncpatcher.yaml` names no input ROM -- where the clean ROM lies differs
+from machine to machine -- so the editor keeps it in the project's
+`.big-star-workspace.json` and passes it as `--rom` on every command that reads
+the configuration. NCPatcher accepts a `rom:` section without `file` or `dir`
+when `--rom` is given.
+
+The editor reads the active variant's build where it lies: the `rom.output`
+that `config dump --json` reports, with `_<variant>` before the extension as
+NCPatcher names a variant's output, and before a first build the clean ROM
+itself. Nothing is unpacked. An extracted
 directory is an explicit export produced by **Build > Extract ROM…**, which
 delegates to `ncpatcher rom extract` so there is one extractor and one layout,
 and it is never an input the editor reads back.
@@ -99,10 +107,12 @@ archives, `.carc` included.
 
 The host applies a successful build as one transaction:
 
-1. Build a ROM into the project's staging area, optionally for one selected
-   variant.
+1. Build a ROM from the clean one into the project's staging area (`--out`),
+   optionally for one selected variant.
 2. Validate the staged ROM's header.
-3. Move it to `big-star-build.nds` and re-point the reader at it.
+3. Move it to the variant's output, where a build without `--out` would have
+   written it, and re-point the reader at it. A project with no `rom.output`
+   is refused: its build would land on the clean ROM.
 4. Clear open documents and cached level sessions, then reindex the project.
 
 A failed build or a rejected ROM leaves the project untouched, and the staging

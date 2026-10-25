@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 pub type RequestId = u64;
 
@@ -47,22 +47,14 @@ pub enum ServerFrame {
 /// Every path in a request is relative to the workspace root and `/`-separated. The empty string is the root itself.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Request {
-    /// The projects under the workspace root.
+    /// The NCPatcher projects under the workspace root: the directories with an `ncpatcher.yaml` (or a legacy
+    /// `ncpatcher.json`).
     ListProjects,
-    /// The entries of one directory under the root, for choosing a ROM or a place for a project.
+    /// The entries of one directory under the root.
     BrowseDirectory {
         path: String,
     },
-    CreateProject {
-        path: String,
-        name: String,
-    },
-    /// Copies a `.nds` that is already under the root into a new project directory.
-    ImportRom {
-        rom_path: String,
-        project_path: String,
-        name: Option<String>,
-    },
+    /// Opens an NCPatcher project directory.
     OpenProject {
         path: String,
     },
@@ -135,6 +127,11 @@ pub enum Request {
     },
     SetActiveModule {
         module: String,
+    },
+    /// The clean ROM the open project is built from, a `.nds` under the root. It is kept in the project's settings,
+    /// not in `ncpatcher.yaml`, and refused unless it is New Super Mario Bros.
+    SetCleanRom {
+        path: String,
     },
     /// The open project's autosave interval and how many backups it keeps; clamped to 1–60 and 1–100.
     SetPreferences {
@@ -656,11 +653,11 @@ pub struct ProjectInfo {
     pub mode: ProjectMode,
 }
 
-/// What an open project is: a module project NCPatcher builds, or a ROM edited directly.
+/// What an open project is: an NCPatcher project, which NCPatcher builds, or a ROM edited directly.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectMode {
     #[default]
-    Module,
+    NcPatcher,
     /// A `.nds` in the workspace, which every save writes into.
     Rom,
     /// A `.nds` the frontend uploaded, held only in the host's memory; it leaves as a download.

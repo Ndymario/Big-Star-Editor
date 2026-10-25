@@ -6,7 +6,7 @@
 //! A ROM comes from one of two places, and neither is a workspace. The desktop app's host opens a file picked on this
 //! machine by its path, and every save writes into that file. A served host takes a ROM a connection uploads and
 //! keeps it only in memory, where it leaves as a download. There are no modules, variants or builds here, and nothing
-//! for NCPatcher to do; requests that only mean something for a module project are refused by name.
+//! for NCPatcher to do; requests that only mean something for an NCPatcher project are refused by name.
 
 use std::sync::Arc;
 
@@ -15,7 +15,7 @@ use bigstar_protocol::{ProjectMode, ROM_CHUNK_BYTES};
 
 use super::*;
 
-pub(super) const ROM_MODE_REFUSAL: &str = "This needs a module project. It is not available when editing a ROM directly.";
+pub(super) const ROM_MODE_REFUSAL: &str = "This needs an NCPatcher project. It is not available when editing a ROM directly.";
 
 /// A ROM being edited directly.
 pub(super) struct RomDocument {
@@ -34,8 +34,8 @@ pub(super) struct RomDocument {
 
 /// What an open project reads from and writes to.
 pub(super) enum Backing {
-    /// A module project: edits go into modules, and NCPatcher builds the ROM.
-    Module,
+    /// An NCPatcher project: edits go into modules, and NCPatcher builds the ROM.
+    NcPatcher,
     Rom(RomDocument),
 }
 
@@ -93,8 +93,8 @@ fn upload_name(name: &str) -> String {
 }
 
 impl Shared {
-    /// Refuses a request that only means something for a module project.
-    pub(super) fn module_only(&self) -> Result<()> {
+    /// Refuses a request that only means something for an NCPatcher project.
+    pub(super) fn ncpatcher_only(&self) -> Result<()> {
         let state = lock(&self.state);
         if state.open.as_ref().is_some_and(|open| open.backing.is_rom()) { Err(invalid(ROM_MODE_REFUSAL)) } else { Ok(()) }
     }
@@ -158,6 +158,7 @@ impl Shared {
             index: RomIndex::new(&rom),
             rom: Some(rom),
             rom_file: doc.file.clone(),
+            built_rom: None,
             catalog: ModuleDataCatalog::default(),
             levels: BTreeMap::new(),
             next_level: 1,

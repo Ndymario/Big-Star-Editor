@@ -17,6 +17,10 @@ struct Stored {
     active_module: String,
     #[serde(default)]
     generated_path: String,
+    /// The clean ROM NCPatcher builds from. Kept here rather than in `ncpatcher.yaml`, which is the same on every
+    /// machine while where the ROM lies is not.
+    #[serde(default)]
+    clean_rom: String,
     #[serde(default = "default_autosave_minutes")]
     autosave_minutes: u32,
     #[serde(default = "default_backups_kept")]
@@ -44,6 +48,7 @@ pub(crate) fn load_settings(directory: &Path) -> ProjectSettings {
         active_variant: String::new(),
         active_module: String::new(),
         generated_path: String::new(),
+        clean_rom: String::new(),
         autosave_minutes: default_autosave_minutes(),
         backups_kept: default_backups_kept(),
     });
@@ -51,6 +56,7 @@ pub(crate) fn load_settings(directory: &Path) -> ProjectSettings {
         active_variant: stored.active_variant,
         active_module: stored.active_module,
         generated_path: stored.generated_path,
+        clean_rom: stored.clean_rom,
         autosave_minutes: stored.autosave_minutes.clamp(1, 60),
         backups_kept: stored.backups_kept.clamp(1, 100),
         ..Default::default()
@@ -62,9 +68,43 @@ pub(crate) fn save_settings(directory: &Path, settings: &ProjectSettings) -> Res
         active_variant: settings.active_variant.clone(),
         active_module: settings.active_module.clone(),
         generated_path: settings.generated_path.clone(),
+        clean_rom: settings.clean_rom.clone(),
         autosave_minutes: settings.autosave_minutes,
         backups_kept: settings.backups_kept,
     };
     let text = serde_json::to_string_pretty(&stored).map_err(|e| Error::new(ErrorCode::InvalidArgument, e.to_string()))?;
     write_text_file_atomically(&path(directory), &format!("{text}\n"))
+}
+
+/// The clean ROM a project's settings name, for a tool that builds it without opening it.
+pub fn stored_clean_rom(directory: &Path) -> Option<PathBuf> {
+    clean_rom_file(directory, &load_settings(directory))
+}
+
+/// The clean ROM the settings name, relative paths against the project. `None` when they name none.
+pub(crate) fn clean_rom_file(directory: &Path, settings: &ProjectSettings) -> Option<PathBuf> {
+    (!settings.clean_rom.is_empty()).then(|| directory.join(&settings.clean_rom))
+}
+
+/// `file` relative to the project when it is inside it, so a project moves with its ROM, and as it is otherwise. How
+/// the settings store the clean ROM, and how a project's ROM is shown.
+pub(crate) fn relative_to_project(directory: &Path, file: &Path) -> String {
+    file.strip_prefix(directory).unwrap_or(file).to_string_lossy().replace('\\', "/")
+}
+
+/// Why the clean ROM cannot be built from, or `None` when it can: it is there, and it is New Super Mario Bros.
+pub(crate) fn clean_rom_problem(directory: &Path, settings: &ProjectSettings) -> Option<String> {
+    let Some(file) = clean_rom_file(directory, settings) else {
+        return Some("This project has no clean ROM to build from yet.".to_owned());
+    };
+    let header = bigstar_core::read_file_prefix(&file, bigstar_nds::DEFAULT_HEADER_REGION_SIZE)
+        .and_then(|bytes| bigstar_nds::parse_rom_header(&bytes))
+        .map_err(|_| format!("The clean ROM {} is missing or is not a DS ROM.", settings.clean_rom));
+    match header {
+        Err(problem) => Some(problem),
+        Ok(header) if bigstar_project::nsmb_graphics_profile(&header.game_code).is_none() => {
+            Some(format!("The clean ROM {} is not New Super Mario Bros. (its game code is {}).", settings.clean_rom, header.game_code))
+        }
+        Ok(_) => None,
+    }
 }

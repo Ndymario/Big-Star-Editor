@@ -7,7 +7,7 @@ use bigstar_formats::{NSMB_LEVEL_BLOCK_COUNT, NsmbLevelObject};
 use bigstar_host::Host;
 use bigstar_level::{EditableLevel, IndexedLevelValue, LevelEntityUpdates};
 use bigstar_project::test_support::{RomFile, TempDir, make_rom, write_bytes};
-use bigstar_protocol::{LevelEdit, Request, Service};
+use bigstar_protocol::LevelEdit;
 use bigstar_ui_egui::Session;
 
 /// A course with two objects and its BGDat.
@@ -67,9 +67,10 @@ fn an_edit_in_one_frontend_appears_in_another() {
     let root = TempDir::new("two-frontends");
     let (course, bgdat) = level_files();
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat)], &[0; 32]);
-    write_bytes(&root.path().join("roms/game.nds"), &rom);
+    write_bytes(&root.path().join("proj/rom.nds"), &rom);
+    write_bytes(&root.path().join("proj/ncpatcher.yaml"), b"version: 2\n");
+    write_bytes(&root.path().join("proj/.big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
     let host = Host::new(root.path()).unwrap();
-    host.session().handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
 
     let (mut one, mut two) = (frontend(&host), frontend(&host));
     for session in [&mut one, &mut two] {

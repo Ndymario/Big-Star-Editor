@@ -104,7 +104,7 @@ fn a_demo_host_answers_requests_it_does_not_know_with_an_error() {
     let mut connection = DemoConnection::new();
     let id = connection.send(Request::ListProjects);
     let id2 = connection.send(Request::CloseLevel { level: 1 });
-    let id3 = connection.send(Request::CreateProject { path: "x".to_owned(), name: "x".to_owned() });
+    let id3 = connection.send(Request::SetActiveModule { module: "x".to_owned() });
     let answers = connection.poll();
     assert_eq!(answers.len(), 3);
     assert!(matches!(&answers[0], Incoming::Response { id: first, result: Ok(Response::Projects(_)) } if *first == id));
@@ -1991,7 +1991,6 @@ fn a_connection_without_a_workspace_uploads_a_rom_and_downloads_it_again() {
     let (mut harness, shelf) = harness_with_shelf(DemoConnection::without_workspace());
     harness.run();
     // No projects to list: the screen offers an upload, and there is nothing to close yet but the connection.
-    assert!(harness.query_by_label("Import ROM…").is_none());
     harness.get_by_label("Disconnect");
     shelf.lock().unwrap().to_open.push_back(("My Game.nds".to_owned(), vec![7; 10]));
     harness.get_by_label("Upload ROM…").click();
@@ -2024,12 +2023,28 @@ fn a_connection_without_a_workspace_uploads_a_rom_and_downloads_it_again() {
 }
 
 #[test]
-fn a_module_project_keeps_its_builds_and_variants() {
+fn an_ncpatcher_project_keeps_its_builds_and_variants() {
     let harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
     for present in ["Run Patcher", "Variant:", "Build", "Level Data", "Close Workspace", "Close project"] {
         harness.get_by_label(present);
     }
     for absent in ["Save ROM As…", "Close ROM", "Disconnect"] {
-        assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for a module project");
+        assert!(harness.query_by_label(absent).is_none(), "{absent} is shown for an NCPatcher project");
     }
+    // A project with a usable clean ROM does not ask for one.
+    assert!(harness.query_by_label("Use This ROM").is_none());
+}
+
+#[test]
+fn a_project_without_a_clean_rom_asks_for_one() {
+    let mut harness = canvas_on(DemoConnection::without_clean_rom(), Vec2::new(1500.0, 800.0));
+    harness.get_by_label("This project has no clean ROM to build from yet.");
+    harness.get_by_label("clean.nds").click();
+    harness.run();
+    harness.get_by_label("Use This ROM").click();
+    harness.run();
+    harness.run();
+    let settings = harness.state().session().unwrap().settings.clone().unwrap();
+    assert_eq!((settings.clean_rom.as_str(), settings.clean_rom_problem), ("demo/clean.nds", None));
+    assert!(harness.query_by_label("Use This ROM").is_none(), "the question closes once it is answered");
 }

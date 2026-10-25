@@ -2,8 +2,8 @@
 //! `libs/nsmb-project/src/patch_apply.cpp`.
 //!
 //! The project directory is also the NCPatcher project. A build runs with `--out` to a staging path, the ROM it
-//! produced is validated there, and only a ROM that parses is moved in. A failed build, or one that writes something
-//! unreadable, leaves the project exactly as it was.
+//! produced is validated there, and only a ROM that parses is moved to the `rom.output` the project configures. A
+//! failed build, or one that writes something unreadable, leaves the project exactly as it was.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -14,8 +14,6 @@ use bigstar_nds::{DS_CARTRIDGE_HEADER_SIZE, parse_rom_header};
 use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, ProcessCancel, ProjectConfigKind, RunSummary, detect_project_config};
 use serde::{Deserialize, Serialize};
 
-use crate::BUILT_ROM_FILE_NAME;
-
 #[derive(Debug, Clone)]
 pub struct PatchApplyRequest {
     /// The project directory, which is also the NCPatcher project directory.
@@ -23,6 +21,10 @@ pub struct PatchApplyRequest {
     /// Which configured build variant to produce. Empty means the project configures none.
     pub variant: String,
     pub ncpatcher_executable: PathBuf,
+    /// The clean ROM NCPatcher builds from, which `ncpatcher.yaml` does not name.
+    pub clean_rom: PathBuf,
+    /// Where the built ROM goes: the `rom.output` NCPatcher reports for the project.
+    pub output: PathBuf,
     pub verbose: bool,
     /// Passed straight to the build; the apply itself only moves files that are already written.
     pub cancel: Option<Arc<ProcessCancel>>,
@@ -30,7 +32,15 @@ pub struct PatchApplyRequest {
 
 impl Default for PatchApplyRequest {
     fn default() -> Self {
-        Self { project_dir: PathBuf::new(), variant: String::new(), ncpatcher_executable: PathBuf::from("ncpatcher"), verbose: false, cancel: None }
+        Self {
+            project_dir: PathBuf::new(),
+            variant: String::new(),
+            ncpatcher_executable: PathBuf::from("ncpatcher"),
+            clean_rom: PathBuf::new(),
+            output: PathBuf::new(),
+            verbose: false,
+            cancel: None,
+        }
     }
 }
 
@@ -64,11 +74,6 @@ pub fn patch_staging_dir(project_dir: &Path) -> PathBuf {
 
 pub fn patch_backup_root(project_dir: &Path) -> PathBuf {
     project_dir.join(".big-star-backups")
-}
-
-/// The ROM a successful apply writes.
-pub fn built_rom_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(BUILT_ROM_FILE_NAME)
 }
 
 /// Removing a staging directory is best effort: failing to clean up is not a reason to refuse a build that otherwise
@@ -135,6 +140,13 @@ pub fn apply_patch_transactionally(request: &PatchApplyRequest, observer: &mut B
         }
         ProjectConfigKind::V2Yaml => {}
     }
+    // NCPatcher with no output patches its ROM in place, and the ROM it is handed is the clean one.
+    if request.output.as_os_str().is_empty() {
+        return Err(Error::new(
+            ErrorCode::InvalidArgument,
+            "ncpatcher.yaml sets no rom.output, so a build would have nowhere to go but over the clean ROM",
+        ));
+    }
 
     let staging = patch_staging_dir(&request.project_dir);
     // A staging directory left behind by an interrupted run is stale by definition, and reusing it would apply a mix
@@ -147,7 +159,7 @@ pub fn apply_patch_transactionally(request: &PatchApplyRequest, observer: &mut B
     let build = BuildRequest {
         project_dir: request.project_dir.clone(),
         variant: request.variant.clone(),
-        rom_override: PathBuf::new(),
+        rom_override: request.clean_rom.clone(),
         output_override: staged_rom.clone(),
         verbose: request.verbose,
         cancel: request.cancel.clone(),
@@ -188,7 +200,10 @@ pub fn apply_patch_transactionally(request: &PatchApplyRequest, observer: &mut B
 
     // The ROM is sound, so it becomes the one the editor reads: one file arriving, nothing unpacked, nothing moved
     // aside. NCPatcher rebuilds the previous build from the pristine binaries it keeps.
-    let final_rom = built_rom_path(&request.project_dir);
+    let final_rom = request.output.clone();
+    if let Some(parent) = final_rom.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     if let Err(e) = move_file(&staged_rom, &final_rom) {
         return reject(result, format!("the built ROM was fine, but could not be moved into place: {}", e.message));
     }

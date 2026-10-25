@@ -19,18 +19,3 @@ pub fn lexically_normal(path: &Path) -> PathBuf {
     }
     out
 }
-
-pub(crate) fn contains_parent_reference(path: &Path) -> bool {
-    path.components().any(|part| matches!(part, Component::ParentDir))
-}
-
-/// The `/`-separated spelling a manifest stores, whatever the platform.
-pub(crate) fn to_generic_string(path: &Path) -> String {
-    path.components()
-        .filter_map(|part| match part {
-            Component::Normal(name) => Some(name.to_string_lossy().into_owned()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}

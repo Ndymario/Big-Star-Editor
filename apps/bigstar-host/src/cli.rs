@@ -3,11 +3,9 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use bigstar_core::read_file_prefix;
-use bigstar_formats::{GraphicsFormatKind, identify_graphics_format};
-use bigstar_host::{Host, HostOptions};
-use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, RomHeader, parse_rom_header};
+use bigstar_host::{Host, HostOptions, stored_clean_rom};
+use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
 use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, describe_stage};
-use bigstar_project::{INPUT_ROM_FILE_NAME, MANIFEST_FILE_NAME, Project, create_empty_project, index_rom_files, save_manifest};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const DEFAULT_PORT: u16 = 7878;
@@ -17,21 +15,8 @@ use crate::server;
 fn usage(out: &mut dyn Write) {
     let _ = write!(
         out,
-        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  import-rom <rom> <project-dir>\n  run-patcher <project-dir> [--variant <name>]\n  patcher-info <project-dir>\n  oracle <project-dir> <data-dir>\n  serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
+        "bigstar-host {VERSION}\nCommands:\n  --version\n  inspect-rom <path>\n  run-patcher <project-dir> [--variant <name>] [--rom <clean-rom>]\n  patcher-info <project-dir> [--rom <clean-rom>]\n  oracle <rom> <data-dir>\n  serve [<root>] [--rom-sessions] [--bind <address>] [--port <port>] [--data <dir>] [--ncpatcher <path>] [--xdelta <path>]\n"
     );
-}
-
-fn read_header(path: &Path) -> Result<RomHeader, String> {
-    let data = read_file_prefix(path, DEFAULT_HEADER_REGION_SIZE).map_err(|e| e.message)?;
-    parse_rom_header(&data).map_err(|e| e.message)
-}
-
-fn count_graphics_candidates(project: &Project) -> usize {
-    project
-        .game_files()
-        .iter()
-        .filter(|file| identify_graphics_format(&[], &file.path.to_string_lossy().replace('\\', "/")) != GraphicsFormatKind::Unknown)
-        .count()
 }
 
 fn inspect_rom(path: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
@@ -54,78 +39,23 @@ fn inspect_rom(path: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     }
 }
 
-fn import_rom(rom_path: &Path, project_dir: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    if let Err(e) = std::fs::create_dir_all(project_dir) {
-        let _ = writeln!(err, "Could not create project directory: {e}");
-        return 4;
-    }
-    let manifest = project_dir.join(MANIFEST_FILE_NAME);
-    match manifest.try_exists() {
-        Err(e) => {
-            let _ = writeln!(err, "Could not inspect project directory: {e}");
-            return 4;
-        }
-        Ok(true) => {
-            let _ = writeln!(err, "Project already exists: \"{}\"", manifest.display());
-            return 4;
-        }
-        Ok(false) => {}
-    }
-
-    let header = match read_header(rom_path) {
-        Ok(header) => header,
-        Err(message) => {
-            let _ = writeln!(err, "{message}");
-            // Unreadable and unparseable are different failures, as they are in `inspect-rom`.
-            return if read_file_prefix(rom_path, 1).is_err() { 5 } else { 6 };
-        }
-    };
-
-    // The ROM is read where it lies rather than unpacked, so importing one is copying it in and reading its table --
-    // and a manifest path has to stay inside the project, so a ROM from elsewhere is copied rather than pointed at.
-    let imported = project_dir.join(INPUT_ROM_FILE_NAME);
-    let same_file = match (std::fs::canonicalize(rom_path), std::fs::canonicalize(&imported)) {
-        (Ok(a), Ok(b)) => a == b,
-        _ => false,
-    };
-    if !same_file && let Err(e) = std::fs::copy(rom_path, &imported) {
-        let _ = writeln!(err, "Could not copy the ROM into the project: {e}");
-        return 7;
-    }
-
-    let mut project_name = project_dir.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
-    if project_name.is_empty() || project_name == "." {
-        project_name = if header.game_title.is_empty() { "Imported ROM".to_owned() } else { header.game_title.clone() };
-    }
-    let mut project = match create_empty_project(project_name, project_dir) {
-        Ok(project) => project,
-        Err(e) => {
-            let _ = writeln!(err, "{}", e.message);
-            return 8;
-        }
-    };
-    project.attach_rom(PathBuf::from(INPUT_ROM_FILE_NAME), Some(header));
-    if let Err(e) = index_rom_files(&mut project).and_then(|()| save_manifest(&project, &manifest)) {
-        let _ = writeln!(err, "{}", e.message);
-        return 8;
-    }
-
-    let _ = write!(
-        out,
-        "Imported ROM into \"{}\"\nFiles indexed: {}\nGraphics candidates: {}\n",
-        project_dir.display(),
-        project.game_files().len(),
-        count_graphics_candidates(&project)
-    );
-    0
-}
-
 const NCPATCHER: &str = "ncpatcher";
 
-/// `run-patcher <project-dir> [--variant <name>]`: one NCPatcher build, its progress and diagnostics on stderr. A
-/// project that configures variants requires an explicit one, so NCPatcher cannot silently build the wrong language.
-fn run_patcher(executable: &str, project_dir: &Path, variant: &str, err: &mut dyn Write) -> i32 {
-    let client = NCPatcherClient::new(executable).with_logger(std::sync::Arc::new(|level, message| {
+/// NCPatcher for `project_dir`, handed `rom`, or else the clean ROM the editor remembers for the project:
+/// `ncpatcher.yaml` names none.
+fn client_for(executable: &str, project_dir: &Path, rom: Option<&Path>) -> NCPatcherClient {
+    let client = NCPatcherClient::new(executable);
+    match rom.map(Path::to_path_buf).or_else(|| stored_clean_rom(project_dir)) {
+        Some(rom) => client.with_rom(rom),
+        None => client,
+    }
+}
+
+/// `run-patcher <project-dir> [--variant <name>] [--rom <clean-rom>]`: one NCPatcher build, its progress and
+/// diagnostics on stderr. A project that configures variants requires an explicit one, so NCPatcher cannot silently
+/// build the wrong language.
+fn run_patcher(executable: &str, project_dir: &Path, variant: &str, rom: Option<&Path>, err: &mut dyn Write) -> i32 {
+    let client = client_for(executable, project_dir, rom).with_logger(std::sync::Arc::new(|level, message| {
         let name = match level {
             log::Level::Error => "error",
             log::Level::Warn => "warning",
@@ -153,9 +83,9 @@ fn run_patcher(executable: &str, project_dir: &Path, variant: &str, err: &mut dy
     summary.exit_code
 }
 
-/// `patcher-info <project-dir>`: what the project says about itself, without building it.
-fn patcher_info(executable: &str, project_dir: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let client = NCPatcherClient::new(executable);
+/// `patcher-info <project-dir> [--rom <clean-rom>]`: what the project says about itself, without building it.
+fn patcher_info(executable: &str, project_dir: &Path, rom: Option<&Path>, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let client = client_for(executable, project_dir, rom);
     let version = match client.version() {
         Ok(version) => version,
         Err(e) => {
@@ -310,6 +240,19 @@ fn serve(args: &[&str], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     })
 }
 
+/// `--variant <name>` (when `variant` is allowed) and `--rom <path>`, each at most once; `None` for anything else.
+fn patcher_options<'a>(words: &[&'a str], variant: bool) -> Option<(&'a str, Option<&'a Path>)> {
+    let (mut chosen, mut rom) = (None, None);
+    for pair in words.chunks(2) {
+        match pair {
+            ["--variant", name] if variant && chosen.is_none() => chosen = Some(*name),
+            ["--rom", path] if rom.is_none() => rom = Some(Path::new(*path)),
+            _ => return None,
+        }
+    }
+    Some((chosen.unwrap_or_default(), rom))
+}
+
 /// Runs one invocation (without the program name) and returns the process exit code.
 pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let words: Vec<&str> = args.iter().map(String::as_str).collect();
@@ -319,15 +262,21 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
             0
         }
         ["inspect-rom", path] => inspect_rom(Path::new(path), out, err),
-        ["import-rom", rom, dir] => import_rom(Path::new(rom), Path::new(dir), out, err),
-        ["run-patcher", dir] => run_patcher(NCPATCHER, Path::new(dir), "", err),
-        ["run-patcher", dir, "--variant", variant] => run_patcher(NCPATCHER, Path::new(dir), variant, err),
-        ["run-patcher", _, _, _] => {
-            usage(out);
-            2
-        }
-        ["patcher-info", dir] => patcher_info(NCPATCHER, Path::new(dir), out, err),
-        ["oracle", dir, data] => crate::oracle::oracle(Path::new(dir), Path::new(data), out, err),
+        ["run-patcher", dir, rest @ ..] => match patcher_options(rest, true) {
+            Some((variant, rom)) => run_patcher(NCPATCHER, Path::new(dir), variant, rom, err),
+            None => {
+                usage(out);
+                2
+            }
+        },
+        ["patcher-info", dir, rest @ ..] => match patcher_options(rest, false) {
+            Some((_, rom)) => patcher_info(NCPATCHER, Path::new(dir), rom, out, err),
+            None => {
+                usage(out);
+                2
+            }
+        },
+        ["oracle", rom, data] => crate::oracle::oracle(Path::new(rom), Path::new(data), out, err),
         ["serve", rest @ ..] => serve(rest, out, err),
         _ => {
             usage(out);
@@ -339,7 +288,6 @@ pub fn run(args: &[String], out: &mut dyn Write, err: &mut dyn Write) -> i32 {
 #[cfg(test)]
 mod tests {
     use bigstar_project::test_support::{RomFile, TempDir, make_rom, write_bytes};
-    use bigstar_project::{MANIFEST_FILE_NAME, load_manifest};
 
     use super::run;
 
@@ -360,7 +308,8 @@ mod tests {
         assert_eq!((code, out), (0, format!("bigstar-host {}\n", env!("CARGO_PKG_VERSION"))));
         let (code, out, _) = invoke(&[]);
         assert_eq!(code, 1);
-        assert!(out.contains("import-rom <rom> <project-dir>"));
+        assert!(out.contains("patcher-info <project-dir> [--rom <clean-rom>]"));
+        assert!(!out.contains("import-rom"));
         assert_eq!(invoke(&["inspect-rom"]).0, 1);
     }
 
@@ -368,20 +317,24 @@ mod tests {
     fn patcher_verbs_check_their_arguments_and_report_a_missing_tool() {
         let (code, out, _) = invoke(&["run-patcher", "p", "--colour", "fr"]);
         assert_eq!(code, 2);
-        assert!(out.contains("run-patcher <project-dir> [--variant <name>]"));
+        assert!(out.contains("run-patcher <project-dir> [--variant <name>] [--rom <clean-rom>]"));
         assert_eq!(invoke(&["run-patcher"]).0, 1);
         assert_eq!(invoke(&["patcher-info"]).0, 1);
+        assert_eq!(invoke(&["patcher-info", "p", "--variant", "fr"]).0, 2, "patcher-info builds nothing, so it takes no variant");
+        assert_eq!(invoke(&["run-patcher", "p", "--rom", "a.nds", "--rom", "b.nds"]).0, 2);
+        assert_eq!(super::patcher_options(&["--rom", "c.nds", "--variant", "fr"], true), Some(("fr", Some(std::path::Path::new("c.nds")))));
+        assert_eq!(super::patcher_options(&[], true), Some(("", None)));
 
         let dir = TempDir::new("cli-patcher");
         std::fs::write(dir.path().join("ncpatcher.yaml"), "version: 2\n").unwrap();
         let (mut out, mut err) = (Vec::new(), Vec::new());
-        assert_eq!(super::patcher_info("big-star-no-such-tool-anywhere", dir.path(), &mut out, &mut err), 10);
+        assert_eq!(super::patcher_info("big-star-no-such-tool-anywhere", dir.path(), None, &mut out, &mut err), 10);
         assert!(String::from_utf8_lossy(&err).contains("could not run"));
-        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", dir.path(), "fr", &mut err), 10);
+        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", dir.path(), "fr", None, &mut err), 10);
         // No configuration at all is a missing project, reported before anything is launched.
         let empty = TempDir::new("cli-patcher-empty");
         let mut err = Vec::new();
-        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", empty.path(), "", &mut err), 10);
+        assert_eq!(super::run_patcher("big-star-no-such-tool-anywhere", empty.path(), "", None, &mut err), 10);
         assert!(String::from_utf8_lossy(&err).contains("no ncpatcher.yaml"));
     }
 
@@ -390,15 +343,13 @@ mod tests {
         let dir = TempDir::new("cli-oracle");
         let rom = dir.path().join("source.nds");
         write_bytes(&rom, &sample_rom());
-        let project = dir.path().join("Oracle");
-        assert_eq!(invoke(&["import-rom", &rom.to_string_lossy(), &project.to_string_lossy()]).0, 0);
         let data = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");
-        let (code, out, err) = invoke(&["oracle", &project.to_string_lossy(), &data.to_string_lossy()]);
+        let (code, out, err) = invoke(&["oracle", &rom.to_string_lossy(), &data.to_string_lossy()]);
         assert_eq!(code, 0, "{err}");
         assert!(out.starts_with("rom A2DE files=3\n"), "{out}");
         assert!(out.contains(" b/map.nscr graphics size=1\n"), "{out}");
         assert_eq!(out.lines().filter(|line| line.starts_with("actor ")).count(), 305);
-        assert_eq!(invoke(&["oracle", &dir.path().join("none").to_string_lossy(), &data.to_string_lossy()]).0, 2);
+        assert_eq!(invoke(&["oracle", &dir.path().join("none.nds").to_string_lossy(), &data.to_string_lossy()]).0, 2);
     }
 
     #[test]
@@ -430,30 +381,5 @@ mod tests {
         let junk = dir.path().join("junk.nds");
         write_bytes(&junk, b"short");
         assert_eq!(invoke(&["inspect-rom", &junk.to_string_lossy()]).0, 3);
-    }
-
-    #[test]
-    fn import_rom_creates_a_project_once() {
-        let dir = TempDir::new("cli-import");
-        let rom = dir.path().join("source.nds");
-        write_bytes(&rom, &sample_rom());
-        let project = dir.path().join("Imported");
-        let (code, out, err) = invoke(&["import-rom", &rom.to_string_lossy(), &project.to_string_lossy()]);
-        assert_eq!(code, 0, "{err}");
-        assert!(out.contains("Files indexed: 3\n"));
-        assert!(out.contains("Graphics candidates: 2\n"));
-        assert!(project.join("rom.nds").is_file());
-
-        let loaded = load_manifest(&project.join(MANIFEST_FILE_NAME)).unwrap();
-        assert_eq!(loaded.name(), "Imported");
-        assert_eq!(loaded.game_files().len(), 3);
-        assert_eq!(loaded.rom().unwrap().header.as_ref().unwrap().game_code, "A2DE");
-
-        let (code, _, err) = invoke(&["import-rom", &rom.to_string_lossy(), &project.to_string_lossy()]);
-        assert_eq!(code, 4);
-        assert!(err.contains("Project already exists"));
-
-        let (code, ..) = invoke(&["import-rom", &dir.path().join("none.nds").to_string_lossy(), &dir.path().join("Other").to_string_lossy()]);
-        assert_eq!(code, 5);
     }
 }

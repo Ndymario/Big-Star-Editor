@@ -82,9 +82,8 @@ fn addresses_workspace(request: &Request) -> bool {
         request,
         Request::ListProjects
             | Request::BrowseDirectory { .. }
-            | Request::CreateProject { .. }
-            | Request::ImportRom { .. }
             | Request::OpenProject { .. }
+            | Request::SetCleanRom { .. }
             | Request::OpenRom { .. }
             | Request::Xdelta { .. }
     )

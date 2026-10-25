@@ -38,9 +38,12 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
 - **ROMs directly**: **Open ROM…** on the desktop edits a `.nds` picked with the system's file dialog, as NSMB Editor
   does: no workspace, no project, and every save writes into the ROM, laid out the way NCPatcher lays out a replaced
   file. In the browser, a host started with `serve --rom-sessions` takes an uploaded ROM, keeps it in memory for that
-  connection alone, and gives it back as a download. Builds, variants and patches need a module project.
+  connection alone, and gives it back as a download. Builds, variants and patches need an NCPatcher project.
+- **NCPatcher projects** are folders with an `ncpatcher.yaml`; Big Star keeps no project file of its own. The clean
+  ROM a project builds from is not in `ncpatcher.yaml` either: it is asked for when a project opens without one, kept
+  in the project's `.big-star-workspace.json`, and passed to NCPatcher as `--rom`.
 - **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
-  and read the ROM a successful build produces. `.nsmbpatch` export/import and xdelta create/apply are in the
+  and read the ROM a successful build writes to the `rom.output` `ncpatcher.yaml` configures. `.nsmbpatch` export/import and xdelta create/apply are in the
   Distribution menu.
 - Recovery snapshots of unsaved levels, backups of what a save overwrites, and five interface languages (English,
   Dutch, Portuguese, Spanish, French), in Preferences.
@@ -88,13 +91,13 @@ Connecting without a token offers **Upload ROM…**. The ROM stays in the host's
 
 ```sh
 cargo run -p bigstar-host-app -- inspect-rom path/to/user_provided.nds
-cargo run -p bigstar-host-app -- import-rom path/to/user_provided.nds my-project
 cargo run -p bigstar-host-app -- run-patcher my-project --variant en
+cargo run -p bigstar-host-app -- patcher-info my-project --rom path/to/clean.nds
 ```
 
-`import-rom` copies the ROM into the project and writes `big-star-project.yaml` with project-relative paths. Nothing
-is unpacked: the ROM is read in place, through its own FAT and name table. Building a ROM is NCPatcher's job; see
-[NCPatcher integration](docs/ncpatcher-integration.md).
+`run-patcher` and `patcher-info` hand NCPatcher the clean ROM the editor remembers for the project, or the one
+`--rom` names. Nothing is unpacked: the ROM is read in place, through its own FAT and name table. Building a ROM is
+NCPatcher's job; see [NCPatcher integration](docs/ncpatcher-integration.md) and [Projects](docs/project-format.md).
 
 ## Tests
 

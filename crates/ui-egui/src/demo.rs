@@ -15,10 +15,10 @@ use bigstar_level::{
     ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice, SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DrawCommand, DrawKind, EditOutcome, Event, FileEntry, FileIcon,
-    FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit, LevelGraphics, LevelId, LevelSnapshot, LevelSummary,
-    LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode, ProjectSummary, RecoverableLevel, Request, RequestId, Response,
-    ResponseResult, TextureData, TilesetGraphics,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, DrawCommand,
+    DrawKind, EditOutcome, Event, FileEntry, FileIcon, FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit,
+    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode, ProjectSummary,
+    RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
@@ -505,6 +505,13 @@ impl DemoConnection {
         connection
     }
 
+    /// The demo project as one that has no clean ROM to build from yet, so opening it asks for one.
+    pub fn without_clean_rom() -> Self {
+        let mut connection = Self::new();
+        connection.settings.clean_rom_problem = Some("This project has no clean ROM to build from yet.".to_owned());
+        connection
+    }
+
     /// The demo host with its art and a level holding just `items`.
     pub fn with_level(items: LevelEntityInsertions) -> Self {
         let first = level_with(items).or_else(|_| level_with(LevelEntityInsertions::default()));
@@ -818,7 +825,7 @@ impl DemoConnection {
         let name = path.rsplit('/').next().unwrap_or(path).to_owned();
         ProjectInfo {
             path: path.to_owned(),
-            name: if mode == ProjectMode::Module { "Demo".to_owned() } else { name },
+            name: if mode == ProjectMode::NcPatcher { "Demo".to_owned() } else { name },
             rom_path: (mode != ProjectMode::Uploaded).then(|| "rom.nds".to_owned()),
             game_title: Some("NEW SUPER MARIO BROS".to_owned()),
             game_code: Some("A2DE".to_owned()),
@@ -830,7 +837,7 @@ impl DemoConnection {
     fn answer(&mut self, request: Request) -> ResponseResult {
         match request {
             Request::ListProjects => Ok(Response::Projects(vec![ProjectSummary { path: "demo".to_owned(), name: "Demo".to_owned() }])),
-            Request::OpenProject { .. } => Ok(Response::Project(Self::project_info(ProjectMode::Module, "demo"))),
+            Request::OpenProject { .. } => Ok(Response::Project(Self::project_info(ProjectMode::NcPatcher, "demo"))),
             Request::OpenRom { path } | Request::SaveRomAs { path } => Ok(Response::Project(Self::project_info(ProjectMode::Rom, &path))),
             Request::UploadRom { name, offset, total, bytes } => {
                 let received = offset + bytes.len() as u64;
@@ -1030,6 +1037,18 @@ impl DemoConnection {
                 Ok(Response::Done)
             }
             Request::ProjectSettings => Ok(Response::Settings(self.settings.clone())),
+            // The workspace holds the demo project and its clean ROM.
+            Request::BrowseDirectory { path } => {
+                let (kind, name) = if path.is_empty() { (DirectoryEntryKind::Directory, "demo") } else { (DirectoryEntryKind::File, "clean.nds") };
+                let entries = vec![DirectoryEntry { name: name.to_owned(), kind, size: 0 }];
+                Ok(Response::Directory(DirectoryListing { path, entries }))
+            }
+            Request::SetCleanRom { path } => {
+                self.settings.clean_rom = path;
+                self.settings.clean_rom_problem = None;
+                self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));
+                Ok(Response::Settings(self.settings.clone()))
+            }
             Request::SetActiveVariant { variant } => {
                 self.settings.active_variant = variant;
                 self.events.push(Incoming::Event(Event::SettingsChanged(self.settings.clone())));

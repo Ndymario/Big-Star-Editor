@@ -8,10 +8,17 @@ use bigstar_patching::{
     BuildObserver, DiagnosticLevel as PatcherLevel, NCPatcherStage, ProcessCancel, ProcessRequest, ProjectConfigKind, describe_stage,
     detect_project_config, run_process,
 };
-use bigstar_project::{BUILT_ROM_FILE_NAME, FilesystemStatus, PatchApplyOutcome, PatchApplyRequest, apply_patch_transactionally};
+use bigstar_project::{FilesystemStatus, PatchApplyOutcome, PatchApplyRequest, apply_patch_transactionally};
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
 use super::*;
+
+/// What a build reads and where it lands.
+struct BuildPaths {
+    clean_rom: PathBuf,
+    /// The active variant's output, as NCPatcher's configuration has it.
+    output: PathBuf,
+}
 
 fn level(level: PatcherLevel) -> DiagnosticLevel {
     match level {
@@ -69,36 +76,43 @@ impl Shared {
     }
 
     pub(super) fn build(self: &Arc<Self>, verbose: bool) -> Result<Response> {
-        let (directory, variant) = {
-            let state = lock(&self.state);
-            let open = state.open.as_ref().ok_or_else(no_project)?;
-            if open.rom.is_none() {
-                return Err(invalid("Open or import a ROM project first."));
-            }
-            (open.directory.clone(), open.settings.active_variant.clone())
-        };
-        if lock(&self.build).is_some() {
-            return Err(invalid("NCPatcher is already running."));
-        }
-        self.save_dirty_levels()?;
-        match detect_project_config(&directory).kind {
+        match detect_project_config(&self.project_directory()?).kind {
             ProjectConfigKind::None => return Err(invalid("This project has no ncpatcher.yaml, so there is nothing for NCPatcher to build.")),
             ProjectConfigKind::V1Json => {
                 return Err(invalid("This project still uses the legacy ncpatcher.json; convert it to ncpatcher.yaml before building."));
             }
             _ => {}
         }
+        let (directory, variant, clean_rom, output) = {
+            let mut state = lock(&self.state);
+            let open = state.open.as_mut().ok_or_else(no_project)?;
+            if let Some(problem) = &open.settings.clean_rom_problem {
+                return Err(invalid(format!("{problem} Choose one before building.")));
+            }
+            self.ensure_patcher(open);
+            let Some(output) = open.built_rom.clone() else {
+                return Err(invalid(open.settings.patcher_error.clone().unwrap_or_else(|| {
+                    "ncpatcher.yaml sets no rom.output, so a build would have nowhere to go but over the clean ROM.".to_owned()
+                })));
+            };
+            let clean_rom = clean_rom_file(&open.directory, &open.settings).unwrap_or_default();
+            (open.directory.clone(), open.settings.active_variant.clone(), clean_rom, output)
+        };
+        if lock(&self.build).is_some() {
+            return Err(invalid("NCPatcher is already running."));
+        }
+        self.save_dirty_levels()?;
         let cancel = Arc::new(ProcessCancel::new());
         *lock(&self.build) = Some(Arc::clone(&cancel));
         self.emit(Event::Build(BuildEvent::Started { variant: variant.clone() }));
         self.log(LogLevel::Info, format!("Running NCPatcher: {}", self.options.ncpatcher.display()));
         let shared = Arc::clone(self);
-        std::thread::spawn(move || shared.run_build(&directory, variant, verbose, cancel));
+        std::thread::spawn(move || shared.run_build(&directory, variant, BuildPaths { clean_rom, output }, verbose, cancel));
         Ok(Response::Done)
     }
 
     /// A build becomes the ROM the project reads only after the one it produced in staging has been validated.
-    fn run_build(self: &Arc<Self>, directory: &Path, variant: String, verbose: bool, cancel: Arc<ProcessCancel>) {
+    fn run_build(self: &Arc<Self>, directory: &Path, variant: String, paths: BuildPaths, verbose: bool, cancel: Arc<ProcessCancel>) {
         let mut observer = BuildObserver::default();
         let shared = Arc::clone(self);
         observer.on_progress = Some(Box::new(move |p| {
@@ -132,6 +146,8 @@ impl Shared {
             project_dir: directory.to_path_buf(),
             variant,
             ncpatcher_executable: self.options.ncpatcher.clone(),
+            clean_rom: paths.clean_rom,
+            output: paths.output,
             verbose,
             cancel: Some(cancel),
         };
@@ -201,13 +217,7 @@ impl Shared {
                 return;
             }
         };
-        // A build writes `big-star-build.nds`, which is not necessarily what the project was reading before.
-        let manifest = directory.join(MANIFEST_FILE_NAME);
-        let refreshed = load_manifest(&manifest).and_then(|mut project| {
-            project.attach_rom(BUILT_ROM_FILE_NAME, Some(reader.header().clone()));
-            index_rom_files_from(&mut project, &reader);
-            save_manifest(&project, &manifest)
-        });
+        // Before the first build of this variant the project was reading the clean ROM.
         open.index = RomIndex::new(&reader);
         open.rom = Some(reader);
         open.rom_file = Some(built_rom.to_path_buf());
@@ -218,9 +228,6 @@ impl Shared {
         open.banner = BannerTarget::Unreported;
         let settings = open.settings.clone();
         drop(state);
-        if let Err(error) = refreshed {
-            self.log(LogLevel::Warning, format!("NCPatcher completed, but the project manifest could not be refreshed: {}", error.message));
-        }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.emit(Event::GraphicsChanged { generation });
         self.emit(Event::SettingsChanged(settings));
@@ -239,14 +246,9 @@ impl Shared {
         let (directory, rom) = {
             let state = lock(&self.state);
             let open = state.open.as_ref().ok_or_else(no_project)?;
-            if open.rom.is_none() {
-                return Err(invalid("Open or import a ROM project first."));
-            }
-            (open.directory.clone(), open.directory.join(default_rom_path(&open.directory)))
+            let rom = open.rom_file.clone().ok_or_else(|| invalid("This project has no ROM to extract yet: choose its clean ROM, or build it."))?;
+            (open.directory.clone(), rom)
         };
-        if !rom.is_file() {
-            return Err(invalid("This project has no built ROM yet. Run NCPatcher first."));
-        }
         let output = self.workspace()?.resolve(target)?;
         let client = NCPatcherClient::new(&self.options.ncpatcher);
         let extracted = client.extract_rom(&directory, &output, &rom)?;
@@ -275,7 +277,7 @@ impl Shared {
             })
             .cloned()
             .collect();
-        let name = load_manifest(&directory.join(MANIFEST_FILE_NAME)).map(|project| project.name().to_owned()).unwrap_or_default();
+        let name = project_name(&directory);
         drop(state);
         let mut patch = Vec::new();
         for file in entries {

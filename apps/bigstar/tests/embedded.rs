@@ -73,11 +73,13 @@ fn until(harness: &mut Harness<'_, BigStarApp>, what: &str, done: impl Fn(&BigSt
 }
 
 #[test]
-fn import_open_drag_and_save_through_the_embedded_host() {
+fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
     let workspace = TempDir::new("embedded-app");
     let (course, bgdat) = level_files();
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat)], &[0; 32]);
     write_bytes(&workspace.path().join("roms/game.nds"), &rom);
+    // An NCPatcher project that names no ROM, as ncpatcher.yaml no longer does.
+    write_bytes(&workspace.path().join("game/ncpatcher.yaml"), b"version: 2\n");
 
     let services = EmbeddedServices { root: workspace.path().to_string_lossy().into_owned() };
     let app = BigStarApp::new(Box::new(services));
@@ -86,20 +88,29 @@ fn import_open_drag_and_save_through_the_embedded_host() {
 
     harness.get_by_label("Open").click();
     until(&mut harness, "the connection", |app| app.session().is_some_and(|s| s.connected()));
-    until(&mut harness, "the project list", |app| app.session().is_some_and(|s| s.projects.is_empty()));
+    until(&mut harness, "the project list", |app| app.session().is_some_and(|s| !s.projects.is_empty()));
 
-    harness.get_by_label("Import ROM…").click();
-    until(&mut harness, "the file browser", |app| app.session().and_then(|s| s.browser.as_ref()).is_some_and(|b| b.listing.is_some()));
+    // The project's name, and then its path beside it.
+    harness.query_all_by_label("game").next().unwrap().click();
+    // It has no clean ROM yet, so opening it asks for one, starting in the project.
+    until(&mut harness, "the clean ROM question", |app| {
+        app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path == "game")
+    });
+    harness.get_by_label("Up").click();
+    until(&mut harness, "the workspace root", |app| {
+        app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path.is_empty())
+    });
     harness.get_by_label("roms").click();
     until(&mut harness, "the roms folder", |app| {
         app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path == "roms")
     });
     harness.get_by_label("game.nds").click();
     harness.run();
-    harness.get_by_label("Import").click();
-    until(&mut harness, "the imported project to open", |app| app.session().is_some_and(|s| s.project.is_some() && !s.worlds.is_empty()));
+    harness.get_by_label("Use This ROM").click();
+    until(&mut harness, "the clean ROM's levels", |app| app.session().is_some_and(|s| s.browser.is_none() && !s.worlds.is_empty()));
+    assert!(workspace.path().join("game/.big-star-workspace.json").is_file());
     // A module to save into, as a build of the project would have recorded it; the host's watcher notices it.
-    let project = workspace.path().join("roms/game");
+    let project = workspace.path().join("game");
     let modules = format!(
         r#"{{"schema":"ncpatcher.modules/1","dir":"{dir}/modules","modules":[{{"key":"mine","id":"Mine","name":"My module","enabled":true,
             "dir":"{dir}/modules/mine","nitrofs":{{"dir":"{dir}/modules/mine/nitrofs"}},"components":[]}}]}}"#,

@@ -1,5 +1,5 @@
-//! `oracle <project> <data-dir>`: one line per fact about a project, so two builds of the editor can be diffed on a
-//! real ROM: every ROM file's format and the hash of what parsing and writing it back produces, every course's entities
+//! `oracle <rom> <data-dir>`: one line per fact about a ROM, so two builds of the editor can be diffed on a real
+//! one: every ROM file's format and the hash of what parsing and writing it back produces, every course's entities
 //! and decoded graphics, and every shipped actor's bounds and draw list at default settings. It began as the report
 //! the C++ `nsmb-cli oracle` printed, line for line, to check the port; only error codes are printed, not messages.
 
@@ -17,9 +17,9 @@ use bigstar_formats::{
 };
 use bigstar_level::{EditableLevel, SpriteBounds, rasterize_level_objects};
 use bigstar_project::{
-    ActorResource, ActorResourceKind, EffectiveFilesystem, LuaActorDrawKind, LuaActorLayer, LuaActorRenderInput, LuaTileLayer, MANIFEST_FILE_NAME,
-    RomReader, TileOverlayCatalog, has_lua_renderer, load_background_graphics, load_level_tilesets, load_lua_actor_layers, load_lua_tile_layers,
-    load_manifest, lua_actor_bounds, render_lua_actor, resolve_level_graphics,
+    ActorResource, ActorResourceKind, EffectiveFilesystem, LuaActorDrawKind, LuaActorLayer, LuaActorRenderInput, LuaTileLayer, RomReader,
+    TileOverlayCatalog, has_lua_renderer, load_background_graphics, load_level_tilesets, load_lua_actor_layers, load_lua_tile_layers,
+    lua_actor_bounds, render_lua_actor, resolve_level_graphics,
 };
 use sha2::{Digest, Sha256};
 
@@ -334,19 +334,8 @@ fn oracle_png(bytes: &[u8]) -> Result<RgbaImage> {
     Ok(RgbaImage { width, height, pixels: vec![0xff; width * height * 4] })
 }
 
-pub fn oracle(project_dir: &Path, data_dir: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
-    let manifest = match load_manifest(&project_dir.join(MANIFEST_FILE_NAME)) {
-        Ok(manifest) => manifest,
-        Err(error) => {
-            let _ = writeln!(err, "{}", error.message);
-            return 2;
-        }
-    };
-    let Some(rom) = manifest.rom() else {
-        let _ = writeln!(err, "the project has no ROM");
-        return 2;
-    };
-    let reader = match RomReader::open(project_dir.join(&rom.rom_path)) {
+pub fn oracle(rom: &Path, data_dir: &Path, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+    let reader = match RomReader::open(rom) {
         Ok(reader) => reader,
         Err(error) => {
             let _ = writeln!(err, "{}", error.message);

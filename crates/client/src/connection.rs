@@ -9,7 +9,7 @@ pub type Waker = Arc<dyn Fn() + Send + Sync>;
 pub struct HostInfo {
     pub host_version: String,
     pub workspace_name: String,
-    /// Whether the connection reaches a workspace of module projects. Without one it edits only ROMs: one it uploads,
+    /// Whether the connection reaches a workspace of NCPatcher projects. Without one it edits only ROMs: one it uploads,
     /// or, on the desktop, one picked on this machine.
     pub has_workspace: bool,
 }

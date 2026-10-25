@@ -10,6 +10,7 @@ mod watch;
 mod workspace;
 
 pub use host::{Host, HostOptions, HostSession, default_data_dir};
+pub use settings::stored_clean_rom;
 pub use workspace::Workspace;
 
 #[cfg(test)]

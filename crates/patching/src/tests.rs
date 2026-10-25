@@ -371,3 +371,14 @@ fn build_refuses_a_legacy_or_missing_project_before_launching() {
     let missing = BuildRequest { project_dir: std::env::temp_dir().join("big-star-no-project-here"), ..BuildRequest::default() };
     assert_eq!(client.build(&missing, &mut BuildObserver::default()).unwrap_err().code, ErrorCode::NotFound);
 }
+
+#[test]
+fn a_variant_builds_beside_the_configured_output() {
+    let config = ProjectConfig { rom_file: "/p/rom.nds".into(), rom_output: "/p/build/nds/rom.nds".into(), ..ProjectConfig::default() };
+    assert_eq!(config.build_output(""), Path::new("/p/build/nds/rom.nds"));
+    assert_eq!(config.build_output("en"), Path::new("/p/build/nds/rom_en.nds"));
+    // With no output the input ROM's name is the base, as NCPatcher has it.
+    let in_place = ProjectConfig { rom_file: "/roms/clean.nds".into(), ..ProjectConfig::default() };
+    assert_eq!(in_place.build_output("fr"), Path::new("/roms/clean_fr.nds"));
+    assert_eq!(ProjectConfig::default().build_output("fr"), Path::new(""));
+}

@@ -229,6 +229,19 @@ impl ProjectConfig {
     pub fn has_variant(&self, name: &str) -> bool {
         self.variants.iter().any(|variant| variant.name == name)
     }
+
+    /// Where NCPatcher writes a build of `variant` to a `.nds`: `rom.output`, or the input ROM without one, with
+    /// `_<variant>` before the extension when there is a variant. Empty when the project names neither, or patches an
+    /// extracted directory, which has no output of its own.
+    pub fn build_output(&self, variant: &str) -> PathBuf {
+        let base = if self.rom_output.as_os_str().is_empty() { &self.rom_file } else { &self.rom_output };
+        if base.as_os_str().is_empty() || variant.is_empty() {
+            return base.clone();
+        }
+        let stem = base.file_stem().map(|stem| stem.to_string_lossy().into_owned()).unwrap_or_default();
+        let extension = base.extension().map(|extension| format!(".{}", extension.to_string_lossy())).unwrap_or_default();
+        base.with_file_name(format!("{stem}_{variant}{extension}"))
+    }
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -650,8 +663,8 @@ pub struct BuildRequest {
     /// Empty means the project configures no variants. When it does configure some, NCPatcher requires an explicit
     /// selection so a build cannot silently produce the wrong language.
     pub variant: String,
-    /// Patch a ROM other than the project's own, and write the result somewhere other than in place. Both are what
-    /// makes a transactional apply possible.
+    /// Patch a ROM other than the client's clean one, and write the result somewhere other than in place. The output
+    /// is what makes a transactional apply possible.
     pub rom_override: PathBuf,
     pub output_override: PathBuf,
     pub verbose: bool,
@@ -663,9 +676,13 @@ pub struct BuildRequest {
 /// Where the client's own log lines go. The default forwards to the `log` crate.
 pub type LogSink = Arc<dyn Fn(log::Level, &str) + Send + Sync>;
 
+#[derive(Clone)]
 pub struct NCPatcherClient {
     executable: PathBuf,
     logger: LogSink,
+    /// The clean ROM, passed as `--rom` to every command that reads the project. The editor keeps it per project
+    /// rather than in `ncpatcher.yaml`, which names none. Empty leaves the configuration to say.
+    rom: PathBuf,
 }
 
 impl Default for NCPatcherClient {
@@ -690,7 +707,12 @@ fn read_text(path: &Path) -> Result<String> {
 
 impl NCPatcherClient {
     pub fn new(executable: impl Into<PathBuf>) -> Self {
-        Self { executable: executable.into(), logger: Arc::new(|level, message| log::log!(level, "{message}")) }
+        Self { executable: executable.into(), logger: Arc::new(|level, message| log::log!(level, "{message}")), rom: PathBuf::new() }
+    }
+
+    pub fn with_rom(mut self, rom: impl Into<PathBuf>) -> Self {
+        self.rom = rom.into();
+        self
     }
 
     pub fn with_logger(mut self, logger: LogSink) -> Self {
@@ -724,8 +746,15 @@ impl NCPatcherClient {
         Error::new(ErrorCode::ExternalToolFailed, format!("{}:\n{}", describe_stage(stage_from_exit_code(run.exit_code)), run.stderr_text))
     }
 
-    fn project_arguments(project_dir: &Path) -> Vec<String> {
-        vec!["-C".to_owned(), project_dir.to_string_lossy().into_owned()]
+    /// `-C`, and `--rom` with `rom` or else the client's clean ROM.
+    fn project_arguments(&self, project_dir: &Path, rom: &Path) -> Vec<String> {
+        let mut arguments = vec!["-C".to_owned(), project_dir.to_string_lossy().into_owned()];
+        let rom = if rom.as_os_str().is_empty() { &self.rom } else { rom };
+        if !rom.as_os_str().is_empty() {
+            arguments.push("--rom".to_owned());
+            arguments.push(rom.to_string_lossy().into_owned());
+        }
+        arguments
     }
 
     /// Preflight. Answers whether the configured executable exists and runs.
@@ -738,7 +767,7 @@ impl NCPatcherClient {
     }
 
     pub fn dump_config(&self, project_dir: &Path) -> Result<ProjectConfig> {
-        let mut arguments = Self::project_arguments(project_dir);
+        let mut arguments = self.project_arguments(project_dir, Path::new(""));
         arguments.extend(["config", "dump", "--json"].map(str::to_owned));
         let run = self.capture(project_dir, arguments)?;
         if run.exit_code != 0 {
@@ -751,7 +780,7 @@ impl NCPatcherClient {
         // The result file is where the structured diagnostics live; stdout in JSON message mode carries the same
         // events as they happen.
         let result_file = temp_result_file("big-star-ncpatcher-validate.json");
-        let mut arguments = Self::project_arguments(project_dir);
+        let mut arguments = self.project_arguments(project_dir, Path::new(""));
         arguments.extend(["--message-format", "json", "--result"].map(str::to_owned));
         arguments.push(result_file.to_string_lossy().into_owned());
         arguments.extend(["config", "validate"].map(str::to_owned));
@@ -765,7 +794,7 @@ impl NCPatcherClient {
     }
 
     pub fn dump_modules(&self, project_dir: &Path) -> Result<ModuleGraph> {
-        let mut arguments = Self::project_arguments(project_dir);
+        let mut arguments = self.project_arguments(project_dir, Path::new(""));
         arguments.extend(["modules", "dump"].map(str::to_owned));
         let run = self.capture(project_dir, arguments)?;
         if run.exit_code != 0 {
@@ -775,13 +804,9 @@ impl NCPatcherClient {
     }
 
     /// Reads a ROM's file table, without provenance. `rom_override` points at a ROM or an extracted directory other
-    /// than the project's (empty for the project's own).
+    /// than the clean one (empty for the clean one).
     pub fn rom_files(&self, project_dir: &Path, rom_override: &Path) -> Result<FileManifest> {
-        let mut arguments = Self::project_arguments(project_dir);
-        if !rom_override.as_os_str().is_empty() {
-            arguments.push("--rom".to_owned());
-            arguments.push(rom_override.to_string_lossy().into_owned());
-        }
+        let mut arguments = self.project_arguments(project_dir, rom_override);
         arguments.extend(["rom", "files", "--json"].map(str::to_owned));
         let run = self.capture(project_dir, arguments)?;
         if run.exit_code != 0 {
@@ -793,11 +818,7 @@ impl NCPatcherClient {
     /// Unpacks a ROM into a directory NCPatcher itself can read back. There is one extractor and one layout on
     /// purpose.
     pub fn extract_rom(&self, project_dir: &Path, output_dir: &Path, rom_override: &Path) -> Result<RunSummary> {
-        let mut arguments = Self::project_arguments(project_dir);
-        if !rom_override.as_os_str().is_empty() {
-            arguments.push("--rom".to_owned());
-            arguments.push(rom_override.to_string_lossy().into_owned());
-        }
+        let mut arguments = self.project_arguments(project_dir, rom_override);
         arguments.extend(["rom", "extract"].map(str::to_owned));
         arguments.push(output_dir.to_string_lossy().into_owned());
         let run = self.capture(project_dir, arguments)?;
@@ -817,7 +838,7 @@ impl NCPatcherClient {
     /// Asks what a build would place, without building. The answer is the same document a build writes, with
     /// `planned` set and prospective ids for the files it would append.
     pub fn plan_files(&self, project_dir: &Path, variant: &str) -> Result<FileManifest> {
-        let mut arguments = Self::project_arguments(project_dir);
+        let mut arguments = self.project_arguments(project_dir, Path::new(""));
         if !variant.is_empty() {
             arguments.push("--variant".to_owned());
             arguments.push(variant.to_owned());
@@ -859,11 +880,7 @@ impl NCPatcherClient {
         }
 
         let result_file = temp_result_file("big-star-ncpatcher-build.json");
-        let mut arguments = Self::project_arguments(&request.project_dir);
-        if !request.rom_override.as_os_str().is_empty() {
-            arguments.push("--rom".to_owned());
-            arguments.push(request.rom_override.to_string_lossy().into_owned());
-        }
+        let mut arguments = self.project_arguments(&request.project_dir, &request.rom_override);
         if !request.output_override.as_os_str().is_empty() {
             arguments.push("--out".to_owned());
             arguments.push(request.output_override.to_string_lossy().into_owned());
@@ -978,7 +995,8 @@ impl NCPatcherClient {
     /// unchanged.
     pub fn migrate(&self, project_dir: &Path, write: bool) -> Result<RunSummary> {
         let result_file = temp_result_file("big-star-ncpatcher-migrate.json");
-        let mut arguments = Self::project_arguments(project_dir);
+        // A legacy configuration names its own ROM, so the clean one is not passed.
+        let mut arguments = vec!["-C".to_owned(), project_dir.to_string_lossy().into_owned()];
         arguments.extend(["--message-format", "json", "--result"].map(str::to_owned));
         arguments.push(result_file.to_string_lossy().into_owned());
         arguments.push("migrate".to_owned());

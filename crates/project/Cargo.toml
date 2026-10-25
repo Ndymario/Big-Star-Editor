@@ -1,6 +1,6 @@
 [package]
 name = "bigstar-project"
-description = "Big Star Editor project layer: manifests, in-place ROM reading and the level catalog"
+description = "Big Star Editor project layer: NCPatcher projects, in-place ROM reading and the level catalog"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

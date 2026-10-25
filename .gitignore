@@ -14,7 +14,7 @@ build-*/
 *.swp
 .cache/
 
-# Private cross-check references (SDK, code reference, module projects) — never committed
+# Private cross-check references (SDK, code reference, NCPatcher projects) — never committed
 deps/
 
 # macOS

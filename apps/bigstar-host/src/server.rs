@@ -335,13 +335,10 @@ mod tests {
         let Some(Incoming::Response { result: Ok(Response::Directory(listing)), .. }) = seen.last() else { panic!("{seen:?}") };
         assert_eq!(listing.entries.len(), 1);
 
-        let imported = answer(&mut connection, Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "p".into(), name: None });
-        assert!(matches!(imported, Ok(Response::Project(_))));
-        assert_eq!(
-            answer(&mut connection, Request::ImportRom { rom_path: "../x".into(), project_path: "q".into(), name: None }).unwrap_err().code,
-            ErrorCode::InvalidArgument
-        );
-        assert!(root.path().join("p/rom.nds").is_file());
+        write_bytes(&root.path().join("p/ncpatcher.yaml"), b"version: 2\n");
+        let Ok(Response::Projects(projects)) = answer(&mut connection, Request::ListProjects) else { panic!() };
+        assert_eq!(projects.iter().map(|p| p.path.as_str()).collect::<Vec<_>>(), ["p"]);
+        assert_eq!(answer(&mut connection, Request::OpenProject { path: "../x".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
 
         // Events reach a second connection.
         let mut other = WebSocket::connect(&websocket_url(&base, "secret"), "secret", None);

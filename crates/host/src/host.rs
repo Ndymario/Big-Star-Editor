@@ -9,12 +9,11 @@ use bigstar_formats::decompress_blz_overlay;
 use bigstar_level::{
     EditableLevel, LevelEntityInsertions, LevelPackage, LevelRecoverySnapshot, ModuleDataCatalog, decode_level_recovery, encode_level_recovery,
 };
-use bigstar_nds::{DEFAULT_HEADER_REGION_SIZE, parse_rom_header};
 use bigstar_patching::{FileManifest, ModuleGraph, ModuleInfo, NCPatcherClient};
 use bigstar_project::{
-    DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, INPUT_ROM_FILE_NAME, LevelCatalogArea, LevelCatalogEntry, MANIFEST_FILE_NAME,
-    Project, RomReader, build_filesystem_view, create_empty_project, default_rom_path, find_object_bank_overlays, index_rom_files_from,
-    load_manifest, load_module_data_catalog, module_file_target, nsmb_level_catalog, prune_patch_backups, save_manifest,
+    DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, LevelCatalogArea, LevelCatalogEntry, RomReader, build_filesystem_view,
+    find_object_bank_overlays, is_ncpatcher_project, load_module_data_catalog, module_file_target, nsmb_level_catalog, project_name, project_rom,
+    prune_patch_backups,
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
@@ -24,7 +23,7 @@ use bigstar_protocol::{
 
 use crate::graphics::ProjectGraphics;
 use crate::levels::{LevelFiles, RomIndex, Source, address, locate};
-use crate::settings::{load_settings, save_settings};
+use crate::settings::{clean_rom_file, clean_rom_problem, load_settings, relative_to_project, save_settings};
 use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
 
@@ -106,6 +105,8 @@ struct OpenProject {
     directory: PathBuf,
     rom: Option<RomReader>,
     rom_file: Option<PathBuf>,
+    /// Where NCPatcher writes the active variant's build, from its configuration; asked with the rest of it.
+    built_rom: Option<PathBuf>,
     index: RomIndex,
     catalog: ModuleDataCatalog,
     levels: BTreeMap<LevelId, LevelSession>,
@@ -142,7 +143,7 @@ struct State {
 }
 
 pub(crate) struct Shared {
-    /// The folder of module projects this host serves. A host that only edits ROMs has none.
+    /// The folder of NCPatcher projects this host serves. A host that only edits ROMs has none.
     workspace: Option<Workspace>,
     /// Whether ROMs may be opened and saved by their path on this machine: the desktop app's own host, never a served one.
     local_files: bool,
@@ -294,8 +295,6 @@ impl Shared {
         match request {
             Request::ListProjects => self.list_projects(),
             Request::BrowseDirectory { path } => self.browse(&path),
-            Request::CreateProject { path, name } => self.create_project(&path, &name),
-            Request::ImportRom { rom_path, project_path, name } => self.import_rom(&rom_path, &project_path, name.as_deref()),
             Request::OpenProject { path } => self.open_project(&path),
             Request::OpenRom { path } => self.open_rom(&path),
             Request::SaveRomAs { path } => self.save_rom_as(&path),
@@ -314,8 +313,9 @@ impl Shared {
             Request::ActorCatalog => self.actor_catalog(),
             Request::RenderActors { inputs } => self.render_actors(&inputs),
             Request::ProjectSettings => self.project_settings(),
-            Request::SetActiveVariant { variant } => self.module_only().and_then(|()| self.set_active_variant(variant)),
-            Request::SetActiveModule { module } => self.module_only().and_then(|()| self.set_active_module(module)),
+            Request::SetActiveVariant { variant } => self.ncpatcher_only().and_then(|()| self.set_active_variant(variant)),
+            Request::SetActiveModule { module } => self.ncpatcher_only().and_then(|()| self.set_active_module(module)),
+            Request::SetCleanRom { path } => self.ncpatcher_only().and_then(|()| self.set_clean_rom(&path)),
             Request::ProjectData => self.project_data(),
             Request::LevelBytes { level } => self.level_bytes(level),
             Request::FindEntities { sprites, id } => self.find_entities(sprites, id),
@@ -326,21 +326,21 @@ impl Shared {
             Request::ReadFile { path } => self.read_file(&path),
             Request::WriteFile { path, bytes } => self.write_file(&path, &bytes),
             Request::FileTargets { path } => self.file_targets(&path),
-            Request::RemoveFile { path } => self.module_only().and_then(|()| self.remove_file(&path)),
+            Request::RemoveFile { path } => self.ncpatcher_only().and_then(|()| self.remove_file(&path)),
             Request::Banner => self.banner(),
             Request::WriteBanner { bytes } => self.write_banner(&bytes),
             Request::TilesetResources { level } => self.tileset_resources(level),
             Request::WriteFiles { files } => self.write_files(&files),
-            Request::BuildConfig => self.module_only().and_then(|()| self.build_config()),
+            Request::BuildConfig => self.ncpatcher_only().and_then(|()| self.build_config()),
             Request::SetPreferences { autosave_minutes, backups_kept } => {
-                self.module_only().and_then(|()| self.set_preferences(autosave_minutes, backups_kept))
+                self.ncpatcher_only().and_then(|()| self.set_preferences(autosave_minutes, backups_kept))
             }
-            Request::MigrateConfig => self.module_only().and_then(|()| self.migrate_config()),
-            Request::Build { verbose } => self.module_only().and_then(|()| self.build(verbose)),
+            Request::MigrateConfig => self.ncpatcher_only().and_then(|()| self.migrate_config()),
+            Request::Build { verbose } => self.ncpatcher_only().and_then(|()| self.build(verbose)),
             Request::CancelBuild => self.cancel_build(),
-            Request::ExtractRom { directory } => self.module_only().and_then(|()| self.extract_rom(&directory)),
-            Request::ExportPatch => self.module_only().and_then(|()| self.export_patch()),
-            Request::ImportPatch { bytes, accept_id_mismatch } => self.module_only().and_then(|()| self.import_patch(&bytes, accept_id_mismatch)),
+            Request::ExtractRom { directory } => self.ncpatcher_only().and_then(|()| self.extract_rom(&directory)),
+            Request::ExportPatch => self.ncpatcher_only().and_then(|()| self.export_patch()),
+            Request::ImportPatch { bytes, accept_id_mismatch } => self.ncpatcher_only().and_then(|()| self.import_patch(&bytes, accept_id_mismatch)),
             Request::Xdelta { create, source, target, output } => self.xdelta(create, &source, &target, &output),
         }
     }
@@ -357,13 +357,9 @@ impl Shared {
         if depth > PROJECT_SEARCH_DEPTH || found.len() >= PROJECT_LIMIT {
             return;
         }
-        let manifest = directory.join(MANIFEST_FILE_NAME);
-        if manifest.is_file() {
+        if is_ncpatcher_project(directory) {
             if let Some(path) = self.workspace.as_ref().and_then(|workspace| workspace.relative(directory)) {
-                let name = load_manifest(&manifest)
-                    .map(|project| project.name().to_owned())
-                    .unwrap_or_else(|_| directory.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
-                found.push(ProjectSummary { path, name });
+                found.push(ProjectSummary { path, name: project_name(directory) });
             }
             return;
         }
@@ -402,105 +398,38 @@ impl Shared {
         Ok(Response::Directory(DirectoryListing { path, entries }))
     }
 
-    fn create_project(&self, path: &str, name: &str) -> Result<Response> {
-        let name = name.trim();
-        if name.is_empty() {
-            return Err(invalid("a project needs a name"));
-        }
-        let workspace = self.workspace()?;
-        let directory = workspace.resolve(path)?;
-        if directory == workspace.root() {
-            return Err(invalid("a project needs a directory of its own"));
-        }
-        let manifest = directory.join(MANIFEST_FILE_NAME);
-        if manifest.try_exists().map_err(|_| Error::new(ErrorCode::IoError, "could not inspect the project directory"))? {
-            return Err(invalid("a project already exists there"));
-        }
-        std::fs::create_dir_all(&directory).map_err(|_| Error::new(ErrorCode::IoError, "could not create the project directory"))?;
-        let project = create_empty_project(name, &directory)?;
-        save_manifest(&project, &manifest)?;
-        self.log(LogLevel::Info, format!("Created project \"{name}\""));
-        Ok(Response::Project(project_info(workspace, &directory, &project, None, 0)))
-    }
-
-    fn import_rom(&self, rom_path: &str, project_path: &str, name: Option<&str>) -> Result<Response> {
-        let workspace = self.workspace()?;
-        let rom = workspace.resolve(rom_path)?;
-        let directory = workspace.resolve(project_path)?;
-        if directory == workspace.root() {
-            return Err(invalid("a project needs a directory of its own"));
-        }
-        let manifest = directory.join(MANIFEST_FILE_NAME);
-        if manifest.try_exists().map_err(|_| Error::new(ErrorCode::IoError, "could not inspect the project directory"))? {
-            return Err(invalid("a project already exists there"));
-        }
-        let header = parse_rom_header(&read_file_prefix(&rom, DEFAULT_HEADER_REGION_SIZE)?)?;
-        std::fs::create_dir_all(&directory).map_err(|_| Error::new(ErrorCode::IoError, "could not create the project directory"))?;
-
-        let imported = directory.join(INPUT_ROM_FILE_NAME);
-        let same_file = matches!((std::fs::canonicalize(&rom), std::fs::canonicalize(&imported)), (Ok(a), Ok(b)) if a == b);
-        if !same_file {
-            std::fs::copy(&rom, &imported).map_err(|_| Error::new(ErrorCode::IoError, "could not copy the ROM into the project"))?;
-        }
-
-        let fallback = directory.file_name().map(|n| n.to_string_lossy().into_owned()).filter(|n| !n.is_empty());
-        let project_name = name
-            .map(str::trim)
-            .filter(|n| !n.is_empty())
-            .map(str::to_owned)
-            .or(fallback)
-            .unwrap_or_else(|| if header.game_title.is_empty() { "Imported ROM".to_owned() } else { header.game_title.clone() });
-        let mut project = create_empty_project(project_name, &directory)?;
-        project.attach_rom(INPUT_ROM_FILE_NAME, Some(header));
-        let reader = RomReader::open(&imported)?;
-        index_rom_files_from(&mut project, &reader);
-        save_manifest(&project, &manifest)?;
-        self.log(LogLevel::Info, format!("Imported the ROM into \"{}\" ({} files)", project.name(), project.game_files().len()));
-        Ok(Response::Project(project_info(workspace, &directory, &project, Some(INPUT_ROM_FILE_NAME.to_owned()), reader.files().len())))
-    }
-
     fn open_project(self: &Arc<Self>, path: &str) -> Result<Response> {
         let workspace = self.workspace()?;
         let directory = workspace.resolve(path)?;
+        if !is_ncpatcher_project(&directory) {
+            return Err(not_found("that directory is not an NCPatcher project: it has no ncpatcher.yaml"));
+        }
         let mut state = lock(&self.state);
         // Another frontend opening the project that is open joins it, as a level opened twice is one session: reopening
         // would close everyone's levels.
         if let Some(open) = state.open.as_ref().filter(|open| !open.backing.is_rom() && open.directory == directory) {
-            let project = load_manifest(&directory.join(MANIFEST_FILE_NAME))?;
-            let rom_path = open.rom_file.as_ref().map(|file| file.strip_prefix(&directory).unwrap_or(file).to_string_lossy().replace('\\', "/"));
-            let file_count = open.rom.as_ref().map_or(0, |rom| rom.files().len());
-            return Ok(Response::Project(project_info(workspace, &directory, &project, rom_path, file_count)));
+            return Ok(Response::Project(project_info(workspace, &directory, open.rom.as_ref(), open.rom_file.as_deref())));
         }
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
             return Err(invalid("save or close the open levels before opening another project"));
         }
-        let project = load_manifest(&directory.join(MANIFEST_FILE_NAME))?;
-        let relative_rom = default_rom_path(&directory);
-        let rom_file = directory.join(&relative_rom);
-        let (rom, rom_path) = if rom_file.is_file() {
-            (Some(RomReader::open(&rom_file)?), Some(relative_rom.to_string_lossy().replace('\\', "/")))
-        } else {
-            (None, None)
-        };
         let mut settings = load_settings(&directory);
         if settings.generated_path.is_empty() {
             settings.generated_path = DEFAULT_GENERATED_DIR.to_owned();
         }
+        // A clean ROM that is missing or wrong does not keep the project shut: the frontend asks for another, and
+        // meanwhile the last build, if there is one, is still there to edit.
+        settings.clean_rom_problem = clean_rom_problem(&directory, &settings);
         // Backups accumulate for as long as somebody keeps working; a project that opens sheds the oldest.
         prune_patch_backups(&directory, open_backups_kept(&settings));
         let catalog = load_module_data_catalog(&directory, Path::new(&settings.generated_path))?;
-        let index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
-        let file_count = rom.as_ref().map_or(0, |rom| rom.files().len());
-        let info = project_info(workspace, &directory, &project, rom_path.clone(), file_count);
-        let had_project = state.open.is_some();
-        // A watcher that cannot start costs live refreshes, not the project.
-        let watcher =
-            ProjectWatcher::start(&directory, Arc::downgrade(self)).map_err(|e| log::warn!("not watching {}: {e}", directory.display())).ok();
-        state.open = Some(OpenProject {
-            directory,
-            rom,
-            rom_file: rom_file.is_file().then_some(rom_file),
-            index,
+        // Which ROM is read depends on where NCPatcher builds the active variant, so NCPatcher is asked first.
+        let mut opening = OpenProject {
+            directory: directory.clone(),
+            rom: None,
+            rom_file: None,
+            built_rom: None,
+            index: RomIndex::new_empty(),
             catalog,
             levels: BTreeMap::new(),
             next_level: 1,
@@ -510,9 +439,17 @@ impl Shared {
             filesystem: None,
             graphics: None,
             own_writes: std::collections::HashSet::new(),
-            _watcher: watcher,
-            backing: Backing::Module,
-        });
+            _watcher: None,
+            backing: Backing::NcPatcher,
+        };
+        self.ensure_patcher(&mut opening);
+        select_rom(&mut opening)?;
+        let info = project_info(workspace, &directory, opening.rom.as_ref(), opening.rom_file.as_deref());
+        let had_project = state.open.is_some();
+        // A watcher that cannot start costs live refreshes, not the project.
+        opening._watcher =
+            ProjectWatcher::start(&directory, Arc::downgrade(self)).map_err(|e| log::warn!("not watching {}: {e}", directory.display())).ok();
+        state.open = Some(opening);
         drop(state);
         if had_project {
             self.emit(Event::ProjectClosed);
@@ -698,7 +635,7 @@ impl Shared {
             open.patcher = Some(Default::default());
             return;
         }
-        let client = NCPatcherClient::new(&self.options.ncpatcher);
+        let client = self.ncpatcher(open);
         let mut errors = Vec::new();
         let config = client.dump_config(&open.directory).map_err(|e| errors.push(e.message)).ok();
         let modules = client.dump_modules(&open.directory).map_err(|e| errors.push(e.message)).ok();
@@ -718,6 +655,12 @@ impl Shared {
                 }
             }
         };
+        // A build that would land on the clean ROM itself is no build to read; NCPatcher would be patching it in place.
+        let clean_rom = clean_rom_file(&open.directory, &open.settings);
+        open.built_rom = config
+            .as_ref()
+            .map(|config| config.build_output(&open.settings.active_variant))
+            .filter(|output| !output.as_os_str().is_empty() && Some(output) != clean_rom.as_ref());
         open.settings.variants = config.map(|config| config.variants.into_iter().map(|variant| variant.name).collect()).unwrap_or_default();
         // Without NCPatcher, the last build's own record of the modules still says where their trees are.
         let modules = modules.or_else(|| {
@@ -1249,6 +1192,8 @@ impl Shared {
         open.graphics = None;
         save_settings(&open.directory, &open.settings)?;
         self.ensure_patcher(open);
+        // Each variant builds to a ROM of its own.
+        select_rom(open)?;
         let settings = open.settings.clone();
         drop(state);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
@@ -1284,6 +1229,48 @@ impl Shared {
         let settings = open.settings.clone();
         drop(state);
         self.emit(Event::SettingsChanged(settings.clone()));
+        Ok(Response::Settings(settings))
+    }
+
+    /// NCPatcher, handed the open project's clean ROM when it has a usable one.
+    fn ncpatcher(&self, open: &OpenProject) -> NCPatcherClient {
+        let client = NCPatcherClient::new(&self.options.ncpatcher);
+        match clean_rom_file(&open.directory, &open.settings).filter(|_| open.settings.clean_rom_problem.is_none()) {
+            Some(rom) => client.with_rom(rom),
+            None => client,
+        }
+    }
+
+    /// Remembers the clean ROM the project builds from. Before a first build it is also the ROM the editor reads, so
+    /// that is reopened, and NCPatcher is asked again now that it has a ROM to answer about.
+    fn set_clean_rom(&self, path: &str) -> Result<Response> {
+        let file = self.workspace()?.resolve(path)?;
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        let mut settings = open.settings.clone();
+        settings.clean_rom = relative_to_project(&open.directory, &file);
+        if let Some(problem) = clean_rom_problem(&open.directory, &settings) {
+            return Err(invalid(problem));
+        }
+        // Before a first build the clean ROM is the one being edited, so the levels open on it go with it.
+        if open.levels.values().any(|session| session.level.dirty()) {
+            return Err(invalid("save or close the open levels before choosing another clean ROM"));
+        }
+        settings.clean_rom_problem = None;
+        save_settings(&open.directory, &settings)?;
+        open.settings = settings;
+        open.patcher = None;
+        open.filesystem = None;
+        open.graphics = None;
+        open.banner = BannerTarget::Unreported;
+        self.ensure_patcher(open);
+        select_rom(open)?;
+        let settings = open.settings.clone();
+        drop(state);
+        self.log(LogLevel::Info, format!("The clean ROM is now {}", settings.clean_rom));
+        let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+        self.emit(Event::SettingsChanged(settings.clone()));
+        self.emit(Event::GraphicsChanged { generation });
         Ok(Response::Settings(settings))
     }
 
@@ -1388,7 +1375,7 @@ pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";
 /// writes nothing of it to disk.
 fn recovery_root(open: &OpenProject) -> Option<PathBuf> {
     match &open.backing {
-        Backing::Module => Some(open.directory.join(AUTOSAVE_DIR)),
+        Backing::NcPatcher => Some(open.directory.join(AUTOSAVE_DIR)),
         Backing::Rom(doc) => doc.file.as_ref().map(|file| open.directory.join(AUTOSAVE_DIR).join(file.file_name().unwrap_or_default())),
     }
 }
@@ -1466,16 +1453,34 @@ fn snapshot_and_event(id: LevelId, session: &LevelSession) -> (LevelSnapshot, Ev
     (snapshot(id, session), Event::LevelChanged { level: id, revision: session.revision, dirty: session.level.dirty() })
 }
 
-fn project_info(workspace: &Workspace, directory: &Path, project: &Project, rom_path: Option<String>, file_count: usize) -> ProjectInfo {
-    let header = project.rom().and_then(|rom| rom.header.as_ref());
+/// Reads the project's ROM: the active variant's build, or before there is one the clean ROM. A different ROM closes the
+/// levels open on the old one, so callers refuse unsaved edits first.
+fn select_rom(open: &mut OpenProject) -> Result<()> {
+    let clean_rom = clean_rom_file(&open.directory, &open.settings).filter(|_| open.settings.clean_rom_problem.is_none());
+    let rom_file = project_rom(open.built_rom.as_deref(), clean_rom.as_deref());
+    if rom_file == open.rom_file && open.rom.is_some() == rom_file.is_some() {
+        return Ok(());
+    }
+    let rom = rom_file.as_deref().map(RomReader::open).transpose()?;
+    open.index = rom.as_ref().map(RomIndex::new).unwrap_or_else(RomIndex::new_empty);
+    open.rom = rom;
+    open.rom_file = rom_file;
+    open.levels.clear();
+    open.filesystem = None;
+    open.graphics = None;
+    Ok(())
+}
+
+fn project_info(workspace: &Workspace, directory: &Path, rom: Option<&RomReader>, rom_file: Option<&Path>) -> ProjectInfo {
+    let header = rom.map(RomReader::header);
     ProjectInfo {
         path: workspace.relative(directory).unwrap_or_default(),
-        name: project.name().to_owned(),
-        rom_path,
+        name: project_name(directory),
+        rom_path: rom_file.map(|file| relative_to_project(directory, file)),
         game_title: header.map(|h| h.game_title.clone()),
         game_code: header.map(|h| h.game_code.clone()),
-        file_count,
-        mode: bigstar_protocol::ProjectMode::Module,
+        file_count: rom.map_or(0, |rom| rom.files().len()),
+        mode: bigstar_protocol::ProjectMode::NcPatcher,
     }
 }
 

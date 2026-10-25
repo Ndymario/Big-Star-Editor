@@ -37,6 +37,14 @@ fn level_files() -> (Vec<u8>, Vec<u8>) {
     (level.serialize_course().unwrap(), level.serialize_bgdat().unwrap())
 }
 
+/// An NCPatcher project at `root/name`: its `ncpatcher.yaml`, and `rom` as the clean ROM its settings name.
+fn make_project(root: &std::path::Path, name: &str, rom: &[u8]) {
+    let project = root.join(name);
+    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
+    write_bytes(&project.join("rom.nds"), rom);
+    write_bytes(&project.join(".big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
+}
+
 struct Fixture {
     root: TempDir,
 }
@@ -46,7 +54,7 @@ impl Fixture {
         Self { root: TempDir::new(label) }
     }
 
-    /// `proj/` imported from a ROM that holds 1-1 and the Field download-play area.
+    /// `proj/`, built from a clean ROM that holds 1-1 and the Field download-play area.
     fn with_project(label: &str) -> (Self, HostSession) {
         let fixture = Self::new(label);
         let (course, bgdat) = level_files();
@@ -56,8 +64,8 @@ impl Fixture {
             &[0; 32],
         );
         write_bytes(&fixture.root.path().join("roms/game.nds"), &rom);
+        make_project(fixture.root.path(), "proj", &rom);
         let mut session = Host::new(fixture.root.path()).unwrap().session();
-        session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
         session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
         (fixture, session)
     }
@@ -130,13 +138,9 @@ fn workspace_refuses_symlinks_that_lead_out() {
 fn requests_cannot_reach_outside_the_root() {
     let fixture = Fixture::new("host-escape");
     let mut session = fixture.session();
-    for request in [
-        Request::BrowseDirectory { path: "..".into() },
-        Request::OpenProject { path: "/tmp".into() },
-        Request::CreateProject { path: "../elsewhere".into(), name: "x".into() },
-        Request::ImportRom { rom_path: "../game.nds".into(), project_path: "p".into(), name: None },
-        Request::ImportRom { rom_path: "game.nds".into(), project_path: "../p".into(), name: None },
-    ] {
+    for request in
+        [Request::BrowseDirectory { path: "..".into() }, Request::OpenProject { path: "/tmp".into() }, Request::OpenProject { path: "../p".into() }]
+    {
         assert_eq!(session.handle(request.clone()).unwrap_err().code, ErrorCode::InvalidArgument, "{request:?}");
     }
 }
@@ -158,37 +162,67 @@ fn browsing_lists_directories_first() {
 }
 
 #[test]
-fn projects_are_created_imported_listed_and_opened() {
+fn ncpatcher_projects_are_listed_and_opened() {
     let (fixture, mut session) = Fixture::with_project("host-projects");
-    let Response::Project(created) = session.handle(Request::CreateProject { path: "empty/one".into(), name: " Empty ".into() }).unwrap() else {
-        panic!()
-    };
-    assert_eq!((created.path.as_str(), created.name.as_str(), created.rom_path.as_deref()), ("empty/one", "Empty", None));
-    assert_eq!(
-        session.handle(Request::CreateProject { path: "empty/one".into(), name: "again".into() }).unwrap_err().code,
-        ErrorCode::InvalidArgument
-    );
-    assert_eq!(session.handle(Request::CreateProject { path: "x".into(), name: "  ".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    // A legacy configuration is a project too, to be offered migration; a manifest of Big Star's own is not.
+    write_bytes(&fixture.root.path().join("old/one/ncpatcher.json"), b"{}");
+    write_bytes(&fixture.root.path().join("retired/big-star-project.yaml"), b"format: big-star-editor-project\nversion: 3\nname: \"Old\"\n");
 
     let Response::Projects(projects) = session.handle(Request::ListProjects).unwrap() else { panic!() };
     let listed: Vec<(&str, &str)> = projects.iter().map(|p| (p.path.as_str(), p.name.as_str())).collect();
-    assert_eq!(listed, [("empty/one", "Empty"), ("proj", "proj")]);
+    assert_eq!(listed, [("old/one", "one"), ("proj", "proj")]);
+    assert_eq!(session.handle(Request::OpenProject { path: "retired".into() }).unwrap_err().code, ErrorCode::NotFound);
 
     let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
-    assert_eq!(info.rom_path.as_deref(), Some("rom.nds"));
+    assert_eq!((info.name.as_str(), info.rom_path.as_deref()), ("proj", Some("rom.nds")));
     assert_eq!(info.file_count, 3);
+    assert_eq!(info.mode, bigstar_protocol::ProjectMode::NcPatcher);
     assert!(info.game_code.is_some());
-    assert!(fixture.root.path().join("proj/rom.nds").is_file());
-    assert_eq!(
-        session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap_err().code,
-        ErrorCode::InvalidArgument
-    );
+    let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert_eq!((settings.clean_rom.as_str(), settings.clean_rom_problem.as_deref()), ("rom.nds", None));
 
-    // A project with no ROM opens and has no levels.
-    session.handle(Request::OpenProject { path: "empty/one".into() }).unwrap();
+    // A project with no clean ROM opens, has no levels, and says what it lacks.
+    session.handle(Request::OpenProject { path: "old/one".into() }).unwrap();
+    let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert!(settings.clean_rom_problem.unwrap().contains("no clean ROM"));
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
     assert!(worlds.iter().flat_map(|w| &w.levels).flat_map(|l| &l.areas).all(|a| !a.available));
     assert_eq!(session.handle(Request::OpenLevel { area: "A01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
+}
+
+#[test]
+fn the_clean_rom_is_asked_for_and_remembered() {
+    let fixture = Fixture::new("host-clean-rom");
+    let rom = make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]);
+    write_bytes(&fixture.root.path().join("roms/game.nds"), &rom);
+    write_bytes(&fixture.root.path().join("roms/junk.nds"), b"not a ROM");
+    write_bytes(&fixture.root.path().join("proj/ncpatcher.yaml"), b"version: 2\n");
+    // Named, but not there: opening says so rather than refusing the project.
+    write_bytes(&fixture.root.path().join("proj/.big-star-workspace.json"), br#"{"clean_rom": "gone.nds"}"#);
+    let mut session = fixture.session();
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!(info.rom_path, None);
+    let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert!(settings.clean_rom_problem.unwrap().contains("gone.nds"));
+    assert!(session.handle(Request::Build { verbose: false }).unwrap_err().message.contains("Choose one before building"));
+
+    assert_eq!(session.handle(Request::SetCleanRom { path: "roms/junk.nds".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    assert_eq!(session.handle(Request::SetCleanRom { path: "../game.nds".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    let Response::Settings(settings) = session.handle(Request::SetCleanRom { path: "roms/game.nds".into() }).unwrap() else { panic!() };
+    assert_eq!(settings.clean_rom_problem, None);
+    // Outside the project it is kept as it is; inside, relative to the project.
+    let stored = fixture.root.path().join("roms/game.nds").to_string_lossy().replace('\\', "/");
+    assert_eq!(settings.clean_rom, stored);
+    assert!(session.drain_events().iter().any(|event| matches!(event, Event::SettingsChanged(s) if s.clean_rom == stored)));
+    // Before a first build it is what the editor reads.
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!((info.rom_path.as_deref(), info.file_count), (Some(stored.as_str()), 1));
+
+    // Remembered for the next session, which finds nothing wrong with it.
+    let mut again = fixture.session();
+    let Response::Project(info) = again.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!(info.game_code.as_deref(), Some("A2DE"));
+    assert_eq!(crate::stored_clean_rom(&fixture.root.path().join("proj")), Some(fixture.root.path().join("roms/game.nds")));
 }
 
 #[test]
@@ -349,10 +383,8 @@ fn project_data_names_the_module_catalog() {
 fn a_real_rom_names_the_overlay_of_every_object_bank() {
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
     let fixture = Fixture::new("host-real-banks");
-    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
-    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
-    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::ProjectData(data) = session.handle(Request::ProjectData).unwrap() else { panic!() };
     let table = data.object_bank_overlays.expect("the clean ROM's bank table");
@@ -364,10 +396,8 @@ fn a_real_rom_names_the_overlay_of_every_object_bank() {
 fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
     let fixture = Fixture::new("host-real-tilesets");
-    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
-    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
-    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let snapshot = open_level(&mut session, "A01_1");
     let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
@@ -465,7 +495,7 @@ fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
 
 /// A project whose last build left a module graph naming module `mine` with a NitroFS tree.
 fn with_module(label: &str) -> (Fixture, HostSession) {
-    let (fixture, session) = Fixture::with_project(label);
+    let (fixture, mut session) = Fixture::with_project(label);
     let project = fixture.root.path().join("proj");
     let modules = format!(
         r#"{{"schema":"ncpatcher.modules/1","dir":"{dir}/modules","modules":[{{"key":"mine","id":"Mine","name":"My module","enabled":true,
@@ -474,7 +504,9 @@ fn with_module(label: &str) -> (Fixture, HostSession) {
     );
     write_bytes(&project.join("build/generated/modules.json"), modules.as_bytes());
     std::fs::create_dir_all(project.join("modules/mine/nitrofs")).unwrap();
-    // The host reads the graph the first time something needs it, which is after this.
+    // Opening a project asks NCPatcher about it, so it opens again to read the graph written here.
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     (fixture, session)
 }
 
@@ -635,7 +667,8 @@ fn download_play_areas_are_read_from_their_archive() {
 
 #[test]
 fn a_project_with_unsaved_levels_stays_open() {
-    let (_fixture, mut session) = Fixture::with_project("host-dirty");
+    let (fixture, mut session) = Fixture::with_project("host-dirty");
+    make_project(fixture.root.path(), "elsewhere", &std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap());
     let opened = open_level(&mut session, "A01_1");
     let moved = move_first_object(&mut session, &opened, 3);
     assert_eq!(session.handle(Request::CloseProject).unwrap_err().code, ErrorCode::InvalidArgument);
@@ -888,6 +921,8 @@ fn events_until(session: &mut HostSession, done: impl Fn(&Event) -> bool) -> Vec
 #[test]
 fn a_build_needs_a_yaml_config_and_a_legacy_one_is_offered_for_migration() {
     let (fixture, mut session) = Fixture::with_project("host-build-config");
+    assert_eq!(session.handle(Request::BuildConfig).unwrap(), Response::BuildConfig(bigstar_protocol::BuildConfigKind::Yaml));
+    std::fs::remove_file(fixture.root.path().join("proj/ncpatcher.yaml")).unwrap();
     assert_eq!(session.handle(Request::BuildConfig).unwrap(), Response::BuildConfig(bigstar_protocol::BuildConfigKind::None));
     let error = session.handle(Request::Build { verbose: false }).unwrap_err();
     assert_eq!(error.message, "This project has no ncpatcher.yaml, so there is nothing for NCPatcher to build.");
@@ -907,20 +942,27 @@ fn a_build_streams_what_it_does_and_its_rom_becomes_the_projects() {
     use std::os::unix::fs::PermissionsExt;
     let (fixture, _) = with_module("host-build");
     let project = fixture.root.path().join("proj");
-    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
-    // Builds by copying the project's ROM to `--out`, after one progress line, one diagnostic and one log line.
+    // Says its builds go to `build/rom.nds`, and builds by copying the clean ROM it is handed to `--out`, after one
+    // progress line, one diagnostic and one log line.
     let script = fixture.root.path().join("ncpatcher.sh");
     let text = format!(
         r#"#!/bin/sh
-out=""; prev=""; build=""
-for a in "$@"; do [ "$prev" = --out ] && out="$a"; [ "$a" = build ] && build=1; prev="$a"; done
+out=""; rom=""; prev=""; build=""; config=""
+for a in "$@"; do
+  [ "$prev" = --out ] && out="$a"; [ "$prev" = --rom ] && rom="$a"
+  [ "$a" = build ] && build=1; [ "$a" = config ] && config=1; prev="$a"
+done
+if [ -n "$config" ]; then
+  echo '{{"schema":"ncpatcher.config/1","version":2,"rom-file":"'"$rom"'","rom-output":"{output}","variants":{{}}}}'
+  exit 0
+fi
 [ -z "$build" ] && exit 3
 echo '{{"type":"progress","phase":"compile","current":1,"total":2,"item":"main.cpp"}}'
 echo '{{"type":"diagnostic","level":"warning","code":"NCP0100","message":"unused variable","location":{{"file":"src/main.cpp","line":3,"col":5}}}}'
 echo linking >&2
-cp {rom} "$out"
+cp "$rom" "$out"
 "#,
-        rom = bigstar_project::INPUT_ROM_FILE_NAME
+        output = project.join("build/rom.nds").display()
     );
     write_bytes(&script, text.as_bytes());
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -943,8 +985,11 @@ cp {rom} "$out"
     assert!(build.iter().any(|e| matches!(e, bigstar_protocol::BuildEvent::Log(line) if line == "linking")));
     let Some(bigstar_protocol::BuildEvent::Finished(outcome)) = build.last() else { panic!("{build:?}") };
     assert!(outcome.ok && outcome.applied, "{outcome:?}");
-    // The edit was saved first, the built ROM is the project's now, and every level session closed to read it.
-    assert!(project.join(bigstar_project::BUILT_ROM_FILE_NAME).is_file());
+    // The edit was saved first, the built ROM is where ncpatcher.yaml sends it and is the project's now, and every
+    // level session closed to read it.
+    assert!(project.join("build/rom.nds").is_file());
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!(info.rom_path.as_deref(), Some("build/rom.nds"));
     assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(_))));
     assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
     // The edit went into the module before the build; this stand-in does not build it in, NCPatcher does.
@@ -1077,10 +1122,8 @@ fn preferences_persist_and_saves_keep_that_many_backups() {
 fn real_backgrounds_and_foregrounds_draw() {
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
     let fixture = Fixture::new("host-real-backgrounds");
-    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
-    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
-    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let drawn = |session: &mut HostSession, area: &str| {
         let level = open_level(session, area).level;
@@ -1121,10 +1164,8 @@ fn real_backgrounds_are_named_and_animated() {
     use bigstar_level::BackgroundLayer;
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
     let fixture = Fixture::new("host-real-background-scripts");
-    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
-    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
-    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
     let areas: Vec<bigstar_protocol::AreaSummary> = worlds.into_iter().flat_map(|world| world.levels).flat_map(|level| level.areas).collect();
@@ -1274,7 +1315,7 @@ fn a_rom_edited_directly_replaces_files_and_members_but_adds_none() {
 }
 
 #[test]
-fn a_rom_edited_directly_refuses_what_needs_a_module_project() {
+fn a_rom_edited_directly_refuses_what_needs_an_ncpatcher_project() {
     let (_fixture, mut session, _) = with_rom("host-rom-refusals");
     for request in [
         Request::Build { verbose: false },
@@ -1459,8 +1500,8 @@ fn a_guest_reaches_nothing_but_what_it_uploads() {
     let workspace_requests = [
         Request::ListProjects,
         Request::BrowseDirectory { path: String::new() },
-        Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "p".into(), name: None },
         Request::OpenProject { path: "p".into() },
+        Request::SetCleanRom { path: "roms/game.nds".into() },
         Request::Xdelta { create: true, source: "roms/game.nds".into(), target: "roms/game.nds".into(), output: "x.xdelta".into() },
     ];
     for request in workspace_requests.iter().cloned().chain([Request::ListLevels, Request::CloseProject]) {
@@ -1470,10 +1511,10 @@ fn a_guest_reaches_nothing_but_what_it_uploads() {
     for request in workspace_requests {
         assert!(guest.handle(request.clone()).is_err(), "{request:?}");
     }
-    assert!(!fixture.root.path().join("p").exists());
     // And the workspace's own events are not the guest's to hear.
-    member.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "p".into(), name: None }).unwrap();
-    assert!(!guest.drain_events().iter().any(|event| matches!(event, Event::Log { message, .. } if message.contains("Imported"))));
+    make_project(fixture.root.path(), "p", &small_rom());
+    member.handle(Request::OpenProject { path: "p".into() }).unwrap();
+    assert!(!guest.drain_events().iter().any(|event| matches!(event, Event::Log { message, .. } if message.contains("Opened project"))));
 }
 
 #[test]
@@ -1577,10 +1618,8 @@ fn a_real_rom_uploads_and_downloads_in_pieces() {
 fn real_levels_load_the_banks_their_sprites_need() {
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
     let fixture = Fixture::new("host-real-sprite-banks");
-    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
-    std::fs::copy(rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
-    session.handle(Request::ImportRom { rom_path: "roms/game.nds".into(), project_path: "proj".into(), name: None }).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::ActorCatalog(catalog) = session.handle(Request::ActorCatalog).unwrap() else { panic!("not a catalog") };
     assert_eq!(catalog.sprite_banks.len(), 326);

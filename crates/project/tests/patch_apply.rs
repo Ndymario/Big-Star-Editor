@@ -8,8 +8,7 @@ use bigstar_core::ErrorCode;
 use bigstar_patching::BuildObserver;
 use bigstar_project::test_support::{RomFile, make_rom};
 use bigstar_project::{
-    PatchApplyOutcome, PatchApplyRequest, RomReader, apply_patch_transactionally, built_rom_path, patch_backup_root, patch_staging_dir,
-    prune_patch_backups,
+    PatchApplyOutcome, PatchApplyRequest, RomReader, apply_patch_transactionally, patch_backup_root, patch_staging_dir, prune_patch_backups,
 };
 
 const PREVIOUS_ROM: &str = "the ROM that was here before";
@@ -19,12 +18,18 @@ fn make_project(name: &str) -> PathBuf {
     let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("ncpatcher.yaml"), "version: 2\n").unwrap();
-    std::fs::write(root.join("big-star-build.nds"), PREVIOUS_ROM).unwrap();
+    std::fs::create_dir_all(root.join("build")).unwrap();
+    std::fs::write(output(&root), PREVIOUS_ROM).unwrap();
     root
 }
 
+/// The `rom.output` the project configures, where a build lands.
+fn output(project: &Path) -> PathBuf {
+    project.join("build/rom.nds")
+}
+
 fn previous_rom_is_untouched(project: &Path) -> bool {
-    std::fs::read(project.join("big-star-build.nds")).unwrap() == PREVIOUS_ROM.as_bytes()
+    std::fs::read(output(project)).unwrap() == PREVIOUS_ROM.as_bytes()
 }
 
 fn request_for(project: &Path, mode: &str) -> PatchApplyRequest {
@@ -34,6 +39,8 @@ fn request_for(project: &Path, mode: &str) -> PatchApplyRequest {
         project_dir: project.to_path_buf(),
         ncpatcher_executable: std::env::current_exe().unwrap(),
         variant: mode.to_owned(),
+        clean_rom: project.join("clean.nds"),
+        output: output(project),
         ..PatchApplyRequest::default()
     }
 }
@@ -82,8 +89,8 @@ fn successful_build_replaces_the_rom() {
     let result = apply(&request_for(&project, "fake-ok")).unwrap();
     assert_eq!(result.outcome, PatchApplyOutcome::Applied);
     assert!(result.summary.succeeded());
-    // The whole of the apply: one ROM arriving where the editor reads it.
-    assert_eq!(result.built_rom, built_rom_path(&project));
+    // The whole of the apply: one ROM arriving where the project configures, which is where the editor reads it.
+    assert_eq!(result.built_rom, output(&project));
     assert!(!previous_rom_is_untouched(&project));
     let mut reopened = RomReader::open(&result.built_rom).unwrap();
     assert_eq!(reopened.read("course.bin").unwrap(), b"LEVEL");
@@ -119,6 +126,15 @@ fn backups_are_pruned_per_kind() {
     let _ = std::fs::remove_dir_all(&project);
 }
 
+fn a_project_with_no_output_is_refused() {
+    // NCPatcher would patch the ROM it was handed in place, and that is the clean one.
+    let project = make_project("no-output");
+    let request = PatchApplyRequest { output: PathBuf::new(), ..request_for(&project, "fake-ok") };
+    assert_eq!(apply(&request).unwrap_err().code, ErrorCode::InvalidArgument);
+    assert!(previous_rom_is_untouched(&project));
+    let _ = std::fs::remove_dir_all(&project);
+}
+
 fn legacy_and_missing_projects_are_refused() {
     let legacy = std::env::temp_dir().join(format!("big-star-apply-legacy-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&legacy);
@@ -136,7 +152,8 @@ fn legacy_and_missing_projects_are_refused() {
 fn fake_ncpatcher(arguments: &[String]) -> i32 {
     let value = |flag: &str| arguments.windows(2).find(|pair| pair[0] == flag).map(|pair| pair[1].clone()).unwrap_or_default();
     let (mode, out, result_path) = (value("--variant"), value("--out"), value("--result"));
-    let ok = mode != "fake-fail";
+    // ncpatcher.yaml names no ROM, so a build that is not handed the clean one has nothing to patch.
+    let ok = mode != "fake-fail" && value("--rom").ends_with("clean.nds");
     let exit_code = if ok { 0 } else { 6 };
     if !result_path.is_empty() {
         let status = if ok { "ok" } else { "error" };
@@ -167,10 +184,11 @@ fn main() {
     if arguments.first().is_some_and(|a| a == "-C") {
         std::process::exit(fake_ncpatcher(&arguments));
     }
-    let tests: [(&str, fn()); 6] = [
+    let tests: [(&str, fn()); 7] = [
         ("build_failure_changes_nothing", build_failure_changes_nothing),
         ("success_without_a_rom_is_rejected", success_without_a_rom_is_rejected),
         ("unparseable_output_is_rejected", unparseable_output_is_rejected),
+        ("a_project_with_no_output_is_refused", a_project_with_no_output_is_refused),
         ("successful_build_replaces_the_rom", successful_build_replaces_the_rom),
         ("legacy_and_missing_projects_are_refused", legacy_and_missing_projects_are_refused),
         ("backups_are_pruned_per_kind", backups_are_pruned_per_kind),

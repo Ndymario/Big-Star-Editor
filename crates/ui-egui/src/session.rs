@@ -21,8 +21,8 @@ enum Pending {
     ListProjects,
     Browse,
     OpenProject,
-    ImportRom,
     SaveRomAs,
+    CleanRom,
     /// A piece of a ROM being uploaded; the last one's answer is the ROM opened.
     Upload,
     Download,
@@ -155,13 +155,12 @@ pub struct Notice {
     pub text: String,
 }
 
-/// The host-side file browser behind "Import ROM".
+/// The host-side file browser the clean ROM is chosen with.
 #[derive(Debug, Clone, Default)]
 pub struct Browser {
     pub path: String,
     pub listing: Option<DirectoryListing>,
     pub rom: Option<String>,
-    pub project_name: String,
 }
 
 const LOG_LIMIT: usize = 500;
@@ -212,6 +211,8 @@ pub struct Session {
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
+    /// Whether the open project has asked for its clean ROM already, so a dismissed question is not asked again.
+    clean_rom_asked: bool,
     /// How much of a ROM being uploaded the host holds, and of how much.
     pub upload: Option<(u64, u64)>,
     /// A download of the uploaded ROM under way: what has arrived of it.
@@ -272,6 +273,7 @@ impl Session {
             log: Vec::new(),
             notice: None,
             browser: None,
+            clean_rom_asked: false,
             upload: None,
             downloading: None,
             downloaded: None,
@@ -400,7 +402,7 @@ impl Session {
         self.project.as_ref().is_some_and(|project| project.mode == ProjectMode::Uploaded)
     }
 
-    /// Whether this connection reaches a workspace of module projects.
+    /// Whether this connection reaches a workspace of NCPatcher projects.
     pub fn has_workspace(&self) -> bool {
         matches!(&self.state, ConnectionState::Connected(info) if info.has_workspace)
     }
@@ -411,9 +413,15 @@ impl Session {
         }
     }
 
-    pub fn import_rom(&mut self, rom_path: &str, project_path: &str, name: &str) {
-        let name = (!name.trim().is_empty()).then(|| name.trim().to_owned());
-        self.request(Request::ImportRom { rom_path: rom_path.to_owned(), project_path: project_path.to_owned(), name }, Pending::ImportRom);
+    /// Opens the browser to choose the clean ROM the project builds from, starting in the project.
+    pub fn choose_clean_rom(&mut self) {
+        let start = self.project.as_ref().map(|project| project.path.clone()).unwrap_or_default();
+        self.browser = Some(Browser::default());
+        self.browse(&start);
+    }
+
+    pub fn set_clean_rom(&mut self, path: &str) {
+        self.request(Request::SetCleanRom { path: path.to_owned() }, Pending::CleanRom);
     }
 
     pub fn close_project(&mut self) {
@@ -765,10 +773,12 @@ impl Session {
                 self.browser = None;
                 self.project = Some(info);
             }
-            (Pending::ImportRom, Response::Project(info)) => {
+            // Another ROM: before a first build it is the one being edited, so what it holds is asked again.
+            (Pending::CleanRom, Response::Settings(settings)) => {
                 self.browser = None;
-                self.open_project(&info.path);
-                self.list_projects();
+                self.settings = Some(settings);
+                self.request(Request::ListLevels, Pending::ListLevels);
+                self.refresh_filesystem();
             }
             (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
@@ -835,7 +845,14 @@ impl Session {
             (Pending::ImportPatch(bytes), Response::PatchIdsDiffer) => self.patch_ids_differ = Some(bytes),
             (Pending::ImportPatch(_), Response::Done) => self.refresh_filesystem(),
             (Pending::Settings, Response::Settings(settings)) => {
-                self.settings = Some(settings);
+                // A project that cannot be built until it has a clean ROM asks for one when it opens.
+                if settings.clean_rom_problem.is_some() && !self.clean_rom_asked {
+                    self.clean_rom_asked = true;
+                    self.settings = Some(settings);
+                    self.choose_clean_rom();
+                } else {
+                    self.settings = Some(settings);
+                }
                 self.refresh_filesystem();
             }
             (Pending::CloseLevel, Response::Done) => {}
@@ -952,6 +969,7 @@ impl Session {
         }
         self.forget_project();
         self.browser = None;
+        self.clean_rom_asked = false;
         self.project = Some(info);
         self.request(Request::ListLevels, Pending::ListLevels);
         self.request(Request::ProjectSettings, Pending::Settings);

@@ -5,6 +5,7 @@
 //! `<project>/fake-ncpatcher/<command>.json`, where `<command>` is `config-dump`, `modules-dump`, `files-plan` or
 //! `rom-files`. A command with no file behind it exits 3, which is what NCPatcher does when it cannot make sense of
 //! the project -- so "the editor was not given an answer" is a case the tests can set up as easily as any other.
+//! The `--rom` a command was given is recorded in `<project>/fake-ncpatcher/rom.txt`, and removed when none was.
 
 use std::io::Write;
 use std::process::ExitCode;
@@ -20,6 +21,14 @@ fn main() -> ExitCode {
         .next_back()
         .cloned()
         .unwrap_or_default();
+
+    if !project.is_empty() {
+        let record = format!("{project}/fake-ncpatcher/rom.txt");
+        match args.windows(2).find_map(|pair| matches!(pair, [flag, _] if flag == "--rom").then(|| pair.get(1)).flatten()) {
+            Some(rom) => drop(std::fs::write(record, rom)),
+            None => drop(std::fs::remove_file(record)),
+        }
+    }
 
     if has("version") {
         println!("ncpatcher 2.0.0 (fake)");
