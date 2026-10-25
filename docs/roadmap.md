@@ -250,6 +250,9 @@ in [the port plan](rust-port-plan.md), whose Status table records what each phas
 - Moved the clean ROM out of `ncpatcher.yaml` into the project's `.big-star-workspace.json` (`clean_rom`), passed to
   every NCPatcher command as `--rom`. NCPatcher now accepts a `rom:` section without `file` or `dir` when `--rom` is
   given. A project without a usable clean ROM opens and asks for one (`SetCleanRom`, **Build > Clean ROM...**).
+- The desktop app's own host takes a clean ROM outside the workspace by its full path, chosen with the system's file
+  dialog; a served host keeps to the workspace browser. A project with no clean ROM in its settings takes the
+  `rom.file` its `ncpatcher.yaml` names, when that file is there.
 - Dropped `big-star-build.nds`. A build lands on the variant's output from `config dump` -- `rom.output` with
   `_<variant>` before the extension, which NCPatcher now derives for a single `--variant` build as it did for
   `--all-variants` -- and that is the ROM the editor reads, or the clean ROM before the variant's first build.

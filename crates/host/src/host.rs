@@ -177,6 +177,12 @@ impl Host {
         Ok(Self::start(Shared::new(Some(Workspace::new(root)?), false, options)))
     }
 
+    /// The desktop app's own host for the workspace at `root`, which also takes files on this machine by their path, such
+    /// as a clean ROM kept outside the workspace.
+    pub fn for_desktop(root: &Path) -> Result<Self> {
+        Ok(Self::start(Shared::new(Some(Workspace::new(root)?), true, HostOptions::default())))
+    }
+
     /// The desktop app's host for a ROM picked on this machine: no workspace, and ROMs opened and saved by their path.
     pub fn for_local_roms(options: HostOptions) -> Self {
         Self::start(Shared::new(None, true, options))
@@ -638,6 +644,18 @@ impl Shared {
         let client = self.ncpatcher(open);
         let mut errors = Vec::new();
         let config = client.dump_config(&open.directory).map_err(|e| errors.push(e.message)).ok();
+        // A project whose settings name no clean ROM takes the one ncpatcher.yaml names (`rom.file`), when it is there.
+        // NCPatcher was asked without `--rom`, so that is what it reports, and every command so far read the same ROM.
+        if open.settings.clean_rom.is_empty()
+            && let Some(rom_file) = config.as_ref().map(|config| open.directory.join(&config.rom_file)).filter(|file| file.is_file())
+        {
+            open.settings.clean_rom = relative_to_project(&open.directory, &rom_file);
+            open.settings.clean_rom_problem = clean_rom_problem(&open.directory, &open.settings);
+            if let Err(error) = save_settings(&open.directory, &open.settings) {
+                log::warn!("could not remember the clean ROM: {}", error.message);
+            }
+            self.log(LogLevel::Info, format!("The clean ROM is {}, as ncpatcher.yaml names it", open.settings.clean_rom));
+        }
         let modules = client.dump_modules(&open.directory).map_err(|e| errors.push(e.message)).ok();
         let plan = if config.is_some() {
             client.plan_files(&open.directory, &open.settings.active_variant).map_err(|e| errors.push(e.message)).ok()
@@ -1244,7 +1262,8 @@ impl Shared {
     /// Remembers the clean ROM the project builds from. Before a first build it is also the ROM the editor reads, so
     /// that is reopened, and NCPatcher is asked again now that it has a ROM to answer about.
     fn set_clean_rom(&self, path: &str) -> Result<Response> {
-        let file = self.workspace()?.resolve(path)?;
+        // The desktop's own host takes a ROM anywhere on the machine by its full path; a served one, only under the root.
+        let file = if self.local_files && Path::new(path).is_absolute() { PathBuf::from(path) } else { self.workspace()?.resolve(path)? };
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
         let mut settings = open.settings.clone();

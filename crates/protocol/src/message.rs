@@ -128,7 +128,8 @@ pub enum Request {
     SetActiveModule {
         module: String,
     },
-    /// The clean ROM the open project is built from, a `.nds` under the root. It is kept in the project's settings,
+    /// The clean ROM the open project is built from, a `.nds` under the root, or anywhere by its full path when the host
+    /// is the desktop app's own. It is kept in the project's settings,
     /// not in `ncpatcher.yaml`, and refused unless it is New Super Mario Bros.
     SetCleanRom {
         path: String,

@@ -35,8 +35,9 @@ pub trait Services {
         Err("this build cannot open a ROM on this machine".to_owned())
     }
 
-    /// Asks the person for a `.nds` on this machine: its full path, or `None` when they cancel or there is no dialog.
-    fn pick_rom(&self) -> Option<String> {
+    /// Asks the person for a `.nds` on this machine, in a dialog titled `title`: its full path, or `None` when they cancel
+    /// or there is no dialog.
+    fn pick_rom(&self, _title: &str) -> Option<String> {
         None
     }
 
@@ -137,7 +138,7 @@ impl Services for MemoryServices {
         self.shelf.lock().ok()?.to_open.pop_front().map(Ok)
     }
 
-    fn pick_rom(&self) -> Option<String> {
+    fn pick_rom(&self, _title: &str) -> Option<String> {
         self.shelf.lock().ok()?.paths.pop_front()
     }
 

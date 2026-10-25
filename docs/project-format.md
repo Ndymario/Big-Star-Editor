@@ -7,7 +7,7 @@ is listed too, so the editor can offer to migrate it. Big Star writes no project
 
 ## The clean ROM
 
-`ncpatcher.yaml` names no input ROM: where a clean ROM lies is different on every machine, and the configuration is
+`ncpatcher.yaml` need name no input ROM: where a clean ROM lies is different on every machine, and the configuration is
 the same on all of them. NCPatcher takes it on the command line instead, with `--rom`, and accepts a `rom:` section
 without `file` or `dir` when it is given:
 
@@ -27,9 +27,14 @@ module, autosave interval, backups kept), relative to the project when the ROM i
 }
 ```
 
+A project whose settings name no clean ROM, but whose `ncpatcher.yaml` does name one with `rom.file` that is there,
+takes that one: it is written to `.big-star-workspace.json` as if it had been chosen.
+
 A project that opens without a usable clean ROM -- none set, the file gone, or a ROM that is not New Super Mario Bros.
--- still opens, says why in the project settings, and the frontend asks for one with a browser of the workspace
-(`SetCleanRom`). **Build > Clean ROM…** changes it later. A build is refused until there is one.
+-- still opens, says why in the project settings, and the frontend asks for one (`SetCleanRom`). **Build > Clean
+ROM…** changes it later. A build is refused until there is one. On a served host it is chosen with a browser of the
+workspace and must lie under it; the desktop app's own host takes a ROM anywhere on the machine by its full path, and
+asks for it with the system's file dialog.
 
 ## The ROM the editor reads
 

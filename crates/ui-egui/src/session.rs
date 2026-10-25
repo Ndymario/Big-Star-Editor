@@ -211,6 +211,9 @@ pub struct Session {
     pub log: Vec<LogLine>,
     pub notice: Option<Notice>,
     pub browser: Option<Browser>,
+    /// Whether the host is the desktop app's own, which takes a clean ROM anywhere on this machine, chosen with the
+    /// system's file dialog rather than the host's browser.
+    pub local_files: bool,
     /// Whether the open project has asked for its clean ROM already, so a dismissed question is not asked again.
     clean_rom_asked: bool,
     /// How much of a ROM being uploaded the host holds, and of how much.
@@ -273,6 +276,7 @@ impl Session {
             log: Vec::new(),
             notice: None,
             browser: None,
+            local_files: false,
             clean_rom_asked: false,
             upload: None,
             downloading: None,
@@ -413,8 +417,13 @@ impl Session {
         }
     }
 
-    /// Opens the browser to choose the clean ROM the project builds from, starting in the project.
+    /// Opens the browser to choose the clean ROM the project builds from, starting in the project. On the desktop's own
+    /// host it opens empty: the system's file dialog does the browsing.
     pub fn choose_clean_rom(&mut self) {
+        if self.local_files {
+            self.browser = Some(Browser::default());
+            return;
+        }
         let start = self.project.as_ref().map(|project| project.path.clone()).unwrap_or_default();
         self.browser = Some(Browser::default());
         self.browse(&start);

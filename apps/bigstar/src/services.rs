@@ -60,7 +60,7 @@ impl Services for NativeServices {
     }
 
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {
-        let host = Host::new(std::path::Path::new(root)).map_err(|e| e.message)?;
+        let host = Host::for_desktop(std::path::Path::new(root)).map_err(|e| e.message)?;
         let info = HostInfo { host_version: env!("CARGO_PKG_VERSION").to_owned(), workspace_name: host.workspace_name(), has_workspace: true };
         Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
     }
@@ -71,12 +71,8 @@ impl Services for NativeServices {
         Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
     }
 
-    fn pick_rom(&self) -> Option<String> {
-        rfd::FileDialog::new()
-            .set_title("Open ROM")
-            .add_filter("Nintendo DS ROM", &["nds"])
-            .pick_file()
-            .map(|path| path.to_string_lossy().into_owned())
+    fn pick_rom(&self, title: &str) -> Option<String> {
+        rfd::FileDialog::new().set_title(title).add_filter("Nintendo DS ROM", &["nds"]).pick_file().map(|path| path.to_string_lossy().into_owned())
     }
 
     fn pick_save_path(&self, title: &str, suggested: &str, extension: &str) -> Option<String> {

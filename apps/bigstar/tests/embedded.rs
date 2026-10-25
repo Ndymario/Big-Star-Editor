@@ -1,5 +1,5 @@
-//! The whole stack in one process: the frontend, an in-process host, a project imported through the file browser, a
-//! level opened, an object dragged, saved into a module.
+//! The whole stack in one process: the frontend, an in-process host, a project given a clean ROM from outside the
+//! workspace through the system's file dialog, a level opened, an object dragged, saved into a module.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -16,11 +16,17 @@ use egui_kittest::kittest::{NodeT, Queryable};
 
 struct EmbeddedServices {
     root: String,
+    /// What the system's file dialog answers.
+    rom: String,
 }
 
 impl Services for EmbeddedServices {
     fn load(&self, key: &str) -> Option<String> {
         (key == EMBEDDED_ROOT_KEY).then(|| self.root.clone())
+    }
+
+    fn pick_rom(&self, _title: &str) -> Option<String> {
+        Some(self.rom.clone())
     }
 
     fn store(&self, _key: &str, _value: &str) {}
@@ -30,7 +36,7 @@ impl Services for EmbeddedServices {
     }
 
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {
-        let host = Host::new(std::path::Path::new(root)).map_err(|e| e.message)?;
+        let host = Host::for_desktop(std::path::Path::new(root)).map_err(|e| e.message)?;
         let info = HostInfo { host_version: "test".to_owned(), workspace_name: host.workspace_name(), has_workspace: true };
         Ok(Box::new(InProcess::spawn(host.session(), info, Some(waker))))
     }
@@ -77,11 +83,13 @@ fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
     let workspace = TempDir::new("embedded-app");
     let (course, bgdat) = level_files();
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat)], &[0; 32]);
-    write_bytes(&workspace.path().join("roms/game.nds"), &rom);
+    let roms = TempDir::new("embedded-app-roms");
+    write_bytes(&roms.path().join("game.nds"), &rom);
     // An NCPatcher project that names no ROM, as ncpatcher.yaml no longer does.
     write_bytes(&workspace.path().join("game/ncpatcher.yaml"), b"version: 2\n");
 
-    let services = EmbeddedServices { root: workspace.path().to_string_lossy().into_owned() };
+    let services =
+        EmbeddedServices { root: workspace.path().to_string_lossy().into_owned(), rom: roms.path().join("game.nds").to_string_lossy().into_owned() };
     let app = BigStarApp::new(Box::new(services));
     let mut harness = Harness::builder().with_size(Vec2::new(1000.0, 640.0)).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
     harness.run();
@@ -92,21 +100,10 @@ fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
 
     // The project's name, and then its path beside it.
     harness.query_all_by_label("game").next().unwrap().click();
-    // It has no clean ROM yet, so opening it asks for one, starting in the project.
-    until(&mut harness, "the clean ROM question", |app| {
-        app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path == "game")
-    });
-    harness.get_by_label("Up").click();
-    until(&mut harness, "the workspace root", |app| {
-        app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path.is_empty())
-    });
-    harness.get_by_label("roms").click();
-    until(&mut harness, "the roms folder", |app| {
-        app.session().and_then(|s| s.browser.as_ref()).and_then(|b| b.listing.as_ref()).is_some_and(|l| l.path == "roms")
-    });
-    harness.get_by_label("game.nds").click();
-    harness.run();
-    harness.get_by_label("Use This ROM").click();
+    // It has no clean ROM yet, so opening it asks for one, with the system's dialog, which can reach outside the
+    // workspace.
+    until(&mut harness, "the clean ROM question", |app| app.session().is_some_and(|s| s.browser.is_some()));
+    harness.get_by_label("Choose ROM…").click();
     until(&mut harness, "the clean ROM's levels", |app| app.session().is_some_and(|s| s.browser.is_none() && !s.worlds.is_empty()));
     assert!(workspace.path().join("game/.big-star-workspace.json").is_file());
     // A module to save into, as a build of the project would have recorded it; the host's watcher notices it.

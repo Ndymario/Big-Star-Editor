@@ -226,6 +226,56 @@ fn the_clean_rom_is_asked_for_and_remembered() {
 }
 
 #[test]
+fn only_the_desktop_host_takes_a_clean_rom_outside_the_workspace() {
+    let outside = TempDir::new("host-clean-rom-outside");
+    let rom = outside.path().join("game.nds");
+    write_bytes(&rom, &make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]));
+    let rom = rom.to_string_lossy().into_owned();
+    let fixture = Fixture::new("host-clean-rom-desktop");
+    write_bytes(&fixture.root.path().join("proj/ncpatcher.yaml"), b"version: 2\n");
+
+    let mut served = fixture.session();
+    served.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    assert_eq!(served.handle(Request::SetCleanRom { path: rom.clone() }).unwrap_err().code, ErrorCode::InvalidArgument);
+    drop(served);
+
+    let mut desktop = Host::for_desktop(fixture.root.path()).unwrap().session();
+    desktop.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Settings(settings) = desktop.handle(Request::SetCleanRom { path: rom.clone() }).unwrap() else { panic!() };
+    assert_eq!((settings.clean_rom.as_str(), settings.clean_rom_problem), (rom.replace('\\', "/").as_str(), None));
+    // Even a served host builds from it once the settings name it.
+    let mut again = fixture.session();
+    let Response::Project(info) = again.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!(info.file_count, 1);
+}
+
+/// A project whose settings name no clean ROM takes the one ncpatcher.yaml names, and keeps it.
+#[cfg(unix)]
+#[test]
+fn the_clean_rom_ncpatcher_yaml_names_is_taken() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new("host-clean-rom-yaml");
+    let project = fixture.root.path().join("proj");
+    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\nrom:\n  file: rom.nds\n");
+    write_bytes(&project.join("rom.nds"), &make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]));
+    let answer = fixture.root.path().join("config.json");
+    let config = format!(r#"{{"schema":"ncpatcher.config/1","version":2,"rom-file":"{}","variants":{{}}}}"#, project.join("rom.nds").display());
+    write_bytes(&answer, config.as_bytes());
+    let script = fixture.root.path().join("ncpatcher.sh");
+    let text = format!("#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = config ] && exec cat '{}'; done\nexit 3\n", answer.display());
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!((info.rom_path.as_deref(), info.file_count), (Some("rom.nds"), 1));
+    let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
+    assert_eq!((settings.clean_rom.as_str(), settings.clean_rom_problem), ("rom.nds", None));
+    assert_eq!(crate::stored_clean_rom(&project), Some(project.join("rom.nds")));
+}
+
+#[test]
 fn level_requests_need_an_open_project() {
     let fixture = Fixture::new("host-noproject");
     let mut session = fixture.session();

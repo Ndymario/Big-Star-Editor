@@ -70,7 +70,10 @@ enum Confirm {
 enum Action {
     Undo,
     Redo,
-    History { undo: bool, steps: usize },
+    History {
+        undo: bool,
+        steps: usize,
+    },
     Save,
     Leave(Leave),
     OpenProject(String),
@@ -78,6 +81,8 @@ enum Action {
     Browse(String),
     ChooseRom(String),
     UseCleanRom(String),
+    /// Asks for the clean ROM with the system's file dialog.
+    PickCleanRom,
     SaveRomAs,
     UploadRom,
     DownloadRom,
@@ -354,7 +359,7 @@ impl BigStarApp {
     /// Asks for a `.nds` on this machine and opens it to edit directly, as NSMB Editor's Open ROM does: with the
     /// desktop's own host for it, which has no workspace.
     pub fn open_local_rom(&mut self, ctx: &egui::Context) {
-        let Some(path) = self.services.pick_rom() else { return };
+        let Some(path) = self.services.pick_rom("Open ROM") else { return };
         match self.services.connect_local_roms(waker(ctx)) {
             Ok(conn) => {
                 self.start(conn, format!("rom:{path}"));
@@ -398,6 +403,9 @@ impl BigStarApp {
             Ok(conn) => {
                 self.services.store(EMBEDDED_ROOT_KEY, &root);
                 self.start(conn, format!("embedded:{root}"));
+                if let Some(session) = &mut self.session {
+                    session.local_files = true;
+                }
             }
             Err(message) => self.form.error = Some(message),
         }
@@ -988,12 +996,26 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         let actions = &mut self.actions;
         let problem = session.settings.as_ref().and_then(|settings| settings.clean_rom_problem.clone());
+        let clean_rom = session.settings.as_ref().map(|settings| settings.clean_rom.clone());
+        let local_files = session.local_files;
         let Some(browser) = &mut session.browser else { return };
         let mut open = true;
         dialogs::window("Clean ROM").open(&mut open).default_width(460.0).show(ctx, |ui| {
             ui.label(problem.as_deref().unwrap_or("Choose the clean ROM this project is built from."));
             ui.weak("It is kept with the project's editor settings, not in ncpatcher.yaml.");
             ui.add_space(4.0);
+            // The desktop's own host takes a ROM anywhere on this machine, so the system's dialog picks it.
+            if local_files {
+                if let Some(current) = clean_rom.as_deref().filter(|rom| !rom.is_empty()) {
+                    ui.label(format!("Now: {current}"));
+                }
+                dialogs::actions(ui, |ui| {
+                    if Button::new("Choose ROM…").primary().show(ui).clicked() {
+                        actions.push(Action::PickCleanRom);
+                    }
+                });
+                return;
+            }
             ui.horizontal(|ui| {
                 if Button::new("Up").with_icon(icons::ARROW_UP).small().enabled(!browser.path.is_empty()).show(ui).clicked() {
                     actions.push(Action::Browse(parent(&browser.path)));
@@ -1284,6 +1306,11 @@ impl BigStarApp {
                 }
             }
             Action::UseCleanRom(rom) => session.set_clean_rom(&rom),
+            Action::PickCleanRom => {
+                if let Some(rom) = self.services.pick_rom("Clean ROM") {
+                    session.set_clean_rom(&rom);
+                }
+            }
             Action::DownloadRom => session.download_rom(),
             Action::CancelCleanRom => session.browser = None,
             Action::UploadRom | Action::SaveRomAs => {}
