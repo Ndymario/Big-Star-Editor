@@ -211,7 +211,7 @@ impl Workspace {
         }
         let tab = DocTab::Level(level);
         if self.dock.find_tab(&tab).is_none() {
-            self.dock.push_to_first_leaf(tab);
+            self.push_tab(tab);
         }
         if let Some(path) = self.dock.find_tab(&tab) {
             let _ = self.dock.set_active_tab(path);
@@ -226,7 +226,7 @@ impl Workspace {
 
     pub fn show_preview_tab(&mut self) {
         if self.dock.find_tab(&DocTab::Preview).is_none() {
-            self.dock.push_to_first_leaf(DocTab::Preview);
+            self.push_tab(DocTab::Preview);
         }
         if let Some(path) = self.dock.find_tab(&DocTab::Preview) {
             let _ = self.dock.set_active_tab(path);
@@ -304,7 +304,7 @@ impl Workspace {
     fn raise_file(&mut self, key: u64) {
         let tab = DocTab::File(key);
         if self.dock.find_tab(&tab).is_none() {
-            self.dock.push_to_first_leaf(tab);
+            self.push_tab(tab);
         }
         if let Some(path) = self.dock.find_tab(&tab) {
             let _ = self.dock.set_active_tab(path);
@@ -319,7 +319,7 @@ impl Workspace {
         self.tilesets.entry(level).or_insert_with(|| (doc, TilesetView::default()));
         let tab = DocTab::Tileset(level);
         if self.dock.find_tab(&tab).is_none() {
-            self.dock.push_to_first_leaf(tab);
+            self.push_tab(tab);
         }
         if let Some(path) = self.dock.find_tab(&tab) {
             let _ = self.dock.set_active_tab(path);
@@ -478,11 +478,25 @@ impl Workspace {
         session.active = self.active();
     }
 
+    /// Replaces a dock whose last tab was closed with a fresh one. egui_dock leaves such a dock with an emptied main
+    /// surface that it still counts as focused, and asking it for the focused tab, or adding one, then panics.
+    fn mend_dock(&mut self) {
+        if self.dock.iter_all_tabs().next().is_none() {
+            self.dock = DockState::new(Vec::new());
+        }
+    }
+
+    fn push_tab(&mut self, tab: DocTab) {
+        self.mend_dock();
+        self.dock.push_to_first_leaf(tab);
+    }
+
     /// The document in front: a focused detached window, else the focused tab when it is a document.
     fn active(&mut self) -> Option<LevelId> {
         if let Some(level) = self.detached_focus.filter(|level| self.detached.contains(level)) {
             return Some(level);
         }
+        self.mend_dock();
         match self.dock.find_active_focused() {
             Some((_, DocTab::Level(level))) => Some(*level),
             _ => None,

@@ -2053,3 +2053,30 @@ fn a_project_without_a_clean_rom_asks_for_one() {
     assert_eq!(project.rom_path.as_deref(), Some("demo/clean.nds"));
     assert!(harness.query_by_label("This project has no ROM, so no level can be opened.").is_none());
 }
+
+#[test]
+fn closing_every_tab_leaves_an_empty_well_that_takes_new_ones() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    harness.state_mut().session_mut().unwrap().open_level("A01_2");
+    harness.run();
+    let documents = harness.state().workspace.documents();
+    assert_eq!(documents.len(), 2);
+    for level in documents {
+        let app = harness.state_mut();
+        let (workspace, session) = (&mut app.workspace, app.session.as_mut().unwrap());
+        workspace.close_document(session, level);
+        harness.run();
+    }
+    // The Preview tab closes like any other, and with it the last tab: egui_dock empties its main surface then.
+    let workspace = &mut harness.state_mut().workspace;
+    let preview = workspace.dock.find_tab(&crate::workspace::DocTab::Preview).expect("the Preview tab");
+    workspace.dock.remove_tab(preview);
+    harness.run();
+    harness.run();
+    assert!(harness.state().workspace.documents().is_empty());
+    // And a level opened afterwards finds somewhere to go.
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness.run();
+    assert_eq!(harness.state().workspace.documents().len(), 1);
+}
