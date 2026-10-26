@@ -71,16 +71,6 @@ pub fn classify(bytes: &[u8], path: &str, rom_user_metadata: bool) -> EditorKind
     EditorKind::None
 }
 
-/// Bytes as hex, sixteen to a line.
-pub fn hex_text(bytes: &[u8]) -> String {
-    crate::tools::hex_text(bytes)
-}
-
-/// The hex document's bytes, or why there are none.
-pub fn hex_bytes(text: &str) -> Result<Vec<u8>, String> {
-    crate::tools::unhex(text).ok_or_else(|| "hex data contains an invalid or incomplete byte".to_owned())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +110,5 @@ mod tests {
         assert_eq!(unwrap(&wrapped), body);
         // Something that only looks compressed is left alone.
         assert_eq!(unwrap(&[0x10, 0xff]), [0x10, 0xff]);
-        assert_eq!(hex_bytes("0A 1").unwrap_err(), "hex data contains an invalid or incomplete byte");
     }
 }

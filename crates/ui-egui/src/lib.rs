@@ -12,6 +12,7 @@ mod dialogs;
 mod editors;
 mod files;
 mod graphics_editor;
+mod hex_editor;
 mod i18n;
 mod icons;
 mod level_data;

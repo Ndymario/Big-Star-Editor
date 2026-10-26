@@ -2,7 +2,8 @@
 //! sprite-event viewer. Ports of `MainWindow::editLevelHex`, `exportLevelPackage`, `importLevelPackage`, `findEntity`
 //! and `showSpriteEvents`.
 
-use crate::controls::{self, Button, TextField};
+use crate::controls::{self, Button};
+use crate::hex_editor::HexDoc;
 use crate::{dialogs, icons};
 use bigstar_level::{LevelPackage, decode_nml, encode_nml};
 use bigstar_protocol::{LevelBytes, LevelEdit, LevelId};
@@ -23,8 +24,8 @@ pub enum HexPage {
 pub struct HexEditor {
     pub level: LevelId,
     pub title: String,
-    pub course: String,
-    pub bgdat: String,
+    pub course: HexDoc,
+    pub bgdat: HexDoc,
     pub page: HexPage,
 }
 
@@ -40,20 +41,6 @@ pub struct Tools {
     pub events: bool,
     /// ROM User Metadata was asked for before the filesystem listing that says which file it is had arrived.
     pub metadata: bool,
-}
-
-/// Bytes as hex, sixteen to a line.
-pub fn hex_text(bytes: &[u8]) -> String {
-    bytes.chunks(16).map(|line| line.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")).collect::<Vec<_>>().join("\n")
-}
-
-/// Hex digits, any whitespace between them; `None` for anything else or an odd count.
-pub fn unhex(text: &str) -> Option<Vec<u8>> {
-    let digits: Vec<u8> = text.bytes().filter(|b| !b.is_ascii_whitespace()).collect();
-    if !digits.len().is_multiple_of(2) {
-        return None;
-    }
-    digits.chunks(2).map(|pair| u8::from_str_radix(std::str::from_utf8(pair).ok()?, 16).ok()).collect()
 }
 
 /// The level as an `.nml`, carrying the ROM file ids when the files have them.
@@ -93,7 +80,8 @@ impl Tools {
         let title = session.levels.get(&level).map_or_else(|| "level".to_owned(), |v| v.snapshot.title.clone());
         match purpose {
             BytesFor::HexEditor => {
-                self.hex = Some(HexEditor { level, title, course: hex_text(&bytes.course), bgdat: hex_text(&bytes.bgdat), page: HexPage::Course });
+                self.hex =
+                    Some(HexEditor { level, title, course: HexDoc::new(bytes.course), bgdat: HexDoc::new(bytes.bgdat), page: HexPage::Course });
             }
             BytesFor::Export => {
                 let written = nml(bytes).and_then(|encoded| services.save_file("Export Level", &format!("{title}.nml"), "nml", &encoded));
@@ -129,24 +117,22 @@ impl Tools {
         let Some(editor) = &mut self.hex else { return };
         let mut open = true;
         let mut done = false;
-        dialogs::window(format!("Level Hex Editor — {}", editor.title)).open(&mut open).default_size([900.0, 600.0]).show(ctx, |ui| {
+        dialogs::window(format!("Level Hex Editor — {}", editor.title)).open(&mut open).default_size([1040.0, 640.0]).show(ctx, |ui| {
             controls::tabs(ui, "hex-page", &mut editor.page, &[(HexPage::Course, "Course"), (HexPage::Bgdat, "BGDat")]);
-            let text = match editor.page {
+            let doc = match editor.page {
                 HexPage::Course => &mut editor.course,
                 HexPage::Bgdat => &mut editor.bgdat,
             };
-            egui::ScrollArea::both().max_height(ui.available_height() - 48.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.add(TextField::multiline(text).code().lock_focus());
+            let bottom = 48.0;
+            ui.allocate_ui(egui::vec2(ui.available_width(), ui.available_height() - bottom), |ui| {
+                crate::hex_editor::show(ui, doc, ("level-hex", editor.page == HexPage::Course), false);
             });
             dialogs::actions(ui, |ui| {
-                if Button::new("Save").primary().show(ui).clicked() {
-                    match (unhex(&editor.course), unhex(&editor.bgdat)) {
-                        (Some(course), Some(bgdat)) => {
-                            session.edit_level(editor.level, LevelEdit::ReplaceSerialized { course, bgdat, name: "Hex edit level".to_owned() });
-                            done = true;
-                        }
-                        _ => session.report("Hex data contains an invalid or incomplete byte.".to_owned()),
-                    }
+                let changed = editor.course.dirty() || editor.bgdat.dirty();
+                if Button::new("Save").primary().enabled(changed).show(ui).clicked() {
+                    let (course, bgdat) = (editor.course.bytes.clone(), editor.bgdat.bytes.clone());
+                    session.edit_level(editor.level, LevelEdit::ReplaceSerialized { course, bgdat, name: "Hex edit level".to_owned() });
+                    done = true;
                 }
                 if Button::new("Cancel").show(ui).clicked() {
                     done = true;
@@ -322,19 +308,6 @@ pub fn find_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_reads_back_what_it_writes_and_refuses_half_bytes() {
-        let bytes: Vec<u8> = (0..40).collect();
-        let text = hex_text(&bytes);
-        assert_eq!(text.lines().count(), 3);
-        assert!(text.starts_with("00 01 02"));
-        assert_eq!(unhex(&text), Some(bytes));
-        assert_eq!(unhex("0A 1b\\n\\tFF"), None, "escaped text is not hex");
-        assert_eq!(unhex("0A 1b\n\tFF"), Some(vec![0x0a, 0x1b, 0xff]));
-        assert_eq!(unhex("0A 1"), None);
-        assert_eq!(unhex("0G"), None);
-    }
 
     #[test]
     fn an_exported_level_imports_as_one_named_step() {

@@ -1304,7 +1304,8 @@ impl BigStarApp {
     }
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
-        if self.session.as_ref().is_none_or(|s| s.active.is_none()) || self.confirm.is_some() {
+        // A hex editor with the keyboard undoes its own typing.
+        if self.session.as_ref().is_none_or(|s| s.active.is_none()) || self.confirm.is_some() || crate::hex_editor::has_keyboard(ctx) {
             return;
         }
         // Redo first: Cmd+Shift+Z would otherwise also match Cmd+Z.

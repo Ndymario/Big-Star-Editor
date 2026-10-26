@@ -2,7 +2,7 @@
 //! moved out to windows of their own, and what is open remembered per host and project. A port of `MainWindow`'s tab
 //! and document handling (`openLevelEditor`, `detachEditor`, `saveWorkspaceState`, `restoreWorkspaceState`).
 
-use crate::controls::{self, Button, TextField};
+use crate::controls::{self, Button};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use bigstar_protocol::LevelId;
@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::canvas::{self, TexturePool};
 use crate::editors::EditorKind;
 use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing, pairing_key};
+use crate::hex_editor::HexDoc;
 use crate::level_view::{Item, Kind};
 use crate::message_editor::{MessageAction, MessageDoc, MessageView};
 use crate::resource_editor::{ResourceDoc, ResourceView};
@@ -54,11 +55,7 @@ pub enum Destination {
 }
 
 pub enum FileView {
-    Hex {
-        text: String,
-        /// The text as last read or saved, so a change shows.
-        saved: String,
-    },
+    Hex(Box<HexDoc>),
     Graphics(Box<GraphicsDoc>, GraphicsView),
     /// A BMG; `compression` is the LZ wrapper it came in, put back on save.
     Messages {
@@ -78,7 +75,7 @@ impl FileView {
     /// What the tab calls the editor.
     pub fn editor(&self) -> &'static str {
         match self {
-            FileView::Hex { .. } => "Hex",
+            FileView::Hex(_) => "Hex",
             FileView::Graphics(..) => "Graphics",
             FileView::Messages { .. } => "Messages",
             FileView::Resource { doc, .. } => doc.title(),
@@ -89,7 +86,7 @@ impl FileView {
 impl FileDoc {
     pub fn dirty(&self) -> bool {
         match &self.view {
-            FileView::Hex { text, saved } => text != saved,
+            FileView::Hex(doc) => doc.dirty(),
             FileView::Graphics(doc, _) => doc.dirty,
             FileView::Messages { doc, .. } => doc.dirty,
             FileView::Resource { doc, .. } => doc.dirty,
@@ -263,10 +260,7 @@ impl Workspace {
                         }
                         FileView::Graphics(Box::new(doc), GraphicsView::default())
                     }
-                    _ => {
-                        let text = crate::editors::hex_text(bytes);
-                        FileView::Hex { saved: text.clone(), text }
-                    }
+                    _ => FileView::Hex(Box::new(HexDoc::new(bytes.to_vec()))),
                 };
                 self.insert_file(FileDoc { path: path.to_owned(), kind, view, waiting, destination: Destination::Filesystem })
             }
@@ -851,8 +845,8 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
         }
         true
     };
-    let (text, saved) = match view {
-        FileView::Hex { text, saved } => (text, saved),
+    let hex = match view {
+        FileView::Hex(hex) => hex,
         FileView::Messages { doc, view, compression } => {
             for action in crate::message_editor::show(ui, doc, view, services) {
                 match action {
@@ -906,18 +900,11 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
     } else {
         format!("· a {} file, shown as its bytes", crate::editors::editor_name(kind).to_lowercase())
     };
-    if controls::document_header(ui, path, &remark, text != saved) {
-        match crate::editors::hex_bytes(text) {
-            Ok(bytes) => {
-                session.write_file(path, bytes);
-                saved.clone_from(text);
-            }
-            Err(error) => session.report(error),
-        }
+    if controls::document_header(ui, path, &remark, hex.dirty()) {
+        session.write_file(path, hex.bytes.clone());
+        hex.mark_saved();
     }
-    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-        ui.add(TextField::multiline(text).code().lock_focus());
-    });
+    crate::hex_editor::show(ui, hex, path, false);
 }
 
 fn preview(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, shown: Option<LevelId>) {

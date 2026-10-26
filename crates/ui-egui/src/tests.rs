@@ -1353,24 +1353,40 @@ fn the_hex_editor_replaces_the_level_as_one_step() {
     {
         let editor = harness.state_mut().tools.hex.as_mut().expect("the hex editor is open");
         // One object fewer: each is ten bytes of the BGDat.
-        let bytes = crate::tools::unhex(&editor.bgdat).unwrap();
-        editor.bgdat = crate::tools::hex_text(&bytes[10..]);
+        editor.bgdat.select(0..10);
+        editor.bgdat.delete(false);
     }
+    harness.run();
     // The editor's Save, not the level's: the window is drawn last.
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     let snapshot = &view(&harness).snapshot;
     assert_eq!((snapshot.objects.len(), snapshot.undo_names[0].as_str()), (objects - 1, "Hex edit level"));
     assert!(harness.state().tools.hex.is_none());
+}
 
-    // A half byte is refused and nothing changes.
+#[test]
+fn the_hex_editor_types_over_bytes_and_keeps_its_own_undo() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
     harness.state_mut().session_mut().unwrap().request_level_bytes(crate::BytesFor::HexEditor);
     harness.run();
-    harness.state_mut().tools.hex.as_mut().unwrap().course.push_str(" 1");
-    harness.get_all_by_label("Save").last().unwrap().click();
+    let first = harness.state().tools.hex.as_ref().unwrap().course.bytes[0];
+    // Two digits write over the first byte.
+    let level_undo = view(&harness).snapshot.undo_names.len();
+    {
+        let course = &mut harness.state_mut().tools.hex.as_mut().unwrap().course;
+        course.type_digit(0xa);
+        course.type_digit(0x5);
+    }
     harness.run();
-    let notice = harness.state().session().unwrap().notice.clone().unwrap();
-    assert_eq!(notice.text, "Hex data contains an invalid or incomplete byte.");
+    let editor = harness.state().tools.hex.as_ref().unwrap();
+    assert_eq!((editor.course.bytes[0], editor.course.caret, editor.course.dirty()), (0xa5, 1, first != 0xa5));
+    assert_eq!(view(&harness).snapshot.undo_names.len(), level_undo, "nothing reaches the level until Save");
+    // Cancel leaves the level as it was.
+    harness.get_all_by_label("Cancel").last().unwrap().click();
+    harness.run();
+    assert!(harness.state().tools.hex.is_none());
+    assert_eq!(view(&harness).snapshot.undo_names.len(), level_undo);
 }
 
 #[test]
@@ -1557,8 +1573,9 @@ fn a_file_extracts_and_opens_as_a_hex_document_that_saves_to_the_module() {
         (*key, doc.path.clone())
     };
     assert_eq!(path, "message/msg.bmg");
-    if let crate::workspace::FileView::Hex { text, .. } = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
-        *text = "AA BB".to_owned();
+    if let crate::workspace::FileView::Hex(hex) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
+        hex.select(0..hex.bytes.len());
+        hex.paste("AA BB");
     }
     harness.run();
     harness.get_all_by_label("Save").last().unwrap().click();
