@@ -373,9 +373,16 @@ impl Workspace {
     /// Closes a document whatever it holds; the host drops its unsaved edits.
     pub fn discard_document(&mut self, session: &mut Session, level: LevelId) {
         self.remove_document(level);
-        // The Preview tab may still be showing the same level.
+        // The Preview tab may still be showing the same level. It shares the host's session, so edits being dropped
+        // mean closing that session too and showing the level again as it was saved.
         if self.preview != Some(level) && self.preview_next != Some(level) {
             session.close_level(level);
+        } else if let Some(view) = session.levels.get(&level)
+            && view.snapshot.dirty
+        {
+            let area = view.snapshot.area.clone();
+            session.close_level(level);
+            session.preview_level(&area);
         }
     }
 

@@ -910,7 +910,15 @@ impl DemoConnection {
                 self.events.push(Incoming::Event(Event::Log { level: LogLevel::Info, message: format!("Saved {title}") }));
                 self.edited(level, EditOutcome::None)
             }
-            Request::CloseLevel { .. } => Ok(Response::Done),
+            // The host drops a closed level's unsaved edits; here they are undone back to the last save.
+            Request::CloseLevel { level } => {
+                let entry = self.entry(level)?;
+                while entry.level.dirty() && entry.level.can_undo() {
+                    entry.level.undo()?;
+                    entry.revision += 1;
+                }
+                Ok(Response::Done)
+            }
             Request::LevelGraphics { level } => Ok(Response::LevelGraphics(Box::new(self.graphics(level)))),
             Request::ActorCatalog => Ok(Response::ActorCatalog(Box::new(Self::catalog()))),
             Request::RenderActors { inputs } => Ok(Response::ActorDraws { generation: 0, draws: inputs.iter().map(Self::render).collect() }),

@@ -1238,6 +1238,37 @@ fn closing_a_document_with_unsaved_edits_asks_first() {
 }
 
 #[test]
+fn closing_a_document_without_saving_drops_its_edits_from_the_preview_too() {
+    let mut harness = harness();
+    harness.run();
+    harness.get_by_label("Demo").click();
+    harness.run();
+    harness.get_by_label("World 1").click();
+    harness.run();
+    harness.get_all_by_label("Area 1").next().unwrap().click();
+    harness.run();
+    harness.get_all_by_label("Edit").nth(1).unwrap().click();
+    harness.run();
+    let level = harness.state().session().unwrap().active.unwrap();
+    assert_eq!(harness.state().workspace.preview, Some(level), "the preview shares the document's session");
+    select(&mut harness, &[Item::new(Kind::Object, 0)]);
+    harness.key_press(Key::Delete);
+    harness.run();
+    {
+        let app = harness.state_mut();
+        let (workspace, session) = (&mut app.workspace, app.session.as_mut().unwrap());
+        workspace.close_document(session, level);
+    }
+    harness.run();
+    harness.get_by_label("Close without saving").click();
+    harness.run();
+    let app = harness.state();
+    let session = app.session().unwrap();
+    let shown = &session.levels[&app.workspace.preview.unwrap()];
+    assert!(!shown.snapshot.dirty, "the preview shows the level as saved");
+}
+
+#[test]
 fn the_canvas_switches_are_shared_by_every_level_and_remembered() {
     let services = MemoryServices::default();
     let later = services.sharing_values();
