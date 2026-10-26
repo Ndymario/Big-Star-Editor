@@ -1,5 +1,7 @@
 //! Big Star Editor for the desktop. It can run the host in its own process or connect to a remote one; the window is
 //! the same `bigstar-ui-egui` frontend the browser build shows.
+// A release build on Windows is a window program: without this, a console opens beside it.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod accent;
 mod services;

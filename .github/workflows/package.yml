@@ -1,0 +1,94 @@
+# Packages of the desktop app: an AppImage and a Windows installer, each
+# carrying the app and the data it reads (packaging/README.md).
+#
+# Runs when started by hand from the Actions page, and on a version tag.
+# Releasing is:
+#
+#   git tag v1.2.3 && git push --tags
+#
+# The tag must match the version in Cargo.toml (checked below); the workflow
+# then creates the GitHub release itself, with generated notes and the two
+# packages attached. A run started by hand only uploads them as workflow
+# artifacts.
+name: Package
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  appimage:
+    # The oldest Ubuntu GitHub offers, not the latest: an AppImage runs only
+    # where glibc is at least as new as the build machine's, and this one's
+    # (2.35) is old enough for Debian 12, Ubuntu 22.04 and what came after.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$version" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - name: Install what the build and the package need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config patchelf file libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the AppImage
+        run: packaging/appimage/build.sh build-appimage
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-appimage
+          path: build-appimage/BigStarEditor-*.AppImage
+      - name: Add to release
+        # Both packaging jobs make the same release; whichever gets there
+        # first creates it and the other adds its file.
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build-appimage/BigStarEditor-*.AppImage
+          generate_release_notes: true
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$version" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis --no-progress -y
+      - name: Build the installer
+        run: packaging/windows/build.sh build-windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: build-windows/BigStarEditor-*-Setup.exe
+      - name: Add to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build-windows/BigStarEditor-*-Setup.exe
+          generate_release_notes: true

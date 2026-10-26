@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Big Star Editor
+Comment=Level editor for New Super Mario Bros. DS projects
+Exec=bigstar
+Icon=bigstar
+Terminal=false
+Categories=Development;Graphics;
+Keywords=nsmb;nintendo;ds;level;editor;rom;
+StartupNotify=true
+StartupWMClass=bigstar
