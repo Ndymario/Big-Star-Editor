@@ -16,6 +16,8 @@ not carried. Each script's header lists what it needs to run by hand, and each
 writes only into a work directory (`build-appimage/`, `build-windows/` unless one
 is named).
 
+The AUR package ([`aur/`](aur/README.md)) builds from source instead of carrying a binary.
+
 `.github/workflows/package.yml` builds both, from the Actions page or on a tag:
 
 ```sh

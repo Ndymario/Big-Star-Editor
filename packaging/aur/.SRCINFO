@@ -1,0 +1,25 @@
+pkgbase = big-star-editor
+	pkgdesc = Level editor for New Super Mario Bros. DS projects built with NCPatcher
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Ndymario/Big-Star-Editor
+	arch = x86_64
+	arch = aarch64
+	license = GPL-3.0-only
+	makedepends = rust
+	depends = glibc
+	depends = gcc-libs
+	depends = wayland
+	depends = libxkbcommon
+	depends = libx11
+	depends = libxcursor
+	depends = libxi
+	depends = libxrandr
+	depends = vulkan-icd-loader
+	depends = vulkan-driver
+	optdepends = xdg-desktop-portal: file and folder dialogs
+	options = !lto
+	source = big-star-editor-0.1.0.tar.gz::https://github.com/Ndymario/Big-Star-Editor/archive/v0.1.0.tar.gz
+	sha256sums = SKIP
+
+pkgname = big-star-editor

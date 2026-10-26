@@ -1,0 +1,53 @@
+# Maintainer: Tiago Silva <tiagolsilva14 at gmail dot com>
+#
+# Before each release:
+#  - tag v$pkgver upstream and push the tag
+#  - run `updpkgsums` to fill sha256sums
+#  - regenerate .SRCINFO: makepkg --printsrcinfo > .SRCINFO
+pkgname=big-star-editor
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Level editor for New Super Mario Bros. DS projects built with NCPatcher"
+arch=('x86_64' 'aarch64')
+_repo_url="https://github.com/Ndymario/Big-Star-Editor"
+url="$_repo_url"
+license=('GPL-3.0-only')
+# Nothing links these: the window system, the keyboard and the graphics
+# drivers are opened at run time, so a package that lacks one starts and then
+# fails without a window. Vulkan draws the interface; the driver is the
+# machine's own.
+depends=('glibc' 'gcc-libs' 'wayland' 'libxkbcommon' 'libx11' 'libxcursor'
+         'libxi' 'libxrandr' 'vulkan-icd-loader' 'vulkan-driver')
+# Lua is built into the editor from the sources its crate carries, which
+# needs only the C compiler of base-devel.
+makedepends=('rust')
+optdepends=('xdg-desktop-portal: file and folder dialogs')
+# The C in the vendored Lua does not link when built with LTO.
+options=('!lto')
+source=("$pkgname-$pkgver.tar.gz::$_repo_url/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+_srcdir="Big-Star-Editor-$pkgver"
+
+prepare() {
+    cd "$_srcdir"
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/^host: //p')"
+}
+
+build() {
+    cd "$_srcdir"
+    export CARGO_TARGET_DIR="$srcdir/target"
+    cargo build --frozen --release -p bigstar
+}
+
+package() {
+    cd "$_srcdir"
+    install -Dm755 "$srcdir/target/release/bigstar" "$pkgdir/usr/bin/bigstar"
+    # Where default_data_dir (crates/host) looks: ../share/bigstar/data from
+    # the executable.
+    install -d "$pkgdir/usr/share/bigstar"
+    cp -r data "$pkgdir/usr/share/bigstar/data"
+    install -Dm644 packaging/bigstar.desktop "$pkgdir/usr/share/applications/bigstar.desktop"
+    install -Dm644 packaging/bigstar.png "$pkgdir/usr/share/icons/hicolor/512x512/apps/bigstar.png"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 docs/licenses.md "$pkgdir/usr/share/licenses/$pkgname/third-party.md"
+}
