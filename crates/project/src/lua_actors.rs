@@ -17,7 +17,8 @@ use bigstar_formats::{
     identify_graphics_format, parse_ncgr, parse_nclr, parse_tex0, render_tex0_texture,
 };
 use bigstar_level::{SpriteBounds, SpriteDefinition, SpriteDefinitionCatalog, SpriteFieldChoice, SpriteFieldDefinition, read_sprite_field};
-use mlua::{AnyUserData, ChunkMode, Function, HookTriggers, Lua, MetaMethod, MultiValue, Scope, Table, UserData, UserDataMethods, Value, VmState};
+use mlua::chunk::ChunkMode;
+use mlua::{AnyUserData, Function, HookTriggers, Lua, MetaMethod, MultiValue, Scope, Table, UserData, UserDataMethods, Value, VmState};
 use serde::{Deserialize, Serialize};
 
 use crate::lua_sandbox::{MAX_INSTRUCTIONS, MAX_SCRIPT_BYTES, boolean_field, integer_field, lua_message, new_state, string_field};

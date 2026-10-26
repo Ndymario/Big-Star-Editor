@@ -8,7 +8,8 @@ use bigstar_level::{
     BACKGROUND_FX_ONE, BackgroundCatalog, BackgroundDefinition, BackgroundLayer, BackgroundMotion, BackgroundPaletteAnimation, BackgroundStrip,
     BackgroundSwap, BackgroundTileAnimation, BackgroundTileCopy, BackgroundTileStep,
 };
-use mlua::{ChunkMode, Table, Value};
+use mlua::chunk::ChunkMode;
+use mlua::{Table, Value};
 
 use crate::lua_sandbox::{MAX_SCRIPT_BYTES, integer_field, lua_message, new_state, string_field};
 

@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result, read_file};
 use bigstar_formats::{RgbaImage, Tex0, decompress_nitro_lz, parse_tex0, render_tex0_texture};
-use mlua::{ChunkMode, Table, Value};
+use mlua::chunk::ChunkMode;
+use mlua::{Table, Value};
 use serde::{Deserialize, Serialize};
 
 use crate::lua_actors::{ActorResourceKind, ActorResourceResolver};
