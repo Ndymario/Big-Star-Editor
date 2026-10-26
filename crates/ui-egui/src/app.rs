@@ -648,8 +648,6 @@ impl BigStarApp {
                     let s = &view.snapshot;
                     (s.undo_names.clone(), s.redo_names.clone(), idle && s.can_undo, idle && s.can_redo, idle && s.dirty)
                 });
-            let named = |verb: &str, names: &[String]| names.first().map_or(verb.to_owned(), |n| format!("{verb} {n}"));
-            let (undo_label, redo_label) = (named("Undo", &undo_names), named("Redo", &redo_names));
             // A ROM opened without a workspace is the whole connection, so closing it ends the connection.
             let close_host = if session.has_workspace() {
                 "Close Workspace"
@@ -663,8 +661,8 @@ impl BigStarApp {
             let shortcut = |modifiers, key| egui::KeyboardShortcut::new(modifiers, key);
 
             ui.add_space(2.0);
-            egui::MenuBar::new().ui(ui, |ui| {
-                ui.menu_button(language.tr("File"), |ui| {
+            egui::MenuBar::new().style(controls::bar_style).ui(ui, |ui| {
+                controls::bar_menu(ui, language.tr("File"), |ui| {
                     if has_project {
                         if Button::menu("Save").shortcut(&ctx, shortcut(Modifiers::COMMAND, Key::S)).enabled(can_save).show(ui).clicked() {
                             actions.push(Action::Save);
@@ -708,20 +706,20 @@ impl BigStarApp {
                     }
                 });
                 if has_project {
-                    ui.menu_button(language.tr("Edit"), |ui| {
-                        if Button::menu(&undo_label).shortcut(&ctx, shortcut(Modifiers::COMMAND, Key::Z)).enabled(can_undo).show(ui).clicked() {
+                    controls::bar_menu(ui, language.tr("Edit"), |ui| {
+                        if Button::menu("Undo").shortcut(&ctx, shortcut(Modifiers::COMMAND, Key::Z)).enabled(can_undo).show(ui).clicked() {
                             actions.push(Action::Undo);
                             ui.close();
                         }
                         let redo = shortcut(Modifiers::COMMAND | Modifiers::SHIFT, Key::Z);
-                        if Button::menu(&redo_label).shortcut(&ctx, redo).enabled(can_redo).show(ui).clicked() {
+                        if Button::menu("Redo").shortcut(&ctx, redo).enabled(can_redo).show(ui).clicked() {
                             actions.push(Action::Redo);
                             ui.close();
                         }
                         ui.separator();
                         tools::find_items(ui, tools, session);
                     });
-                    ui.menu_button(language.tr("View"), |ui| {
+                    controls::bar_menu(ui, language.tr("View"), |ui| {
                         if Button::menu("Preview").show(ui).clicked() {
                             workspace.show_preview_tab();
                             ui.close();
@@ -732,11 +730,11 @@ impl BigStarApp {
                         }
                     });
                     if !rom_mode {
-                        ui.menu_button("Build", |ui| builds.build_menu(ui, session));
+                        controls::bar_menu(ui, "Build", |ui| builds.build_menu(ui, session));
                     }
-                    ui.menu_button(language.tr("Tools"), |ui| tools::menu(ui, tools, session, language));
+                    controls::bar_menu(ui, language.tr("Tools"), |ui| tools::menu(ui, tools, session, language));
                 }
-                ui.menu_button("Help", |ui| {
+                controls::bar_menu(ui, "Help", |ui| {
                     if Button::menu("About").show(ui).clicked() {
                         *about = true;
                         ui.close();
@@ -774,33 +772,25 @@ impl BigStarApp {
             if has_project {
                 let mut build = false;
                 ui.horizontal(|ui| {
-                    if Button::new(undo_label).with_icon(icons::UNDO).enabled(can_undo).show(ui).clicked() {
+                    // Right-click either for every step, named; picking one takes it back and everything after it.
+                    let history = |undo: bool, names: &[String], actions: &mut Vec<Action>, ui: &mut Ui| {
+                        for (index, name) in names.iter().enumerate() {
+                            if Button::menu(name).show(ui).clicked() {
+                                actions.push(Action::History { undo, steps: index + 1 });
+                                ui.close();
+                            }
+                        }
+                    };
+                    let undo = Button::new("Undo").with_icon(icons::UNDO).enabled(can_undo).show(ui);
+                    if undo.clicked() {
                         actions.push(Action::Undo);
                     }
-                    // Every step back, named; picking one undoes it and everything after it.
-                    ui.add_enabled_ui(can_undo, |ui| {
-                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Undo several steps", |ui| {
-                            for (index, name) in undo_names.iter().enumerate() {
-                                if Button::menu(name).show(ui).clicked() {
-                                    actions.push(Action::History { undo: true, steps: index + 1 });
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
-                    if Button::new(redo_label).with_icon(icons::REDO).enabled(can_redo).show(ui).clicked() {
+                    controls::context_menu(&undo, |ui| history(true, &undo_names, actions, ui));
+                    let redo = Button::new("Redo").with_icon(icons::REDO).enabled(can_redo).show(ui);
+                    if redo.clicked() {
                         actions.push(Action::Redo);
                     }
-                    ui.add_enabled_ui(can_redo, |ui| {
-                        controls::icon_menu(ui, icons::CHEVRON_DOWN, "Redo several steps", |ui| {
-                            for (index, name) in redo_names.iter().enumerate() {
-                                if Button::menu(name).show(ui).clicked() {
-                                    actions.push(Action::History { undo: false, steps: index + 1 });
-                                    ui.close();
-                                }
-                            }
-                        });
-                    });
+                    controls::context_menu(&redo, |ui| history(false, &redo_names, actions, ui));
                     if Button::new("Save").with_icon(icons::SAVE).enabled(can_save).show(ui).clicked() {
                         actions.push(Action::Save);
                     }
@@ -1452,7 +1442,7 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
                 } else if response.clicked() {
                     picked.0 = Some(area.token.clone());
                 }
-                response.context_menu(|ui| {
+                controls::context_menu(&response, |ui| {
                     if Button::menu("Open").show(ui).clicked() {
                         picked.1 = Some(area.token.clone());
                         ui.close();

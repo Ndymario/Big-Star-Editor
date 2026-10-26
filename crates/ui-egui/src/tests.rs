@@ -1076,7 +1076,7 @@ fn the_history_menus_take_several_steps_at_once() {
     }
     let x = view(&harness).snapshot.course.sprites[0].x;
     assert_eq!(view(&harness).snapshot.undo_names.len(), 3);
-    harness.get_all_by_label("Undo several steps").next().unwrap().click();
+    harness.get_by_label("Undo").click_secondary();
     harness.run();
     // The third entry is the oldest step: picking it undoes all three.
     harness.get_all_by_label("Move selection").nth(2).unwrap().click();
@@ -2049,4 +2049,44 @@ fn closing_every_tab_leaves_an_empty_well_that_takes_new_ones() {
     harness.run();
     harness.run();
     assert_eq!(harness.state().workspace.documents().len(), 1);
+}
+
+#[test]
+fn the_menu_bar_opens_its_menus_under_the_pointer() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1200.0, 600.0));
+    // Coming onto a title opens its menu, with no press, from the first point egui counts as on it: a pointer that
+    // creeps up stays a frame or more in the margin just outside the button.
+    let file = harness.get_by_label("File").rect();
+    for x in [file.left() - 3.0, file.left() - 2.0, file.left() - 1.0, file.left() + 2.0] {
+        harness.event(egui::Event::PointerMoved(egui::pos2(x, file.center().y)));
+        harness.step();
+    }
+    harness.run();
+    assert!(harness.query_by_label("Preferences…").is_some());
+    // Going down into it keeps it.
+    harness.get_by_label("Preferences…").hover();
+    harness.run();
+    assert!(harness.query_by_label("Preferences…").is_some());
+    // Moving along the bar swaps it for the next one.
+    harness.get_by_label("Edit").hover();
+    harness.run();
+    assert!(harness.query_by_label("Preferences…").is_none());
+    assert!(harness.query_by_label("Find Sprite…").is_some());
+    // A press on the title keeps the menu open rather than closing what the pointer opened.
+    harness.get_by_label("Edit").click();
+    harness.run();
+    assert!(harness.query_by_label("Find Sprite…").is_some());
+    // Escape closes it, and it stays closed under a pointer that has not moved.
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("Find Sprite…").is_none());
+    // Coming back onto it opens it again, and leaving both the title and the menu closes it.
+    harness.event(egui::Event::PointerMoved(egui::pos2(600.0, 400.0)));
+    harness.run();
+    harness.get_by_label("Edit").hover();
+    harness.run();
+    assert!(harness.query_by_label("Find Sprite…").is_some());
+    harness.event(egui::Event::PointerMoved(egui::pos2(600.0, 400.0)));
+    harness.run();
+    assert!(harness.query_by_label("Find Sprite…").is_none());
 }

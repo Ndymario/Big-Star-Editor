@@ -311,15 +311,64 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, name: &str) -> Response {
     Button::icon(icon).ghost().name(name).show(ui).on_hover_text(name)
 }
 
-/// A menu behind an icon; `name` is what it holds.
-pub fn icon_menu<R>(ui: &mut Ui, icon: Icon, name: &str, body: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let t = Tokens::get(ui.ctx());
-    let image = icon.image(ui.ctx(), icons::SIZE_SM).tint(t.foreground);
-    let menu = ui.menu_button(image, body);
-    let enabled = ui.is_enabled();
-    menu.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
-    menu.response.on_hover_text(name);
-    menu.inner
+/// The menu a right-click on `response` opens, in the same look as the menu bar's.
+pub fn context_menu<R>(response: &Response, body: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui::Popup::context_menu(response).style(menu_style).show(body).map(|inner| inner.inner)
+}
+
+/// egui's look for a menu, with room either side of each line's text: egui's leaves it against the edges.
+fn menu_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = PADDING_SM;
+}
+
+/// egui's look for a menu bar, with a little room either side of each title.
+pub fn bar_style(style: &mut egui::Style) {
+    egui::containers::menu::menu_style(style);
+    style.spacing.button_padding = vec2(5.0, 2.0);
+}
+
+fn menu_config() -> egui::containers::menu::MenuConfig {
+    egui::containers::menu::MenuConfig::new().style(menu_style)
+}
+
+/// A menu of the window's menu bar. It opens as the pointer comes onto its button, and the next along takes its place as
+/// the pointer moves across the bar, so none needs a press; it closes once the pointer has left both it and its button.
+pub fn bar_menu<R>(ui: &mut Ui, title: &str, body: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    use egui::containers::menu::MenuConfig;
+    let id = ui.next_auto_id().with("bar-menu");
+    let open = egui::Popup::is_id_open(ui.ctx(), id);
+    // egui's flat button of a menu bar, keeping the wash of the pointer while its menu is open.
+    let mut button = egui::Button::new(title);
+    if open {
+        button = button.fill(ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+    let response = ui.add(button);
+    // Only coming onto the button opens it, so a menu closed with Escape stays closed under a pointer that has not moved.
+    let was_hovered = ui.data_mut(|data| std::mem::replace(data.get_temp_mut_or_default::<bool>(id.with("hovered")), response.hovered()));
+    let pointer = ui.ctx().pointer_hover_pos();
+    // Where the menu was drawn the frame before, with a little give so a pointer on its edge is still in it.
+    let menu_rect = ui.ctx().read_response(id).map(|menu| menu.rect.expand(4.0));
+    // egui counts a pointer a few points short of the button as on it, so that counts as inside too: a slow pointer
+    // would otherwise open the menu there and close it again the next frame.
+    let inside = response.hovered() || pointer.is_some_and(|p| response.rect.contains(p) || menu_rect.is_some_and(|rect| rect.contains(p)));
+    let set = if ui.is_enabled() && ((response.hovered() && !was_hovered) || response.clicked()) {
+        Some(true)
+    } else if open && pointer.is_some() && !inside {
+        Some(false)
+    } else {
+        None
+    };
+    let config = menu_config();
+    egui::Popup::menu(&response)
+        .id(id)
+        .open_memory(set.map(egui::SetOpenCommand::Bool))
+        // A press on the button that opened it is no click outside it: the menu stays.
+        .close_behavior(if response.clicked() { egui::PopupCloseBehavior::IgnoreClicks } else { config.close_behavior })
+        .style(config.style.clone())
+        .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(MenuConfig::MENU_CONFIG_TAG, config))
+        .show(body)
+        .map(|inner| inner.inner)
 }
 
 /// The arrow that opens and closes a node of a tree.
