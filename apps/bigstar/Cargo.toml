@@ -19,7 +19,7 @@ bigstar-core.workspace = true
 bigstar-host.workspace = true
 bigstar-ui-egui.workspace = true
 egui.workspace = true
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "links", "wayland", "x11"] }
 log.workspace = true
 rfd.workspace = true
 serde_json.workspace = true

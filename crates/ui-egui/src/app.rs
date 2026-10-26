@@ -24,6 +24,7 @@ use crate::{dialogs, icons, level_data, properties_ui};
 pub const RECENT_HOSTS_KEY: &str = "recent_hosts";
 pub const EMBEDDED_ROOT_KEY: &str = "embedded_root";
 const RECENT_LIMIT: usize = 8;
+const ICON: &[u8] = include_bytes!("../../../packaging/bigstar.png");
 
 #[derive(Default)]
 struct ConnectForm {
@@ -128,6 +129,8 @@ pub struct BigStarApp {
     pub(crate) preferences: Option<Preferences>,
     /// Whether the About window is open.
     about: bool,
+    /// The editor's icon for the About window, uploaded the first time it opens.
+    about_icon: Option<egui::TextureHandle>,
     actions: Vec<Action>,
     textures: TexturePool,
     pub(crate) picker: PickerState,
@@ -195,6 +198,7 @@ impl BigStarApp {
             styled: None,
             preferences: None,
             about: false,
+            about_icon: None,
             form: ConnectForm::default(),
             session: None,
             host_key: String::new(),
@@ -1127,24 +1131,40 @@ impl BigStarApp {
         }
         let mut open = true;
         let mut close = false;
-        dialogs::window("About Big Star Editor").open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
-            ui.set_width(420.0);
-            ui.label(RichText::new(format!("Big Star Editor {}", env!("CARGO_PKG_VERSION"))).strong());
-            ui.add_space(6.0);
-            ui.label(
-                "Thank you to the whole New Super Mario Bros. DS community for the years of effort, \
-                 curiosity and generosity that made this editor possible.",
-            );
-            ui.add_space(6.0);
-            ui.label(
-                "Thank you to every original contributor to NSMB Editor, whose work this editor builds on: \
-                 its actors, its artwork and the formats it first understood.",
-            );
-            ui.add_space(6.0);
-            ui.label(
-                "And thank you to the Mamma Mia Team, whose research into the game and its files is the \
-                 foundation all of this stands on.",
-            );
+        let icon = about_icon(ctx, &mut self.about_icon);
+        dialogs::window("About Big Star Editor").open(&mut open).resizable(false).default_width(480.0).show(ctx, |ui| {
+            ui.set_width(480.0);
+            ui.horizontal_top(|ui| {
+                if let Some(icon) = icon {
+                    ui.add(egui::Image::new((icon, egui::vec2(72.0, 72.0))));
+                    ui.add_space(12.0);
+                }
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(format!("Big Star Editor {}", env!("CARGO_PKG_VERSION"))).strong().size(16.0));
+                    ui.add_space(6.0);
+                    ui.label(
+                        "A level and ROM editor for New Super Mario Bros. DS: edit levels, their objects and \
+                         actors, browse and change the ROM's files, and build NCPatcher code projects into it.",
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        "Thank you to the whole New Super Mario Bros. DS community for the years of effort, \
+                         curiosity and generosity that made this editor possible.",
+                    );
+                    ui.add_space(6.0);
+                    ui.label(
+                        "Thank you to every original contributor to NSMB Editor, whose work this editor builds on: \
+                         its actors, its artwork and the formats it first understood.",
+                    );
+                    ui.add_space(6.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.weak("Built with ");
+                        ui.hyperlink_to("egui", "https://github.com/emilk/egui");
+                        ui.weak(".");
+                    });
+                });
+            });
             dialogs::actions(ui, |ui| {
                 if Button::new("Close").primary().show(ui).clicked() {
                     close = true;
@@ -1489,4 +1509,15 @@ fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) ->
         session.preview_level(&area);
     }
     reveal
+}
+
+/// The editor's icon, scaled down once and smoothed: unlike the level art, it is not pixel art.
+fn about_icon(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>) -> Option<egui::TextureId> {
+    if slot.is_none() {
+        let icon = image::load_from_memory_with_format(ICON, image::ImageFormat::Png).ok()?;
+        let icon = icon.resize(144, 144, image::imageops::FilterType::Lanczos3).into_rgba8();
+        let image = egui::ColorImage::from_rgba_unmultiplied([icon.width() as usize, icon.height() as usize], icon.as_raw());
+        *slot = Some(ctx.load_texture("bigstar:icon", image, egui::TextureOptions::LINEAR));
+    }
+    slot.as_ref().map(egui::TextureHandle::id)
 }
