@@ -38,6 +38,9 @@ pub struct StageObjectDeclaration {
     pub header: String,
     pub hash: u32,
     pub object_id: u32,
+    /// The runtime module the class is in, or `None` when it is in the main binary. The game loads that module when
+    /// a level places the object, so placing one needs nothing from it.
+    pub runtime: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -156,7 +159,11 @@ pub fn parse_stage_object_catalog(json: &str) -> Result<(u16, Vec<StageObjectDec
     let mut out = Vec::new();
     for node in entries(&root, "stageObjects", "stage-object catalog")? {
         let node = node.as_object().ok_or_else(|| parse_error("stage-object entry is not an object"))?;
-        only(node, &["name", "hash", "module", "component", "object", "variant", "objectId", "info", "header"], "stage-object entry")?;
+        only(
+            node,
+            &["name", "hash", "module", "component", "object", "variant", "objectId", "info", "header", "runtime"],
+            "stage-object entry",
+        )?;
         let name = required_string(node, "name", "stage-object entry")?;
         let hash = hash_value(node.get("hash"), &name)?;
         if hash != fnv1a_32(&name) {
@@ -174,7 +181,13 @@ pub fn parse_stage_object_catalog(json: &str) -> Result<(u16, Vec<StageObjectDec
             .filter(|id| *id >= 386)
             .and_then(|id| u32::try_from(id).ok())
             .ok_or_else(|| parse_error(format!("{name} has an invalid objectId")))?;
-        out.push(StageObjectDeclaration { name, module, component, object, variant, info, header, hash, object_id });
+        // Absent from catalogs written before it was added, which means the main binary, as null does.
+        let runtime = match node.get("runtime") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(text)) if !text.is_empty() => Some(text.clone()),
+            Some(_) => return Err(parse_error(format!("{name} has an invalid runtime"))),
+        };
+        out.push(StageObjectDeclaration { name, module, component, object, variant, info, header, hash, object_id, runtime });
     }
     Ok((DEFAULT_STAGE_OBJECT_ID_BASE, out))
 }

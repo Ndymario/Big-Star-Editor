@@ -58,11 +58,20 @@ fn module_data_catalogs_parse_and_reject_bad_documents() {
       "schema":"nsmbtool.stageobjects/1","stageObjectIdBase":326,
       "stageObjects":[
         {"name":"coop.CoopFlagActor.Default","hash":"0xf46a44b9","module":"coop","component":"CustomWorldUnlock","object":"CoopFlagActor","variant":"Default","objectId":387,"info":"CoopFlagActor::ObjectInfo_Default","header":"coop_flag.hpp"},
-        {"name":"coop.CoopFlagActor.Big","hash":"0x27e61112","module":"coop","component":"CustomWorldUnlock","object":"CoopFlagActor","variant":"Big","objectId":387,"info":"CoopFlagActor::ObjectInfo_Big","header":"coop_flag.hpp"}
+        {"name":"coop.CoopFlagActor.Big","hash":"0x27e61112","module":"coop","component":"CustomWorldUnlock","object":"CoopFlagActor","variant":"Big","objectId":387,"info":"CoopFlagActor::ObjectInfo_Big","header":"coop_flag.hpp","runtime":null},
+        {"name":"e3itemblock.ItemBlock.Default","hash":"0xf0752862","module":"E3ItemBlock","component":"ItemBlock","object":"ItemBlock","variant":"Default","objectId":390,"info":"ItemBlock::ObjectInfo_Default","header":"e3itemblock/ItemBlock.hpp","runtime":"e3itemblock"}
       ]}"#;
     let (base, objects) = parse_stage_object_catalog(objects_json).unwrap();
-    assert_eq!((base, objects.len()), (326, 2));
+    assert_eq!((base, objects.len()), (326, 3));
     assert_eq!(objects[0].object_id, objects[1].object_id);
+    assert_eq!((objects[0].runtime.as_deref(), objects[1].runtime.as_deref()), (None, None));
+    assert_eq!(objects[2].runtime.as_deref(), Some("e3itemblock"));
+    assert!(
+        parse_stage_object_catalog(
+            r#"{"schema":"nsmbtool.stageobjects/1","stageObjectIdBase":326,"stageObjects":[{"name":"coop.CoopFlagActor.Default","hash":"0xf46a44b9","module":"coop","component":"c","object":"CoopFlagActor","variant":"Default","objectId":387,"info":"i","header":"h","runtime":5}]}"#
+        )
+        .is_err()
+    );
     assert!(parse_stage_object_catalog(r#"{"schema":"nsmbtool.stageobjects/2","stageObjectIdBase":326,"stageObjects":[]}"#).is_err());
     assert!(parse_stage_object_catalog(r#"{"schema":"nsmbtool.stageobjects/1","stageObjectIdBase":325,"stageObjects":[]}"#).is_err());
 
