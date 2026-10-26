@@ -226,6 +226,15 @@ fn main() -> Result<(), String> {
         node.click();
     }
     shot(&mut harness, &dir, "properties.png")?;
+    // Every object bank slot at once, each picked by name.
+    if let Some(tab) = harness.query_by_label("Banks") {
+        tab.click();
+    }
+    harness.run_ok();
+    shot(&mut harness, &dir, "banks.png")?;
+    if let Some(tab) = harness.query_by_label("Sprites") {
+        tab.click();
+    }
     if let Some(node) = harness.query_by_label("Level Data") {
         node.click();
     }

@@ -285,6 +285,80 @@ pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
     (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned())).collect()
 }
 
+/// What each object bank of a slot holds, as NSMB Editor names them: `BANK_NAMES[slot][bank - 1]`, empty where the
+/// bank holds nothing. The game loads banks into slots 0 to 9 and 15.
+const BANK_NAMES: [(usize, [&str; 10]); 11] = [
+    (0, ["Pipe Enemy Spawner", "Enemy Desert", "Enemy Castle", "Enemy Water", "Kab-omb", "Swooper", "Bowser Jr", "", "", ""]),
+    (1, ["Pipe Piranha", "Wiggler", "Whomp, Fence Koopa", "Skeeter", "Snailicorn", "", "Crowber", "", "Boss Common", ""]),
+    (2, ["Hammer Bro", "Chain Chomp", "Spike Bass", "Corked Pipe", "Cloud Platform", "", "", "", "", ""]),
+    (3, ["Lakitu", "Big Cheep Cheep", "Beetles, Amp", "Blockhopper", "Flame Chomp", "Ghost House", "", "", "", ""]),
+    (4, ["Enemy Common", "Final Boss", "", "", "Cheep Chomp", "Dorrie", "Lava Objects", "Screw Mushroom", "Jumping Cheep Cheep", ""]),
+    (5, ["", "Squiggler", "Sushi", "Unagi", "Scuttlebug, Money Bag", "Ground Piranha", "Snow Spike", "", "", ""]),
+    (6, ["Desert Objects", "Water Objects", "Platforms 1", "Platforms 2", "Mushrooms", "Wavy Goo", "", "", "", ""]),
+    (7, ["Platforms 3", "Platforms 4", "Platforms 5", "Bouncing Blocks", "Castle Platforms", "Burner, Ball N Chain", "", "", "", ""]),
+    (8, ["Scale Lift", "Rope", "Broozer", "Snake Block", "Bumper", "Expandable Block", "", "", "", ""]),
+    (9, ["Snow Common", "Sewer Common", "Ghost House 2", "Giant Wiggler", "Skewer", "Spiked Ball", "", "Toad House", "", ""]),
+    (
+        15,
+        [
+            "Stage Objects",
+            "Bowser",
+            "Mega Goomba",
+            "Petey Piranha",
+            "Mummipokey",
+            "Lakithunder",
+            "Cheepskipper",
+            "Monty Tank",
+            "Versus, Tower Lift",
+            "",
+        ],
+    ),
+];
+
+/// The most actors a bank's entry names before it only counts the rest.
+const BANK_ACTORS_NAMED: usize = 3;
+
+/// The slots the Banks tab shows, one row each: those the game loads banks into, and any other this level sets.
+pub fn bank_slots(object_banks: &[u8]) -> Vec<usize> {
+    (0..).zip(object_banks).filter(|&(slot, &bank)| bank != 0 || BANK_NAMES.iter().any(|(named, _)| *named == slot)).map(|(slot, _)| slot).collect()
+}
+
+/// The names of the actors that need bank `bank` of slot `slot`, in type order.
+fn bank_actors(view: &LevelView, slot: usize, bank: u8) -> Vec<String> {
+    (0u16..)
+        .zip(&view.art.actors.catalog.sprite_banks)
+        .filter(|(_, needs)| usize::from(needs[0]) == slot && needs[1] == bank)
+        .map(|(t, _)| {
+            view.art.actors.actor(t, None).map(|a| a.definition.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Actor {t}"))
+        })
+        .collect()
+}
+
+/// A slot's banks to pick from, each named for what it holds, with the overlay it loads and the actors in it.
+fn bank_choices(view: &LevelView, slot: usize, overlays: Option<&ObjectBankOverlays>) -> Vec<(i64, String)> {
+    let names = BANK_NAMES.iter().find(|(s, _)| *s == slot).map(|(_, names)| names);
+    let mut choices = vec![(0, "None".to_owned())];
+    for bank in 1..=10u8 {
+        let index = usize::from(bank) - 1;
+        let mut text = names.and_then(|names| names.get(index).copied()).filter(|name| !name.is_empty()).unwrap_or("Unused").to_owned();
+        // A slot with no banks holds 0xFFFFFFFF there: no overlay to name.
+        if let Some(overlay) = overlays.and_then(|table| table.get(slot)?.get(index)).filter(|&&overlay| overlay != u32::MAX) {
+            text.push_str(&format!(" (overlay {overlay})"));
+        }
+        let actors = bank_actors(view, slot, bank);
+        if !actors.is_empty() {
+            let rest = actors.len().saturating_sub(BANK_ACTORS_NAMED);
+            let named: Vec<&str> = actors.iter().take(BANK_ACTORS_NAMED).map(String::as_str).collect();
+            text.push_str(&format!(": {}", named.join(", ")));
+            if rest != 0 {
+                text.push_str(&format!(" and {rest} more"));
+            }
+        }
+        choices.push((i64::from(bank), text));
+    }
+    choices
+}
+
 /// The game's music by sequence number, as NSMB Editor names it. The rest are sound effects, unused or a mod's own.
 const MUSIC_NAMES: [(u8, &str); 52] = [
     (0, "MvsL Stage"),
@@ -579,14 +653,20 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             }
         }
         Tab::Banks => {
-            let bank = course.object_banks.get(index).copied().unwrap_or(0);
-            // A slot with no banks holds 0xFFFFFFFF there: no overlay to name.
-            let overlay = overlays
-                .filter(|_| (1..=10).contains(&bank))
-                .and_then(|table| table.get(index)?.get(usize::from(bank) - 1))
-                .filter(|&&overlay| overlay != u32::MAX);
-            let label = overlay.map_or_else(|| "Bank ID".to_owned(), |overlay| format!("Bank ID (overlay {overlay})"));
-            full(rows, &label, Some(i64::from(bank)), 0, 10);
+            // Every slot at once, as NSMB Editor shows them: the level is set up by looking across them, not one by one.
+            for slot in bank_slots(&course.object_banks) {
+                let bank = course.object_banks.get(slot).copied().unwrap_or(0);
+                full(rows, &format!("Slot {slot}"), Some(i64::from(bank)), 0, 10);
+                let Some(row) = rows.last_mut() else { continue };
+                row.representable = bank <= 10;
+                row.editor = Editor::Choice(bank_choices(view, slot, overlays));
+                // The sprites placed here that this slot's bank leaves out of the game.
+                let left_out = (0..course.sprites.len()).filter(|&i| view.missing_bank(i).is_some_and(|(s, _)| usize::from(s) == slot)).count();
+                if left_out != 0 {
+                    let sprites = if left_out == 1 { "sprite needs" } else { "sprites need" };
+                    row.note = format!("{left_out} placed {sprites} another bank in this slot, so the game leaves them out.");
+                }
+            }
         }
         Tab::Entity(Kind::Object) => {
             let list = &snapshot.objects;
@@ -955,8 +1035,8 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             Some(LevelEdit::SetTilesetReferences { references: r })
         }
         Tab::Banks => {
-            let slot = *rows.indices.first()?;
-            (changed == 0).then(|| LevelEdit::SetObjectBank { slot, value: narrow(value, 0) })
+            let slot = *bank_slots(&course.object_banks).get(changed)?;
+            Some(LevelEdit::SetObjectBank { slot, value: narrow(value, 0) })
         }
         Tab::Entity(Kind::Object) => {
             for &index in &rows.indices {
@@ -1564,8 +1644,15 @@ mod tests {
         view.snapshot.course.object_banks[0] = 3;
         let mut overlays = [[0; 10]; 16];
         overlays[0][2] = 77;
-        assert_eq!(rows(&view, &view.panel, Some(&overlays)).rows[0].label, "Bank ID (overlay 77)");
+        view.snapshot.course.object_banks[12] = 2;
+        // Every slot the game loads banks into shows at once, and any other the level sets, each picked by name.
+        let shown_rows = rows(&view, &view.panel, Some(&overlays));
+        let labels: Vec<&str> = shown_rows.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels[9..], ["Slot 9", "Slot 12", "Slot 15"]);
+        let Editor::Choice(choices) = &shown_rows.rows[0].editor else { panic!() };
+        assert_eq!((shown_rows.rows[0].value, &choices[3].1), (Some(3), &"Enemy Castle (overlay 77)".to_owned()));
         assert_eq!(apply(&view, &view.panel, &shown(&view), 0, 4), Some(LevelEdit::SetObjectBank { slot: 0, value: 4 }));
+        assert_eq!(apply(&view, &view.panel, &shown(&view), 11, 5), Some(LevelEdit::SetObjectBank { slot: 15, value: 5 }));
     }
 
     #[test]

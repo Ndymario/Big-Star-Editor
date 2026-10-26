@@ -187,7 +187,9 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
 
         match tab {
             Tab::Entity(kind) => edit = item_list(ui, view, kind, &shown, reveal, busy),
-            _ => {
+            // Its rows are every slot at once, so there is nothing to pick between.
+            Tab::Banks => {}
+            Tab::Course => {
                 controls::section(ui, "Selection", |ui| {
                     ui.add_enabled_ui(tab != Tab::Course && count != 0, |ui| {
                         ui.horizontal(|ui| {
