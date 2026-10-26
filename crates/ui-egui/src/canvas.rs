@@ -1135,9 +1135,8 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
         .collect();
     let cells = LEVEL_CHUNK_CELLS as i32;
     let side = TILE * LEVEL_CHUNK_CELLS as f32;
-    // What question blocks and bricks hold, once a block is big enough on screen for its icon to read.
+    // What question blocks and bricks hold, and the invisible blocks, which have no art of their own.
     let mut icons = Vec::new();
-    let show_contents = TILE * frame.zoom >= CONTENTS_MIN_BLOCK;
     for chunk in &tilemap.chunks {
         let corner = Pos2::new(chunk.x as f32 * side, chunk.y as f32 * side);
         if !Rect::from_min_size(corner, Vec2::splat(side)).intersects(visible) {
@@ -1157,12 +1156,11 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
             let (x, y) = ((offset as i32 % cells) as f32, (offset as i32 / cells) as f32);
             let world = Rect::from_min_size(corner + Vec2::new(x, y) * TILE, Vec2::splat(TILE));
             mesh.add_rect_with_uv(frame.rect(world), uv, Color32::WHITE);
-            if show_contents
-                && let Some(contents) = graphics
-                    .tilesets
-                    .get(usize::from(cell.slot))
-                    .and_then(|slot| slot.behaviors.get(block as usize))
-                    .and_then(|&b| block_icons::contents_cell(b))
+            if let Some(contents) = graphics
+                .tilesets
+                .get(usize::from(cell.slot))
+                .and_then(|slot| slot.behaviors.get(block as usize))
+                .and_then(|&b| block_icons::contents_cell(b))
             {
                 icons.push((frame.rect(world), contents));
             }
@@ -1181,9 +1179,6 @@ fn tiles(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: Fra
         painter.add(Shape::mesh(mesh));
     }
 }
-
-/// How many screen points a block must cover before the canvas puts what it holds on it.
-pub(crate) const CONTENTS_MIN_BLOCK: f32 = 10.0;
 
 fn command_color(packed: u32, opacity: f32) -> Color32 {
     let [r, g, b, a] = packed.to_be_bytes();

@@ -10,7 +10,7 @@ use bigstar_protocol::{ATLAS_COLUMNS, TilesetGraphics};
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::block_icons;
-use crate::canvas::{Art, CONTENTS_MIN_BLOCK, Frame, paint_command};
+use crate::canvas::{Art, Frame, paint_command};
 use crate::controls::{self, Choice as _, Row, Width};
 use crate::level_view::{ActorKey, Kind, LevelView, TILE};
 
@@ -228,7 +228,7 @@ fn object_preview(painter: &egui::Painter, icon: Rect, entry: &ObjectEntry, tile
     let origin = icon.center() - Vec2::new(width as f32, height as f32) * cell / 2.0;
     let mut mesh = egui::Mesh::with_texture(texture);
     // What a question block or a brick holds, over it, as the canvas shows it.
-    let mut icons = if cell >= CONTENTS_MIN_BLOCK { art.contents_sheet().map(egui::Mesh::with_texture) } else { None };
+    let mut icons = art.contents_sheet().map(egui::Mesh::with_texture);
     for (index, &block) in cells.iter().enumerate() {
         if block == OBJECT_LAYOUT_UNWRITTEN || block == OBJECT_LAYOUT_EMPTY_TILE || block < 0 || block as u32 >= tileset.blocks {
             continue;
