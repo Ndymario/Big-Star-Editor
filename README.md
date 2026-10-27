@@ -11,7 +11,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
   <img alt="Rust 1.90+" src="https://img.shields.io/badge/rust-1.90%2B-orange?logo=rust">
-  <img alt="Platforms: Windows, Linux, Web" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Web-lightgrey">
+  <img alt="Platforms: Windows, macOS, Linux, Web" src="https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux%20%7C%20Web-lightgrey">
   <a href="https://github.com/Ndymario/Big-Star-Editor/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Ndymario/Big-Star-Editor?include_prereleases"></a>
 </p>
 
@@ -59,13 +59,13 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
 
 ### And more
 
-- Works as a **desktop app** (Windows and Linux) or **in your browser**, from a computer that hosts your projects.
+- Works as a **desktop app** (Windows, macOS and Linux) or **in your browser**, from a computer that hosts your projects.
 - Automatic **recovery** of unsaved levels, and **backups** of anything a save overwrites.
 - Available in **English, Dutch, Portuguese, Spanish and French**.
 
 ## Getting started
 
-1. Download the latest installer or AppImage from the [releases page](https://github.com/Ndymario/Big-Star-Editor/releases).
+1. Download the latest installer, disk image or AppImage from the [releases page](https://github.com/Ndymario/Big-Star-Editor/releases).
 2. Start the editor and choose **Open ROM…** to edit a `.nds` file, or open a workspace folder holding your
    NCPatcher projects (each has an `ncpatcher.yaml`).
 3. Open a level from the **Levels** tab and start editing.

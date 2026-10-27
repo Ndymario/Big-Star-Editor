@@ -1,5 +1,5 @@
-# Packages of the desktop app: an AppImage and a Windows installer, each
-# carrying the app and the data it reads (packaging/README.md).
+# Packages of the desktop app: an AppImage, a Windows installer and a macOS
+# disk image, each carrying the app and the data it reads (packaging/README.md).
 #
 # Runs when started by hand from the Actions page, and on a version tag.
 # Releasing is:
@@ -7,7 +7,7 @@
 #   git tag v1.2.3 && git push --tags
 #
 # The tag must match the version in Cargo.toml (checked below); the workflow
-# then creates the GitHub release itself, with generated notes and the two
+# then creates the GitHub release itself, with generated notes and the three
 # packages attached. A run started by hand only uploads them as workflow
 # artifacts.
 name: Package
@@ -52,8 +52,8 @@ jobs:
           name: linux-appimage
           path: build-appimage/BigStarEditor-*.AppImage
       - name: Add to release
-        # Both packaging jobs make the same release; whichever gets there
-        # first creates it and the other adds its file.
+        # The packaging jobs all make the same release; whichever gets there
+        # first creates it and the others add their files.
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -91,4 +91,83 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/')
         with:
           files: build-windows/BigStarEditor-*-Setup.exe
+          generate_release_notes: true
+
+  macos:
+    # Apple silicon; the x86_64 half of the universal app is cross-compiled.
+    runs-on: macos-latest
+    env:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check tag matches the version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          version=$(sed -n '/^\[workspace\.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
+          if [ "$version" != "${GITHUB_REF_NAME#v}" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Cargo.toml version $version"
+            exit 1
+          fi
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Set up signing
+        # Where the secrets are set (packaging/README.md says which); without
+        # them the app is signed ad hoc. The certificate goes into a keychain
+        # of its own, unlocked, so codesign can use it without asking.
+        if: env.MACOS_CERTIFICATE != ''
+        env:
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/signing.keychain-db
+          password=$(uuidgen)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity=$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"$/\1/p' | head -n 1)
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_CERTIFICATE holds no Developer ID Application identity"
+            exit 1
+          fi
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          echo "MACOS_NOTARY_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+      - name: Set up notarization
+        # An App Store Connect API key, stored in the signing keychain as the
+        # profile the build script is given.
+        if: env.MACOS_CERTIFICATE != '' && env.MACOS_NOTARY_KEY != ''
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+        run: |
+          printf '%s\n' "$MACOS_NOTARY_KEY" > "$RUNNER_TEMP/notary.p8"
+          xcrun notarytool store-credentials bigstar --key "$RUNNER_TEMP/notary.p8" \
+            --key-id "$MACOS_NOTARY_KEY_ID" ${MACOS_NOTARY_ISSUER:+--issuer "$MACOS_NOTARY_ISSUER"} \
+            --keychain "$MACOS_NOTARY_KEYCHAIN"
+          rm "$RUNNER_TEMP/notary.p8"
+          echo "MACOS_NOTARY_PROFILE=bigstar" >> "$GITHUB_ENV"
+      - name: Say what is not set up
+        if: env.MACOS_CERTIFICATE == '' || env.MACOS_NOTARY_KEY == ''
+        run: |
+          [ -n "$MACOS_CERTIFICATE" ] || echo "::warning::No MACOS_CERTIFICATE: the app is signed ad hoc and not notarized"
+          [ -z "$MACOS_CERTIFICATE" ] || echo "::warning::No MACOS_NOTARY_KEY: the app is signed but not notarized"
+      - name: Build the disk image
+        run: packaging/macos/build.sh build-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-dmg
+          path: build-macos/BigStarEditor-*-macOS.dmg
+      - name: Add to release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: build-macos/BigStarEditor-*-macOS.dmg
           generate_release_notes: true

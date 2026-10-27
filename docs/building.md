@@ -9,8 +9,8 @@ cargo run --release -p bigstar -- path/to/workspace # with that workspace folder
 cargo xtask ci                                      # fmt, clippy -D warnings, tests, layering, wasm build
 ```
 
-Packages of the desktop app (an AppImage, a Windows installer and an AUR recipe) are described in
-[packaging](../packaging/README.md).
+Packages of the desktop app (an AppImage, a Windows installer, a macOS disk image and an AUR recipe) are
+described in [packaging](../packaging/README.md).
 
 ## How it fits together
 

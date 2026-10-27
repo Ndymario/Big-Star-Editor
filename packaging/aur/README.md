@@ -3,7 +3,7 @@
 `PKGBUILD` and `.SRCINFO` for the `big-star-editor` AUR package. This directory
 is the source of truth; the AUR repository is a clone of it.
 
-Unlike the AppImage and the installer, it carries nothing the system has: the
+Unlike the AppImage, the installer and the disk image, it carries nothing the system has: the
 editor is built from the tag's source and installed beside the system's
 programs (`/usr/bin/bigstar`, its catalogs in `/usr/share/bigstar/data`). The
 window system, keyboard and graphics libraries are opened at run time, so
@@ -21,7 +21,7 @@ it, and runs the `ncpatcher` it finds on the `PATH` to build.
    ```
 
    The Package workflow checks the tag against that version, builds the
-   AppImage and the installer, and creates the GitHub release.
+   AppImage, the installer and the disk image, and creates the GitHub release.
 
 2. Update this directory:
 
