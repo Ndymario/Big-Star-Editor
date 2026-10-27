@@ -1683,6 +1683,35 @@ fn a_message_file_opens_in_the_message_editor_and_saves_its_edits() {
 }
 
 #[test]
+fn a_runtime_module_opens_in_its_viewer_with_its_patches_exports_and_code() {
+    let (mut harness, _) = filesystem();
+    harness.state_mut().files.expanded.insert("z_new".to_owned());
+    harness.state_mut().files.expanded.insert("z_new/ncprt".to_owned());
+    harness.run();
+    harness.get_by_label("demo.ncrt").click();
+    harness.run();
+    harness.get_by_label_contains("Opens in: Runtime module");
+    harness.get_by_label("Open").click();
+    harness.run();
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    assert!(matches!(harness.state().workspace.files[&key].view, crate::workspace::FileView::Module(..)));
+    harness.get_by_label("Hook bridges");
+
+    harness.get_by_label("Patches").click();
+    harness.run();
+    harness.get_by_label("0x02000C00");
+    harness.get_by_label("ARM BL");
+
+    harness.get_by_label("Exports").click();
+    harness.run();
+    harness.get_by_label("THUMB function at +0x0040");
+    // A function in the exports is shown where it is in the listing.
+    harness.get_by_label("THUMB function at +0x0040").click();
+    harness.run();
+    harness.get_by_label("Back");
+}
+
+#[test]
 fn a_touch_layout_and_the_rom_metadata_open_as_pages_of_the_graphics_editor() {
     let (mut harness, shelf) = filesystem();
     harness.state_mut().files.expanded.insert("uiStudio".to_owned());

@@ -1,10 +1,11 @@
 //! One entry point for "open this file in whichever editor understands it", so nothing asks the person what kind of
 //! resource they are about to edit; and the hex document every file can fall back to. A port of `FileEditors`.
 
-use bigstar_formats::{compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, is_bmg};
+use bigstar_formats::{compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, is_bmg, is_ncrt};
 
 use crate::graphics_editor::GraphicsDoc;
 use crate::message_editor::MessageDoc;
+use crate::module_viewer::ModuleDoc;
 use crate::resource_editor::ResourceDoc;
 
 /// NSMB keeps its ROM user metadata in NitroFS file 131, which the metadata reader understands rather than uiStudio's.
@@ -15,12 +16,15 @@ pub enum EditorKind {
     None,
     Messages,
     Graphics,
+    /// An NCPatcher runtime module, shown rather than edited.
+    Module,
 }
 
 pub fn editor_name(kind: EditorKind) -> &'static str {
     match kind {
         EditorKind::Messages => "Messages",
         EditorKind::Graphics => "Graphics",
+        EditorKind::Module => "Runtime module",
         EditorKind::None => "None",
     }
 }
@@ -64,6 +68,9 @@ pub fn classify(bytes: &[u8], path: &str, rom_user_metadata: bool) -> EditorKind
     if is_bmg(&plain, path) && MessageDoc::supports(&plain) {
         return EditorKind::Messages;
     }
+    if is_ncrt(&plain) && ModuleDoc::supports(&plain) {
+        return EditorKind::Module;
+    }
     // The uiStudio resources, the banner and the ROM metadata are pages of the same graphics editor.
     if ResourceDoc::supports(&plain, path, rom_user_metadata) || GraphicsDoc::supports(bytes, path) {
         return EditorKind::Graphics;
@@ -82,6 +89,9 @@ mod tests {
         assert_eq!(classify(b"RLCN\xff\xfe\x00\x01", "b.nclr", false), EditorKind::None, "a header that does not parse claims nothing");
         assert_eq!(classify(b"hello", "notes.txt", false), EditorKind::None);
         assert_eq!(classify(b"MESGbmg1", "x.bmg", false), EditorKind::None, "a magic that does not parse claims nothing");
+        let module = crate::module_viewer::tests::empty_module();
+        assert_eq!(classify(&module, "z_new/ncprt/a.ncrt", false), EditorKind::Module);
+        assert_eq!(classify(b"NCRT\x01\0", "z_new/ncprt/b.ncrt", false), EditorKind::None);
         assert_eq!(editor_name(EditorKind::Graphics), "Graphics");
     }
 

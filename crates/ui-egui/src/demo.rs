@@ -91,6 +91,9 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
     let palette = [[0, 0], 0x001fu16.to_le_bytes(), 0x03e0u16.to_le_bytes()].into_iter().flatten().chain(std::iter::repeat_n(0, 26)).collect();
     files.insert("BG_ncg/demo_ncl.bin".to_owned(), file(21, palette));
     files.insert("dat/demo.narc".to_owned(), file(50, [b"NARC\xfe\xff".to_vec(), vec![0; 26]].concat()));
+    // An NCPatcher runtime module with ARM and THUMB code, a hook, a constructor and destructor, and exports. New files
+    // come after the game's own.
+    files.insert("z_new/ncprt/demo.ncrt".to_owned(), file(1000, include_bytes!("../assets/demo/demo.ncrt").to_vec()));
     // The files behind the levels' tilesets and backgrounds, for the tileset workspace.
     let mut id = 70;
     for (slot, page) in [(0usize, 0u8), (1, 1), (2, 4)] {

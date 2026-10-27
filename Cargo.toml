@@ -28,6 +28,8 @@ ewebsock = "0.8"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "sync", "signal"] }
 getrandom = "0.4"
+# ARMv5TE and THUMB, as the DS runs them, for the runtime module listing.
+unarm = { version = "2.3", default-features = false, features = ["arm", "thumb", "v4", "v4t", "v5t", "v5te"] }
 
 egui = "0.36"
 eframe = { version = "0.36", default-features = false }

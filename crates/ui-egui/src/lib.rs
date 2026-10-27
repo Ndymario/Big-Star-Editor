@@ -18,6 +18,7 @@ mod icons;
 mod level_data;
 mod level_view;
 mod message_editor;
+mod module_viewer;
 mod motion;
 mod picker;
 mod properties;

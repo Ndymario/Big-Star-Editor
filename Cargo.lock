@@ -508,6 +508,7 @@ dependencies = [
  "bigstar-core",
  "bigstar-nds",
  "serde",
+ "unarm",
 ]
 
 [[package]]
@@ -4113,6 +4114,12 @@ dependencies = [
  "tempfile",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "unarm"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "80223c12405fafe97ecf0e30b93401bd30b18def40df9fde264afd0bc0468111"
 
 [[package]]
 name = "unicode-general-category"

@@ -13,3 +13,4 @@ workspace = true
 bigstar-core.workspace = true
 bigstar-nds.workspace = true
 serde.workspace = true
+unarm.workspace = true

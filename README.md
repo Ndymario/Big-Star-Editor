@@ -27,7 +27,9 @@ See [Architecture](docs/architecture.md) for the crates and their boundaries.
   and adds, replaces, extracts and removes module files. Files open in the editor that understands them, through
   any LZ10/LZ11 wrapper: the graphics editor (NCLR/NCGR/NSCR/NCER/NANR/TEX0 and headerless sheets, paired with
   their palettes), the message editor (BMG text, escapes, attributes, IDs, text export/import), the uiStudio layout
-  pages (BNBL/BNCL/BNCD/ENPG), the ROM banner and the ROM user metadata (NSMBeUD), or hex.
+  pages (BNBL/BNCL/BNCD/ENPG), the ROM banner and the ROM user metadata (NSMBeUD), or hex. NCPatcher runtime modules (`.ncrt`) open in a
+  read-only viewer: their layout, the patches they write into the game, their exports object, and their code as ARM
+  and THUMB assembly that can be followed branch to branch and exported as a `.s` listing.
 - **Tilesets and backgrounds**: graphics, Map16, objects, behaviours, background and foreground maps and the level's
   slot IDs, with quantised PNG and `.bstileset` import/export. Map16 entries that name another tileset's tiles are
   drawn the way the game composes them ([Tileset memory](docs/tileset-memory.md)), and blocks the game hands to its

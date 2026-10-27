@@ -17,6 +17,7 @@ use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing,
 use crate::hex_editor::HexDoc;
 use crate::level_view::{Item, Kind};
 use crate::message_editor::{MessageAction, MessageDoc, MessageView};
+use crate::module_viewer::{ModuleDoc, ModuleView};
 use crate::resource_editor::{ResourceDoc, ResourceView};
 use crate::services::Services;
 use crate::session::FileRead;
@@ -69,6 +70,8 @@ pub enum FileView {
         view: ResourceView,
         compression: u8,
     },
+    /// An NCPatcher runtime module, read only.
+    Module(Box<ModuleDoc>, ModuleView),
 }
 
 impl FileView {
@@ -79,6 +82,7 @@ impl FileView {
             FileView::Graphics(..) => "Graphics",
             FileView::Messages { .. } => "Messages",
             FileView::Resource { doc, .. } => doc.title(),
+            FileView::Module(..) => "Runtime module",
         }
     }
 }
@@ -90,6 +94,7 @@ impl FileDoc {
             FileView::Graphics(doc, _) => doc.dirty,
             FileView::Messages { doc, .. } => doc.dirty,
             FileView::Resource { doc, .. } => doc.dirty,
+            FileView::Module(..) => false,
         }
     }
 
@@ -247,6 +252,9 @@ impl Workspace {
                     }
                     // The uiStudio resources and the ROM metadata are pages of the graphics editor; only when none of
                     // them claims the file does it go down the NNS G2D path.
+                    EditorKind::Module if ModuleDoc::supports(&plain) => {
+                        FileView::Module(Box::new(ModuleDoc::open(path, &plain)), ModuleView::default())
+                    }
                     EditorKind::Graphics if ResourceDoc::supports(&plain, path, metadata) => {
                         FileView::Resource { doc: Box::new(ResourceDoc::open(path, &plain, metadata)), view: ResourceView::default(), compression }
                     }
@@ -863,6 +871,10 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
             if crate::resource_editor::show(ui, doc, view) && save(session, *compression, doc.output()) {
                 doc.dirty = false;
             }
+            return;
+        }
+        FileView::Module(doc, view) => {
+            crate::module_viewer::show(ui, doc, view, services);
             return;
         }
         FileView::Graphics(graphics, state) => {
