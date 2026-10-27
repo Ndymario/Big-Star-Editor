@@ -1,113 +1,84 @@
-# Big Star Editor
+<p align="center">
+  <img src="packaging/bigstar.png" alt="Big Star Editor icon" width="128">
+</p>
 
-Big Star Editor is a New Super Mario Bros. DS editor, written in Rust: a host that holds your projects and their ROMs,
-and one egui frontend that runs as a desktop app or in a browser. It does **not** include ROM data, Nintendo SDK
-files, Nitro SDK contents or game assets.
+<h1 align="center">Big Star Editor</h1>
 
-## How it fits together
+<p align="center">
+  A level editor, graphics editor and text editor for <b>New Super Mario Bros.</b> on the Nintendo DS.
+</p>
 
-- **The host** (`bigstar-host`, or built into the desktop app) runs on the machine with the projects. It reads the
-  `.nds` in place, keeps the level sessions and their undo history, renders tilesets and Lua actors, runs NCPatcher,
-  and writes every edit into a module's NitroFS tree. Nothing outside its workspace folder is reachable.
-- **The frontend** (`crates/ui-egui`) is a view of a host. The desktop app (`apps/bigstar`) runs a host in-process
-  and can also connect to a remote one; the browser build (`apps/bigstar-web`) always connects to a host, usually
-  the one that served the page. Both speak the same MessagePack protocol (`crates/protocol`).
+<p align="center">
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <img alt="Rust 1.90+" src="https://img.shields.io/badge/rust-1.90%2B-orange?logo=rust">
+  <img alt="Platforms: Windows, Linux, Web" src="https://img.shields.io/badge/platforms-Windows%20%7C%20Linux%20%7C%20Web-lightgrey">
+  <a href="https://github.com/Ndymario/Big-Star-Editor/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/Ndymario/Big-Star-Editor?include_prereleases"></a>
+</p>
 
-See [Architecture](docs/architecture.md) for the crates and their boundaries.
+![Big Star Editor editing World 1-1](docs/images/preview.png)
 
-## What it edits
+Big Star Editor lets you build and change New Super Mario Bros. levels the way the game draws them: with its real
+tilesets, backgrounds and enemy graphics on screen while you work. Open a ROM and start editing, or set up a project
+and let the editor build the game for you.
 
-- **Levels**: objects, sprites, entrances, zones, views, paths and progress paths on a canvas with real tilesets and
-  actor graphics, with selection, marquee, resize, Ctrl-drag clone, snapping, copy/paste compatible with the
-  earlier Qt editor, named undo history, the property panels, the actor picker and the level-data tables. Question
-  blocks and bricks show what they hold with NSMB Editor's icons, on the canvas and in the palette, and a sprite whose object bank the level does not load is tinted red, with
-  a button in its properties that loads the bank. Several levels open
-  as documents, in tabs or windows of their own; a workspace is remembered per host and project.
-- **Files**: the Filesystem dock lists the ROM as the active variant's modules change it, opens NARCs like folders,
-  and adds, replaces, extracts and removes module files. Files open in the editor that understands them, through
-  any LZ10/LZ11 wrapper: the graphics editor (NCLR/NCGR/NSCR/NCER/NANR/TEX0 and headerless sheets, paired with
-  their palettes), the message editor (BMG text, escapes, attributes, IDs, text export/import), the uiStudio layout
-  pages (BNBL/BNCL/BNCD/ENPG), the ROM banner and the ROM user metadata (NSMBeUD), or hex. NCPatcher runtime modules (`.ncrt`) open in a
-  read-only viewer: their layout, the patches they write into the game, their exports object, and their code as ARM
-  and THUMB assembly that can be followed branch to branch and exported as a `.s` listing.
-- **Tilesets and backgrounds**: graphics, Map16, objects, behaviours, background and foreground maps and the level's
-  slot IDs, with quantised PNG and `.bstileset` import/export. Map16 entries that name another tileset's tiles are
-  drawn the way the game composes them ([Tileset memory](docs/tileset-memory.md)), and blocks the game hands to its
-  3D engine are drawn from the ROM's own textures by Lua scripts ([Lua tiles](docs/lua-tiles.md)).
-- **Backgrounds** are placed per view as the game places them, named and animated -- drifting clouds, lava, colour
-  cycles -- by one Lua script each ([Lua backgrounds](docs/lua-backgrounds.md)).
-- **Actors** are one `.lua` file each, declaring their fields and drawing themselves ([Lua actors](docs/lua-actors.md)).
-- **ROMs directly**: **Open ROM…** on the desktop edits a `.nds` picked with the system's file dialog, as NSMB Editor
-  does: no workspace, no project, and every save writes into the ROM, laid out the way NCPatcher lays out a replaced
-  file. In the browser, a host started with `serve --rom-sessions` takes an uploaded ROM, keeps it in memory for that
-  connection alone, and gives it back as a download. Builds and variants need an NCPatcher project.
-- **NCPatcher projects** are folders with an `ncpatcher.yaml`; Big Star keeps no project file of its own. The clean
-  ROM a project builds from is not in `ncpatcher.yaml` either: it is asked for when a project opens without one, kept
-  in the project's `.big-star-workspace.json`, and passed to NCPatcher as `--rom`.
-- **Builds** run NCPatcher on the host for the chosen variant, stream progress and diagnostics into the Output panel,
-  and read the ROM a successful build writes to the `rom.output` `ncpatcher.yaml` configures.
-- Recovery snapshots of unsaved levels, backups of what a save overwrites, and five interface languages (English,
-  Dutch, Portuguese, Spanish, French), in Preferences.
+It does **not** include ROM data, Nintendo SDK files or game assets. You bring your own copy of the game.
 
-## Building
+## What you can do
 
-Rust 1.90 or newer (the CI gate uses 1.96.1), and for the browser build the `wasm32-unknown-unknown` target and
-[trunk](https://trunkrs.dev).
+### Edit levels
 
-```sh
-cargo run --release -p bigstar                      # desktop app
-cargo run --release -p bigstar -- path/to/workspace # with that workspace folder filled in
-cargo xtask ci                                      # fmt, clippy -D warnings, tests, layering, wasm build
-```
+- Place and move **objects, sprites, entrances, zones, views and paths** directly on the level, with snapping, a grid,
+  a minimap, zoom, box selection, resizing and Ctrl-drag cloning.
+- See what you are building: blocks show the item they hold, sprites are drawn with their real graphics, and a sprite
+  the level can't load yet is tinted red, with one button to load what it needs.
+- Pick things from a palette or a searchable list of every actor, and fill in their properties in a side panel with
+  proper names instead of raw numbers.
+- Undo and redo with a named history, copy and paste between levels (and from the older Qt editor), and keep several
+  levels open at once in tabs or windows. The editor remembers your workspace for each project.
 
-### Serving to a browser
+### Edit the rest of the game
 
-```sh
-cd apps/bigstar-web && trunk build --release && cd ../..
-cargo run --release -p bigstar-host-app -- serve path/to/workspace --data data
-```
+- **Graphics**: palettes, tiles, screens, cells and animations, with PNG import and export.
+- **Tilesets and backgrounds**: edit the Map16 blocks, tile behaviours and background layers, and share tilesets as
+  files.
+- **Text**: edit the game's messages, with their special codes, and export or import them as text.
+- **Menus and the ROM banner**: the layout pages of the menu screens, the ROM's icon and title, and its user metadata.
+- **Anything else** in a hex editor that works like HxD.
+- **The file system**: browse the ROM as a folder tree, open archives like folders, and add, replace, extract or remove
+  files. Each file opens in the editor that understands it.
 
-The host embeds the bundle `trunk` wrote to `dist/web` when it is built, and prints a link with its token:
+### Make it your own
 
-```
-Serving "workspace" on ws://127.0.0.1:7878/ws
-Token: …
-Open http://127.0.0.1:7878/?token=… in a browser
-```
+- **Actors, backgrounds and special tiles are Lua scripts.** Add a new enemy or a moving background by writing one
+  file that says what it is and how to draw it. See [Lua actors](docs/lua-actors.md),
+  [Lua backgrounds](docs/lua-backgrounds.md) and [Lua tiles](docs/lua-tiles.md).
+- **Build the game from the editor.** Projects are plain [NCPatcher](docs/ncpatcher-integration.md) folders, so code
+  mods build with one click, with progress and errors shown in the Output panel. Pick a *variant* (say, a language)
+  and run the patcher. Code modules can also be inspected in a viewer that shows their patches and assembly.
+- **Open a ROM directly**, with no project, just like NSMB Editor. Saving writes the changes straight into the file.
 
-It binds `127.0.0.1` unless told otherwise (`--bind`, `--port`); `--ncpatcher` names the NCPatcher it
-runs. A host built without the bundle still serves desktop frontends, and its page says how to add one.
+### And more
 
-To let people edit ROMs they upload, without a workspace or the token, serve uploads only (or add `--rom-sessions`
-to a workspace host, so the token still opens the workspace):
+- Works as a **desktop app** (Windows and Linux) or **in your browser**, from a computer that hosts your projects.
+- Automatic **recovery** of unsaved levels, and **backups** of anything a save overwrites.
+- Available in **English, Dutch, Portuguese, Spanish and French**.
 
-```sh
-cargo run --release -p bigstar-host-app -- serve --rom-sessions --data data
-```
+## Getting started
 
-Connecting without a token offers **Upload ROM…**. The ROM stays in the host's memory for that connection alone, and
-**Download ROM** saves it with its edits. A ROM may be up to 64 MiB, and the host holds eight at once.
+1. Download the latest installer or AppImage from the [releases page](https://github.com/Ndymario/Big-Star-Editor/releases).
+2. Start the editor and choose **Open ROM…** to edit a `.nds` file, or open a workspace folder holding your
+   NCPatcher projects (each has an `ncpatcher.yaml`).
+3. Open a level from the **Levels** tab and start editing.
 
-### Command line
+To build a project you also need [NCPatcher](docs/ncpatcher-integration.md) on your `PATH` (or set in Preferences).
 
-```sh
-cargo run -p bigstar-host-app -- inspect-rom path/to/user_provided.nds
-cargo run -p bigstar-host-app -- run-patcher my-project --variant en
-cargo run -p bigstar-host-app -- patcher-info my-project --rom path/to/clean.nds
-```
+## For developers
 
-`run-patcher` and `patcher-info` hand NCPatcher the clean ROM the editor remembers for the project, or the one
-`--rom` names. Nothing is unpacked: the ROM is read in place, through its own FAT and name table. Building a ROM is
-NCPatcher's job; see [NCPatcher integration](docs/ncpatcher-integration.md) and [Projects](docs/project-format.md).
+Building from source, serving the editor to a browser, the command line, and how the code is organised are in
+[Building and running from source](docs/building.md) and [Architecture](docs/architecture.md). Project layout is in
+[Projects](docs/project-format.md).
 
-## Tests
+## License
 
-`cargo xtask ci` is the gate. UI behaviour is tested with `egui_kittest`; `cargo run -p bigstar-ui-egui --example
-ui_shot -- <dir>` renders the interface headlessly against a built-in demo host, or against a running host given its
-address and token. Tests that need a real NSMB ROM run when `BIGSTAR_NSMB_ROM` names one.
-
-## History
-
-Big Star began as a C++20 backend with a Qt 6 editor and an Emscripten level editor. This tree is a port of it
-([the port plan](docs/rust-port-plan.md)); the C++ implementation was retired once the port was complete, and lives
-on in the git history. The `docs/m*-manual-checklist.md` files and `docs/roadmap.md` date from it.
+Big Star Editor is released under the [GPL-3.0](LICENSE). Third-party licenses are listed in
+[docs/licenses.md](docs/licenses.md).
