@@ -11,8 +11,9 @@ use bigstar_formats::{
     OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage, fnv1a_32,
 };
 use bigstar_level::{
-    BackgroundCatalog, BackgroundDefinition, BackgroundLayer, EditableLevel, LevelDataDeclaration, LevelDataKind, LevelEntityInsertions,
-    ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice, SpriteFieldDefinition, SpriteInsertion, StageObjectDeclaration,
+    BackgroundCatalog, BackgroundDefinition, BackgroundLayer, EditableLevel, LevelDataDeclaration, LevelDataEditor, LevelDataKind,
+    LevelEntityInsertions, ModuleDataCatalog, SpriteBounds, SpriteDefinition, SpriteFieldChoice, SpriteFieldDefinition, SpriteInsertion,
+    StageObjectDeclaration,
 };
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, DrawCommand,
@@ -759,17 +760,28 @@ impl DemoConnection {
         }
     }
 
-    /// One module with one actor and one level-data key, so the custom-actor tree and the level-data tab have something
-    /// to show.
+    /// One module with one actor, a flag and a view mask, so the custom-actor tree, the level-data tab and a view's
+    /// custom data have something to show.
     fn project_data() -> ProjectData {
         let modules = ModuleDataCatalog {
-            level_data: vec![LevelDataDeclaration {
-                key: "demo.lowGravity".to_owned(),
-                module: "demo".to_owned(),
-                kind: LevelDataKind::Flag,
-                hash: fnv1a_32("demo.lowGravity"),
-                ..Default::default()
-            }],
+            level_data: vec![
+                LevelDataDeclaration {
+                    key: "demo.lowGravity".to_owned(),
+                    module: "demo".to_owned(),
+                    kind: LevelDataKind::Flag,
+                    hash: fnv1a_32("demo.lowGravity"),
+                    ..Default::default()
+                },
+                LevelDataDeclaration {
+                    key: "demo.noLiquidReloadViews".to_owned(),
+                    module: "demo".to_owned(),
+                    kind: LevelDataKind::Value,
+                    type_name: "u32".to_owned(),
+                    hash: fnv1a_32("demo.noLiquidReloadViews"),
+                    editor: Some(LevelDataEditor::ViewMask),
+                    ..Default::default()
+                },
+            ],
             stage_objects: vec![StageObjectDeclaration {
                 name: "Signpost".to_owned(),
                 module: "demo".to_owned(),

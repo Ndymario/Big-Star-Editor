@@ -40,12 +40,23 @@ fn module_data_catalogs_parse_and_reject_bad_documents() {
       "schema":"nsmbtool.leveldata/1",
       "levelData":[
         {"key":"coop.canFly","module":"coop","dataType":"flag","hash":"0xc8dfeb91"},
-        {"key":"glue.stageObjects","module":"glue","dataType":"sizedArray","hash":"0x6db68f3c","typeName":"u32"}
+        {"key":"glue.stageObjects","module":"glue","dataType":"sizedArray","hash":"0x6db68f3c","typeName":"u32"},
+        {"key":"coop.noLiquidReloadViews","module":"coop","dataType":"value","hash":"0x75d6d23e","typeName":"u32","editor":"viewMask"},
+        {"key":"coop.speed","module":"coop","dataType":"value","hash":"0x2933ec95","typeName":"u8","editor":"slider"}
       ]}"#;
     let levels = parse_level_data_catalog(level_json).unwrap();
-    assert_eq!(levels.len(), 2);
+    assert_eq!(levels.len(), 4);
     assert_eq!(levels[0].kind, LevelDataKind::Flag);
     assert_eq!(levels[1].type_name, "u32");
+    assert_eq!(levels[2].editor, Some(LevelDataEditor::ViewMask));
+    // An editor this build does not know falls back to the default control rather than refusing the catalog.
+    assert_eq!((levels[1].editor, levels[3].editor), (None, None));
+    assert!(
+        parse_level_data_catalog(
+            r#"{"schema":"nsmbtool.leveldata/1","levelData":[{"key":"coop.speed","module":"coop","dataType":"value","hash":"0x2933ec95","typeName":"u8","editor":3}]}"#
+        )
+        .is_err()
+    );
     assert!(parse_level_data_catalog(r#"{"schema":"nsmbtool.leveldata/2","levelData":[]}"#).is_err());
     assert!(
         parse_level_data_catalog(

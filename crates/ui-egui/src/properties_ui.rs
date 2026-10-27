@@ -1,5 +1,6 @@
 //! Draws the properties panel from `properties`' rows and turns what the person does into edits.
 
+use bigstar_level::ModuleDataCatalog;
 use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
 use egui::{RichText, Ui};
 
@@ -9,7 +10,7 @@ use crate::properties::{
     Editor, PanelState, Row, Rows, Span, TABS, Tab, add_edit, add_node_edit, apply, apply_settings, common_settings, delete_edit, delete_node_edit,
     format_settings, format_value, item_count, line_label, list_lines, parse_settings, parse_value, rows, sprite_types,
 };
-use crate::{dialogs, icons};
+use crate::{dialogs, icons, level_data};
 
 const LABEL_WIDTH: f32 = 112.0;
 /// The least a number's box is wide; a longer value widens its own.
@@ -161,8 +162,15 @@ fn pairs_up(row: &Row) -> bool {
     row.span == Span::Half && !row.group.is_empty() && matches!(row.editor, Editor::Number { .. }) && row.note.is_empty()
 }
 
-/// The panel. Returns the edit the person made, if they made one.
-pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverlays>, busy: bool) -> Option<LevelEdit> {
+/// The panel. Returns the edit the person made, if they made one. `modules` is `None` where level data cannot be
+/// edited, which hides the views' custom data.
+pub fn show(
+    ui: &mut Ui,
+    view: &mut LevelView,
+    overlays: Option<&ObjectBankOverlays>,
+    modules: Option<&ModuleDataCatalog>,
+    busy: bool,
+) -> Option<LevelEdit> {
     view.sync_panel();
     let reveal = std::mem::take(&mut view.panel.reveal);
     let mut edit = None;
@@ -252,6 +260,14 @@ pub fn show(ui: &mut Ui, view: &mut LevelView, overlays: Option<&ObjectBankOverl
                 edit = apply(view, &view.panel, &shown, row, value);
             }
         });
+
+        // The view masks modules declare, read and set per view.
+        if tab == Tab::Entity(Kind::View) {
+            let ids: Vec<u8> = shown.indices.iter().filter_map(|&i| view.snapshot.course.views.get(i)).map(|v| v.id).collect();
+            if let Some(made) = level_data::custom_view_data(ui, &view.snapshot, modules, &ids, busy) {
+                edit = Some(made);
+            }
+        }
 
         // The raw value is the sprite; the declared fields are only a reading of it.
         if tab == Tab::Entity(Kind::Sprite) && count != 0 {

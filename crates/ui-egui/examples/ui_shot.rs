@@ -232,6 +232,18 @@ fn main() -> Result<(), String> {
     }
     harness.run_ok();
     shot(&mut harness, &dir, "banks.png")?;
+    // A view, with the view masks the modules declare under its custom data.
+    if let Some(view) = harness.state_mut().session_mut().and_then(|s| s.level_mut()) {
+        view.selection = vec![Item::new(Kind::View, 0)];
+    }
+    if let Some(tab) = harness.query_by_label("Views") {
+        tab.click();
+    }
+    // Tall enough for the panel to reach its custom data.
+    harness.set_size(Vec2::new(1400.0, 1250.0));
+    harness.run_ok();
+    shot(&mut harness, &dir, "view.png")?;
+    harness.set_size(Vec2::new(1400.0, 800.0));
     if let Some(tab) = harness.query_by_label("Sprites") {
         tab.click();
     }

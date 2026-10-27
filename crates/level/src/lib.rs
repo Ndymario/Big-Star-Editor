@@ -16,8 +16,8 @@ pub use editable_level::{
 };
 pub use exchange::*;
 pub use module_data::{
-    DEFAULT_STAGE_OBJECT_ID_BASE, LevelDataDeclaration, LevelDataKind, ModuleDataCatalog, StageObjectDeclaration, parse_level_data_catalog,
-    parse_stage_object_catalog,
+    DEFAULT_STAGE_OBJECT_ID_BASE, LevelDataDeclaration, LevelDataEditor, LevelDataKind, ModuleDataCatalog, StageObjectDeclaration,
+    parse_level_data_catalog, parse_stage_object_catalog,
 };
 pub use sprite_definitions::*;
 pub use state::LevelTilesetReferences;

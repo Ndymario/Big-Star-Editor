@@ -936,7 +936,8 @@ impl BigStarApp {
             match self.side {
                 Side::Properties => {
                     let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
-                    edit = properties_ui::show(ui, view, overlays, busy);
+                    let modules = session.project_data.as_ref().filter(|_| !rom_mode).map(|d| &d.modules);
+                    edit = properties_ui::show(ui, view, overlays, modules, busy);
                 }
                 Side::LevelData => {
                     let modules = session.project_data.as_ref().map(|d| &d.modules);

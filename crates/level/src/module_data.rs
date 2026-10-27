@@ -17,6 +17,14 @@ pub enum LevelDataKind {
     SizedArray,
 }
 
+/// How a module asks for a key to be presented. A name this build does not know reads as `None`, the default control
+/// for the key's shape, which is always a correct way to edit it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LevelDataEditor {
+    /// A `u8`, `u16` or `u32` value in which bit n stands for the area's view n.
+    ViewMask,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelDataDeclaration {
     pub key: String,
@@ -25,6 +33,7 @@ pub struct LevelDataDeclaration {
     pub kind: LevelDataKind,
     pub hash: u32,
     pub array_size: Option<usize>,
+    pub editor: Option<LevelDataEditor>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,7 +131,7 @@ pub fn parse_level_data_catalog(json: &str) -> Result<Vec<LevelDataDeclaration>>
     let mut out = Vec::new();
     for node in entries(&root, "levelData", "level-data catalog")? {
         let node = node.as_object().ok_or_else(|| parse_error("level-data entry is not an object"))?;
-        only(node, &["key", "module", "dataType", "hash", "typeName", "arraySize"], "level-data entry")?;
+        only(node, &["key", "module", "dataType", "hash", "typeName", "arraySize", "editor"], "level-data entry")?;
         let key = required_string(node, "key", "level-data entry")?;
         let module = required_string(node, "module", &key)?;
         let hash = hash_value(node.get("hash"), &key)?;
@@ -144,7 +153,13 @@ pub fn parse_level_data_catalog(json: &str) -> Result<Vec<LevelDataDeclaration>>
         } else {
             None
         };
-        out.push(LevelDataDeclaration { key, module, type_name, kind, hash, array_size });
+        let editor = match node.get("editor") {
+            None => None,
+            Some(Value::String(name)) if name == "viewMask" => Some(LevelDataEditor::ViewMask),
+            Some(Value::String(_)) => None,
+            Some(_) => return Err(parse_error(format!("{key} has an editor that is not a name"))),
+        };
+        out.push(LevelDataDeclaration { key, module, type_name, kind, hash, array_size, editor });
     }
     Ok(out)
 }

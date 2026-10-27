@@ -1,9 +1,9 @@
 //! The Level Data tab: the glue block's flags and values, named by the modules that declare them, and the stage-object
 //! registration the sprites imply. A port of `LevelDataWidget`.
 
-use crate::controls::{self, TextField, Width};
+use crate::controls::{self, Button, TextField, Width};
 use bigstar_formats::{GlueValue, fnv1a_32};
-use bigstar_level::{LevelDataKind, ModuleDataCatalog};
+use bigstar_level::{LevelDataDeclaration, LevelDataEditor, LevelDataKind, ModuleDataCatalog};
 use bigstar_protocol::{LevelEdit, LevelSnapshot};
 use egui::{RichText, Ui};
 
@@ -19,6 +19,101 @@ pub struct DataRow {
     /// False for a key a module declares that the level does not hold yet.
     pub present: bool,
     pub payload: Vec<u8>,
+    /// The mask's width in bytes, for a view mask that is edited on the views rather than as bytes.
+    pub view_mask: Option<usize>,
+}
+
+/// The width in bytes of a key declared as a view mask, or `None` when it is anything else.
+pub fn view_mask_width(declaration: &LevelDataDeclaration) -> Option<usize> {
+    if declaration.editor != Some(LevelDataEditor::ViewMask) || declaration.kind != LevelDataKind::Value {
+        return None;
+    }
+    match declaration.type_name.as_str() {
+        "u8" => Some(1),
+        "u16" => Some(2),
+        "u32" => Some(4),
+        _ => None,
+    }
+}
+
+/// The view masks the modules declare, with their widths.
+pub fn view_masks(modules: Option<&ModuleDataCatalog>) -> Vec<(&LevelDataDeclaration, usize)> {
+    modules.map(|m| m.level_data.as_slice()).unwrap_or_default().iter().filter_map(|d| Some((d, view_mask_width(d)?))).collect()
+}
+
+/// The level's mask for a key, little-endian like every payload; an absent key has no bits set. `None` when the stored
+/// payload is not the declared width, which is then only shown as bytes.
+pub fn stored_mask(snapshot: &LevelSnapshot, hash: u32, width: usize) -> Option<u32> {
+    match snapshot.glue.values.iter().find(|v| v.hash == hash) {
+        None => Some(0),
+        Some(value) if value.payload.len() == width => Some(value.payload.iter().rev().fold(0, |mask, &b| mask << 8 | u32::from(b))),
+        Some(_) => None,
+    }
+}
+
+/// The view ids the area holds, in order.
+pub fn area_views(snapshot: &LevelSnapshot) -> Vec<u8> {
+    let mut ids: Vec<u8> = snapshot.course.views.iter().map(|v| v.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    ids
+}
+
+fn mask_bytes(mask: u32, width: usize) -> Vec<u8> {
+    mask.to_le_bytes().into_iter().take(width).collect()
+}
+
+/// Ids as runs, `1–7, 9`.
+pub fn id_ranges(mask: u32) -> String {
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for bit in (0..32).filter(|b| mask & (1 << b) != 0) {
+        match runs.last_mut() {
+            Some((_, end)) if *end + 1 == bit => *end = bit,
+            _ => runs.push((bit, bit)),
+        }
+    }
+    runs.iter().map(|&(start, end)| if start == end { start.to_string() } else { format!("{start}–{end}") }).collect::<Vec<_>>().join(", ")
+}
+
+/// Sets or clears the bits of `views` in a view mask, adding the key when the level does not hold it yet.
+pub fn set_views(snapshot: &LevelSnapshot, hash: u32, width: usize, views: &[u8], on: bool) -> Option<LevelEdit> {
+    let mask = stored_mask(snapshot, hash, width)?;
+    let bits = views.iter().filter(|&&v| usize::from(v) < width * 8).fold(0u32, |bits, &v| bits | 1 << v);
+    let next = if on { mask | bits } else { mask & !bits };
+    let present = snapshot.glue.values.iter().any(|v| v.hash == hash);
+    (next != mask || (on && !present)).then(|| set_payload(snapshot, hash, mask_bytes(next, width)))
+}
+
+/// The view masks as checkboxes for the selected views: on where every selected view is set, a dash where they
+/// disagree. Shown in the properties of a view.
+pub fn custom_view_data(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCatalog>, views: &[u8], busy: bool) -> Option<LevelEdit> {
+    let masks = view_masks(modules);
+    if masks.is_empty() || views.is_empty() {
+        return None;
+    }
+    let mut edit = None;
+    controls::section(ui, "Custom data", |ui| {
+        let read_only = snapshot.glue_error.is_some() || busy;
+        for (declaration, width) in masks {
+            let Some(mask) = stored_mask(snapshot, declaration.hash, width) else {
+                ui.add_enabled(false, egui::Label::new(&declaration.key))
+                    .on_disabled_hover_text("The level stores this key at a different size; edit its bytes in the Level Data tab.");
+                continue;
+            };
+            let fits = views.iter().all(|&v| usize::from(v) < width * 8);
+            let set = views.iter().filter(|&&v| usize::from(v) < width * 8 && mask & (1 << v) != 0).count();
+            let mut on = set == views.len();
+            let response = ui
+                .add_enabled_ui(!read_only && fits, |ui| controls::checkbox_undecided(ui, &mut on, set != 0 && set != views.len(), &declaration.key))
+                .inner;
+            let response =
+                if fits { response } else { response.on_disabled_hover_text(format!("A {}-bit mask has no bit for a view this high.", width * 8)) };
+            if response.changed() {
+                edit = set_views(snapshot, declaration.hash, width, views, on);
+            }
+        }
+    });
+    edit
 }
 
 fn key_name(hash: u32, modules: Option<&ModuleDataCatalog>) -> String {
@@ -41,14 +136,19 @@ pub fn parse_hex(text: &str) -> Option<Vec<u8>> {
 /// The level's flags, then its values, then every key a module declares that the level does not hold.
 pub fn rows(snapshot: &LevelSnapshot, modules: Option<&ModuleDataCatalog>) -> Vec<DataRow> {
     let glue = &snapshot.glue;
-    let mut rows: Vec<DataRow> =
-        glue.flags.iter().map(|&hash| DataRow { hash, key: key_name(hash, modules), flag: true, present: true, payload: Vec::new() }).collect();
+    let width = |hash: u32| modules.and_then(|m| m.level_data_by_hash(hash)).and_then(view_mask_width);
+    let mut rows: Vec<DataRow> = glue
+        .flags
+        .iter()
+        .map(|&hash| DataRow { hash, key: key_name(hash, modules), flag: true, present: true, payload: Vec::new(), view_mask: None })
+        .collect();
     rows.extend(glue.values.iter().filter(|v| v.hash != REGISTRATION_HASH).map(|v| DataRow {
         hash: v.hash,
         key: key_name(v.hash, modules),
         flag: false,
         present: true,
         payload: v.payload.clone(),
+        view_mask: width(v.hash).filter(|&w| w == v.payload.len()),
     }));
     for declaration in modules.map(|m| m.level_data.as_slice()).unwrap_or_default() {
         if declaration.hash == REGISTRATION_HASH {
@@ -56,7 +156,14 @@ pub fn rows(snapshot: &LevelSnapshot, modules: Option<&ModuleDataCatalog>) -> Ve
         }
         let flag = declaration.kind == LevelDataKind::Flag;
         if !rows.iter().any(|row| row.hash == declaration.hash && row.flag == flag) {
-            rows.push(DataRow { hash: declaration.hash, key: declaration.key.clone(), flag, present: false, payload: Vec::new() });
+            rows.push(DataRow {
+                hash: declaration.hash,
+                key: declaration.key.clone(),
+                flag,
+                present: false,
+                payload: Vec::new(),
+                view_mask: view_mask_width(declaration),
+            });
         }
     }
     rows
@@ -79,6 +186,10 @@ pub fn set_flag(snapshot: &LevelSnapshot, hash: u32, on: bool) -> Option<LevelEd
 /// Sets a value's bytes from hex text, adding the value after the others when the level does not hold it yet.
 pub fn set_value(snapshot: &LevelSnapshot, hash: u32, text: &str) -> Result<LevelEdit, String> {
     let bytes = parse_hex(text).ok_or("Enter an even number of hexadecimal digits, at least two.")?;
+    Ok(set_payload(snapshot, hash, bytes))
+}
+
+fn set_payload(snapshot: &LevelSnapshot, hash: u32, bytes: Vec<u8>) -> LevelEdit {
     let mut glue = snapshot.glue.clone();
     match glue.values.iter_mut().find(|v| v.hash == hash) {
         Some(value) => value.payload = bytes,
@@ -87,7 +198,7 @@ pub fn set_value(snapshot: &LevelSnapshot, hash: u32, text: &str) -> Result<Leve
             glue.values.push(GlueValue { hash, payload: bytes, payload_order });
         }
     }
-    Ok(LevelEdit::SetGlue { glue, name: EDIT_NAME.to_owned() })
+    LevelEdit::SetGlue { glue, name: EDIT_NAME.to_owned() }
 }
 
 /// The stage id each registered module sprite takes, and its name.
@@ -130,8 +241,30 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
         ui.end_row();
         for row in &rows {
             ui.label(&row.key).on_hover_text(format!("0x{:08x}", row.hash));
-            ui.label(if row.flag { "flag" } else { "value" });
-            if row.flag {
+            ui.label(if row.flag {
+                "flag"
+            } else if row.view_mask.is_some() {
+                "view mask"
+            } else {
+                "value"
+            });
+            if let Some(width) = row.view_mask {
+                // Edited on the views themselves; here it is a summary, plus the bits no view of this area can show.
+                let mask = if row.present { stored_mask(snapshot, row.hash, width).unwrap_or(0) } else { 0 };
+                let area = area_views(snapshot).iter().filter(|&&v| usize::from(v) < width * 8).fold(0u32, |bits, &v| bits | 1 << v);
+                ui.horizontal_wrapped(|ui| {
+                    let set = mask & area;
+                    ui.label(if set == 0 { "No views".to_owned() } else { format!("Views {}", id_ranges(set)) })
+                        .on_hover_text("Set it on each view, under Custom data in its properties.");
+                    let stray = mask & !area;
+                    if stray != 0 {
+                        ui.weak(format!("and {}, which this area lacks", id_ranges(stray)));
+                        if ui.add(Button::new("Clear").small().enabled(!read_only)).on_hover_text("Clear the bits no view here has.").clicked() {
+                            outcome = Some(Outcome::Edit(set_payload(snapshot, row.hash, mask_bytes(mask & area, width))));
+                        }
+                    }
+                });
+            } else if row.flag {
                 let mut on = row.present;
                 if ui.add_enabled_ui(!read_only, |ui| controls::checkbox(ui, &mut on, "")).inner.changed() {
                     outcome = set_flag(snapshot, row.hash, on).map(Outcome::Edit);
@@ -206,6 +339,50 @@ mod tests {
 
         level.registration_hashes = vec![7, 9];
         assert_eq!(registration(&level, Some(&modules)), [(326, "Signboard".to_owned()), (327, "0x00000009 (undeclared)".to_owned())]);
+    }
+
+    #[test]
+    fn view_masks_are_set_per_view_and_keep_bits_no_view_has() {
+        use bigstar_formats::NsmbLevelView;
+        let declared = |key: &str, type_name: &str, editor| LevelDataDeclaration {
+            key: key.to_owned(),
+            kind: LevelDataKind::Value,
+            type_name: type_name.to_owned(),
+            hash: fnv1a_32(key),
+            editor,
+            ..Default::default()
+        };
+        let mask = declared("coop.noLiquidReloadViews", "u16", Some(LevelDataEditor::ViewMask));
+        let modules = ModuleDataCatalog {
+            level_data: vec![mask.clone(), declared("coop.wide", "s32", Some(LevelDataEditor::ViewMask)), declared("coop.plain", "u32", None)],
+            ..Default::default()
+        };
+        // Only an unsigned value of a width an editor can shift into is a mask.
+        assert_eq!(view_masks(Some(&modules)).iter().map(|(d, w)| (d.key.as_str(), *w)).collect::<Vec<_>>(), [("coop.noLiquidReloadViews", 2)]);
+
+        let mut level = snapshot(GlueBlock::default());
+        level.course.views = [3, 0, 1].map(|id| NsmbLevelView { id, ..Default::default() }).to_vec();
+        assert_eq!(area_views(&level), [0, 1, 3]);
+        assert_eq!(stored_mask(&level, mask.hash, 2), Some(0), "an absent key has no bits set");
+        assert_eq!(rows(&level, Some(&modules))[0].view_mask, Some(2));
+
+        // Ticking a view adds the key; ticking it again changes nothing.
+        let Some(LevelEdit::SetGlue { glue, .. }) = set_views(&level, mask.hash, 2, &[1, 3], true) else { panic!() };
+        assert_eq!(glue.values[0].payload, [0x0a, 0x00]);
+        level.glue = glue;
+        assert_eq!(set_views(&level, mask.hash, 2, &[1], true), None);
+        // A view too high for the mask is left alone rather than wrapping onto another bit.
+        let Some(LevelEdit::SetGlue { glue, .. }) = set_views(&level, mask.hash, 2, &[3, 20], false) else { panic!() };
+        assert_eq!(glue.values[0].payload, [0x02, 0x00]);
+
+        // A payload of the wrong size is only bytes.
+        level.glue.values[0].payload = vec![1, 2, 3, 4];
+        assert_eq!(stored_mask(&level, mask.hash, 2), None);
+        assert_eq!(rows(&level, Some(&modules))[0].view_mask, None);
+        assert_eq!(set_views(&level, mask.hash, 2, &[0], true), None);
+
+        assert_eq!(id_ranges(0xFFFF_FFFE), "1–31");
+        assert_eq!(id_ranges(0b1011_0001), "0, 4–5, 7");
     }
 
     #[test]
