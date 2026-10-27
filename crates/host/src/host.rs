@@ -60,8 +60,8 @@ impl Default for HostOptions {
     }
 }
 
-/// `BIGSTAR_DATA` when set; otherwise a `data` directory beside the executable or one level up (an installed layout);
-/// otherwise the repository's own, for builds run from the source tree.
+/// `BIGSTAR_DATA` when set; otherwise a `data` directory beside the executable or one level up (an installed layout,
+/// or a macOS app bundle's resources); otherwise the repository's own, for builds run from the source tree.
 pub fn default_data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("BIGSTAR_DATA") {
         return PathBuf::from(dir);
@@ -69,7 +69,7 @@ pub fn default_data_dir() -> PathBuf {
     if let Ok(exe) = std::env::current_exe()
         && let Some(dir) = exe.parent()
     {
-        for candidate in [dir.join("data"), dir.join("../share/bigstar/data")] {
+        for candidate in [dir.join("data"), dir.join("../share/bigstar/data"), dir.join("../Resources/data")] {
             if candidate.join("actors").is_dir() {
                 return candidate;
             }
