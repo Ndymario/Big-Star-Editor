@@ -1605,8 +1605,8 @@ fn about_icon(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>) -> Op
     slot.as_ref().map(egui::TextureHandle::id)
 }
 
-/// Opens a file in its editor, paired with what it was paired with last time, or at first with the palette of its
-/// name in `listing`. Returns the companion files to read.
+/// Opens a file in its editor, paired with what it was paired with last time, or at first with the palette and
+/// graphics of its name in `listing`. Returns the companion files to read.
 fn open_editor(
     services: &dyn Services,
     workspace: &mut crate::workspace::Workspace,
@@ -1618,10 +1618,12 @@ fn open_editor(
 ) -> Vec<String> {
     let key = crate::graphics_editor::pairing_key(path);
     let pairing = services.load(&key).and_then(|text| serde_json::from_str(&text).ok()).or_else(|| {
-        // Never paired before: the palette of the same name, which is usually the one, until the person says else.
-        let files = listing.map(|l| l.entries.iter().map(|e| e.path.as_str())).into_iter().flatten();
-        let palette = crate::graphics_editor::namesake_palette(path, files)?;
-        Some(crate::graphics_editor::Pairing { palettes: vec![palette], ..Default::default() })
+        // Never paired before: the palette and graphics of the same name, which are usually the ones, until the
+        // person says else.
+        let files = || listing.map(|l| l.entries.iter().map(|e| e.path.as_str())).into_iter().flatten();
+        let palettes: Vec<String> = crate::graphics_editor::namesake_palette(path, files()).into_iter().collect();
+        let characters = crate::graphics_editor::namesake_graphics(path, files());
+        (!palettes.is_empty() || characters.is_some()).then(|| crate::graphics_editor::Pairing { palettes, characters, ..Default::default() })
     });
     workspace.open_file(path, bytes, kind, pairing, metadata)
 }

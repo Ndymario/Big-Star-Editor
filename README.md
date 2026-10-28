@@ -44,7 +44,7 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
   as in NSMB Editor's image manager, with its PNG buttons: export a bitmap, import one with the existing palette or
   recreating it, and export or import every bitmap with every palette at once. Any palettes go with any graphics:
   drag palette files from the Filesystem dock onto an open editor, or open one and choose which editor to attach it
-  to, and switch between them in the Palettes list. A file opened for the first time comes with the palette of its name.
+  to, and switch between them in the Palettes list. A file opened for the first time comes with the palette, and a screen or cells with the graphics, of its name.
 - **Tilesets and backgrounds**: paint Map16 blocks and background layers from a tile picker beside them, build objects
   by clicking blocks, set behaviours on many blocks at once, and share tilesets as files.
 - **Text**: edit the game's messages, with their special codes, and export or import them as text.

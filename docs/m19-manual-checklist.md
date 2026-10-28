@@ -32,7 +32,8 @@ to NSMB Editor finds every step where they expect it.
     the Palettes list and confirm both files are listed with their rows, the new one shown; choose a row of the first
     and confirm the sheet redraws in it. Export with all palettes and confirm the PNG holds every row of both. Detach
     one with the button beside its name and confirm the other stays. Change a colour and confirm Save writes that
-    NCLR as well. Close and reopen the NCGR and confirm the same palettes come back, the same one shown. Open an NSCR,
+    NCLR as well. Close and reopen the NCGR and confirm the same palettes come back, the same one shown. Open an NSCR
+    that has an NCGR and NCLR of its name beside it and confirm it opens with both attached. Open one that has none,
     drag an NCGR onto its **Graphics file** row and two NCLRs onto its palette list, switch between them, and paint
     it from the tile picker. Save both and confirm the module holds the edits. Open an NCLR once more and choose
     **Open on its own**.

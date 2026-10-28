@@ -87,9 +87,21 @@ pub fn pairing_key(path: &str) -> String {
 /// screens and cells. What a file is paired with before the person says otherwise; any other palette can be added.
 pub fn namesake_palette<'a>(path: &str, files: impl IntoIterator<Item = &'a str>) -> Option<String> {
     const SUFFIXES: [&str; 8] = ["_ncg.bin", "_nsc.bin", "_nce.bin", "_nan.bin", ".ncgr", ".nscr", ".ncer", ".nanr"];
+    namesake(path, &SUFFIXES, ["_ncl.bin", ".nclr"], files)
+}
+
+/// The graphics file named as the screen or cells `path` is, beside it: `x_ncg.bin` for `x_nsc.bin`, `x.ncgr` for
+/// `x.nscr`. Like [`namesake_palette`], only where pairing starts.
+pub fn namesake_graphics<'a>(path: &str, files: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    const SUFFIXES: [&str; 6] = ["_nsc.bin", "_nce.bin", "_nan.bin", ".nscr", ".ncer", ".nanr"];
+    namesake(path, &SUFFIXES, ["_ncg.bin", ".ncgr"], files)
+}
+
+/// The file in `files` that is `path` with one of `suffixes` swapped for one of `wanted`, whatever the case.
+fn namesake<'a>(path: &str, suffixes: &[&str], wanted: [&str; 2], files: impl IntoIterator<Item = &'a str>) -> Option<String> {
     let lower = path.to_ascii_lowercase();
-    let stem = SUFFIXES.iter().find_map(|suffix| lower.strip_suffix(suffix))?;
-    let wanted = [format!("{stem}_ncl.bin"), format!("{stem}.nclr")];
+    let stem = suffixes.iter().find_map(|suffix| lower.strip_suffix(suffix))?;
+    let wanted = wanted.map(|suffix| format!("{stem}{suffix}"));
     files.into_iter().find(|file| wanted.iter().any(|w| file.eq_ignore_ascii_case(w))).map(str::to_owned)
 }
 
@@ -1736,6 +1748,16 @@ mod tests {
         assert_eq!(namesake_palette("bg/lonely_ncg.bin", files), None, "nothing of its name");
         assert_eq!(namesake_palette("other/demo_ncg.bin", files), None, "only beside it");
         assert_eq!(namesake_palette("bg/demo_ncl.bin", files), None, "a palette is not given one");
+    }
+
+    #[test]
+    fn the_graphics_of_the_same_name_are_the_default_for_screens_and_cells() {
+        let files = ["bg/demo_ncg.bin", "obj/Hero.NCGR"];
+        assert_eq!(namesake_graphics("bg/demo_nsc.bin", files).as_deref(), Some("bg/demo_ncg.bin"));
+        assert_eq!(namesake_graphics("obj/hero.ncer", files).as_deref(), Some("obj/Hero.NCGR"));
+        assert_eq!(namesake_graphics("obj/hero.nanr", files).as_deref(), Some("obj/Hero.NCGR"));
+        assert_eq!(namesake_graphics("bg/demo_ncg.bin", files), None, "graphics are not their own graphics");
+        assert_eq!(namesake_graphics("bg/other_nsc.bin", files), None);
     }
 
     #[test]
