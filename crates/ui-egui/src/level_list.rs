@@ -1,0 +1,126 @@
+//! The Levels tab of the left panel: the project's levels by world. Picking an area shows it in the Preview tab; Edit
+//! (or a double-click) opens it as a document.
+
+use bigstar_protocol::{AreaSummary, LevelId, LevelSummary, LevelWorld};
+use egui::{RichText, Ui};
+
+use crate::controls::{self, Button, Row};
+use crate::session::Session;
+
+/// A group of the level list: a world, or a step of a world path such as "Mario vs. Luigi > Multicard".
+#[derive(Default)]
+struct Group<'a> {
+    name: String,
+    groups: Vec<Group<'a>>,
+    levels: Vec<&'a LevelSummary>,
+}
+
+/// The catalog's worlds as a tree: a world named as a path is a group holding a group, not a row with an arrow in its
+/// label.
+fn level_groups(worlds: &[LevelWorld]) -> Group<'_> {
+    let mut root = Group::default();
+    for world in worlds {
+        let mut group = &mut root;
+        for part in world.name.split('>').map(str::trim).filter(|part| !part.is_empty()) {
+            let position = match group.groups.iter().position(|g| g.name == part) {
+                Some(position) => position,
+                None => {
+                    group.groups.push(Group { name: part.to_owned(), ..Group::default() });
+                    group.groups.len() - 1
+                }
+            };
+            let Some(next) = group.groups.get_mut(position) else { break };
+            group = next;
+        }
+        group.levels.extend(&world.levels);
+    }
+    root
+}
+
+/// What the person asked of the list this frame.
+#[derive(Default)]
+struct Picked {
+    /// An area to show in the Preview tab.
+    preview: Option<String>,
+    /// An area to open as a document.
+    open: Option<String>,
+    /// A file to show in the Filesystem dock.
+    reveal: Option<String>,
+}
+
+fn area_row(ui: &mut Ui, label: &str, area: &AreaSummary, shown: Option<&str>, picked: &mut Picked) {
+    ui.horizontal(|ui| {
+        ui.add_enabled_ui(area.available, |ui| {
+            let tip = format!(
+                "{label}\nToken: {}\nCourse: {}\nBGDat: {}",
+                area.token,
+                if area.course_path.is_empty() { "missing" } else { &area.course_path },
+                if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
+            );
+            let response = Row::new(label).selected(shown == Some(area.token.as_str())).fit().show(ui).on_hover_text(tip);
+            if response.double_clicked() {
+                picked.open = Some(area.token.clone());
+            } else if response.clicked() {
+                picked.preview = Some(area.token.clone());
+            }
+            controls::context_menu(&response, |ui| {
+                if Button::menu("Open").show(ui).clicked() {
+                    picked.open = Some(area.token.clone());
+                    ui.close();
+                }
+                for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
+                    if Button::menu(name).enabled(!path.is_empty()).show(ui).clicked() {
+                        picked.reveal = Some(path.clone());
+                        ui.close();
+                    }
+                }
+            });
+            if Button::new("Edit").small().quiet().show(ui).clicked() {
+                picked.open = Some(area.token.clone());
+            }
+        });
+    });
+}
+
+fn group_ui(ui: &mut Ui, group: &Group<'_>, path: &str, shown: Option<&str>, picked: &mut Picked) {
+    for child in &group.groups {
+        let id = format!("{path}>{}", child.name);
+        controls::group(ui, &id, RichText::new(&child.name).strong(), false, |ui| {
+            group_ui(ui, child, &id, shown, picked);
+        });
+    }
+    for level in &group.levels {
+        match level.areas.as_slice() {
+            [only] => area_row(ui, &level.display_name, only, shown, picked),
+            areas => {
+                controls::group(ui, format!("{path}/{}", level.display_name), &level.display_name, true, |ui| {
+                    for area in areas {
+                        area_row(ui, &area.display_name, area, shown, picked);
+                    }
+                });
+            }
+        }
+    }
+}
+
+/// The list itself; `previewed` is the level in the Preview tab, whose row is lit. A level of one area is one row.
+/// Returns a file to show in the Filesystem dock, when asked for.
+pub fn show(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) -> Option<String> {
+    // A ROM edited directly is its own ROM, though an uploaded one has no path to give.
+    if let Some(project) = &session.project
+        && !project.mode.is_rom()
+        && project.rom_path.is_none()
+    {
+        controls::error_text(ui, "This project has no ROM, so no level can be opened.");
+    }
+    let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
+    let root = level_groups(&session.worlds);
+    let mut picked = Picked::default();
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| group_ui(ui, &root, "", shown.as_deref(), &mut picked));
+    if let Some(area) = picked.open {
+        session.open_level(&area);
+    } else if let Some(area) = picked.preview {
+        session.preview_level(&area);
+    }
+    picked.reveal
+}

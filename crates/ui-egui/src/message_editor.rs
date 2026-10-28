@@ -318,9 +318,10 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
     ui.label(doc.info());
     controls::search(ui, &mut doc.filter, "Filter messages by text or ID", Width::Fill);
 
-    let list_height = (ui.available_height() * 0.55).max(80.0);
+    // The list takes what the editor under it leaves, however its buttons wrap.
+    let mut footer = controls::Footer::new(ui, "messages", 260.0);
     let mut chosen = None;
-    egui::ScrollArea::vertical().id_salt("messages").max_height(list_height).auto_shrink([false, false]).show(ui, |ui| {
+    egui::ScrollArea::vertical().id_salt("messages").max_height(footer.room_above(ui, 80.0)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("message-list").num_columns(if doc.bmg.has_mid1 { 3 } else { 2 }).striped(true).show(ui, |ui| {
             ui.strong("#");
             if doc.bmg.has_mid1 {
@@ -352,6 +353,7 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
         view.cursor = None;
     }
 
+    footer.start(ui);
     ui.separator();
     let editing = doc.active.is_some();
     let editor = ui.add_enabled(editing, TextField::multiline(&mut doc.text).code().lock_focus().rows(5).id_salt("message-text"));
@@ -416,9 +418,8 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
             }
         }
     });
-    if let Some(notice) = &view.notice {
-        ui.weak(notice);
-    }
+    controls::notice_line(ui, &mut view.notice, false);
+    footer.end(ui);
 
     prompts(ui, doc, view);
     actions

@@ -93,6 +93,74 @@ impl<T: Clone + PartialEq> History<T> {
     }
 }
 
+/// A document whose undo keeps whole snapshots of what it edits: where its history is, and how to take and put back
+/// a snapshot. Its steps then come from [`Undoable`].
+pub trait Snapshots {
+    type State: Clone + PartialEq;
+
+    fn history(&self) -> &History<Self::State>;
+    fn history_mut(&mut self) -> &mut History<Self::State>;
+    fn snapshot(&self) -> Self::State;
+    /// Puts back a snapshot that undo or redo returned to.
+    fn restore(&mut self, state: Self::State);
+}
+
+/// Undo and redo in a document that keeps its own history, whatever it keeps, so the Edit menu and the toolbar can
+/// work whichever editor is in front.
+pub trait Undoable {
+    /// Starts an undo step called `name`, unless one is open: the edits until [`Self::end_edit`] are one step.
+    fn begin_edit(&mut self, name: &str);
+    fn end_edit(&mut self);
+    fn can_undo(&self) -> bool;
+    fn can_redo(&self) -> bool;
+    /// The names of the steps to undo, latest first, and to redo, next first.
+    fn history_names(&self) -> (Vec<String>, Vec<String>);
+    fn undo(&mut self);
+    fn redo(&mut self);
+}
+
+impl<D: Snapshots> Undoable for D {
+    fn begin_edit(&mut self, name: &str) {
+        if !self.history().is_open() {
+            let state = self.snapshot();
+            self.history_mut().begin(name, &state);
+        }
+    }
+
+    fn end_edit(&mut self) {
+        if self.history().is_open() {
+            let state = self.snapshot();
+            self.history_mut().commit(&state);
+        }
+    }
+
+    fn can_undo(&self) -> bool {
+        self.history().can_undo()
+    }
+
+    fn can_redo(&self) -> bool {
+        self.history().can_redo()
+    }
+
+    fn history_names(&self) -> (Vec<String>, Vec<String>) {
+        self.history().names()
+    }
+
+    fn undo(&mut self) {
+        let mut state = self.snapshot();
+        if self.history_mut().undo(&mut state) {
+            self.restore(state);
+        }
+    }
+
+    fn redo(&mut self) {
+        let mut state = self.snapshot();
+        if self.history_mut().redo(&mut state) {
+            self.restore(state);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

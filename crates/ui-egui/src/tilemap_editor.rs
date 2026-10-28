@@ -236,11 +236,11 @@ impl TilemapEditor {
 
     /// Draws the map with the brush or the rectangle the drag covers.
     pub fn canvas(&mut self, ui: &mut Ui, name: &str, image: &RgbaImage, version: u64, max_height: f32) -> CanvasInput {
-        let accent = Color32::from_rgb(255, 200, 40);
+        let accent = zoom_canvas::SELECTION;
         let pick = Color32::from_rgb(80, 180, 255);
         let mut overlays = Vec::new();
         if let Some((a, b)) = self.selection {
-            overlays.push(Overlay::cells(a, b, 8, accent).filled(Color32::from_rgba_unmultiplied(255, 200, 40, 30)));
+            overlays.push(Overlay::selection(a, b, 8));
         }
         if let (Some(start), Some(at)) = (self.picking, self.hover) {
             overlays.push(Overlay::cells(start, at, 8, pick));

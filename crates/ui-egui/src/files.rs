@@ -386,8 +386,10 @@ impl FilesDock {
         }
         ui.separator();
         let tree = build_tree(&listing.entries);
-        let footer = 96.0;
-        egui::ScrollArea::both().max_height((ui.available_height() - footer).max(80.0)).auto_shrink([false, false]).show(ui, |ui| {
+        // The tree takes what the footer below it leaves, which changes with the selected file's details and with how
+        // many rows its buttons wrap to.
+        let mut footer = controls::Footer::new(ui, "files", 96.0);
+        egui::ScrollArea::both().max_height(footer.room_above(ui, 80.0)).auto_shrink([false, false]).show(ui, |ui| {
             const GAP: f32 = 12.0;
             // The path column takes what the others leave, so a line reaches across the dock. How much they take is
             // known once they are laid out: last frame's figure.
@@ -409,6 +411,7 @@ impl FilesDock {
             let others = second.map_or(0.0, |left| grid.response.rect.right() - left + GAP);
             ui.data_mut(|data| data.insert_temp(others_id, others));
         });
+        footer.start(ui);
         ui.separator();
         let entry = self.selected_entry(&listing).cloned();
         let editor = entry.as_ref().and_then(|e| self.editors.get(&e.path).copied());
@@ -465,6 +468,7 @@ impl FilesDock {
                 session.read_file(&entry.path, FileRead::Hex);
             }
         });
+        footer.end(ui);
         self.prompt_window(ui.ctx(), session, &listing);
     }
 

@@ -15,6 +15,7 @@ use crate::canvas::{self, TexturePool};
 use crate::editors::EditorKind;
 use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing, pairing_key};
 use crate::hex_editor::HexDoc;
+use crate::history::Undoable;
 use crate::level_view::{Item, Kind};
 use crate::message_editor::{MessageAction, MessageDoc, MessageView};
 use crate::module_viewer::{ModuleDoc, ModuleView};
@@ -33,13 +34,6 @@ pub enum DocTab {
     File(u64),
     /// A level's tilesets and backgrounds.
     Tileset(LevelId),
-}
-
-/// A document that keeps its own undo history.
-enum EditorHistory<'a> {
-    Graphics(&'a mut GraphicsDoc),
-    Resource(&'a mut ResourceDoc),
-    Tileset(&'a mut TilesetDoc),
 }
 
 /// A file open as a document, in the editor that understands it, or as hex.
@@ -576,14 +570,14 @@ impl Workspace {
 
     /// The graphics document in front, when it keeps its own undo: a tile sheet, a resource's picture or a tileset
     /// workspace. Undo and redo act on it rather than on a level.
-    fn editor_in_front(&mut self) -> Option<EditorHistory<'_>> {
+    fn editor_in_front(&mut self) -> Option<&mut dyn Undoable> {
         self.mend_dock();
         let tab = *self.dock.find_active_focused()?.1;
         match tab {
-            DocTab::Tileset(level) => self.tilesets.get_mut(&level).map(|(doc, _)| EditorHistory::Tileset(doc)),
+            DocTab::Tileset(level) => self.tilesets.get_mut(&level).map(|(doc, _)| doc as &mut dyn Undoable),
             DocTab::File(key) => match &mut self.files.get_mut(&key)?.view {
-                FileView::Graphics(doc, _) => Some(EditorHistory::Graphics(doc)),
-                FileView::Resource { doc, .. } => Some(EditorHistory::Resource(doc)),
+                FileView::Graphics(doc, _) => Some(doc.as_mut()),
+                FileView::Resource { doc, .. } => Some(doc.as_mut()),
                 _ => None,
             },
             _ => None,
@@ -592,24 +586,19 @@ impl Workspace {
 
     /// The front editor's undo and redo steps, and whether each can be taken.
     pub fn editor_history(&mut self) -> Option<(Vec<String>, Vec<String>, bool, bool)> {
-        Some(match self.editor_in_front()? {
-            EditorHistory::Graphics(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
-            EditorHistory::Resource(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
-            EditorHistory::Tileset(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
-        })
+        let editor = self.editor_in_front()?;
+        let (undo, redo) = editor.history_names();
+        Some((undo, redo, editor.can_undo(), editor.can_redo()))
     }
 
     /// Takes `steps` undo (or redo) steps in the front editor. Returns whether there was one to take them in.
     pub fn editor_step(&mut self, undo: bool, steps: usize) -> bool {
-        let Some(mut editor) = self.editor_in_front() else { return false };
+        let Some(editor) = self.editor_in_front() else { return false };
         for _ in 0..steps {
-            match (&mut editor, undo) {
-                (EditorHistory::Graphics(doc), true) => doc.undo(),
-                (EditorHistory::Graphics(doc), false) => doc.redo(),
-                (EditorHistory::Resource(doc), true) => doc.undo(),
-                (EditorHistory::Resource(doc), false) => doc.redo(),
-                (EditorHistory::Tileset(doc), true) => doc.undo(),
-                (EditorHistory::Tileset(doc), false) => doc.redo(),
+            if undo {
+                editor.undo();
+            } else {
+                editor.redo();
             }
         }
         true

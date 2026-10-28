@@ -19,7 +19,7 @@ use crate::theme::{Theme, Tokens};
 use crate::tools::{self, Tools};
 use crate::workspace::Workspace;
 use crate::zoom_canvas::Grids;
-use crate::{dialogs, icons, level_data, properties_ui};
+use crate::{dialogs, icons, level_data, level_list, properties_ui};
 
 /// Storage keys, so a shell can seed them.
 pub const RECENT_HOSTS_KEY: &str = "recent_hosts";
@@ -35,24 +35,6 @@ struct ConnectForm {
     recent: Vec<String>,
     error: Option<String>,
     loaded: bool,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{host_base, join, parent};
-
-    #[test]
-    fn a_host_may_be_given_with_or_without_its_socket_path() {
-        assert_eq!(host_base("ws://127.0.0.1:7878/ws"), "ws://127.0.0.1:7878");
-        assert_eq!(host_base(" ws://example.org:7878/ "), "ws://example.org:7878");
-        assert_eq!(host_base("wss://example.org/ws/"), "wss://example.org");
-    }
-
-    #[test]
-    fn paths_join_and_split_at_the_root() {
-        assert_eq!((join("", "a"), join("a/b", "c")), ("a".to_owned(), "a/b/c".to_owned()));
-        assert_eq!((parent("a/b"), parent("a"), parent("")), ("a".to_owned(), String::new(), String::new()));
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -855,16 +837,20 @@ impl BigStarApp {
                         ui.weak("No level open for editing");
                         return;
                     };
-                    ui.weak(format!(
+                    let summary = format!(
                         "{} · {} objects · {} sprites · {} entrances · revision {}",
                         snapshot.title,
                         snapshot.objects.len(),
                         snapshot.course.sprites.len(),
                         snapshot.course.entrances.len(),
                         snapshot.revision
-                    ));
+                    );
+                    // Cut short rather than run off the window, sharing the rest of the row with a warning when there is one.
+                    let reserve = if snapshot.glue_error.is_some() { ui.available_width() / 2.0 } else { 0.0 };
+                    controls::one_line(ui, RichText::new(summary).weak(), reserve);
                     if let Some(error) = &snapshot.glue_error {
-                        controls::warning_text(ui, format!("Custom actor data unreadable: {error}"));
+                        let warning = RichText::new(format!("Custom actor data unreadable: {error}")).color(Tokens::get(ui.ctx()).warning);
+                        controls::one_line(ui, warning, 0.0);
                     }
                 });
                 if build {
@@ -890,16 +876,15 @@ impl BigStarApp {
                     ui.add(controls::Spinner::new());
                     ui.weak(&session.build.status);
                 }
+                // One line whatever it says, so the bar keeps its height and Dismiss stays in reach.
                 let mut dismiss = false;
                 if let Some(notice) = &session.notice {
-                    if notice.error {
-                        controls::error_text(ui, &notice.text);
-                    } else {
-                        ui.label(&notice.text);
-                    }
+                    let text = RichText::new(&notice.text);
+                    let text = if notice.error { text.color(Tokens::get(ui.ctx()).danger) } else { text };
+                    controls::one_line(ui, text, controls::HEIGHT_SM + ui.spacing().item_spacing.x);
                     dismiss = Button::icon(icons::CLOSE).ghost().small().name("Dismiss").show(ui).on_hover_text("Dismiss").clicked();
                 } else if let Some(last) = session.log.last() {
-                    ui.weak(&last.text);
+                    controls::one_line(ui, RichText::new(&last.text).weak(), 0.0);
                 }
                 if dismiss {
                     session.dismiss_notice();
@@ -919,7 +904,7 @@ impl BigStarApp {
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
                 Left::Levels => {
-                    if let Some(path) = level_list(ui, session, self.workspace.previewed()) {
+                    if let Some(path) = level_list::show(ui, session, self.workspace.previewed()) {
                         // A level row hands the person over to its file.
                         self.left = Left::Filesystem;
                         if !self.files.reveal(session.filesystem.as_ref(), &path) {
@@ -941,16 +926,16 @@ impl BigStarApp {
         });
     }
 
-    /// The properties and level data of the active document.
+    /// The properties and level data of the active document. The panel stays while a project is open, whatever is in
+    /// front, so moving between a level and another document does not resize everything in the middle.
     fn right_panel(&mut self, ui: &mut Ui) {
         let Some(session) = &mut self.session else { return };
-        let Some(level) = session.active else { return };
+        let level = session.active;
         let busy = session.busy();
         let rom_mode = session.rom_mode();
         let mut edit = None;
         let mut error = None;
         egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
-            let Some(view) = session.levels.get_mut(&level) else { return };
             // The Level Data tab edits glue, which only the module's code reads; a ROM edited directly keeps it as it is.
             if rom_mode {
                 self.side = Side::Properties;
@@ -959,6 +944,10 @@ impl BigStarApp {
                 controls::tabs(ui, "side", &mut self.side, &[(Side::Properties, "Properties"), (Side::LevelData, "Level Data")]);
             }
             ui.add_space(2.0);
+            let Some(view) = level.and_then(|level| session.levels.get_mut(&level)) else {
+                ui.weak("Bring a level to the front to see and change its properties.");
+                return;
+            };
             match self.side {
                 Side::Properties => {
                     let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());
@@ -977,7 +966,9 @@ impl BigStarApp {
                 }
             }
         });
-        if let Some(edit) = edit.filter(|_| !busy) {
+        if let Some(level) = level
+            && let Some(edit) = edit.filter(|_| !busy)
+        {
             session.edit_level(level, edit);
         }
         if let Some(error) = error {
@@ -1160,7 +1151,7 @@ impl BigStarApp {
         let mut close = false;
         let icon = about_icon(ctx, &mut self.about_icon);
         dialogs::window("About Big Star Editor").open(&mut open).resizable(false).default_width(480.0).show(ctx, |ui| {
-            ui.set_width(480.0);
+            dialogs::fit_width(ui, 480.0);
             ui.horizontal_top(|ui| {
                 if let Some(icon) = icon {
                     ui.add(egui::Image::new((icon, egui::vec2(72.0, 72.0))));
@@ -1482,118 +1473,6 @@ impl BigStarApp {
     }
 }
 
-/// A group of the level list: a world, or a step of a world path such as "Mario vs. Luigi > Multicard".
-#[derive(Default)]
-struct Group<'a> {
-    name: String,
-    groups: Vec<Group<'a>>,
-    levels: Vec<&'a bigstar_protocol::LevelSummary>,
-}
-
-/// The catalog's worlds as a tree: a world named as a path is a group holding a group, not a row with an arrow in its
-/// label.
-fn level_groups(worlds: &[bigstar_protocol::LevelWorld]) -> Group<'_> {
-    let mut root = Group::default();
-    for world in worlds {
-        let mut group = &mut root;
-        for part in world.name.split('>').map(str::trim).filter(|part| !part.is_empty()) {
-            let position = match group.groups.iter().position(|g| g.name == part) {
-                Some(position) => position,
-                None => {
-                    group.groups.push(Group { name: part.to_owned(), ..Group::default() });
-                    group.groups.len() - 1
-                }
-            };
-            let Some(next) = group.groups.get_mut(position) else { break };
-            group = next;
-        }
-        group.levels.extend(&world.levels);
-    }
-    root
-}
-
-/// The project's levels by world. Picking an area shows it in the Preview tab; Edit (or a double-click) opens it as a
-/// document. A level of one area is one row. Returns a file to show in the Filesystem dock, when asked for.
-fn level_list(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) -> Option<String> {
-    // A ROM edited directly is its own ROM, though an uploaded one has no path to give.
-    if let Some(project) = &session.project
-        && !project.mode.is_rom()
-        && project.rom_path.is_none()
-    {
-        controls::error_text(ui, "This project has no ROM, so no level can be opened.");
-    }
-    let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
-    let root = level_groups(&session.worlds);
-    fn area_row(
-        ui: &mut Ui,
-        label: &str,
-        area: &bigstar_protocol::AreaSummary,
-        shown: Option<&str>,
-        picked: &mut (Option<String>, Option<String>, Option<String>),
-    ) {
-        ui.horizontal(|ui| {
-            ui.add_enabled_ui(area.available, |ui| {
-                let tip = format!(
-                    "{label}\nToken: {}\nCourse: {}\nBGDat: {}",
-                    area.token,
-                    if area.course_path.is_empty() { "missing" } else { &area.course_path },
-                    if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
-                );
-                let response = Row::new(label).selected(shown == Some(area.token.as_str())).fit().show(ui).on_hover_text(tip);
-                if response.double_clicked() {
-                    picked.1 = Some(area.token.clone());
-                } else if response.clicked() {
-                    picked.0 = Some(area.token.clone());
-                }
-                controls::context_menu(&response, |ui| {
-                    if Button::menu("Open").show(ui).clicked() {
-                        picked.1 = Some(area.token.clone());
-                        ui.close();
-                    }
-                    for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
-                        if Button::menu(name).enabled(!path.is_empty()).show(ui).clicked() {
-                            picked.2 = Some(path.clone());
-                            ui.close();
-                        }
-                    }
-                });
-                if Button::new("Edit").small().quiet().show(ui).clicked() {
-                    picked.1 = Some(area.token.clone());
-                }
-            });
-        });
-    }
-    fn group_ui(ui: &mut Ui, group: &Group<'_>, path: &str, shown: Option<&str>, picked: &mut (Option<String>, Option<String>, Option<String>)) {
-        for child in &group.groups {
-            let id = format!("{path}>{}", child.name);
-            controls::group(ui, &id, RichText::new(&child.name).strong(), false, |ui| {
-                group_ui(ui, child, &id, shown, picked);
-            });
-        }
-        for level in &group.levels {
-            match level.areas.as_slice() {
-                [only] => area_row(ui, &level.display_name, only, shown, picked),
-                areas => {
-                    controls::group(ui, format!("{path}/{}", level.display_name), &level.display_name, true, |ui| {
-                        for area in areas {
-                            area_row(ui, &area.display_name, area, shown, picked);
-                        }
-                    });
-                }
-            }
-        }
-    }
-    let mut picked = (None, None, None);
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| group_ui(ui, &root, "", shown.as_deref(), &mut picked));
-    let (preview, open, reveal) = picked;
-    if let Some(area) = open {
-        session.open_level(&area);
-    } else if let Some(area) = preview {
-        session.preview_level(&area);
-    }
-    reveal
-}
-
 /// The editor's icon, scaled down once and smoothed: unlike the level art, it is not pixel art.
 fn about_icon(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>) -> Option<egui::TextureId> {
     if slot.is_none() {
@@ -1626,4 +1505,22 @@ fn open_editor(
         (!palettes.is_empty() || characters.is_some()).then(|| crate::graphics_editor::Pairing { palettes, characters, ..Default::default() })
     });
     workspace.open_file(path, bytes, kind, pairing, metadata)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{host_base, join, parent};
+
+    #[test]
+    fn a_host_may_be_given_with_or_without_its_socket_path() {
+        assert_eq!(host_base("ws://127.0.0.1:7878/ws"), "ws://127.0.0.1:7878");
+        assert_eq!(host_base(" ws://example.org:7878/ "), "ws://example.org:7878");
+        assert_eq!(host_base("wss://example.org/ws/"), "wss://example.org");
+    }
+
+    #[test]
+    fn paths_join_and_split_at_the_root() {
+        assert_eq!((join("", "a"), join("a/b", "c")), ("a".to_owned(), "a/b/c".to_owned()));
+        assert_eq!((parent("a/b"), parent("a"), parent("")), ("a".to_owned(), String::new(), String::new()));
+    }
 }

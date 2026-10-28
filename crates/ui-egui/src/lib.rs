@@ -18,6 +18,7 @@ mod i18n;
 mod icons;
 mod image_manager;
 mod level_data;
+mod level_list;
 mod level_view;
 mod message_editor;
 mod module_viewer;

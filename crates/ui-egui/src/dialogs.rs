@@ -17,14 +17,18 @@ pub fn modal<R>(ctx: &egui::Context, id: impl egui::AsIdSalt, title: &str, width
                 .inner_margin(egui::Margin::same(16)),
         )
         .show(ctx, |ui| {
-            // Never wider than the window it covers.
-            ui.set_width(width.min(ui.ctx().content_rect().width() - 48.0));
+            fit_width(ui, width);
             controls::title(ui, title);
             ui.add_space(6.0);
             body(ui)
         });
     let dismissed = response.should_close();
     (response.inner, dismissed)
+}
+
+/// Makes `ui` `width` points wide, or as wide as the window it opens over allows, whichever is narrower.
+pub fn fit_width(ui: &mut Ui, width: f32) {
+    ui.set_width(width.min(ui.ctx().content_rect().width() - 48.0));
 }
 
 /// A floating window titled `title`: a tool that stays open beside the documents. Finish it with `.open(..)` and

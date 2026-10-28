@@ -245,8 +245,9 @@ pub struct CanvasOutput {
 
 fn toolbar(ui: &mut Ui, view: &mut LevelView) {
     // One line whatever is chosen, scrolling sideways when narrow: a toolbar that wrapped differently per kind would
-    // resize the canvas under the person, and re-fit a level they have not zoomed.
-    egui::ScrollArea::horizontal().id_salt("canvas-toolbar").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(
+    // resize the canvas under the person, and re-fit a level they have not zoomed. The scroll bar floats over the row
+    // under the pointer, taking no room, so what runs past the edge can be found.
+    egui::ScrollArea::horizontal().id_salt("canvas-toolbar").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded).show(
         ui,
         |ui| {
             ui.horizontal(|ui| {

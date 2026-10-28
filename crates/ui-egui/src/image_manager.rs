@@ -4,13 +4,12 @@
 
 use std::collections::BTreeMap;
 
-use bigstar_formats::RgbaImage;
+use bigstar_formats::{RgbaImage, expand_5_to_8, shrink_8_to_5};
 use egui::Ui;
 
 use crate::controls::{self, Button, Choice as _};
 use crate::paint::Grid;
 use crate::services::Services;
-use crate::tileset_editor::{decode_png, encode_png};
 
 /// A bitmap's palette indices, row by row.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -39,6 +38,20 @@ impl Bitmap {
 /// Colours as eight bits a channel.
 pub type Palette = Vec<[u8; 3]>;
 
+/// A PNG's pixels.
+pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, String> {
+    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).map_err(|_| "Could not read the PNG.".to_owned())?.to_rgba8();
+    Ok(RgbaImage { width: decoded.width() as usize, height: decoded.height() as usize, pixels: decoded.into_raw() })
+}
+
+pub fn encode_png(value: &RgbaImage) -> Result<Vec<u8>, String> {
+    let (width, height) = (u32::try_from(value.width).unwrap_or(0), u32::try_from(value.height).unwrap_or(0));
+    let buffer = image::RgbaImage::from_raw(width, height, value.pixels.clone()).ok_or_else(|| "Could not write the PNG.".to_owned())?;
+    let mut bytes = Vec::new();
+    buffer.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|_| "Could not write the PNG.".to_owned())?;
+    Ok(bytes)
+}
+
 /// Draws `bitmap` in `palette`: index 0 is clear, and an index the palette has no colour for is magenta, as NSMB
 /// Editor shows it.
 pub fn render(bitmap: &Bitmap, palette: &[[u8; 3]]) -> RgbaImage {
@@ -59,13 +72,8 @@ fn rgba(image: &RgbaImage, x: usize, y: usize) -> [u8; 4] {
 }
 
 /// The colour a DS palette would store for an eight-bit one: five bits a channel.
-fn five(rgb: [u8; 4]) -> [u16; 3] {
-    let five = |c: u8| (u16::from(c) * 31 + 127) / 255;
-    [five(rgb[0]), five(rgb[1]), five(rgb[2])]
-}
-
-fn eight(channel: u16) -> u8 {
-    ((channel << 3) | (channel >> 2)) as u8
+fn five([r, g, b, _]: [u8; 4]) -> [u16; 3] {
+    [shrink_8_to_5(r), shrink_8_to_5(g), shrink_8_to_5(b)]
 }
 
 /// A clear pixel is one more than half transparent.
@@ -190,7 +198,7 @@ pub fn import_all(image: &RgbaImage, sizes: &[(usize, usize)], palettes: usize, 
         for dimension in 0..palettes * 3 {
             let sum: usize =
                 members.iter().filter_map(|&m| samples.get(m)).map(|(key, n)| usize::from(key.get(dimension).copied().unwrap_or(0)) * n).sum();
-            let value = eight(((sum + total / 2) / total) as u16);
+            let value = expand_5_to_8(((sum + total / 2) / total) as u16);
             if let Some(channel) = result.get_mut(dimension / 3).and_then(|p| p.get_mut(index)).and_then(|c| c.get_mut(dimension % 3)) {
                 *channel = value;
             }
@@ -473,6 +481,13 @@ mod tests {
     fn picture(width: usize, height: usize, colour: impl Fn(usize, usize) -> [u8; 4]) -> RgbaImage {
         let pixels = (0..height).flat_map(|y| (0..width).map(move |x| (x, y))).flat_map(|(x, y)| colour(x, y)).collect();
         RgbaImage { width, height, pixels }
+    }
+
+    #[test]
+    fn pngs_round_trip() {
+        let image = RgbaImage { width: 2, height: 1, pixels: vec![1, 2, 3, 255, 4, 5, 6, 0] };
+        assert_eq!(decode_png(&encode_png(&image).unwrap()).unwrap(), image);
+        assert!(decode_png(b"not a png").is_err());
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //! which is what the map is then painted with. As NSMB Editor's tile picker, with its own zoom.
 
 use bigstar_formats::RgbaImage;
-use egui::{Color32, Ui};
+use egui::Ui;
 
 use crate::paint::{Pattern, Point};
 use crate::zoom_canvas::{self, CanvasState, Overlay, Steps};
@@ -78,11 +78,9 @@ pub fn show(
     max_height: f32,
 ) -> Picked {
     let (left, top, width, height) = state.selection();
-    let selection =
-        Overlay::cells((left as i64, top as i64), ((left + width - 1) as i64, (top + height - 1) as i64), cell, Color32::from_rgb(255, 200, 40))
-            .filled(Color32::from_rgba_unmultiplied(255, 200, 40, 40));
+    let selection = Overlay::selection((left as i64, top as i64), ((left + width - 1) as i64, (top + height - 1) as i64), cell);
     let steps = Steps { fine: 0, coarse: cell };
-    ui.horizontal(|ui| zoom_canvas::zoom_controls(ui, &mut state.canvas, steps));
+    ui.horizontal_wrapped(|ui| zoom_canvas::zoom_controls(ui, &mut state.canvas, steps));
     let input = zoom_canvas::show(ui, name, image, version, &mut state.texture, &mut state.canvas, steps, &[selection], max_height);
     let mut picked = Picked { changed: false, finished: input.released().is_some() };
     let Some((x, y)) = input.at else { return picked };

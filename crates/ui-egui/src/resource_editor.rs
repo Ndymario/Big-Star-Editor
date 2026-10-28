@@ -7,13 +7,13 @@
 use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
 use bigstar_formats::{
     Bnbl, BnblEntry, Bncd, BncdEntry, BncdSubentry, Bncl, BnclEntry, DsBanner, Enpg, RgbaImage, RomUserMetadata, RomUserMetadataEntry,
-    RomUserMetadataSection, UiResourceKind, banner_title, identify_ui_resource, parse_bnbl, parse_bncd, parse_bncl, parse_ds_banner, parse_enpg,
-    parse_rom_user_metadata, set_banner_title, write_bnbl, write_bncd, write_bncl, write_ds_banner, write_enpg, write_rom_user_metadata,
+    RomUserMetadataSection, UiResourceKind, banner_title, bgr555_to_rgb, identify_ui_resource, pack_bgr555, parse_bnbl, parse_bncd, parse_bncl,
+    parse_ds_banner, parse_enpg, parse_rom_user_metadata, set_banner_title, write_bnbl, write_bncd, write_bncl, write_ds_banner, write_enpg,
+    write_rom_user_metadata,
 };
 use egui::{Color32, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 
-use crate::graphics_editor::expand;
-use crate::history::History;
+use crate::history::{History, Snapshots, Undoable};
 use crate::paint::{Grid, IndexedSheet};
 use crate::palette_panel;
 use crate::pixel_editor::{self, Command, HistoryButton, PixelEditor};
@@ -110,13 +110,14 @@ fn sheet_width(tiles: usize) -> usize {
     ((tiles as f64).sqrt().ceil() as usize).max(1)
 }
 
+/// A packed BGR555 colour, opaque.
 fn colour(value: u16) -> [u8; 4] {
-    [expand(value & 31), expand((value >> 5) & 31), expand((value >> 10) & 31), 255]
+    let [r, g, b] = bgr555_to_rgb(value);
+    [r, g, b, 255]
 }
 
 fn bgr555([r, g, b]: [u8; 3]) -> u16 {
-    let five = |channel: u8| (u16::from(channel) * 31 + 127) / 255;
-    five(r) | (five(g) << 5) | (five(b) << 10)
+    pack_bgr555(r, g, b)
 }
 
 /// A grey ramp of `colours` BGR555 entries standing in for "index N".
@@ -158,6 +159,26 @@ fn tiled(data: &[u8], eight: bool, colours: &[u16]) -> RgbaImage {
         }
     }
     image
+}
+
+impl Snapshots for ResourceDoc {
+    type State = (Vec<u8>, Vec<u16>);
+
+    fn history(&self) -> &History<Self::State> {
+        &self.history
+    }
+
+    fn history_mut(&mut self) -> &mut History<Self::State> {
+        &mut self.history
+    }
+
+    fn snapshot(&self) -> Self::State {
+        self.image_state()
+    }
+
+    fn restore(&mut self, state: Self::State) {
+        self.set_image_state(state);
+    }
 }
 
 impl ResourceDoc {
@@ -388,46 +409,6 @@ impl ResourceDoc {
         }
         self.version += 1;
         self.dirty = true;
-    }
-
-    pub fn begin_edit(&mut self, name: &str) {
-        if !self.history.is_open() {
-            let state = self.image_state();
-            self.history.begin(name, &state);
-        }
-    }
-
-    pub fn end_edit(&mut self) {
-        if self.history.is_open() {
-            let state = self.image_state();
-            self.history.commit(&state);
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
-    }
-
-    pub fn history_names(&self) -> (Vec<String>, Vec<String>) {
-        self.history.names()
-    }
-
-    pub fn undo(&mut self) {
-        let mut state = self.image_state();
-        if self.history.undo(&mut state) {
-            self.set_image_state(state);
-        }
-    }
-
-    pub fn redo(&mut self) {
-        let mut state = self.image_state();
-        if self.history.redo(&mut state) {
-            self.set_image_state(state);
-        }
     }
 
     /// Changes a colour of the file's own palette, rounded to BGR555.
@@ -664,7 +645,9 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
 /// A table of text cells with a row header to select by; true when a cell changed.
 fn table(ui: &mut Ui, id: &str, columns: &[&str], rows: &mut [Vec<String>], selected: &mut Option<usize>) -> bool {
     let mut changed = false;
-    egui::ScrollArea::both().id_salt(id).max_height((ui.available_height() - 36.0).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
+    // The row of buttons the caller puts under the table keeps its room.
+    let buttons = controls::HEIGHT + ui.spacing().item_spacing.y;
+    egui::ScrollArea::both().id_salt(id).max_height((ui.available_height() - buttons).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new(id).num_columns(columns.len() + 1).striped(true).show(ui, |ui| {
             ui.label("");
             for column in columns {
@@ -733,7 +716,7 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
     let Some((image, palette, editable)) = doc.picture() else { return };
     let colours: Vec<[u8; 4]> = palette.iter().map(|&c| colour(c)).collect();
     let row = if colours.len() > 16 && doc.eight || matches!(doc.page, Some(Page::Enpg(_))) { 256 } else { 16 };
-    egui::Panel::right(egui::Id::new(("resource-palette", &doc.path))).resizable(true).default_size(300.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::right(egui::Id::new(("resource-palette", &doc.path))), 300.0).show(ui, |ui| {
         ui.strong("Palette");
         let edited = egui::ScrollArea::vertical().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, row, editable)).inner;
         if let Some((index, rgb)) = edited {
@@ -767,7 +750,9 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
 fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
     let mut changed = false;
     let mut chosen = None;
-    egui::ScrollArea::vertical().max_height((ui.available_height() - 36.0).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
+    // The row of buttons under the tree keeps its room.
+    let buttons = controls::HEIGHT + ui.spacing().item_spacing.y;
+    egui::ScrollArea::vertical().max_height((ui.available_height() - buttons).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("metadata-tree").num_columns(3).striped(true).show(ui, |ui| {
             ui.strong("Section");
             ui.strong("Key");

@@ -4,7 +4,7 @@
 //! graphics, a resource's picture. The document keeps the pixels and the history; this keeps the tool.
 
 use bigstar_formats::RgbaImage;
-use egui::{Color32, Event, Key, Pos2, Rect, Ui, Vec2};
+use egui::{Event, Key, Pos2, Rect, Ui, Vec2};
 
 use crate::controls::Button;
 use crate::icons::{self, Icon};
@@ -215,9 +215,9 @@ impl PixelEditor {
     /// Draws the canvas with what the tool would do under the pointer.
     pub fn canvas(&mut self, ui: &mut Ui, name: &str, image: &RgbaImage, version: u64, max_height: f32) -> CanvasInput {
         let mut overlays = Vec::new();
-        let accent = Color32::from_rgb(255, 200, 40);
+        let accent = zoom_canvas::SELECTION;
         if let Some((a, b)) = self.selection {
-            overlays.push(Overlay::cells(a, b, 1, accent).filled(Color32::from_rgba_unmultiplied(255, 200, 40, 30)));
+            overlays.push(Overlay::selection(a, b, 1));
         }
         match (self.tool, self.start, self.hover) {
             (PixelTool::Line, Some(start), Some(end)) => {

@@ -127,9 +127,7 @@ pub fn show(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView, services: &
             return;
         }
     };
-    if let Some(notice) = &view.notice {
-        controls::warning_text(ui, notice);
-    }
+    controls::notice_line(ui, &mut view.notice, true);
     controls::tabs(
         ui,
         ("module-tabs", &doc.path),

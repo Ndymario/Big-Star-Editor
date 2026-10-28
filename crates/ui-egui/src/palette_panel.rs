@@ -2,10 +2,10 @@
 //! button paints, the secondary the secondary's. Below the swatches the chosen colour is edited in the DS's own five
 //! bits a channel. A 4bpp image paints in one row of sixteen; choosing a swatch in another row moves to that row.
 
+use bigstar_formats::{bgr555_to_rgb, expand_5_to_8, shrink_8_to_5};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::controls::{self, TextField, Width};
-use crate::graphics_editor::expand;
 
 /// The colours the two buttons paint, as indices into the whole palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,9 +56,9 @@ impl Colours {
     }
 }
 
-fn bgr555(rgba: [u8; 4]) -> [u16; 3] {
-    let five = |c: u8| (u16::from(c) * 31 + 127) / 255;
-    [five(rgba[0]), five(rgba[1]), five(rgba[2])]
+/// An 8-bit colour as the DS's five bits a channel.
+fn bgr555([r, g, b, _]: [u8; 4]) -> [u16; 3] {
+    [shrink_8_to_5(r), shrink_8_to_5(g), shrink_8_to_5(b)]
 }
 
 fn swatch(ui: &mut Ui, rgba: [u8; 4], size: f32) -> (egui::Rect, egui::Response) {
@@ -143,7 +143,7 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
     let mut changed = None;
     if channels != before {
         let [r, g, b] = channels;
-        changed = Some([expand(r), expand(g), expand(b)]);
+        changed = Some([expand_5_to_8(r), expand_5_to_8(g), expand_5_to_8(b)]);
     }
     ui.horizontal(|ui| {
         let packed = channels[0] | (channels[1] << 5) | (channels[2] << 10);
@@ -152,7 +152,7 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
         let response = ui.add(TextField::new(&mut text).width(Width::Px(56.0)).code()).on_hover_text("BGR555, as the file stores it");
         if response.lost_focus() {
             if let Ok(value) = u16::from_str_radix(text.trim(), 16) {
-                changed = Some([expand(value & 31), expand((value >> 5) & 31), expand((value >> 10) & 31)]);
+                changed = Some(bgr555_to_rgb(value));
             }
             ui.data_mut(|d| d.remove::<String>(id));
         } else if response.has_focus() {

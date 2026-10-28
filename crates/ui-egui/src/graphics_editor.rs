@@ -4,16 +4,16 @@
 
 use crate::controls::{self, Choice as _};
 use bigstar_formats::{
-    GraphicsFormatKind, Nanr, Ncer, Ncgr, Nclr, Nscr, RgbaImage, ScreenMapEntry, Tex0, Tex0Palette, Tex0Texture, TextureFormat,
-    decode_bgr555_palette, identify_graphics_format, parse_nanr, parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0, render_ncer_cell,
-    render_tex0_texture, write_nanr, write_ncer, write_ncgr, write_nclr, write_nscr, write_tex0,
+    GraphicsFormatKind, Nanr, Ncer, Ncgr, Nclr, Nscr, RgbaImage, ScreenMapEntry, Tex0, Tex0Palette, Tex0Texture, TextureFormat, bgr555_to_rgb,
+    decode_bgr555_palette, identify_graphics_format, pack_bgr555, parse_nanr, parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0,
+    render_ncer_cell, render_tex0_texture, write_nanr, write_ncer, write_ncgr, write_nclr, write_nscr, write_tex0,
 };
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 
 use crate::editors::{rewrap, unwrap_with};
 use crate::files::DraggedFile;
-use crate::history::History;
+use crate::history::{History, Snapshots, Undoable};
 use crate::image_manager::{self, Bitmap, Group, Images, Lists, ManagerAction, ManagerState};
 use crate::paint::{Grid, IndexedSheet, Pattern, RawScreen};
 use crate::palette_panel;
@@ -105,21 +105,16 @@ fn namesake<'a>(path: &str, suffixes: &[&str], wanted: [&str; 2], files: impl In
     files.into_iter().find(|file| wanted.iter().any(|w| file.eq_ignore_ascii_case(w))).map(str::to_owned)
 }
 
-/// BGR555 to 8-bit channels, the low bits repeating the high ones.
-pub(crate) fn expand(channel: u16) -> u8 {
-    ((channel << 3) | (channel >> 2)) as u8
-}
-
+/// Colour `index` of BGR555 palette bytes, opaque, as 8-bit channels.
 fn unpack(bytes: &[u8], index: usize) -> [u8; 4] {
     let (Some(&low), Some(&high)) = (bytes.get(index * 2), bytes.get(index * 2 + 1)) else { return [0, 0, 0, 255] };
-    let value = u16::from(low) | (u16::from(high) << 8);
-    [expand(value & 31), expand((value >> 5) & 31), expand((value >> 10) & 31), 255]
+    let [r, g, b] = bgr555_to_rgb(u16::from_le_bytes([low, high]));
+    [r, g, b, 255]
 }
 
-/// 8-bit channels to BGR555, rounding to the nearest step.
+/// Writes 8-bit channels into colour `index` of BGR555 palette bytes, rounding to the nearest step.
 pub fn pack(bytes: &mut [u8], index: usize, [r, g, b]: [u8; 3]) {
-    let five = |channel: u8| (u16::from(channel) * 31 + 127) / 255;
-    let packed = five(r) | (five(g) << 5) | (five(b) << 10);
+    let packed = pack_bgr555(r, g, b);
     if let Some(target) = bytes.get_mut(index * 2..index * 2 + 2) {
         target.copy_from_slice(&packed.to_le_bytes());
     }
@@ -223,6 +218,34 @@ pub struct GraphicsDoc {
     /// Grows with every change, so a drawn texture knows when it is stale.
     pub version: u64,
     pub dirty: bool,
+}
+
+impl Snapshots for GraphicsDoc {
+    type State = Contents;
+
+    fn history(&self) -> &History<Contents> {
+        &self.history
+    }
+
+    fn history_mut(&mut self) -> &mut History<Contents> {
+        &mut self.history
+    }
+
+    fn snapshot(&self) -> Contents {
+        self.contents()
+    }
+
+    fn restore(&mut self, contents: Contents) {
+        let companion;
+        Contents { body: self.body, nclr: self.nclr, ncgr: self.ncgr, nscr: self.nscr, tex0: self.tex0, companion } = contents;
+        for (path, colours) in companion {
+            if let Some(palette) = self.palettes.iter_mut().find(|p| p.path == path && p.colours != colours) {
+                palette.colours = colours;
+                palette.edited = true;
+            }
+        }
+        self.touched(true);
+    }
 }
 
 impl GraphicsDoc {
@@ -904,59 +927,6 @@ impl GraphicsDoc {
         }
     }
 
-    fn restore(&mut self, contents: Contents) {
-        let companion;
-        Contents { body: self.body, nclr: self.nclr, ncgr: self.ncgr, nscr: self.nscr, tex0: self.tex0, companion } = contents;
-        for (path, colours) in companion {
-            if let Some(palette) = self.palettes.iter_mut().find(|p| p.path == path && p.colours != colours) {
-                palette.colours = colours;
-                palette.edited = true;
-            }
-        }
-        self.touched(true);
-    }
-
-    /// Starts an undo step called `name`, unless one is open: the edits until [`Self::end_edit`] are one step.
-    pub fn begin_edit(&mut self, name: &str) {
-        if !self.history.is_open() {
-            let contents = self.contents();
-            self.history.begin(name, &contents);
-        }
-    }
-
-    pub fn end_edit(&mut self) {
-        if self.history.is_open() {
-            let contents = self.contents();
-            self.history.commit(&contents);
-        }
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
-    }
-
-    pub fn history_names(&self) -> (Vec<String>, Vec<String>) {
-        self.history.names()
-    }
-
-    pub fn undo(&mut self) {
-        let mut contents = self.contents();
-        if self.history.undo(&mut contents) {
-            self.restore(contents);
-        }
-    }
-
-    pub fn redo(&mut self) {
-        let mut contents = self.contents();
-        if self.history.redo(&mut contents) {
-            self.restore(contents);
-        }
-    }
-
     /// Whether colour edits go to an attached palette file rather than this one.
     fn edits_companion(&self) -> bool {
         self.pairs_palette() && !self.palettes.is_empty()
@@ -1200,14 +1170,13 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
     if let Some(error) = &doc.companion_error {
         controls::error_text(ui, error);
     }
-    if let Some(notice) = &view.notice {
-        controls::warning_text(ui, notice);
-    }
+    controls::notice_line(ui, &mut view.notice, true);
     if doc.error.is_some() {
         return actions;
     }
-    egui::Panel::left(egui::Id::new(("graphics-options", &doc.path))).resizable(true).default_size(240.0).show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::left(egui::Id::new(("graphics-options", &doc.path))), 240.0).show(ui, |ui| {
+        // Scrolls sideways too: what does not fit a narrow panel is scrolled to, not drawn over the canvas beside it.
+        egui::ScrollArea::both().show(ui, |ui| {
             options(ui, doc, &mut actions);
             if doc.pairs_palette() {
                 ui.separator();
@@ -1233,7 +1202,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
     let sheet = doc.sheet().is_some();
     let screen = doc.paints_screen();
     if !palette_only && (screen || !rendered.swatches.is_empty()) {
-        egui::Panel::right(egui::Id::new(("graphics-side", &doc.path))).resizable(true).default_size(300.0).show(ui, |ui| {
+        controls::side_panel(ui, egui::Panel::right(egui::Id::new(("graphics-side", &doc.path))), 300.0).show(ui, |ui| {
             if screen {
                 tile_side(ui, doc, view);
             } else {
@@ -1248,7 +1217,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
                     (None, true) => format!("Palette {chosen}"),
                     (None, false) => "Palette".to_owned(),
                 });
-                let edited = egui::ScrollArea::vertical()
+                let edited = egui::ScrollArea::both()
                     .show(ui, |ui| palette_panel::show(ui, shown, &mut view.pixels.colours, size.max(1), rendered.swatches_editable))
                     .inner;
                 if let Some((index, rgb)) = edited {

@@ -12,6 +12,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 
 use crate::demo::{DemoConnection, DemoTileset};
+use crate::history::Undoable as _;
 use crate::level_view::{Backgrounds, Gesture, Handle, Item, Kind, LevelView, handle_centres};
 use crate::properties::Tab;
 use crate::{BigStarApp, MemoryServices, Session};
@@ -884,6 +885,15 @@ fn lightness([r, g, b, _]: [u8; 4]) -> u32 {
     (u32::from(r.max(g).max(b)) + u32::from(r.min(g).min(b))) / 2
 }
 
+/// The middle lightness of the 5×5 pixels around `at`: the surface's own, whether or not a fine grid line runs through
+/// the very pixel.
+fn surface_lightness(image: &image::RgbaImage, at: Pos2) -> u32 {
+    let mut around: Vec<u32> =
+        (-2..=2).flat_map(|dy| (-2..=2).map(move |dx| at + Vec2::new(dx as f32, dy as f32))).map(|p| lightness(pixel(image, p))).collect();
+    around.sort_unstable();
+    around[around.len() / 2]
+}
+
 fn drawn(connection: DemoConnection, size: Vec2) -> Harness<'static, BigStarApp> {
     let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(connection));
     let mut harness = Harness::builder().with_size(size).with_max_steps(16).wgpu().build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
@@ -907,8 +917,8 @@ fn the_canvas_follows_the_theme() {
     // makes the surface a wash a few units off its flat colour, which the thresholds leave room for.
     let minimap = view(&harness).canvas.max - Vec2::new(100.0, 25.0);
     for at in [inside, minimap] {
-        assert!(lightness(pixel(&light, at)) > 180, "{:?}", pixel(&light, at));
-        assert!(lightness(pixel(&dark, at)) < 80, "{:?}", pixel(&dark, at));
+        assert!(surface_lightness(&light, at) > 180, "{:?}", pixel(&light, at));
+        assert!(surface_lightness(&dark, at) < 80, "{:?}", pixel(&dark, at));
     }
 }
 
@@ -1064,6 +1074,41 @@ fn the_properties_panel_holds_its_width_over_an_actors_fields() {
     let before = edge(&harness);
     harness.run_steps(8);
     assert_eq!(edge(&harness), before);
+}
+
+#[test]
+fn the_panels_stay_put_when_another_document_comes_to_the_front() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    let edge = |harness: &Harness<'_, BigStarApp>| harness.get_by_label("Level Data").rect().left();
+    let (before, canvas) = (edge(&harness), view(&harness).canvas);
+    let level = harness.state().session().unwrap().active.unwrap();
+    // The Preview tab in front: no level is active, and the panel says so rather than leaving.
+    harness.state_mut().workspace.show_preview_tab();
+    harness.run();
+    assert_eq!(harness.state().session().unwrap().active, None);
+    assert_eq!(edge(&harness), before);
+    harness.get_by_label("Bring a level to the front to see and change its properties.");
+    // And back: the level is where it was.
+    harness.state_mut().workspace.show_document(level);
+    harness.run();
+    assert_eq!(edge(&harness), before);
+    assert_eq!(view(&harness).canvas, canvas);
+}
+
+#[test]
+fn a_long_notice_keeps_the_status_bar_one_line_and_dismiss_in_reach() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    let canvas = view(&harness).canvas;
+    let width = harness.ctx.content_rect().width();
+    let long = format!("{}\nand a second line", "A build step failed badly. ".repeat(20));
+    harness.state_mut().session_mut().unwrap().report(long);
+    harness.run();
+    assert_eq!(view(&harness).canvas, canvas, "the bar keeps its height");
+    let dismiss = harness.get_by_label("Dismiss").rect();
+    assert!(dismiss.right() <= width, "{dismiss:?} is past the window's edge, {width}");
+    harness.get_by_label("Dismiss").click();
+    harness.run();
+    assert!(harness.state().session().unwrap().notice.is_none());
 }
 
 #[test]
@@ -1732,7 +1777,7 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     harness.run();
     let (name, png) = shelf.lock().unwrap().saved.pop().expect("exported");
     assert_eq!(name, "demo_ncg.png");
-    let image = crate::tileset_editor::decode_png(&png).unwrap();
+    let image = crate::image_manager::decode_png(&png).unwrap();
     assert_eq!(&image.pixels[..4], &[0, 255, 0, 255], "index 2 is the palette's green");
     let sheet = |harness: &mut Harness<'static, BigStarApp>| {
         let crate::workspace::FileView::Graphics(doc, _) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view else { panic!() };
@@ -1741,7 +1786,7 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     let before = sheet(&mut harness);
     let mut red = image.clone();
     red.pixels[..4].copy_from_slice(&[250, 0, 0, 255]);
-    shelf.lock().unwrap().to_open.push_back(("red.png".to_owned(), crate::tileset_editor::encode_png(&red).unwrap()));
+    shelf.lock().unwrap().to_open.push_back(("red.png".to_owned(), crate::image_manager::encode_png(&red).unwrap()));
     harness.get_by_label("Import this bitmap with existing palette…").click();
     harness.run();
     let after = sheet(&mut harness);
@@ -1751,7 +1796,7 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     // Recreating the palette writes the paired palette file, and Save writes both.
     let mut blue = image;
     blue.pixels[..4].copy_from_slice(&[0, 0, 255, 255]);
-    shelf.lock().unwrap().to_open.push_back(("blue.png".to_owned(), crate::tileset_editor::encode_png(&blue).unwrap()));
+    shelf.lock().unwrap().to_open.push_back(("blue.png".to_owned(), crate::image_manager::encode_png(&blue).unwrap()));
     harness.get_by_label("Import this bitmap and recreate palette…").click();
     harness.run();
     {
@@ -1983,7 +2028,7 @@ fn tileset_graphics_go_out_and_back_in_with_all_their_palettes() {
         doc.sheet_image(crate::tileset_editor::Sheet::Current, 0).unwrap()
     };
     let before = drawn(&mut harness);
-    assert_eq!(crate::tileset_editor::decode_png(&png).unwrap(), before, "one palette: the sheet as the tab draws it");
+    assert_eq!(crate::image_manager::decode_png(&png).unwrap(), before, "one palette: the sheet as the tab draws it");
 
     // Read back in, the palette is made again from the PNG's colours and the sheet looks the same; one undo step.
     shelf.lock().unwrap().to_open.push_back(("sheet.png".to_owned(), png));

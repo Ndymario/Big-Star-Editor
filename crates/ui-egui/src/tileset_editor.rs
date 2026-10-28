@@ -12,18 +12,18 @@ use bigstar_formats::{
     BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, Bgr555Color, EditableTilemap, EditableTileset, FOREGROUND_PALETTE_OFFSET,
     FOREGROUND_TILE_OFFSET, IndexedTile8Bpp, OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage, ScreenMapEntry,
     TILE_BEHAVIOR_FLAG_NAMES, TILE_BEHAVIOR_PIPE_MAIN_NAMES, TILE_BEHAVIOR_SUBTYPE_NAMES, TileBehaviorParameterKind, TileBehaviorParts, TileOverlay,
-    TilemapResourceData, TilesetResourceData, compose_tileset_memory, decode_tile_behavior, encode_tile_behavior, import_tilemap_image,
-    overlay_map16_sheet, parse_tilemap, parse_tileset, parse_tileset_bundle, render_composed_map16_sheet, render_map16_sheet, render_object_layout,
-    render_screen_map, render_tilemap, tile_behavior_parameter_kind, tile_behavior_parameter_name, write_tilemap, write_tileset,
-    write_tileset_bundle,
+    TilemapResourceData, TilesetResourceData, bgr555_to_rgb, compose_tileset_memory, decode_tile_behavior, encode_tile_behavior,
+    import_tilemap_image, overlay_map16_sheet, pack_bgr555, parse_tilemap, parse_tileset, parse_tileset_bundle, render_composed_map16_sheet,
+    render_map16_sheet, render_object_layout, render_screen_map, render_tilemap, tile_behavior_parameter_kind, tile_behavior_parameter_name,
+    write_tilemap, write_tileset, write_tileset_bundle,
 };
 use bigstar_level::LevelTilesetReferences;
 use bigstar_protocol::{FileWrite, LevelId, ResourceBytes, TilemapSlot, TilesetResources, TilesetSlot};
 use egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Ui, Vec2};
 
-use crate::graphics_editor::{entry_text, expand};
-use crate::history::History;
-use crate::image_manager::{self, Bitmap, Images, Lists, ManagerState};
+use crate::graphics_editor::entry_text;
+use crate::history::{History, Snapshots, Undoable};
+use crate::image_manager::{self, Bitmap, Images, Lists, ManagerState, decode_png, encode_png};
 use crate::paint::{Grid, Map16Sheet, Pattern, Screen, TileSheet};
 use crate::palette_panel;
 use crate::pixel_editor::{self, Command, HistoryButton, PixelEditor, history_buttons};
@@ -49,8 +49,8 @@ pub enum Sheet {
 
 /// A colour rounded to what the DS stores, as eight bits a channel.
 fn rounded([r, g, b]: [u8; 3]) -> Bgr555Color {
-    let five = |c: u8| expand((u16::from(c) * 31 + 127) / 255);
-    Bgr555Color::new(five(r), five(g), five(b), false)
+    let [r, g, b] = bgr555_to_rgb(pack_bgr555(r, g, b));
+    Bgr555Color::new(r, g, b, false)
 }
 
 pub const QUADRANTS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
@@ -92,20 +92,6 @@ fn map_resource(slot: &TilemapSlot) -> TilemapResourceData {
     TilemapResourceData { graphics: slot.graphics.bytes.clone(), palette: slot.palette.bytes.clone(), screen: slot.screen.bytes.clone() }
 }
 
-/// A PNG's pixels.
-pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, String> {
-    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).map_err(|_| "Could not read the PNG.".to_owned())?.to_rgba8();
-    Ok(RgbaImage { width: decoded.width() as usize, height: decoded.height() as usize, pixels: decoded.into_raw() })
-}
-
-pub fn encode_png(value: &RgbaImage) -> Result<Vec<u8>, String> {
-    let (width, height) = (u32::try_from(value.width).unwrap_or(0), u32::try_from(value.height).unwrap_or(0));
-    let buffer = image::RgbaImage::from_raw(width, height, value.pixels.clone()).ok_or_else(|| "Could not write the PNG.".to_owned())?;
-    let mut bytes = Vec::new();
-    buffer.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|_| "Could not write the PNG.".to_owned())?;
-    Ok(bytes)
-}
-
 /// One level's tilesets and backgrounds being edited.
 pub struct TilesetDoc {
     pub level: LevelId,
@@ -138,6 +124,30 @@ pub struct TilesetDoc {
 
 /// What an edit can change, for undo: every tileset and both tilemaps.
 type Snapshot = (Vec<EditableTileset>, [EditableTilemap; 2]);
+
+impl Snapshots for TilesetDoc {
+    type State = Snapshot;
+
+    fn history(&self) -> &History<Snapshot> {
+        &self.history
+    }
+
+    fn history_mut(&mut self) -> &mut History<Snapshot> {
+        &mut self.history
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        (self.tilesets.clone(), self.tilemaps.clone())
+    }
+
+    fn restore(&mut self, (tilesets, tilemaps): Snapshot) {
+        self.tilesets = tilesets;
+        self.tilemaps = tilemaps;
+        self.object = self.object.min(self.objects().len().saturating_sub(1));
+        self.object_cell = None;
+        self.touched();
+    }
+}
 
 impl TilesetDoc {
     pub fn open(resources: TilesetResources, title: &str) -> Result<Self, String> {
@@ -183,30 +193,17 @@ impl TilesetDoc {
         })
     }
 
+    /// A side panel's id. Panels are named across the whole window, so each workspace's are told apart by its level,
+    /// and two shown side by side keep their own sizes.
+    fn panel_id(&self, name: &str) -> egui::Id {
+        egui::Id::new((name, self.level))
+    }
+
     fn touched(&mut self) {
         self.version += 1;
     }
 
     // --- Undo ---
-
-    fn snapshot(&self) -> Snapshot {
-        (self.tilesets.clone(), self.tilemaps.clone())
-    }
-
-    /// Starts an undo step called `name`, unless one is open: the edits until [`Self::end_edit`] are one step.
-    pub fn begin_edit(&mut self, name: &str) {
-        if !self.history.is_open() {
-            let snapshot = self.snapshot();
-            self.history.begin(name, &snapshot);
-        }
-    }
-
-    pub fn end_edit(&mut self) {
-        if self.history.is_open() {
-            let snapshot = self.snapshot();
-            self.history.commit(&snapshot);
-        }
-    }
 
     /// One edit, as one undo step.
     pub fn edit<R>(&mut self, name: &str, change: impl FnOnce(&mut Self) -> R) -> R {
@@ -214,40 +211,6 @@ impl TilesetDoc {
         let result = change(self);
         self.end_edit();
         result
-    }
-
-    pub fn can_undo(&self) -> bool {
-        self.history.can_undo()
-    }
-
-    pub fn can_redo(&self) -> bool {
-        self.history.can_redo()
-    }
-
-    pub fn history_names(&self) -> (Vec<String>, Vec<String>) {
-        self.history.names()
-    }
-
-    pub fn undo(&mut self) {
-        let mut snapshot = self.snapshot();
-        if self.history.undo(&mut snapshot) {
-            self.restore(snapshot);
-        }
-    }
-
-    pub fn redo(&mut self) {
-        let mut snapshot = self.snapshot();
-        if self.history.redo(&mut snapshot) {
-            self.restore(snapshot);
-        }
-    }
-
-    fn restore(&mut self, (tilesets, tilemaps): Snapshot) {
-        self.tilesets = tilesets;
-        self.tilemaps = tilemaps;
-        self.object = self.object.min(self.objects().len().saturating_sub(1));
-        self.object_cell = None;
-        self.touched();
     }
 
     pub fn tileset(&self) -> Option<&EditableTileset> {
@@ -802,8 +765,27 @@ fn cached(
 
 pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: &dyn Services) -> Option<TilesetAction> {
     let mut action = None;
+    // A header line as every document has, the title cut short before it reaches Save and Cancel; the tools under it.
     ui.horizontal(|ui| {
-        ui.label(RichText::new(format!("Tilesets and backgrounds — {}", doc.title)).strong());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if Button::new("Cancel").show(ui).clicked() {
+                action = Some(TilesetAction::Close);
+            }
+            if Button::new("Save")
+                .with_icon(icons::SAVE)
+                .primary()
+                .show(ui)
+                .on_hover_text("Writes the files the edits changed into their modules")
+                .clicked()
+            {
+                action = Some(TilesetAction::Save);
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                controls::one_line(ui, RichText::new(format!("Tilesets and backgrounds — {}", doc.title)).strong(), 0.0);
+            });
+        });
+    });
+    ui.horizontal_wrapped(|ui| {
         ui.label("Tileset slot");
         let mut slot = doc.slot;
         controls::drop_down("tileset-slot").selected_text(SLOT_NAMES.get(slot).copied().unwrap_or_default()).show_ui(ui, |ui| {
@@ -831,25 +813,9 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             let written = doc.export_bundle().and_then(|bytes| services.save_file("Export tileset", "tileset.bstileset", "bstileset", &bytes));
             view.notice = written.err();
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if Button::new("Cancel").show(ui).clicked() {
-                action = Some(TilesetAction::Close);
-            }
-            if Button::new("Save")
-                .with_icon(icons::SAVE)
-                .primary()
-                .show(ui)
-                .on_hover_text("Writes the files the edits changed into their modules")
-                .clicked()
-            {
-                action = Some(TilesetAction::Save);
-            }
-        });
     });
     controls::tabs(ui, "tileset", &mut doc.tab, &TABS);
-    if let Some(notice) = &view.notice {
-        controls::warning_text(ui, notice);
-    }
+    controls::notice_line(ui, &mut view.notice, true);
     ui.add_space(2.0);
     match doc.tab {
         Tab::Slots => slots(ui, doc),
@@ -1017,8 +983,9 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     view.graphics.bitmap = sheets.iter().position(|(s, _)| *s == shown).unwrap_or(0);
     let palettes = doc.sheet_palettes(shown);
     let palette_names: Vec<String> = (0..palettes).map(|i| format!("Palette {i}")).collect();
-    egui::Panel::left("tileset-graphics-images").resizable(true).default_size(240.0).show(ui, |ui| {
-        egui::ScrollArea::vertical().show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-graphics-images")), 240.0).show(ui, |ui| {
+        // Scrolls sideways too: what does not fit a narrow panel is scrolled to, not drawn over the canvas beside it.
+        egui::ScrollArea::both().show(ui, |ui| {
             let names: Vec<String> = sheets.iter().map(|(_, name)| name.clone()).collect();
             let lists = Lists { bitmaps: &names, palettes: &palette_names, groups: &[], shared: false, no_import: None };
             let (_, action) = image_manager::show(ui, "tileset-graphics", &mut view.graphics, &lists);
@@ -1047,9 +1014,9 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     let sheet = doc.resolve(view.sheet);
     let palette = view.graphics.palette.min(doc.sheet_palettes(sheet).saturating_sub(1));
     let colours: Vec<[u8; 4]> = doc.sheet_palette(sheet, palette).unwrap_or_default().iter().map(|&[r, g, b]| [r, g, b, 255]).collect();
-    egui::Panel::right("tileset-graphics-palette").resizable(true).default_size(300.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-graphics-palette")), 300.0).show(ui, |ui| {
         ui.strong(format!("Palette {palette}"));
-        let edited = egui::ScrollArea::vertical().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, 256, true)).inner;
+        let edited = egui::ScrollArea::both().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, 256, true)).inner;
         if let Some((index, rgb)) = edited {
             doc.set_sheet_colour(sheet, palette * 256 + index, rgb);
         }
@@ -1101,7 +1068,7 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     let palettes = doc.map16_palettes();
     view.map16.palette = view.map16.palette.clamp(0, palettes as i16 - 1);
     let (version, sheet) = map16_sheet(doc, view);
-    egui::Panel::right("tileset-map16-side").resizable(true).default_size(340.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-map16-side")), 340.0).show(ui, |ui| {
         ui.strong("Tiles");
         ui.weak("Drag to choose the tiles to paint with. All three tilesets are here, at the place the level loads them.");
         let palette = view.map16.palette;
@@ -1133,7 +1100,7 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     egui::CentralPanel::default().show(ui, |ui| {
         let mut commands = Vec::new();
         view.map16.toolbar(ui, None, palettes, &mut commands);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             controls::checkbox(ui, &mut doc.composed, "Show the other tilesets’ graphics").on_hover_text(
                 "A Map16 entry can use tiles from another tileset. When checked, those tiles are drawn the way the game loads them; when unchecked, only this tileset's own tiles are shown.",
             );
@@ -1196,7 +1163,7 @@ fn block_inspector(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, sh
         let at = Rect::from_min_size(rect.min + Vec2::new((quadrant % 2) as f32, (quadrant / 2) as f32) * size / 2.0, Vec2::splat(size / 2.0));
         let response = ui.interact(at, ui.id().with(("quadrant", quadrant)), egui::Sense::click());
         let chosen = doc.quadrant == quadrant;
-        let stroke = if chosen { Stroke::new(2.0, Color32::from_rgb(255, 200, 40)) } else { Stroke::new(1.0, ui.visuals().weak_text_color()) };
+        let stroke = if chosen { Stroke::new(2.0, zoom_canvas::SELECTION) } else { Stroke::new(1.0, ui.visuals().weak_text_color()) };
         ui.painter().rect_stroke(at, 0.0, stroke, StrokeKind::Inside);
         let response = response.on_hover_text(format!(
             "{}: click paints the brush's tile here, right-click picks this tile",
@@ -1251,7 +1218,7 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     };
     let id = texture(ui, &mut view.textures, "objects-map16", &sheet, version);
 
-    egui::Panel::left("tileset-object-list").resizable(true).default_size(200.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-object-list")), 200.0).show(ui, |ui| {
         ui.horizontal(|ui| {
             if Button::new("Add").small().show(ui).clicked() {
                 doc.edit("Add object", TilesetDoc::add_object);
@@ -1306,7 +1273,7 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         });
     });
 
-    egui::Panel::right("tileset-object-blocks").resizable(true).default_size(300.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-object-blocks")), 300.0).show(ui, |ui| {
         ui.strong("Map16 blocks");
         ui.weak("Click a block to put it in the chosen cell; Shift+click inserts it instead. Drag to place several.");
         let picked = tile_picker::show(ui, "object-blocks", &sheet, version, &mut view.object_blocks, 16, MAP16_COLUMNS, ui.available_height());
@@ -1390,7 +1357,7 @@ fn object_table(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: e
     let size = 16.0 * view.object_zoom;
     let rows = doc.object_table();
     let slope = doc.objects().get(doc.object).is_some_and(|o| o.slope);
-    let accent = Color32::from_rgb(255, 200, 40);
+    let accent = zoom_canvas::SELECTION;
     let tip = "Click to choose · Ctrl+click deletes · Alt+click repeats across · Shift+click repeats down";
     ui.spacing_mut().item_spacing = Vec2::splat(1.0);
     for (y, (block, row)) in rows.iter().enumerate() {
@@ -1527,7 +1494,7 @@ fn cell_settings(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, coun
 /// The object laid out at a size dragged out on it, as a level would show it.
 fn object_preview(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: egui::TextureId, sheet: &RgbaImage, count: usize) {
     let (mut width, mut height) = view.preview;
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Preview");
         ui.add(controls::number(&mut width).range(1..=64));
         ui.label("×");
@@ -1555,7 +1522,7 @@ fn object_preview(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id:
 fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     let (version, sheet) = map16_sheet(doc, view);
     let count = doc.map16_count();
-    egui::Panel::left("tileset-behavior-blocks").resizable(true).default_size(320.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-behavior-blocks")), 320.0).show(ui, |ui| {
         ui.strong("Map16 blocks");
         ui.weak("Drag to choose several blocks: an edit sets them all.");
         match &sheet {
@@ -1665,7 +1632,7 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
     let Some(editor) = view.maps.get_mut(which) else { return };
     editor.palette = editor.palette.clamp(0, palettes as i16 - 1);
     let palette = editor.palette;
-    egui::Panel::right(egui::Id::new(("tilemap-side", which))).resizable(true).default_size(320.0).show(ui, |ui| {
+    controls::side_panel(ui, egui::Panel::right(doc.panel_id("tilemap-side").with(which)), 320.0).show(ui, |ui| {
         ui.strong("Tiles");
         ui.weak("Drag to choose the tiles to paint with.");
         let version = doc.version * 32 + palette.max(0) as u64;
@@ -2003,12 +1970,5 @@ pub(crate) mod tests {
         let mut picker = PickerState::default();
         picker.select(0, GRAPHICS_COLUMNS);
         assert_eq!(brush_from(&picker, count, 192).cells, [ScreenMapEntry::new(-192, 0, false, false)], "a tile below this tileset's own");
-    }
-
-    #[test]
-    fn pngs_round_trip() {
-        let image = RgbaImage { width: 2, height: 1, pixels: vec![1, 2, 3, 255, 4, 5, 6, 0] };
-        assert_eq!(decode_png(&encode_png(&image).unwrap()).unwrap(), image);
-        assert!(decode_png(b"not a png").is_err());
     }
 }

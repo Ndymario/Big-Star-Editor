@@ -947,6 +947,59 @@ pub fn document_header(ui: &mut Ui, path: &str, remark: &str, can_save: bool) ->
     .inner
 }
 
+/// A side panel inside a document: `default` wide at first but no more than a third of the document, and never dragged
+/// past half of it, so the editor in the middle keeps room for its toolbar however narrow the document is.
+pub fn side_panel(ui: &Ui, panel: egui::Panel, default: f32) -> egui::Panel {
+    let width = ui.available_width();
+    panel.resizable(true).default_size(default.min(width / 3.0)).max_size(width / 2.0)
+}
+
+/// What sits under a part that fills the height down to it, such as a list with its buttons below: its height is
+/// known only once it is laid out, so the part above takes last frame's measure off what is left, and a change is
+/// drawn again at once. Call [`Footer::start`] where the footer begins and [`Footer::end`] after it.
+pub struct Footer {
+    id: egui::Id,
+    height: f32,
+    top: f32,
+}
+
+impl Footer {
+    /// The footer under `id_salt`, `guess` tall until it has been measured.
+    pub fn new(ui: &Ui, id_salt: impl egui::AsIdSalt, guess: f32) -> Self {
+        let id = ui.id().with(("footer", id_salt));
+        let height = ui.data(|data| data.get_temp(id)).unwrap_or(guess);
+        Footer { id, height, top: 0.0 }
+    }
+
+    /// The height left above the footer, but never less than `min`.
+    pub fn room_above(&self, ui: &Ui, min: f32) -> f32 {
+        (ui.available_height() - self.height).max(min)
+    }
+
+    pub fn start(&mut self, ui: &Ui) {
+        self.top = ui.cursor().top();
+    }
+
+    pub fn end(self, ui: &Ui) {
+        let measured = ui.cursor().top() - self.top;
+        if (measured - self.height).abs() > 0.5 {
+            ui.data_mut(|data| data.insert_temp(self.id, measured));
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// Text kept to one line of a row, cut short with an ellipsis (the whole of it on hover) instead of running past the
+/// row's end or growing it, leaving `reserve` points after it for what follows.
+pub fn one_line(ui: &mut Ui, text: impl Into<WidgetText>, reserve: f32) -> Response {
+    let width = (ui.available_width() - reserve).max(0.0);
+    ui.scope(|ui| {
+        ui.set_max_width(width);
+        ui.add(egui::Label::new(text).truncate())
+    })
+    .inner
+}
+
 /// Something went wrong.
 pub fn error_text(ui: &mut Ui, text: impl Into<String>) -> Response {
     let t = Tokens::get(ui.ctx());
@@ -957,6 +1010,25 @@ pub fn error_text(ui: &mut Ui, text: impl Into<String>) -> Response {
 pub fn warning_text(ui: &mut Ui, text: impl Into<String>) -> Response {
     let t = Tokens::get(ui.ctx());
     ui.colored_label(t.warning, text.into())
+}
+
+/// What a document's last import, export or check had to say, on a line under its header until the person dismisses
+/// it. `warning` colours it as something that went wrong; otherwise it reads as a remark.
+pub fn notice_line(ui: &mut Ui, notice: &mut Option<String>, warning: bool) {
+    let Some(text) = notice.as_deref() else { return };
+    let dismissed = ui
+        .horizontal_wrapped(|ui| {
+            if warning {
+                warning_text(ui, text);
+            } else {
+                ui.weak(text);
+            }
+            Button::icon(icons::CLOSE).ghost().small().name("Dismiss").show(ui).on_hover_text("Dismiss").clicked()
+        })
+        .inner;
+    if dismissed {
+        *notice = None;
+    }
 }
 
 /// A heading with a sentence under it, for a screen with nothing else to show.

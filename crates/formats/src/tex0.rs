@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use bigstar_core::{Error, ErrorCode, Result};
 
 use crate::g2d::{put16, put32, u16_at, u32_at};
+use crate::graphics::unpack_bgr555;
 use crate::{Bgr555Color, RgbaImage};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -338,16 +339,12 @@ pub fn write_tex0(value: &Tex0) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-fn expand5(value: u16) -> u8 {
-    ((value << 3) | (value >> 2)) as u8
-}
-
 fn color(palette: &[u8], index: usize) -> Bgr555Color {
     if index * 2 + 1 >= palette.len() {
         return Bgr555Color::default();
     }
     let packed = u16_at(palette, index * 2);
-    Bgr555Color::new(expand5(packed & 31), expand5((packed >> 5) & 31), expand5((packed >> 10) & 31), false)
+    unpack_bgr555(packed, false)
 }
 
 fn blend(a: Bgr555Color, b: Bgr555Color, wa: u32, wb: u32, divisor: u32) -> Bgr555Color {
@@ -407,7 +404,7 @@ pub fn render_tex0_texture(texture: &Tex0Texture, palette: &Tex0Palette) -> Resu
                         return Err(err(ErrorCode::OutOfBounds, "TEX0 direct-color data is truncated"));
                     }
                     let packed = u16_at(&texture.texels, source * 2);
-                    let value = Bgr555Color::new(expand5(packed & 31), expand5((packed >> 5) & 31), expand5((packed >> 10) & 31), false);
+                    let value = unpack_bgr555(packed, false);
                     set_pixel(&mut image, target, value, if packed & 0x8000 != 0 { 255 } else { 0 });
                     continue;
                 }

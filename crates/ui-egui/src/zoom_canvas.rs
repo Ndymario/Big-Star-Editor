@@ -153,6 +153,11 @@ impl CanvasInput {
     }
 }
 
+/// What every graphics canvas outlines a selection, or the chosen cell, in.
+pub const SELECTION: Color32 = Color32::from_rgb(255, 200, 40);
+/// The wash inside a selection.
+pub const SELECTION_FILL: Color32 = Color32::from_rgba_unmultiplied_const(255, 200, 40, 30);
+
 /// A rectangle drawn over the image, in image pixels.
 #[derive(Debug, Clone, Copy)]
 pub struct Overlay {
@@ -172,6 +177,11 @@ impl Overlay {
         let (left, top) = (a.0.min(b.0) as f32 * size, a.1.min(b.1) as f32 * size);
         let (right, bottom) = ((a.0.max(b.0) + 1) as f32 * size, (a.1.max(b.1) + 1) as f32 * size);
         Self::outline(Rect::from_min_max(Pos2::new(left, top), Pos2::new(right, bottom)), stroke)
+    }
+
+    /// The cells from `a` to `b` as a selection: outlined and washed in the selection colour.
+    pub fn selection(a: Point, b: Point, size: usize) -> Self {
+        Self::cells(a, b, size, SELECTION).filled(SELECTION_FILL)
     }
 
     pub fn filled(mut self, fill: Color32) -> Self {

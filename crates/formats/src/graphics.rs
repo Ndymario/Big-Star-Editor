@@ -228,24 +228,28 @@ pub fn parse_nitro_header(data: &[u8]) -> Result<NitroHeader> {
     Ok(NitroHeader { magic, byte_order_mark, version, file_size, header_size, block_count })
 }
 
-pub(crate) fn expand_5_to_8(value: u16) -> u8 {
+/// A five-bit channel as eight bits, the low bits repeating the high ones.
+pub fn expand_5_to_8(value: u16) -> u8 {
     ((value << 3) | (value >> 2)) as u8
 }
 
-pub(crate) fn shrink_8_to_5(value: u8) -> u16 {
+/// An eight-bit channel as five bits, rounded to the nearest step.
+pub fn shrink_8_to_5(value: u8) -> u16 {
     ((u32::from(value) * 31 + 127) / 255) as u16
 }
 
-pub(crate) fn unpack_bgr555(packed: u16, transparent: bool) -> Bgr555Color {
-    Bgr555Color {
-        red: expand_5_to_8(packed & 0x1F),
-        green: expand_5_to_8((packed >> 5) & 0x1F),
-        blue: expand_5_to_8((packed >> 10) & 0x1F),
-        transparent,
-    }
+/// A packed BGR555 colour as eight-bit red, green and blue.
+pub fn bgr555_to_rgb(packed: u16) -> [u8; 3] {
+    [expand_5_to_8(packed & 0x1F), expand_5_to_8((packed >> 5) & 0x1F), expand_5_to_8((packed >> 10) & 0x1F)]
 }
 
-pub(crate) fn pack_bgr555(red: u8, green: u8, blue: u8) -> u16 {
+pub(crate) fn unpack_bgr555(packed: u16, transparent: bool) -> Bgr555Color {
+    let [red, green, blue] = bgr555_to_rgb(packed);
+    Bgr555Color { red, green, blue, transparent }
+}
+
+/// Eight-bit red, green and blue as a packed BGR555 colour, each channel rounded to the nearest step.
+pub fn pack_bgr555(red: u8, green: u8, blue: u8) -> u16 {
     shrink_8_to_5(red) | (shrink_8_to_5(green) << 5) | (shrink_8_to_5(blue) << 10)
 }
 
