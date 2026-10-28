@@ -353,12 +353,20 @@ impl FilesDock {
             if !rom_mode {
                 ui.label("Save to module");
                 let current = listing.modules.iter().find(|m| m.key == listing.active_module).map_or("(none)".to_owned(), |m| m.name.clone());
-                controls::drop_down("active-module").selected_text(current).show_ui(ui, |ui| {
-                    for module in &listing.modules {
-                        if ui.choice(module.key == listing.active_module, &module.name).clicked() {
-                            session.set_active_module(&module.key);
+                // A drop-down sits in a Ui of its own, which a wrapping row moves to its next line only when it is
+                // placed at a size: the name's, but no wider than the dock, the name cut short to it.
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                let name = ui.painter().layout_no_wrap(current.clone(), font, egui::Color32::PLACEHOLDER).size().x;
+                let spacing = ui.spacing();
+                let width = (name + spacing.icon_width + spacing.icon_spacing + 2.0 * spacing.button_padding.x).min(ui.max_rect().width());
+                ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
+                    controls::drop_down("active-module").width(width).truncate().selected_text(current).show_ui(ui, |ui| {
+                        for module in &listing.modules {
+                            if ui.choice(module.key == listing.active_module, &module.name).clicked() {
+                                session.set_active_module(&module.key);
+                            }
                         }
-                    }
+                    });
                 });
             }
             ui.menu_button("Columns", |ui| {

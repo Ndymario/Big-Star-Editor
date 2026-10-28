@@ -2551,3 +2551,36 @@ fn a_side_panel_holding_only_text_stays_as_wide_as_it_is_dragged() {
     let right = egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new("left")).unwrap().outer_rect.right();
     assert!((right - (edge + 200.0)).abs() < 2.0, "dragged to {} but the panel ends at {right}", edge + 200.0);
 }
+
+/// The Filesystem dock as a project fills it: a warning, an error, a long module name, folders open and a file picked.
+/// None of it may hold the dock wider than it is dragged.
+#[test]
+fn the_filesystem_dock_shrinks_as_far_as_it_is_dragged_however_full() {
+    let (mut harness, _) = filesystem();
+    {
+        let app = harness.state_mut();
+        let listing = app.session_mut().unwrap().filesystem.as_mut().unwrap();
+        listing.pending = true;
+        listing.error = Some("ncpatcher.json was not found in the project folder, so nothing can be planned".to_owned());
+        listing.modules.push(bigstar_protocol::ModuleChoice { key: "long".to_owned(), name: "A module with a rather long name".to_owned() });
+        listing.active_module = "long".to_owned();
+        app.files.expanded.insert("course".to_owned());
+        app.files.expanded.insert("dat".to_owned());
+        app.files.selected = Some("course/A01_1.bin".to_owned());
+    }
+    harness.run();
+    harness.get_by_label("Columns");
+    let panel = |harness: &Harness<'_, BigStarApp>| egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new("left")).unwrap();
+    let edge = panel(&harness).outer_rect.right();
+    let at = |step: f32| Pos2::new(edge - step * 12.0, 400.0);
+    harness.hover_at(at(0.0));
+    harness.run();
+    button(&harness, at(0.0), PointerButton::Primary, true, Modifiers::NONE);
+    for step in 1..=24 {
+        harness.hover_at(at(step as f32));
+        harness.run();
+    }
+    button(&harness, at(24.0), PointerButton::Primary, false, Modifiers::NONE);
+    harness.run();
+    assert!(panel(&harness).size().x < 120.0, "the dock stays {} wide", panel(&harness).size().x);
+}
