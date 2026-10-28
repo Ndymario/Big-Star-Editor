@@ -12,7 +12,12 @@ use bigstar_formats::{
 };
 use egui::{Color32, Pos2, Rect, Stroke, StrokeKind, Ui, Vec2};
 
-use crate::graphics_editor::{expand, picture, swatches};
+use crate::graphics_editor::expand;
+use crate::history::History;
+use crate::paint::{Grid, IndexedSheet};
+use crate::palette_panel;
+use crate::pixel_editor::{self, Command, HistoryButton, PixelEditor};
+use crate::zoom_canvas;
 
 /// The parsed resource.
 pub enum Page {
@@ -55,7 +60,8 @@ pub struct ResourceDoc {
     pub sections: Vec<Section>,
     /// JNCD's texture read as 8bpp rather than 4bpp.
     pub eight: bool,
-    pub selected_colour: usize,
+    /// Undo for the picture's pixels and colours.
+    history: History<(Vec<u8>, Vec<u16>)>,
     pub selected_row: Option<usize>,
     /// The metadata section, and the entry in it, chosen.
     pub selected_item: Option<(usize, Option<usize>)>,
@@ -123,6 +129,12 @@ fn grey(colours: usize) -> Vec<u16> {
         .collect()
 }
 
+/// Tiled pixels as a grid, laid out as [`tiled`] draws them.
+fn tiled_sheet(bytes: &mut [u8], eight: bool) -> IndexedSheet<'_> {
+    let width_tiles = sheet_width(bytes.len() / if eight { 64 } else { 32 });
+    IndexedSheet { bytes, width_tiles, eight, linear: false }
+}
+
 /// 8×8 tiles laid out in a square-ish sheet.
 fn tiled(data: &[u8], eight: bool, colours: &[u16]) -> RgbaImage {
     let tile_size = if eight { 64 } else { 32 };
@@ -148,27 +160,6 @@ fn tiled(data: &[u8], eight: bool, colours: &[u16]) -> RgbaImage {
     image
 }
 
-/// Sets the pixel at (`x`, `y`) of a tiled sheet to `index`.
-fn paint_tiled(data: &mut [u8], x: usize, y: usize, eight: bool, index: usize) {
-    let tile_size = if eight { 64 } else { 32 };
-    let tiles = data.len() / tile_size;
-    let width = sheet_width(tiles);
-    let tile = (y / 8) * width + x / 8;
-    let pixel = (y % 8) * 8 + x % 8;
-    if tile >= tiles {
-        return;
-    }
-    if eight {
-        if let Some(slot) = data.get_mut(tile * 64 + pixel) {
-            *slot = u8::try_from(index).unwrap_or(u8::MAX);
-        }
-    } else if let Some(byte) = data.get_mut(tile * 32 + pixel / 2) {
-        let shift = (pixel & 1) * 4;
-        let mask = 15u8 << shift;
-        *byte = (*byte & !mask) | ((u8::try_from(index & 15).unwrap_or(0)) << shift);
-    }
-}
-
 impl ResourceDoc {
     /// Reads plain bytes as the resource its magic or name says, or as ROM user metadata when the file is NitroFS
     /// file 131.
@@ -184,7 +175,7 @@ impl ResourceDoc {
             titles: Vec::new(),
             sections: Vec::new(),
             eight: false,
-            selected_colour: 0,
+            history: History::default(),
             selected_row: None,
             selected_item: None,
         };
@@ -352,36 +343,109 @@ impl ResourceDoc {
         }
     }
 
-    /// Paints the chosen palette index at a pixel of the picture.
-    pub fn paint(&mut self, x: usize, y: usize) {
-        let index = self.selected_colour;
+    /// Writes palette index `value` at a pixel of the picture.
+    #[cfg(test)]
+    pub fn paint(&mut self, x: usize, y: usize, value: u8) {
+        if self.with_sheet(|grid| grid.set(x, y, value)).is_some() {
+            self.version += 1;
+            self.dirty = true;
+        }
+    }
+
+    /// Runs `edit` on the picture's pixels as a grid of indices, laid out as the picture draws them.
+    pub fn with_sheet<R>(&mut self, edit: impl FnOnce(&mut dyn Grid<Cell = u8>) -> R) -> Option<R> {
+        let eight = self.eight;
+        Some(match &mut self.page {
+            Some(Page::Bncd(bncd)) => edit(&mut tiled_sheet(&mut bncd.texture, eight)),
+            Some(Page::Enpg(enpg)) => edit(&mut IndexedSheet { bytes: &mut enpg.pixels, width_tiles: 32, eight: true, linear: true }),
+            Some(Page::Banner(banner)) => edit(&mut tiled_sheet(&mut banner.icon, false)),
+            _ => return None,
+        })
+    }
+
+    /// The picture's pixels and colours, as an undo step keeps them.
+    fn image_state(&self) -> (Vec<u8>, Vec<u16>) {
+        match &self.page {
+            Some(Page::Bncd(bncd)) => (bncd.texture.clone(), Vec::new()),
+            Some(Page::Enpg(enpg)) => (enpg.pixels.clone(), enpg.palette.to_vec()),
+            Some(Page::Banner(banner)) => (banner.icon.to_vec(), banner.palette.to_vec()),
+            _ => (Vec::new(), Vec::new()),
+        }
+    }
+
+    fn set_image_state(&mut self, (pixels, palette): (Vec<u8>, Vec<u16>)) {
         match &mut self.page {
-            Some(Page::Bncd(bncd)) => paint_tiled(&mut bncd.texture, x, y, self.eight, index),
+            Some(Page::Bncd(bncd)) => bncd.texture = pixels,
             Some(Page::Enpg(enpg)) => {
-                if x < 256
-                    && let Some(pixel) = enpg.pixels.get_mut(y * 256 + x)
-                {
-                    *pixel = u8::try_from(index).unwrap_or(u8::MAX);
-                }
+                enpg.pixels = pixels;
+                enpg.palette.iter_mut().zip(palette).for_each(|(slot, value)| *slot = value);
             }
-            Some(Page::Banner(banner)) => paint_tiled(&mut banner.icon, x, y, false, index),
+            Some(Page::Banner(banner)) => {
+                banner.icon.iter_mut().zip(pixels).for_each(|(slot, value)| *slot = value);
+                banner.palette.iter_mut().zip(palette).for_each(|(slot, value)| *slot = value);
+            }
             _ => return,
         }
         self.version += 1;
         self.dirty = true;
     }
 
+    pub fn begin_edit(&mut self, name: &str) {
+        if !self.history.is_open() {
+            let state = self.image_state();
+            self.history.begin(name, &state);
+        }
+    }
+
+    pub fn end_edit(&mut self) {
+        if self.history.is_open() {
+            let state = self.image_state();
+            self.history.commit(&state);
+        }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    pub fn history_names(&self) -> (Vec<String>, Vec<String>) {
+        self.history.names()
+    }
+
+    pub fn undo(&mut self) {
+        let mut state = self.image_state();
+        if self.history.undo(&mut state) {
+            self.set_image_state(state);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        let mut state = self.image_state();
+        if self.history.redo(&mut state) {
+            self.set_image_state(state);
+        }
+    }
+
     /// Changes a colour of the file's own palette, rounded to BGR555.
     pub fn set_colour(&mut self, index: usize, rgb: [u8; 3]) {
+        let before = self.image_state();
         let slot = match &mut self.page {
             Some(Page::Enpg(enpg)) => enpg.palette.get_mut(index),
             Some(Page::Banner(banner)) => banner.palette.get_mut(index),
             _ => None,
         };
-        if let Some(slot) = slot {
+        if let Some(slot) = slot
+            && *slot != bgr555(rgb)
+        {
             *slot = bgr555(rgb);
             self.version += 1;
             self.dirty = true;
+            let after = self.image_state();
+            self.history.record("Change colour", before, &after);
         }
     }
 
@@ -517,10 +581,10 @@ impl ResourceDoc {
     }
 }
 
-/// The view's own state: the uploaded picture and the JNCD tab in front.
+/// The view's own state: the painting tools and the JNCD tab in front.
 #[derive(Default)]
 pub struct ResourceView {
-    texture: Option<(u64, egui::TextureHandle)>,
+    pixels: PixelEditor,
     shown_eight: bool,
     tab: BncdTab,
     banner_titles: bool,
@@ -667,16 +731,37 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
         doc.version += 1;
     }
     let Some((image, palette, editable)) = doc.picture() else { return };
-    let height = (ui.available_height() - 110.0).max(120.0);
-    if let Some((x, y)) = picture(ui, &doc.path, &image, 1, doc.version, &mut view.texture, height) {
-        doc.paint(x, y);
-    }
-    ui.separator();
     let colours: Vec<[u8; 4]> = palette.iter().map(|&c| colour(c)).collect();
-    doc.selected_colour = doc.selected_colour.min(colours.len().saturating_sub(1));
-    if let Some(rgb) = swatches(ui, &colours, &mut doc.selected_colour, editable) {
-        doc.set_colour(doc.selected_colour, rgb);
-    }
+    let row = if colours.len() > 16 && doc.eight || matches!(doc.page, Some(Page::Enpg(_))) { 256 } else { 16 };
+    egui::Panel::right(egui::Id::new(("resource-palette", &doc.path))).resizable(true).default_size(300.0).show(ui, |ui| {
+        ui.strong("Palette");
+        let edited = egui::ScrollArea::vertical().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, row, editable)).inner;
+        if let Some((index, rgb)) = edited {
+            doc.set_colour(index, rgb);
+        }
+    });
+    egui::CentralPanel::default().show(ui, |ui| {
+        let mut commands = Vec::new();
+        match view.pixels.toolbar(ui, Some((doc.can_undo(), doc.can_redo())), &mut commands) {
+            Some(HistoryButton::Undo) => doc.undo(),
+            Some(HistoryButton::Redo) => doc.redo(),
+            None => {}
+        }
+        let input = view.pixels.canvas(ui, &doc.path, &image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+        view.pixels.keys(ui, &input, &mut commands);
+        ui.weak(pixel_editor::position_text(view.pixels.hover(), &image));
+        if input.pressed().is_some() || commands.iter().any(Command::edits) {
+            doc.begin_edit(view.pixels.step_name(&commands));
+        }
+        let ctx = ui.ctx().clone();
+        if doc.with_sheet(|grid| view.pixels.apply(&ctx, &input, &commands, grid, row)) == Some(true) {
+            doc.version += 1;
+            doc.dirty = true;
+        }
+        if input.released().is_some() || commands.iter().any(Command::edits) {
+            doc.end_edit();
+        }
+    });
 }
 
 fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
@@ -794,8 +879,7 @@ mod tests {
     #[test]
     fn an_enpg_paints_and_recolours() {
         let mut doc = ResourceDoc::open("loading.enpg", &vec![0u8; 0x10200], false);
-        doc.selected_colour = 3;
-        doc.paint(5, 7);
+        doc.paint(5, 7, 3);
         doc.set_colour(3, [255, 0, 0]);
         let written = doc.output().unwrap();
         let parsed = parse_enpg(&written).unwrap();
@@ -810,13 +894,13 @@ mod tests {
     #[test]
     fn a_tiled_sheet_paints_in_both_depths() {
         let mut data = vec![0u8; 64];
-        paint_tiled(&mut data, 1, 0, false, 0x1A);
+        tiled_sheet(&mut data, false).set(1, 0, 0x0A);
         assert_eq!(data[0], 0xA0, "4bpp keeps the low nibble and the odd pixel's high one");
         // Two 4bpp tiles sit side by side.
-        paint_tiled(&mut data, 8, 0, false, 2);
+        tiled_sheet(&mut data, false).set(8, 0, 2);
         assert_eq!(data[32], 2);
         let mut eight = vec![0u8; 128];
-        paint_tiled(&mut eight, 9, 1, true, 200);
+        tiled_sheet(&mut eight, true).set(9, 1, 200);
         assert_eq!(eight[64 + 9], 200);
         assert_eq!(grey(16)[15], 0x7fff);
         assert_eq!(tiled(&data, false, &grey(16)).width, 16);
@@ -838,7 +922,7 @@ mod tests {
         assert_eq!(doc.titles.len(), 6);
         assert_eq!(doc.titles[1], "Mario");
         doc.titles[1] = "Luigi's ✓".into();
-        doc.paint(0, 0);
+        doc.paint(0, 0, 0);
         let written = doc.output().unwrap();
         let parsed = parse_ds_banner(&written).unwrap();
         assert_eq!(String::from_utf16_lossy(&banner_title(&parsed, 1)), "Luigi's ✓");
@@ -888,8 +972,7 @@ mod tests {
         assert_eq!(doc.output().unwrap(), bytes);
 
         doc.subentries[0][3] = "9".into();
-        doc.selected_colour = 5;
-        doc.paint(0, 0);
+        doc.paint(0, 0, 5);
         let parsed = parse_bncd(&doc.output().unwrap()).unwrap();
         assert_eq!(parsed.subentries[0].tile_number, 9);
         assert_eq!(parsed.texture[0], 5);

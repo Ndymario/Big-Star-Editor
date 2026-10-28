@@ -1631,17 +1631,98 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     assert_eq!(doc.pairing.palette.as_deref(), Some("BG_ncg/demo_ncl.bin"));
     assert!(!doc.render().info.contains("greys"));
 
-    // Painting index 1 into the first pixel and saving writes the sheet into the module.
-    if let crate::workspace::FileView::Graphics(doc, _) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view {
-        doc.selected_color = 1;
-        doc.paint(0, 0);
-    }
+    // A click on the first pixel paints it: the left button colour 1, the right colour 0, whichever changes it. Ctrl+Z
+    // takes it back, as the editor's own step rather than the level's.
+    let first = |harness: &mut Harness<'static, BigStarApp>| {
+        let crate::workspace::FileView::Graphics(doc, _) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view else { panic!() };
+        doc.with_sheet(|grid| grid.get(0, 0)).flatten().unwrap()
+    };
+    let before = first(&mut harness);
+    let corner = harness.get_by_label("GraphicsCanvas").rect().min + Vec2::splat(1.0);
+    let (which, painted) = if before == 1 { (PointerButton::Secondary, 0) } else { (PointerButton::Primary, 1) };
+    click(&mut harness, corner, which, Modifiers::NONE);
     harness.run();
+    assert_eq!(first(&mut harness), painted);
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    assert_eq!(first(&mut harness), before, "undone");
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Y);
+    harness.run();
+    assert_eq!(first(&mut harness), painted, "redone");
+
+    // Saving writes the painted sheet into the module.
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
     let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
     assert!(listing.entries.iter().any(|e| e.path == "BG_ncg/demo_ncg.bin" && e.from_module));
+}
+
+#[test]
+fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_file() {
+    let (mut harness, shelf) = filesystem();
+    harness.state_mut().files.expanded.insert("BG_ncg".to_owned());
+    harness.run();
+    harness.get_by_label("demo_ncg.bin").click();
+    harness.run();
+    harness.get_by_label("Open").click();
+    harness.run();
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    // As NSMB Editor's image manager: the bitmap beside its palettes, and the PNG buttons under them.
+    harness.get_by_label("Bitmaps");
+    harness.get_by_label("Greys (no palette file)");
+    let import = harness.get_by_label("Import this bitmap with existing palette…");
+    assert!(egui_kittest::kittest::NodeT::accesskit_node(&import).is_disabled(), "nothing to match colours to yet");
+    {
+        let doc = harness.state_mut().workspace.files.get_mut(&key).unwrap();
+        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), true));
+    }
+    harness.state_mut().session_mut().unwrap().read_file("BG_ncg/demo_ncl.bin", crate::session::FileRead::Companion);
+    harness.run();
+    harness.run();
+    harness.get_by_label("Palette 0");
+
+    // Exported, the sheet comes out in its palette; read back in with that palette, it is the same indices.
+    harness.get_by_label("Export this bitmap…").click();
+    harness.run();
+    let (name, png) = shelf.lock().unwrap().saved.pop().expect("exported");
+    assert_eq!(name, "demo_ncg.png");
+    let image = crate::tileset_editor::decode_png(&png).unwrap();
+    assert_eq!(&image.pixels[..4], &[0, 255, 0, 255], "index 2 is the palette's green");
+    let sheet = |harness: &mut Harness<'static, BigStarApp>| {
+        let crate::workspace::FileView::Graphics(doc, _) = &mut harness.state_mut().workspace.files.get_mut(&key).unwrap().view else { panic!() };
+        doc.with_sheet(|grid| crate::image_manager::Bitmap::read(grid)).unwrap()
+    };
+    let before = sheet(&mut harness);
+    let mut red = image.clone();
+    red.pixels[..4].copy_from_slice(&[250, 0, 0, 255]);
+    shelf.lock().unwrap().to_open.push_back(("red.png".to_owned(), crate::tileset_editor::encode_png(&red).unwrap()));
+    harness.get_by_label("Import this bitmap with existing palette…").click();
+    harness.run();
+    let after = sheet(&mut harness);
+    assert_eq!(after.pixels[0], 1, "the nearest colour, red, is index 1");
+    assert_eq!(after.pixels[1..], before.pixels[1..]);
+
+    // Recreating the palette writes the paired palette file, and Save writes both.
+    let mut blue = image;
+    blue.pixels[..4].copy_from_slice(&[0, 0, 255, 255]);
+    shelf.lock().unwrap().to_open.push_back(("blue.png".to_owned(), crate::tileset_editor::encode_png(&blue).unwrap()));
+    harness.get_by_label("Import this bitmap and recreate palette…").click();
+    harness.run();
+    {
+        let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
+        let (palette, bytes) = doc.companion_output().expect("the palette file changed").unwrap();
+        assert_eq!(palette, "BG_ncg/demo_ncl.bin");
+        let colours: Vec<u16> = bytes.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        assert!(colours.contains(&0x7c00) && colours.contains(&0x03e0), "blue and the sheet's green: {colours:x?}");
+    }
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    harness.run();
+    let listing = harness.state().session().unwrap().filesystem.clone().unwrap();
+    for path in ["BG_ncg/demo_ncg.bin", "BG_ncg/demo_ncl.bin"] {
+        assert!(listing.entries.iter().any(|e| e.path == path && e.from_module), "{path} saved");
+    }
 }
 
 /// The bytes the demo host holds for `path` now, read back the way Extract reads them.
@@ -1798,7 +1879,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     harness.get_by_label("Map16").click();
     harness.run();
     harness.get_by_label("Show 3D tiles");
-    harness.get_by_label("GraphicsCanvas");
+    assert_eq!(harness.get_all_by_label("GraphicsCanvas").count(), 2, "the Map16 sheet and the tile picker beside it");
 
     // A Map16 quadrant and the level tileset id change; Save writes the one file and edits the level.
     {
@@ -1821,6 +1902,156 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     assert!(listing.entries.iter().all(|e| e.path != "BG_ncg/demo_t1_ncg.bin" || !e.from_module), "untouched files stay the ROM's");
     let log = &harness.state().session().unwrap().log;
     assert!(log.iter().any(|line| line.text == "Saved 1 edited graphics file(s) to the modules."));
+}
+
+#[test]
+fn tileset_graphics_go_out_and_back_in_with_all_their_palettes() {
+    let services = MemoryServices::default();
+    let shelf = services.shelf.clone();
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_level("A01_1");
+    harness.run();
+    harness.run();
+    let level = view(&harness).snapshot.level;
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.run();
+    harness.run();
+    harness.get_by_label("Graphics").click();
+    harness.run();
+    // Every tileset and layer is a bitmap; the chosen slot's tileset is the chosen one.
+    harness.get_by_label("Bitmaps");
+    harness.get_by_label("Palettes");
+    assert_eq!(harness.get_all_by_label("Palette 0").count(), 2, "listed, and heading the palette it chose");
+    harness.get_by_label("Export this bitmap with all palettes…").click();
+    harness.run();
+    let (_, png) = shelf.lock().unwrap().saved.pop().expect("exported");
+    let drawn = |harness: &mut Harness<'static, BigStarApp>| {
+        let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+        doc.sheet_image(crate::tileset_editor::Sheet::Current, 0).unwrap()
+    };
+    let before = drawn(&mut harness);
+    assert_eq!(crate::tileset_editor::decode_png(&png).unwrap(), before, "one palette: the sheet as the tab draws it");
+
+    // Read back in, the palette is made again from the PNG's colours and the sheet looks the same; one undo step.
+    shelf.lock().unwrap().to_open.push_back(("sheet.png".to_owned(), png));
+    harness.get_by_label("Import this bitmap with all palettes…").click();
+    harness.run();
+    assert_eq!(drawn(&mut harness), before);
+    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    assert_eq!(doc.history_names().0.first().map(String::as_str), Some("Import graphics"));
+}
+
+#[test]
+fn the_graphics_grids_are_shared_by_every_canvas_and_remembered() {
+    let services = MemoryServices::default();
+    let later = services.sharing_values();
+    let open = |services: MemoryServices| {
+        let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+        let mut harness =
+            Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+        harness.run();
+        harness.state_mut().session_mut().unwrap().open_project("demo");
+        harness.run();
+        harness.state_mut().session_mut().unwrap().open_level("A01_1");
+        harness.run();
+        harness.run();
+        harness.get_by_label("Tools").click();
+        harness.run();
+        harness.get_by_label("Tilesets and Backgrounds…").click();
+        harness.run();
+        harness.run();
+        harness.get_by_label("Graphics").click();
+        harness.run();
+        harness
+    };
+    let mut harness = open(services);
+    let grids = |harness: &Harness<'_, BigStarApp>| crate::zoom_canvas::Grids::current(&harness.ctx);
+    assert!(grids(&harness).pixel, "on until turned off");
+    harness.get_by_label("Pixel grid").click();
+    harness.run();
+    harness.run();
+    assert!(!grids(&harness).pixel);
+    // The Map16 tab's tile grid is the same switch as the graphics sheet's.
+    harness.get_by_label("Map16").click();
+    harness.run();
+    harness.get_all_by_label("Tile grid").next().unwrap().click();
+    harness.run();
+    harness.run();
+    assert!(!grids(&harness).tile);
+    drop(harness);
+
+    // A later run starts with them as they were left.
+    let harness = open(later);
+    assert_eq!(grids(&harness), crate::zoom_canvas::Grids { pixel: false, tile: false, block: true });
+}
+
+#[test]
+fn a_background_is_painted_with_tiles_from_the_picker_beside_it() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let level = view(&harness).snapshot.level;
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.run();
+    harness.run();
+    harness.get_by_label("Background").click();
+    harness.run();
+    // The picker is docked on the right of the map.
+    let mut canvases: Vec<Rect> = harness.get_all_by_label("GraphicsCanvas").map(|node| node.rect()).collect();
+    canvases.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    let [map, picker] = canvases[..] else { panic!("expected the map and its picker, got {canvases:?}") };
+    // The picker's second tile (it opens at twice the size, so 16 to 32 points across), painted at the map's first entry.
+    click(&mut harness, picker.min + Vec2::new(20.0, 2.0), PointerButton::Primary, Modifiers::NONE);
+    click(&mut harness, map.min + Vec2::splat(1.0), PointerButton::Primary, Modifiers::NONE);
+    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    let painted = doc.map_value(0).unwrap();
+    assert_ne!(painted.tile, 0, "the brush is the picked tile, not the first");
+    let paths: Vec<String> = doc.writes().unwrap().into_iter().map(|w| w.path).collect();
+    assert_eq!(paths.len(), 1, "only the background's screen changed: {paths:?}");
+    assert!(paths[0].contains("nsc"), "{paths:?}");
+    // Undo takes the stroke back.
+    harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
+    harness.run();
+    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    assert!(doc.writes().unwrap().is_empty());
+}
+
+#[test]
+fn map16_blocks_are_painted_with_tiles_chosen_in_the_picker() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let level = view(&harness).snapshot.level;
+    harness.get_by_label("Tools").click();
+    harness.run();
+    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.run();
+    harness.run();
+    harness.get_by_label("Map16").click();
+    harness.run();
+    let mut canvases: Vec<Rect> = harness.get_all_by_label("GraphicsCanvas").map(|node| node.rect()).collect();
+    canvases.sort_by(|a, b| a.left().total_cmp(&b.left()));
+    let [sheet, picker] = canvases[..] else { panic!("expected the sheet and its picker, got {canvases:?}") };
+    let first = {
+        let (doc, _) = harness.state().workspace.tilesets.get(&level).unwrap();
+        doc.tileset().unwrap().tile_offset
+    };
+    // The picker opens on this tileset's first tile; the one after it is clicked, and stays chosen.
+    let zoom = picker.width() / (crate::tileset_editor::GRAPHICS_COLUMNS * 8) as f32;
+    let next = usize::from(first) + 1;
+    let at = picker.min + Vec2::new(((next % 32) * 8) as f32 + 4.0, ((next / 32) * 8) as f32 + 4.0) * zoom;
+    click(&mut harness, at, PointerButton::Primary, Modifiers::NONE);
+    harness.run();
+    // Painted at block 0's top-left quadrant.
+    click(&mut harness, sheet.min + Vec2::splat(1.0), PointerButton::Primary, Modifiers::NONE);
+    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    assert_eq!((doc.map16_entry, doc.quadrant), (0, 0));
+    assert_eq!(doc.map16_value().unwrap().tile, 1, "the picked tile, in this tileset's own numbering");
 }
 
 #[test]

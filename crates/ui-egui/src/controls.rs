@@ -527,23 +527,11 @@ pub struct TextField<'a> {
     code: bool,
     id: Option<egui::Id>,
     lock_focus: bool,
-    fill: Option<Color32>,
 }
 
 impl<'a> TextField<'a> {
     pub fn new(value: &'a mut dyn egui::TextBuffer) -> Self {
-        TextField {
-            value,
-            hint: "",
-            name: None,
-            width: Width::Fill,
-            rows: None,
-            password: false,
-            code: false,
-            id: None,
-            lock_focus: false,
-            fill: None,
-        }
+        TextField { value, hint: "", name: None, width: Width::Fill, rows: None, password: false, code: false, id: None, lock_focus: false }
     }
 
     /// A field of several lines.
@@ -591,12 +579,6 @@ impl<'a> TextField<'a> {
         self
     }
 
-    /// A background of its own: a cell of a grid that is the chosen one.
-    pub fn fill(mut self, fill: Color32) -> Self {
-        self.fill = Some(fill);
-        self
-    }
-
     /// Tab types a tab rather than leaving the field.
     pub fn lock_focus(mut self) -> Self {
         self.lock_focus = true;
@@ -621,9 +603,6 @@ impl egui::Widget for TextField<'_> {
         }
         if let Some(id) = self.id {
             edit = edit.id_salt(id);
-        }
-        if let Some(fill) = self.fill {
-            edit = edit.background_color(fill);
         }
         let response = ui.add(edit);
         if let Some(name) = self.name {

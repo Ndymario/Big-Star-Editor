@@ -263,3 +263,24 @@ in [the port plan](rust-port-plan.md), whose Status table records what each phas
   `--xdelta`). Protocol 19.
 - Replaced the top bar with a menu bar (File, Edit, View, Build, Tools, Help) over a toolbar of Undo, Redo, Save and
   the project's main action; menu lines show their shortcuts, and the bar names only the open project.
+
+## M19: graphics editors at NSMB Editor's level
+
+- The pixel editors (character files, a tileset's graphics, uiStudio pictures and the banner icon) paint with a palette
+  docked beside the canvas. Left and right paint their own colours, Ctrl+click picks one, and the tools are brush,
+  eraser, eyedropper, fill, line, rectangle and a selection to copy, cut, paste, flip and delete. A 4bpp sheet paints
+  in the palette row chosen there. Colours are edited in the DS's five bits a channel, or as BGR555 hex.
+- Tilemaps (backgrounds, NSCR files and the Map16 sheet) paint from a tile picker beside them. A drag paints as it goes,
+  Shift-drag fills a rectangle with the picked pattern, the right button picks tiles from the map, and region tools
+  flip and set palettes. The Map16 picker shows all three tilesets as the level loads them, and a zoomed block
+  inspector paints single quadrants.
+- Objects are built by clicking Map16 blocks into the chosen cell (Shift inserts). The table draws each block with its
+  repeat flags, and the preview is sized by dragging on it. Behaviours apply to every block chosen in their picker.
+- The tileset Graphics tab and the graphics editor list bitmaps beside palettes, as NSMB Editor's image manager does:
+  the three tilesets and both background layers each in any of their 256-colour palettes, a sheet in any row of its
+  paired palette file, a TEX0's textures in any of its palettes. Its buttons export a bitmap, import one matched to the
+  chosen palette or making that palette from the PNG, and export or import every bitmap in every palette as one PNG.
+  A paired palette file's colours are edited in place and saved with the graphics.
+- Every canvas zooms (Ctrl+wheel, `+`/`-`/`0`), pans (middle button or Space) and shows a checkerboard where pixels are
+  clear. Each editor keeps its own undo history; Ctrl+Z, Ctrl+Y and the Edit menu act on the editor in front. See
+  `docs/m19-manual-checklist.md`.

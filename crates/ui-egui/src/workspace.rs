@@ -35,6 +35,13 @@ pub enum DocTab {
     Tileset(LevelId),
 }
 
+/// A document that keeps its own undo history.
+enum EditorHistory<'a> {
+    Graphics(&'a mut GraphicsDoc),
+    Resource(&'a mut ResourceDoc),
+    Tileset(&'a mut TilesetDoc),
+}
+
 /// A file open as a document, in the editor that understands it, or as hex.
 pub struct FileDoc {
     pub path: String,
@@ -57,7 +64,7 @@ pub enum Destination {
 
 pub enum FileView {
     Hex(Box<HexDoc>),
-    Graphics(Box<GraphicsDoc>, GraphicsView),
+    Graphics(Box<GraphicsDoc>, Box<GraphicsView>),
     /// A BMG; `compression` is the LZ wrapper it came in, put back on save.
     Messages {
         doc: Box<MessageDoc>,
@@ -266,7 +273,7 @@ impl Workspace {
                             waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, false)));
                             reads.extend(waiting.iter().map(|(p, _)| p.clone()));
                         }
-                        FileView::Graphics(Box::new(doc), GraphicsView::default())
+                        FileView::Graphics(Box::new(doc), Box::default())
                     }
                     _ => FileView::Hex(Box::new(HexDoc::new(bytes.to_vec()))),
                 };
@@ -510,6 +517,47 @@ impl Workspace {
             Some((_, DocTab::Level(level))) => Some(*level),
             _ => None,
         }
+    }
+
+    /// The graphics document in front, when it keeps its own undo: a tile sheet, a resource's picture or a tileset
+    /// workspace. Undo and redo act on it rather than on a level.
+    fn editor_in_front(&mut self) -> Option<EditorHistory<'_>> {
+        self.mend_dock();
+        let tab = *self.dock.find_active_focused()?.1;
+        match tab {
+            DocTab::Tileset(level) => self.tilesets.get_mut(&level).map(|(doc, _)| EditorHistory::Tileset(doc)),
+            DocTab::File(key) => match &mut self.files.get_mut(&key)?.view {
+                FileView::Graphics(doc, _) => Some(EditorHistory::Graphics(doc)),
+                FileView::Resource { doc, .. } => Some(EditorHistory::Resource(doc)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The front editor's undo and redo steps, and whether each can be taken.
+    pub fn editor_history(&mut self) -> Option<(Vec<String>, Vec<String>, bool, bool)> {
+        Some(match self.editor_in_front()? {
+            EditorHistory::Graphics(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
+            EditorHistory::Resource(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
+            EditorHistory::Tileset(doc) => (doc.history_names().0, doc.history_names().1, doc.can_undo(), doc.can_redo()),
+        })
+    }
+
+    /// Takes `steps` undo (or redo) steps in the front editor. Returns whether there was one to take them in.
+    pub fn editor_step(&mut self, undo: bool, steps: usize) -> bool {
+        let Some(mut editor) = self.editor_in_front() else { return false };
+        for _ in 0..steps {
+            match (&mut editor, undo) {
+                (EditorHistory::Graphics(doc), true) => doc.undo(),
+                (EditorHistory::Graphics(doc), false) => doc.redo(),
+                (EditorHistory::Resource(doc), true) => doc.undo(),
+                (EditorHistory::Resource(doc), false) => doc.redo(),
+                (EditorHistory::Tileset(doc), true) => doc.undo(),
+                (EditorHistory::Tileset(doc), false) => doc.redo(),
+            }
+        }
+        true
     }
 
     /// What to remember about the open project.
@@ -879,7 +927,7 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
         }
         FileView::Graphics(graphics, state) => {
             let siblings = siblings(session, path);
-            for action in crate::graphics_editor::show(ui, graphics, state, &siblings) {
+            for action in crate::graphics_editor::show(ui, graphics, state, &siblings, services) {
                 match action {
                     GraphicsAction::Load { path: companion, palette } => {
                         waiting.retain(|(_, p)| *p != palette);
@@ -887,12 +935,16 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
                         session.read_file(&companion, FileRead::Companion);
                     }
                     GraphicsAction::Remember => {}
-                    GraphicsAction::Save => match graphics.output() {
-                        Ok(bytes) => {
+                    GraphicsAction::Save => match (graphics.output(), graphics.companion_output().transpose()) {
+                        (Ok(bytes), Ok(companion)) => {
                             session.write_file(path, bytes);
-                            graphics.dirty = false;
+                            // A palette changed here belongs to the palette file it was read from.
+                            if let Some((palette, bytes)) = companion {
+                                session.write_file(&palette, bytes);
+                            }
+                            graphics.mark_saved();
                         }
-                        Err(error) => session.report(error),
+                        (Err(error), _) | (_, Err(error)) => session.report(error),
                     },
                 }
             }

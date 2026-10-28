@@ -4,14 +4,23 @@
 
 use crate::controls::{self, Choice as _};
 use bigstar_formats::{
-    GraphicsFormatKind, Nanr, Ncer, Ncgr, Nclr, Nscr, RgbaImage, Tex0, Tex0Palette, decode_bgr555_palette, identify_graphics_format, parse_nanr,
-    parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0, render_ncer_cell, render_tex0_texture, write_nanr, write_ncer, write_ncgr,
-    write_nclr, write_nscr, write_tex0,
+    GraphicsFormatKind, Nanr, Ncer, Ncgr, Nclr, Nscr, RgbaImage, ScreenMapEntry, Tex0, Tex0Palette, Tex0Texture, TextureFormat,
+    decode_bgr555_palette, identify_graphics_format, parse_nanr, parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0, render_ncer_cell,
+    render_tex0_texture, write_nanr, write_ncer, write_ncgr, write_nclr, write_nscr, write_tex0,
 };
-use egui::{Color32, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2};
+use egui::Ui;
 use serde::{Deserialize, Serialize};
 
 use crate::editors::{rewrap, unwrap_with};
+use crate::history::History;
+use crate::image_manager::{self, Bitmap, Images, Lists, ManagerState};
+use crate::paint::{Grid, IndexedSheet, Pattern, RawScreen};
+use crate::palette_panel;
+use crate::pixel_editor::{self, Command, HistoryButton, PixelEditor};
+use crate::services::Services;
+use crate::tile_picker::{self, PickerState};
+use crate::tilemap_editor::TilemapEditor;
+use crate::zoom_canvas::{self, CanvasState, Steps};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -57,6 +66,11 @@ pub fn pack(bytes: &mut [u8], index: usize, [r, g, b]: [u8; 3]) {
     if let Some(target) = bytes.get_mut(index * 2..index * 2 + 2) {
         target.copy_from_slice(&packed.to_le_bytes());
     }
+}
+
+/// A screen map's width in entries: the declared one in pixels when there is one, otherwise the square root.
+fn screen_width(entries: usize, declared_pixels: usize) -> usize {
+    if declared_pixels >= 8 { declared_pixels / 8 } else { sheet_width(entries, 0) }.max(1)
 }
 
 /// A sheet's width in tiles: the declared one when it is real, otherwise the square root, rounded up.
@@ -111,6 +125,18 @@ pub struct Rendered {
     pub swatches_editable: bool,
 }
 
+/// What an edit can change, for undo.
+#[derive(Clone, PartialEq)]
+pub struct Contents {
+    body: Vec<u8>,
+    nclr: Option<Nclr>,
+    ncgr: Option<Ncgr>,
+    nscr: Option<Nscr>,
+    tex0: Option<Tex0>,
+    /// The paired palette, with the file it is: undoing into it only when the same file is still paired.
+    companion: (Option<String>, Vec<u8>),
+}
+
 pub struct GraphicsDoc {
     pub path: String,
     original: Vec<u8>,
@@ -129,10 +155,17 @@ pub struct GraphicsDoc {
     pub secondary: usize,
     pub pairing: Pairing,
     companion_palette: Vec<u8>,
+    /// The paired palette file as read, and its NCLR when it is one: what an edited palette is written back into.
+    companion_original: Vec<u8>,
+    companion_nclr: Option<Nclr>,
+    /// The paired palette's colours were changed here, so a save writes that file too.
+    companion_edited: bool,
     companion_characters: Vec<u8>,
     companion_8bpp: bool,
     pub companion_error: Option<String>,
-    pub selected_color: usize,
+    /// The palette a sheet is drawn and painted with: a row of sixteen colours at 4bpp, a block of 256 at 8bpp.
+    pub palette_row: usize,
+    history: History<Contents>,
     /// Grows with every change, so a drawn texture knows when it is stale.
     pub version: u64,
     pub dirty: bool,
@@ -156,10 +189,14 @@ impl GraphicsDoc {
             secondary: 0,
             pairing: Pairing::default(),
             companion_palette: Vec::new(),
+            companion_original: Vec::new(),
+            companion_nclr: None,
+            companion_edited: false,
             companion_characters: Vec::new(),
             companion_8bpp: false,
             companion_error: None,
-            selected_color: 0,
+            palette_row: 0,
+            history: History::default(),
             version: 0,
             dirty: false,
         };
@@ -237,7 +274,7 @@ impl GraphicsDoc {
     }
 
     /// Bumps the version and marks the file changed.
-    fn touched(&mut self, edited: bool) {
+    pub(crate) fn touched(&mut self, edited: bool) {
         self.version += 1;
         self.dirty |= edited;
     }
@@ -303,9 +340,67 @@ impl GraphicsDoc {
     /// Takes a companion palette's bytes; an NCLR gives its palette, anything else is taken as raw BGR555.
     pub fn set_companion_palette(&mut self, path: Option<String>, bytes: Option<&[u8]>) {
         self.pairing.palette = path;
+        self.companion_original = bytes.map(<[u8]>::to_vec).unwrap_or_default();
         let plain = bytes.map(|b| unwrap_with(b).1).unwrap_or_default();
-        self.companion_palette = parse_nclr(&plain).map_or(plain, |nclr| nclr.palette);
+        self.companion_nclr = parse_nclr(&plain).ok();
+        self.companion_palette = self.companion_nclr.as_ref().map_or(plain, |nclr| nclr.palette.clone());
+        self.companion_edited = false;
         self.touched(false);
+    }
+
+    /// The paired palette file as edited, when its colours were changed here: its path and bytes.
+    pub fn companion_output(&self) -> Option<Result<(String, Vec<u8>), String>> {
+        if !self.companion_edited {
+            return None;
+        }
+        let path = self.pairing.palette.clone()?;
+        let body = match &self.companion_nclr {
+            Some(nclr) => match write_nclr(&Nclr { palette: self.companion_palette.clone(), ..nclr.clone() }) {
+                Ok(body) => body,
+                Err(error) => return Some(Err(error.message)),
+            },
+            None => self.companion_palette.clone(),
+        };
+        Some(rewrap(&self.companion_original, body).map(|bytes| (path, bytes)))
+    }
+
+    /// The file, and an edited paired palette, were written.
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+        self.companion_edited = false;
+    }
+
+    /// How many colours one palette of the list holds: a 4bpp row of sixteen, an 8bpp block of 256, or a whole
+    /// palette file or TEX0 palette.
+    pub fn palette_size(&self) -> usize {
+        match self.mode {
+            Mode::Ncgr | Mode::RawCharacters => {
+                if self.eight_bits() {
+                    256
+                } else {
+                    16
+                }
+            }
+            Mode::Nscr | Mode::RawScreen | Mode::Ncer | Mode::Nanr => {
+                if self.companion_8bpp {
+                    256
+                } else {
+                    16
+                }
+            }
+            Mode::Tex0 => self.tex0.as_ref().and_then(|t| t.palettes.get(self.secondary)).map_or(0, |p| p.colors.len() / 2),
+            Mode::Nclr => self.nclr.as_ref().map_or(0, |n| n.palette.len() / 2),
+            _ => self.body.len() / 2,
+        }
+        .max(1)
+    }
+
+    /// How many palettes a sheet can be drawn in: the rows (or blocks) of the paired palette.
+    pub fn palette_count(&self) -> usize {
+        match self.mode {
+            Mode::Tex0 => self.tex0.as_ref().map_or(0, |t| t.palettes.len()),
+            _ => (self.active_palette(self.palette_size()).len() / 2).div_ceil(self.palette_size()).max(1),
+        }
     }
 
     /// Takes companion graphics: an NCGR's characters (and bit depth), or raw 4bpp tiles.
@@ -332,8 +427,17 @@ impl GraphicsDoc {
         gray
     }
 
+    fn chosen_texture(&self) -> Option<&Tex0Texture> {
+        self.tex0.as_ref()?.textures.get(self.primary)
+    }
+
+    /// Whether the image manager lists this file's bitmaps and palettes: a sheet, or a TEX0's textures.
+    pub fn manages_images(&self) -> bool {
+        matches!(self.mode, Mode::Ncgr | Mode::RawCharacters | Mode::Tex0)
+    }
+
     /// The sheet being painted: its bytes, width in tiles, bit depth and whether it is a linear bitmap.
-    fn sheet(&self) -> Option<(&[u8], usize, bool, bool)> {
+    pub(crate) fn sheet(&self) -> Option<(&[u8], usize, bool, bool)> {
         match self.mode {
             Mode::Ncgr => {
                 let ncgr = self.ncgr.as_ref()?;
@@ -396,6 +500,7 @@ impl GraphicsDoc {
         let width_pixels = width_tiles * 8;
         let mut image = blank(width_pixels, rows * 8);
         let palette = self.active_palette(if eight { 256 } else { 16 });
+        let row = self.palette_row * if eight { 256 } else { 16 };
         for index in 0..tiles * 64 {
             let value =
                 if eight { bytes.get(index).copied().unwrap_or(0) } else { (bytes.get(index / 2).copied().unwrap_or(0) >> ((index & 1) * 4)) & 15 };
@@ -408,22 +513,23 @@ impl GraphicsDoc {
             if y >= image.height {
                 break;
             }
-            put(&mut image, x, y, unpack(&palette, usize::from(value)));
+            put(&mut image, x, y, unpack(&palette, row + usize::from(value)));
         }
         let colours = palette.len() / 2;
         let info = format!(
-            "{} — {tiles} tiles, {}bpp, {}.{} Choose an index, then click pixels to paint.",
+            "{} — {tiles} tiles, {}bpp, {}.{}",
             if self.mode == Mode::Ncgr { "NCGR" } else { "Raw graphics" },
             if eight { 8 } else { 4 },
             if linear { "bitmap arrangement (NCBR)" } else { "8x8 tiled" },
             if self.companion_palette.is_empty() { " Indices are shown as greys until a palette file is chosen." } else { "" }
         );
-        Rendered { image: Some(image), grid: 1, info, swatches: (0..colours).map(|i| unpack(&palette, i)).collect(), swatches_editable: false }
+        let swatches = (0..colours).map(|i| unpack(&palette, i)).collect();
+        Rendered { image: Some(image), grid: 1, info, swatches, swatches_editable: !self.companion_palette.is_empty() }
     }
 
     fn screen_view(&self, bytes: &[u8], declared_width: usize, declared_height: usize, name: &str) -> Rendered {
         let entries = bytes.len() / 2;
-        let width = if declared_width >= 8 { declared_width / 8 } else { sheet_width(entries, 0) }.max(1);
+        let width = screen_width(entries, declared_width);
         let height = if declared_height >= 8 { declared_height / 8 } else { entries.div_ceil(width) };
         let mut image = blank(width * 8, height * 8);
         let composed = !self.companion_characters.is_empty();
@@ -443,7 +549,12 @@ impl GraphicsDoc {
             // Bits 0-9 character, 10 H-flip, 11 V-flip, 12-15 palette row.
             let tile = usize::from(value & 0x3ff);
             let (hflip, vflip) = (value & 0x400 != 0, value & 0x800 != 0);
-            let row = if eight { 0 } else { usize::from(value >> 12) * 16 };
+            // An 8bpp map names a block of 256 only when there are extended palettes to name.
+            let row = match eight {
+                false => usize::from(value >> 12) * 16,
+                true if palette.len() > 512 => usize::from(value >> 12) * 256,
+                true => 0,
+            };
             let tile_size = if eight { 64 } else { 32 };
             for pixel in 0..64 {
                 let sx = if hflip { 7 - pixel % 8 } else { pixel % 8 };
@@ -459,7 +570,7 @@ impl GraphicsDoc {
         }
         let info = format!(
             "{name} — {entries} map entries.{}",
-            if composed { "" } else { " Tile colours are identifiers; choose a graphics file to see the picture." }
+            if composed { "" } else { " Tile colours are identifiers; choose a graphics file to see the picture and paint it." }
         );
         let swatches = if composed { (0..palette.len() / 2).map(|i| unpack(&palette, i)).collect() } else { Vec::new() };
         Rendered { image: Some(image), grid: 0, info, swatches, swatches_editable: false }
@@ -563,33 +674,160 @@ impl GraphicsDoc {
         }
     }
 
-    /// Paints the selected palette index into the sheet at image pixel (`x`, `y`). A BMP-arranged sheet is one
-    /// row-major bitmap; a CHAR one is 8x8 tiles in reading order.
-    pub fn paint(&mut self, x: usize, y: usize) {
-        let Some((_, width_tiles, eight, linear)) = self.sheet() else { return };
-        let index = if linear { y * width_tiles * 8 + x } else { ((y / 8) * width_tiles + x / 8) * 64 + (y % 8) * 8 + x % 8 };
-        let color = self.selected_color;
+    /// Runs `edit` on the sheet being painted, as a grid of indices. `None` when this file is not a sheet.
+    pub fn with_sheet<R>(&mut self, edit: impl FnOnce(&mut dyn Grid<Cell = u8>) -> R) -> Option<R> {
+        let (_, width_tiles, eight, linear) = self.sheet()?;
         let bytes = match self.mode {
-            Mode::Ncgr => match &mut self.ncgr {
-                Some(ncgr) => &mut ncgr.characters,
-                None => return,
-            },
+            Mode::Ncgr => &mut self.ncgr.as_mut()?.characters,
             _ => &mut self.body,
         };
-        if eight {
-            let Some(byte) = bytes.get_mut(index) else { return };
-            *byte = color as u8;
-        } else {
-            let Some(byte) = bytes.get_mut(index / 2) else { return };
-            let shift = (index & 1) * 4;
-            *byte = (*byte & !(15 << shift)) | (((color & 15) as u8) << shift);
+        Some(edit(&mut IndexedSheet { bytes, width_tiles, eight, linear }))
+    }
+
+    /// Writes palette index `value` at pixel (`x`, `y`) of the sheet.
+    #[cfg(test)]
+    pub fn paint(&mut self, x: usize, y: usize, value: u8) {
+        if self.with_sheet(|grid| grid.set(x, y, value)).is_some() {
+            self.touched(true);
+        }
+    }
+
+    /// Whether the sheet stores eight bits a pixel, and so paints from the whole palette rather than a row of it.
+    pub fn eight_bits(&self) -> bool {
+        self.sheet().is_some_and(|(_, _, eight, _)| eight)
+    }
+
+    /// Whether a screen map can be painted here: it needs graphics to paint with.
+    pub fn paints_screen(&self) -> bool {
+        matches!(self.mode, Mode::Nscr | Mode::RawScreen) && !self.companion_characters.is_empty()
+    }
+
+    /// Runs `edit` on the screen map's entries. `None` when this file is not one.
+    pub fn with_screen<R>(&mut self, edit: impl FnOnce(&mut dyn Grid<Cell = ScreenMapEntry>) -> R) -> Option<R> {
+        let (bytes, declared) = match self.mode {
+            Mode::Nscr => {
+                let nscr = self.nscr.as_mut()?;
+                let declared = usize::from(nscr.width);
+                (&mut nscr.screen, declared)
+            }
+            Mode::RawScreen => (&mut self.body, self.pairing.width * 8),
+            _ => return None,
+        };
+        let width = screen_width(bytes.len() / 2, declared);
+        Some(edit(&mut RawScreen { bytes, width }))
+    }
+
+    /// The paired graphics as a sheet sixteen tiles across, in palette row `row`: what the tile picker shows.
+    pub fn companion_sheet(&self, row: usize) -> Option<RgbaImage> {
+        let eight = self.companion_8bpp;
+        let tile_size = if eight { 64 } else { 32 };
+        let tiles = self.companion_characters.len() / tile_size;
+        if tiles == 0 {
+            return None;
+        }
+        let palette = self.active_palette(if eight { 256 } else { 16 });
+        let offset = row * if eight { 256 } else { 16 };
+        let mut image = blank(16 * 8, tiles.div_ceil(16) * 8);
+        for tile in 0..tiles {
+            for pixel in 0..64 {
+                let at = tile * tile_size + if eight { pixel } else { pixel / 2 };
+                let Some(&byte) = self.companion_characters.get(at) else { continue };
+                let index = if eight { byte } else { (byte >> ((pixel & 1) * 4)) & 15 };
+                if index != 0 {
+                    put(&mut image, (tile % 16) * 8 + pixel % 8, (tile / 16) * 8 + pixel / 8, unpack(&palette, offset + usize::from(index)));
+                }
+            }
+        }
+        Some(image)
+    }
+
+    /// How many tiles the paired graphics hold, and how many palette rows a screen entry can name.
+    pub fn companion_counts(&self) -> (usize, usize) {
+        let tiles = self.companion_characters.len() / if self.companion_8bpp { 64 } else { 32 };
+        let rows = if self.companion_8bpp { self.companion_palette.len() / 512 } else { (self.companion_palette.len() / 32).min(16) }.max(1);
+        (tiles, rows)
+    }
+
+    pub fn set_palette_row(&mut self, row: usize) {
+        if row != self.palette_row {
+            self.palette_row = row;
+            self.touched(false);
+        }
+    }
+
+    // --- Undo ---
+
+    fn contents(&self) -> Contents {
+        Contents {
+            body: self.body.clone(),
+            nclr: self.nclr.clone(),
+            ncgr: self.ncgr.clone(),
+            nscr: self.nscr.clone(),
+            tex0: self.tex0.clone(),
+            companion: (self.pairing.palette.clone(), self.companion_palette.clone()),
+        }
+    }
+
+    fn restore(&mut self, contents: Contents) {
+        let companion;
+        Contents { body: self.body, nclr: self.nclr, ncgr: self.ncgr, nscr: self.nscr, tex0: self.tex0, companion } = contents;
+        if companion.0 == self.pairing.palette && companion.1 != self.companion_palette {
+            self.companion_palette = companion.1;
+            self.companion_edited = true;
         }
         self.touched(true);
     }
 
-    /// Sets palette colour `index` of this file's own palette.
-    pub fn set_color(&mut self, index: usize, rgb: [u8; 3]) {
-        let bytes = match self.mode {
+    /// Starts an undo step called `name`, unless one is open: the edits until [`Self::end_edit`] are one step.
+    pub fn begin_edit(&mut self, name: &str) {
+        if !self.history.is_open() {
+            let contents = self.contents();
+            self.history.begin(name, &contents);
+        }
+    }
+
+    pub fn end_edit(&mut self) {
+        if self.history.is_open() {
+            let contents = self.contents();
+            self.history.commit(&contents);
+        }
+    }
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    pub fn history_names(&self) -> (Vec<String>, Vec<String>) {
+        self.history.names()
+    }
+
+    pub fn undo(&mut self) {
+        let mut contents = self.contents();
+        if self.history.undo(&mut contents) {
+            self.restore(contents);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        let mut contents = self.contents();
+        if self.history.redo(&mut contents) {
+            self.restore(contents);
+        }
+    }
+
+    /// Whether colour edits go to the paired palette file rather than this one.
+    fn edits_companion(&self) -> bool {
+        self.pairs_palette() && !self.companion_palette.is_empty()
+    }
+
+    /// The palette a colour edit changes: this file's own, or the paired palette file's.
+    fn palette_bytes(&mut self) -> Option<&mut Vec<u8>> {
+        match self.mode {
+            _ if self.edits_companion() => Some(&mut self.companion_palette),
             Mode::Nclr => self.nclr.as_mut().map(|n| &mut n.palette),
             Mode::RawPalette => Some(&mut self.body),
             Mode::Tex0 => {
@@ -597,11 +835,25 @@ impl GraphicsDoc {
                 self.tex0.as_mut().and_then(|t| t.palettes.get_mut(secondary)).map(|p| &mut p.colors)
             }
             _ => None,
-        };
-        if let Some(bytes) = bytes {
-            pack(bytes, index, rgb);
-            self.touched(true);
         }
+    }
+
+    /// Sets palette colour `index` of this file's own palette.
+    pub fn set_color(&mut self, index: usize, rgb: [u8; 3]) {
+        let Some(bytes) = self.palette_bytes() else { return };
+        let mut changed = bytes.clone();
+        pack(&mut changed, index, rgb);
+        if changed == *bytes {
+            return;
+        }
+        let before = self.contents();
+        if let Some(bytes) = self.palette_bytes() {
+            *bytes = changed;
+        }
+        self.companion_edited |= self.edits_companion();
+        let after = self.contents();
+        self.history.record("Change colour", before, &after);
+        self.touched(true);
     }
 
     /// The file as edited, wrapped the way it was read.
@@ -626,97 +878,132 @@ impl GraphicsDoc {
     }
 }
 
-/// Draws an image zoomed to fit 512 points in whole steps, at most 16, so pixel art stays crisp; a grid every `grid`
-/// pixels when cells are big enough on screen to tell apart. `texture` caches the upload for `version`. Returns the
-/// pixel clicked or dragged over, for painting.
+/// Bits a texel of a paletted TEX0 format stores; the other formats aren't indices into a palette alone.
+fn tex0_bits(format: TextureFormat) -> Option<usize> {
+    match format {
+        TextureFormat::Palette4 => Some(2),
+        TextureFormat::Palette16 => Some(4),
+        TextureFormat::Palette256 => Some(8),
+        _ => None,
+    }
+}
+
+/// Where texel (`x`, `y`) of a paletted texture is: its byte, its shift and its mask.
+fn tex0_texel(texture: &Tex0Texture, bits: usize, x: usize, y: usize) -> (usize, usize, u8) {
+    let source = y * texture.width + x;
+    let per_byte = 8 / bits;
+    (source / per_byte, (source % per_byte) * bits, ((1u16 << bits) - 1) as u8)
+}
+
+fn tex0_bitmap(texture: &Tex0Texture) -> Option<Bitmap> {
+    let bits = tex0_bits(texture.format)?;
+    let (width, height) = (texture.original_width, texture.original_height);
+    let mut pixels = Vec::with_capacity(width * height);
+    for y in 0..height {
+        for x in 0..width {
+            let (at, shift, mask) = tex0_texel(texture, bits, x, y);
+            pixels.push((texture.texels.get(at).copied().unwrap_or(0) >> shift) & mask);
+        }
+    }
+    Some(Bitmap { width, height, pixels })
+}
+
+/// The bitmaps and palettes [`image_manager`] moves in and out of PNGs: the sheet in each row of its palette, or a
+/// TEX0's textures in each of its palettes.
+struct DocImages<'a>(&'a mut GraphicsDoc);
+
+impl Images for DocImages<'_> {
+    fn bitmap(&self, index: usize) -> Option<Bitmap> {
+        let doc = &*self.0;
+        if doc.mode == Mode::Tex0 {
+            return tex0_bitmap(doc.tex0.as_ref()?.textures.get(index)?);
+        }
+        let (bytes, width_tiles, eight, linear) = doc.sheet()?;
+        let mut bytes = bytes.to_vec();
+        Some(Bitmap::read(&IndexedSheet { bytes: &mut bytes, width_tiles, eight, linear }))
+    }
+
+    fn palette(&self, index: usize) -> Option<image_manager::Palette> {
+        let doc = &*self.0;
+        let (bytes, start, count) = if doc.mode == Mode::Tex0 {
+            let colours = &doc.tex0.as_ref()?.palettes.get(index)?.colors;
+            (colours.clone(), 0, colours.len() / 2)
+        } else {
+            let size = doc.palette_size();
+            (doc.active_palette(size), index * size, size)
+        };
+        Some((start..start + count).map(|i| unpack(&bytes, i)).map(|[r, g, b, _]| [r, g, b]).collect())
+    }
+
+    fn colours(&self) -> usize {
+        match self.0.mode {
+            Mode::Tex0 => self.0.chosen_texture().and_then(|t| tex0_bits(t.format)).map_or(256, |bits| 1 << bits),
+            _ => self.0.palette_size(),
+        }
+    }
+
+    fn set_bitmap(&mut self, index: usize, pixels: Vec<u8>) -> Result<(), String> {
+        let doc = &mut *self.0;
+        if doc.mode == Mode::Tex0 {
+            let texture = doc.tex0.as_mut().and_then(|t| t.textures.get_mut(index)).ok_or("no texture")?;
+            let bits = tex0_bits(texture.format).ok_or("Only 4-, 16- and 256-colour textures can be imported.")?;
+            for (i, &value) in pixels.iter().enumerate() {
+                let (x, y) = (i % texture.original_width.max(1), i / texture.original_width.max(1));
+                let (at, shift, mask) = tex0_texel(texture, bits, x, y);
+                if let Some(byte) = texture.texels.get_mut(at) {
+                    *byte = (*byte & !(mask << shift)) | ((value & mask) << shift);
+                }
+            }
+        } else {
+            let read = DocImages(doc).bitmap(index).ok_or("no graphics")?;
+            doc.with_sheet(|grid| Bitmap { pixels, ..read }.write(grid));
+        }
+        doc.touched(true);
+        Ok(())
+    }
+
+    fn set_palette(&mut self, index: usize, colours: &[[u8; 3]]) {
+        let doc = &mut *self.0;
+        let (bytes, start) = if doc.mode == Mode::Tex0 {
+            let Some(palette) = doc.tex0.as_mut().and_then(|t| t.palettes.get_mut(index)) else { return };
+            (&mut palette.colors, 0)
+        } else if doc.edits_companion() {
+            doc.companion_edited = true;
+            let start = index * doc.palette_size();
+            (&mut doc.companion_palette, start)
+        } else {
+            return;
+        };
+        for (i, &rgb) in colours.iter().enumerate().skip(1) {
+            if (start + i) * 2 < bytes.len() {
+                pack(bytes, start + i, rgb);
+            }
+        }
+        doc.touched(true);
+    }
+
+    fn draw(&self, bitmap: usize, palette: usize) -> Option<RgbaImage> {
+        let doc = &*self.0;
+        if doc.mode == Mode::Tex0 {
+            let tex0 = doc.tex0.as_ref()?;
+            return render_tex0_texture(tex0.textures.get(bitmap)?, tex0.palettes.get(palette)?).ok();
+        }
+        Some(image_manager::render(&self.bitmap(bitmap)?, &self.palette(palette)?))
+    }
+}
+
+/// Draws an image to look at without painting it, on the same canvas the editors paint on.
 pub(crate) fn picture(
     ui: &mut Ui,
     name: &str,
     image: &RgbaImage,
-    grid: usize,
     version: u64,
     texture: &mut Option<(u64, egui::TextureHandle)>,
+    state: &mut CanvasState,
     max_height: f32,
-) -> Option<(usize, usize)> {
-    if image.width == 0 || image.height == 0 || image.pixels.len() < image.width * image.height * 4 {
-        ui.weak("Nothing to draw.");
-        return None;
-    }
-    let longest = image.width.max(image.height).max(1);
-    let zoom = (512 / longest).clamp(1, 16) as f32;
-    if texture.as_ref().is_none_or(|(shown, _)| *shown != version) {
-        let colors = egui::ColorImage::from_rgba_unmultiplied([image.width, image.height], &image.pixels);
-        let handle = ui.ctx().load_texture(format!("graphics:{name}"), colors, egui::TextureOptions::NEAREST);
-        *texture = Some((version, handle));
-    }
-    let mut painted = None;
-    egui::ScrollArea::both().id_salt(("picture", name)).max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
-        let size = Vec2::new(image.width as f32, image.height as f32) * zoom;
-        let (rect, response) = ui.allocate_exact_size(size.max(Vec2::splat(1.0)), Sense::click_and_drag());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Other, true, "GraphicsCanvas"));
-        let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
-        if let Some((_, texture)) = texture {
-            painter.image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
-        }
-        if grid > 0 && grid as f32 * zoom >= 8.0 {
-            let stroke = Stroke::new(1.0, ui.visuals().weak_text_color().gamma_multiply(0.4));
-            for x in (0..=image.width).step_by(grid) {
-                let sx = rect.left() + x as f32 * zoom;
-                painter.line_segment([Pos2::new(sx, rect.top()), Pos2::new(sx, rect.bottom())], stroke);
-            }
-            for y in (0..=image.height).step_by(grid) {
-                let sy = rect.top() + y as f32 * zoom;
-                painter.line_segment([Pos2::new(rect.left(), sy), Pos2::new(rect.right(), sy)], stroke);
-            }
-        }
-        // Clicking or dragging over a sheet paints the chosen index.
-        if (response.clicked() || response.dragged())
-            && let Some(at) = response.interact_pointer_pos()
-        {
-            let (x, y) = (((at.x - rect.left()) / zoom) as usize, ((at.y - rect.top()) / zoom) as usize);
-            if x < image.width && y < image.height {
-                painted = Some((x, y));
-            }
-        }
-    });
-    painted
-}
-
-/// A palette as swatches to choose the painting index from; when the palette is the file's own, the chosen colour can
-/// be changed, and the new colour is returned.
-pub(crate) fn swatches(ui: &mut Ui, colours: &[[u8; 4]], selected: &mut usize, editable: bool) -> Option<[u8; 3]> {
-    ui.horizontal_wrapped(|ui| {
-        for (index, rgba) in colours.iter().enumerate() {
-            let (rect, response) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, *selected == index, format!("Colour {index}")));
-            let [r, g, b, _] = *rgba;
-            ui.painter().rect(
-                rect,
-                2.0,
-                Color32::from_rgb(r, g, b),
-                Stroke::new(if *selected == index { 2.0 } else { 1.0 }, ui.visuals().strong_text_color()),
-                StrokeKind::Inside,
-            );
-            if response.on_hover_text(format!("Index {index}")).clicked() {
-                *selected = index;
-            }
-        }
-    });
-    let mut changed = None;
-    if editable {
-        ui.horizontal(|ui| {
-            ui.label(format!("Colour {}", *selected));
-            if let Some([r, g, b, _]) = colours.get(*selected).copied() {
-                let mut rgb = [r, g, b];
-                if ui.color_edit_button_srgb(&mut rgb).changed() {
-                    changed = Some(rgb);
-                }
-                ui.weak("The DS stores 5 bits per colour channel, so the colour is rounded to the nearest one it can show.");
-            }
-        });
-    }
-    changed
+) {
+    ui.horizontal(|ui| zoom_canvas::zoom_controls(ui, state, Steps { fine: 0, coarse: 8 }));
+    zoom_canvas::show(ui, name, image, version, texture, state, Steps { fine: 0, coarse: 8 }, &[], max_height);
 }
 
 /// What the person did in the editor that the workspace carries out.
@@ -731,15 +1018,27 @@ pub enum GraphicsAction {
     Save,
 }
 
-/// The editor's view state: the drawn texture and which version of the document it shows.
+/// The editor's view state: its tools, and the drawn picture with the version of the document it shows.
 #[derive(Default)]
 pub struct GraphicsView {
+    pixels: PixelEditor,
+    tiles: TilemapEditor,
+    picker: PickerState,
+    picker_version: u64,
+    still: CanvasState,
     texture: Option<(u64, egui::TextureHandle)>,
+    rendered: Option<(u64, Rendered)>,
+    /// The image manager's choice of bitmap and palette, and what its last import or export said went wrong.
+    manager: ManagerState,
+    notice: Option<String>,
 }
 
-pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, siblings: &[String]) -> Vec<GraphicsAction> {
+pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, siblings: &[String], services: &dyn Services) -> Vec<GraphicsAction> {
     let mut actions = Vec::new();
-    let rendered = doc.render();
+    if view.rendered.as_ref().is_none_or(|(version, _)| *version != doc.version) {
+        view.rendered = Some((doc.version, doc.render()));
+    }
+    let Some((_, rendered)) = view.rendered.clone() else { return actions };
     if controls::document_header(ui, &doc.path, "", doc.dirty && doc.error.is_none()) {
         actions.push(GraphicsAction::Save);
     }
@@ -747,13 +1046,70 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
     if let Some(error) = &doc.companion_error {
         controls::error_text(ui, error);
     }
+    if let Some(notice) = &view.notice {
+        controls::warning_text(ui, notice);
+    }
     if doc.error.is_some() {
         return actions;
     }
+    egui::Panel::left(egui::Id::new(("graphics-options", &doc.path))).resizable(true).default_size(240.0).show(ui, |ui| {
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            options(ui, doc, siblings, &mut actions);
+            if doc.manages_images() {
+                ui.separator();
+                manager(ui, doc, view, services);
+            }
+        });
+    });
+    let palette_only = matches!(doc.mode, Mode::Nclr | Mode::RawPalette);
+    let sheet = doc.sheet().is_some();
+    let screen = doc.paints_screen();
+    if !palette_only && (screen || !rendered.swatches.is_empty()) {
+        egui::Panel::right(egui::Id::new(("graphics-side", &doc.path))).resizable(true).default_size(300.0).show(ui, |ui| {
+            if screen {
+                tile_side(ui, doc, view);
+            } else {
+                // Only the palette the picture is drawn in, as the list beside it chose it.
+                let (size, chosen) = if doc.mode == Mode::Tex0 { (rendered.swatches.len(), 0) } else { (doc.palette_size(), doc.palette_row) };
+                let start = (chosen * size).min(rendered.swatches.len());
+                let shown = rendered.swatches.get(start..(start + size).min(rendered.swatches.len())).unwrap_or_default();
+                ui.strong(if doc.palette_count() > 1 { format!("Palette {chosen}") } else { "Palette".to_owned() });
+                let edited = egui::ScrollArea::vertical()
+                    .show(ui, |ui| palette_panel::show(ui, shown, &mut view.pixels.colours, size.max(1), rendered.swatches_editable))
+                    .inner;
+                if let Some((index, rgb)) = edited {
+                    doc.set_color(start + index, rgb);
+                }
+            }
+        });
+    }
+    egui::CentralPanel::default().show(ui, |ui| {
+        if palette_only {
+            if let Some((index, rgb)) = palette_panel::show(ui, &rendered.swatches, &mut view.pixels.colours, 256, true) {
+                doc.set_color(index, rgb);
+            }
+            return;
+        }
+        let Some(image) = &rendered.image else { return };
+        if sheet {
+            sheet_canvas(ui, doc, view, image);
+        } else if screen {
+            screen_canvas(ui, doc, view, image);
+        } else {
+            picture(ui, &doc.path, image, doc.version, &mut view.texture, &mut view.still, ui.available_height());
+        }
+    });
+    actions
+}
+
+/// The pairing, the cell or texture shown, and the width a headerless file is read at.
+fn options(ui: &mut Ui, doc: &mut GraphicsDoc, siblings: &[String], actions: &mut Vec<GraphicsAction>) {
     egui::Grid::new(("graphics-form", &doc.path)).num_columns(2).show(ui, |ui| {
-        let primary = doc.primary_choices();
+        // A TEX0's textures and palettes are the image manager's lists instead.
+        let listed = doc.mode == Mode::Tex0;
+        let primary = if listed { Vec::new() } else { doc.primary_choices() };
         if !primary.is_empty() {
-            ui.label("Image/cell");
+            ui.label(if doc.mode == Mode::RawCharacters { "Bit depth" } else { "Image/cell" });
             let mut chosen = doc.primary.min(primary.len() - 1);
             controls::drop_down("graphics-primary").selected_text(primary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
                 for (i, name) in primary.iter().enumerate() {
@@ -765,7 +1121,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
             }
             ui.end_row();
         }
-        let secondary = doc.secondary_choices();
+        let secondary = if listed { Vec::new() } else { doc.secondary_choices() };
         if !secondary.is_empty() {
             ui.label("Palette");
             let mut chosen = doc.secondary.min(secondary.len() - 1);
@@ -790,9 +1146,11 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
                 continue;
             }
             ui.label(label);
-            controls::drop_down(("graphics-source", palette)).selected_text(current.clone().unwrap_or_else(|| "(none)".to_owned())).show_ui(
-                ui,
-                |ui| {
+            controls::drop_down(("graphics-source", palette))
+                .width(140.0)
+                .truncate()
+                .selected_text(current.clone().unwrap_or_else(|| "(none)".to_owned()))
+                .show_ui(ui, |ui| {
                     if ui.choice(current.is_none(), "(none)").clicked() {
                         if palette {
                             doc.set_companion_palette(None, None);
@@ -806,8 +1164,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
                             actions.push(GraphicsAction::Load { path: choice.clone(), palette });
                         }
                     }
-                },
-            );
+                });
             ui.end_row();
         }
         if doc.uses_width() {
@@ -824,19 +1181,151 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
             ui.end_row();
         }
     });
-    if let Some(image) = &rendered.image {
-        let height = (ui.available_height() - 130.0).max(120.0);
-        if let Some((x, y)) = picture(ui, &doc.path, image, rendered.grid, doc.version, &mut view.texture, height) {
-            doc.paint(x, y);
+}
+
+/// NSMB Editor's bitmaps and palettes: the sheet listed with each row of its palette, or a TEX0's textures with its
+/// palettes, and the PNG imports and exports between them.
+fn manager(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services: &dyn Services) {
+    let tex0 = doc.mode == Mode::Tex0;
+    let name = doc.path.rsplit('/').next().unwrap_or_default().to_owned();
+    let (bitmaps, palettes) = match &doc.tex0 {
+        Some(tex0) if doc.mode == Mode::Tex0 => {
+            (tex0.textures.iter().map(|t| t.name.clone()).collect(), tex0.palettes.iter().map(|p| p.name.clone()).collect())
+        }
+        _ if doc.companion_palette.is_empty() => (vec![name.clone()], vec!["Greys (no palette file)".to_owned()]),
+        _ => (vec![name.clone()], (0..doc.palette_count()).map(|i| format!("Palette {i}")).collect::<Vec<_>>()),
+    };
+    view.manager.bitmap = if tex0 { doc.primary } else { 0 };
+    view.manager.palette = if tex0 { doc.secondary } else { doc.palette_row };
+    let no_import = if tex0 {
+        doc.chosen_texture().filter(|t| tex0_bits(t.format).is_none()).map(|_| "Only 4-, 16- and 256-colour textures can be imported.")
+    } else if doc.companion_palette.is_empty() {
+        Some("Choose a palette file first: an import's colours are matched to it, or written into it.")
+    } else {
+        None
+    };
+    let lists = Lists { bitmaps: &bitmaps, palettes: &palettes, shared: tex0, no_import };
+    let (_, action) = image_manager::show(ui, &doc.path.clone(), &mut view.manager, &lists);
+    if tex0 {
+        if view.manager.bitmap != doc.primary {
+            doc.set_primary(view.manager.bitmap);
+        }
+        if view.manager.palette != doc.secondary {
+            doc.set_secondary(view.manager.palette);
+        }
+    } else {
+        doc.set_palette_row(view.manager.palette);
+    }
+    let Some(action) = action else { return };
+    // "All" is every texture stored the way the chosen one is, so they read back from one PNG with one palette size.
+    let all: Vec<usize> = match doc.tex0.as_ref().filter(|_| tex0) {
+        Some(t) => {
+            let format = doc.chosen_texture().map(|c| c.format);
+            t.textures.iter().enumerate().filter(|(_, x)| Some(x.format) == format).map(|(i, _)| i).collect()
+        }
+        None => vec![0],
+    };
+    let palettes: Vec<usize> = (0..doc.palette_count()).collect();
+    let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem).to_owned();
+    doc.begin_edit("Import bitmap");
+    let result = image_manager::run(action, &view.manager, &mut DocImages(doc), &all, &palettes, services, &stem);
+    doc.end_edit();
+    view.notice = result.err();
+}
+
+/// The toolbar's undo or redo, carried out on the document.
+fn take_step(doc: &mut GraphicsDoc, asked: Option<HistoryButton>) {
+    match asked {
+        Some(HistoryButton::Undo) => doc.undo(),
+        Some(HistoryButton::Redo) => doc.redo(),
+        None => {}
+    }
+}
+
+fn sheet_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, image: &RgbaImage) {
+    let mut commands = Vec::new();
+    let asked = view.pixels.toolbar(ui, Some((doc.can_undo(), doc.can_redo())), &mut commands);
+    take_step(doc, asked);
+    let input = view.pixels.canvas(ui, &doc.path, image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+    view.pixels.keys(ui, &input, &mut commands);
+    ui.weak(pixel_editor::position_text(view.pixels.hover(), image));
+    let edits = input.pressed().is_some() || commands.iter().any(Command::edits);
+    if edits {
+        doc.begin_edit(view.pixels.step_name(&commands));
+    }
+    let row = if doc.eight_bits() { 256 } else { 16 };
+    let ctx = ui.ctx().clone();
+    if doc.with_sheet(|grid| view.pixels.apply(&ctx, &input, &commands, grid, row)) == Some(true) {
+        doc.touched(true);
+    }
+    if input.released().is_some() || commands.iter().any(Command::edits) {
+        doc.end_edit();
+    }
+}
+
+/// The paired graphics to paint the screen with, and the brush they make.
+fn tile_side(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
+    let (tiles, rows) = doc.companion_counts();
+    view.tiles.palette = view.tiles.palette.clamp(0, rows as i16 - 1);
+    ui.strong("Tiles");
+    ui.weak("Drag to choose the tiles to paint with.");
+    let row = view.tiles.palette.max(0) as usize;
+    let Some(sheet) = doc.companion_sheet(row) else { return };
+    let version = doc.version * 16 + row as u64;
+    let picked = tile_picker::show(ui, "graphics-tiles", &sheet, version, &mut view.picker, 8, 16, ui.available_height());
+    if picked.changed || view.picker_version == 0 {
+        view.picker_version = 1;
+        let picked = view.picker.indices(16, tiles);
+        let cells = picked.cells.iter().map(|i| ScreenMapEntry::new(i.unwrap_or(0) as i32, view.tiles.palette, false, false)).collect();
+        view.tiles.set_brush(Pattern { width: picked.width, height: picked.height, cells });
+    }
+}
+
+fn screen_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, image: &RgbaImage) {
+    let (_, rows) = doc.companion_counts();
+    let mut commands = Vec::new();
+    let asked = view.tiles.toolbar(ui, Some((doc.can_undo(), doc.can_redo())), rows, &mut commands);
+    take_step(doc, asked);
+    let input = view.tiles.canvas(ui, &doc.path, image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+    view.tiles.keys(ui, &input, &mut commands);
+    let hovered = view.tiles.hover().and_then(|at| doc.with_screen(|grid| crate::paint::get(grid, at)).flatten());
+    ui.weak(entry_text(view.tiles.hover(), hovered));
+    let edits = input.pressed().is_some() || commands.iter().any(Command::edits);
+    if edits {
+        doc.begin_edit(view.tiles.step_name(&commands));
+    }
+    let ctx = ui.ctx().clone();
+    if let Some(outcome) = doc.with_screen(|grid| view.tiles.apply(&ctx, &input, &commands, grid)) {
+        if outcome.changed {
+            doc.touched(true);
+        }
+        if outcome.picked && view.tiles.brush.width * view.tiles.brush.height == 1 {
+            // A single tile picked from the map is shown chosen in the picker too.
+            if let Some(entry) = view.tiles.brush.cells.first() {
+                view.picker.select(entry.tile.max(0) as usize, 16);
+                view.tiles.palette = entry.palette;
+            }
         }
     }
-    if !rendered.swatches.is_empty() {
-        ui.separator();
-        if let Some(rgb) = swatches(ui, &rendered.swatches, &mut doc.selected_color, rendered.swatches_editable) {
-            doc.set_color(doc.selected_color, rgb);
-        }
+    if input.released().is_some() || commands.iter().any(Command::edits) {
+        doc.end_edit();
     }
-    actions
+}
+
+/// The entry under the pointer, for a status line.
+pub(crate) fn entry_text(at: Option<crate::paint::Point>, entry: Option<ScreenMapEntry>) -> String {
+    match (at, entry) {
+        (Some((x, y)), Some(entry)) => {
+            let flips = match (entry.horizontal_flip, entry.vertical_flip) {
+                (false, false) => "",
+                (true, false) => " · flipped X",
+                (false, true) => " · flipped Y",
+                (true, true) => " · flipped X and Y",
+            };
+            format!("{x}, {y} · tile {} · palette {}{flips}", entry.tile, entry.palette)
+        }
+        _ => String::new(),
+    }
 }
 
 #[cfg(test)]
@@ -868,8 +1357,7 @@ mod tests {
         assert!(GraphicsDoc::supports(&tile, "root/enemy/test_ncg.bin"));
         let mut doc = GraphicsDoc::open("root/enemy/test_ncg.bin", &tile);
         assert_eq!(doc.render().swatches.len(), 16);
-        doc.selected_color = 3;
-        doc.paint(0, 0);
+        doc.paint(0, 0, 3);
         let edited = doc.output().unwrap();
         assert_eq!((edited.len(), edited[0] & 0x0f), (32, 3));
         assert!(doc.dirty);
@@ -942,6 +1430,47 @@ mod tests {
         assert_eq!(saved[0], 0x10, "still LZ10");
         let plain = decompress_nitro_lz(&saved).unwrap();
         assert_eq!(&plain[2..4], &[0x1f, 0x00]);
+    }
+
+    #[test]
+    fn a_paired_palette_is_edited_undone_and_written_back_into_its_own_file() {
+        let mut doc = GraphicsDoc::open("pair/sheet.ncgr", &ncgr(vec![0x11; 32], 1, 0));
+        let nclr = write_nclr(&Nclr { palette: vec![0; 64], ..Nclr::default() }).unwrap();
+        doc.set_companion_palette(Some("pair/two.nclr".to_owned()), Some(&nclr));
+        assert_eq!((doc.palette_size(), doc.palette_count()), (16, 2), "two rows of sixteen");
+        assert!(doc.render().swatches_editable);
+        assert!(doc.companion_output().is_none(), "nothing changed yet");
+        doc.set_color(17, [0, 0, 255]);
+        let (path, bytes) = doc.companion_output().unwrap().unwrap();
+        assert_eq!(path, "pair/two.nclr");
+        assert_eq!(parse_nclr(&bytes).unwrap().palette[34..36], [0x00, 0x7c]);
+        doc.undo();
+        assert_eq!(parse_nclr(&doc.companion_output().unwrap().unwrap().1).unwrap().palette, vec![0; 64]);
+        doc.mark_saved();
+        assert!(!doc.dirty && doc.companion_output().is_none());
+    }
+
+    #[test]
+    fn a_paletted_texture_reads_and_writes_its_indices() {
+        let texture = Tex0Texture {
+            name: "t".to_owned(),
+            format: TextureFormat::Palette16,
+            width: 8,
+            height: 2,
+            original_width: 4,
+            original_height: 2,
+            texels: vec![0x21, 0x43, 0, 0, 0x65, 0, 0, 0],
+            ..Tex0Texture::default()
+        };
+        let read = tex0_bitmap(&texture).unwrap();
+        assert_eq!(read.pixels, [1, 2, 3, 4, 5, 6, 0, 0], "the stored width is 8, the drawn one 4");
+        let mut doc = GraphicsDoc::open("t.nsbtx", &[]);
+        doc.mode = Mode::Tex0;
+        doc.tex0 = Some(Tex0 { textures: vec![texture], ..Tex0::default() });
+        DocImages(&mut doc).set_bitmap(0, vec![15, 0, 0, 0, 0, 0, 0, 9]).unwrap();
+        let texels = &doc.tex0.as_ref().unwrap().textures[0].texels;
+        assert_eq!(texels[..], [0x0f, 0x00, 0, 0, 0x00, 0x90, 0, 0]);
+        assert_eq!(DocImages(&mut doc).colours(), 16);
     }
 
     #[test]

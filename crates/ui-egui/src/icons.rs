@@ -184,6 +184,33 @@ pub const SEARCH: Icon = Icon::new("search", 24.0, &[Part::Stroke("M21 21l-6-6m2
 
 pub const UNDO: Icon = Icon::new("undo", 24.0, &[Part::Stroke("M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6")]);
 
+// The graphics editors' tools.
+
+pub const ZOOM_IN: Icon = Icon::new("zoom_in", 24.0, &[Part::Stroke("M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6M7 10h6")]);
+
+pub const ZOOM_OUT: Icon = Icon::new("zoom_out", 24.0, &[Part::Stroke("M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM7 10h6")]);
+
+pub const PENCIL: Icon =
+    Icon::new("pencil", 24.0, &[Part::Stroke("M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z")]);
+
+pub const ERASER: Icon = Icon::new("eraser", 24.0, &[Part::Stroke("M8 20h12M8 20l-4-4L14 6l6 6-8 8M9 11l6 6")]);
+
+pub const EYEDROPPER: Icon = Icon::new("eyedropper", 24.0, &[Part::Stroke("M14 4l6 6M12 6l6 6M15 9L6 18l-3 1 1-3 9-9")]);
+
+pub const BUCKET: Icon = Icon::new("bucket", 24.0, &[Part::Stroke("M4 12l7-7 7 7-7 7zM4 12h14M20 15l1.5 3a1.5 1.5 0 01-3 0z")]);
+
+pub const LINE: Icon = Icon::new("line", 24.0, &[Part::Stroke("M5 19L19 5")]);
+
+pub const RECTANGLE: Icon = Icon::new("rectangle", 24.0, &[Part::Stroke("M5 5h14v14H5z")]);
+
+pub const SELECT: Icon = Icon::new("select", 24.0, &[Part::Stroke("M4 7V4h3M10 4h4M17 4h3v3M20 10v4M20 17v3h-3M14 20h-4M7 20H4v-3M4 14v-4")]);
+
+pub const FLIP_HORIZONTAL: Icon = Icon::new("flip_horizontal", 24.0, &[Part::Stroke("M12 3v18M9 7l-5 5 5 5zM15 7l5 5-5 5z")]);
+
+pub const FLIP_VERTICAL: Icon = Icon::new("flip_vertical", 24.0, &[Part::Stroke("M3 12h18M7 9l5-5 5 5zM7 15l5 5 5-5z")]);
+
+pub const STAMP: Icon = Icon::new("stamp", 24.0, &[Part::Stroke("M4 4h7v7H4zM13 4h7v7h-7zM4 13h7v7H4zM13 13h7v7h-7z")]);
+
 #[cfg(test)]
 const ALL: &[Icon] = &[
     ARCHIVE,
@@ -204,6 +231,18 @@ const ALL: &[Icon] = &[
     SAVE,
     SEARCH,
     UNDO,
+    ZOOM_IN,
+    ZOOM_OUT,
+    PENCIL,
+    ERASER,
+    EYEDROPPER,
+    BUCKET,
+    LINE,
+    RECTANGLE,
+    SELECT,
+    FLIP_HORIZONTAL,
+    FLIP_VERTICAL,
+    STAMP,
 ];
 
 #[cfg(test)]

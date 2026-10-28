@@ -18,6 +18,7 @@ use crate::session::Session;
 use crate::theme::{Theme, Tokens};
 use crate::tools::{self, Tools};
 use crate::workspace::Workspace;
+use crate::zoom_canvas::Grids;
 use crate::{dialogs, icons, level_data, properties_ui};
 
 /// Storage keys, so a shell can seed them.
@@ -141,6 +142,8 @@ pub struct BigStarApp {
     side: Side,
     /// The canvas toolbar's switches, the same on every canvas.
     canvas_options: CanvasOptions,
+    /// The graphics canvases' grid switches, as last stored.
+    grids: Grids,
     /// The connection is the desktop's own host for a ROM on this machine, which holds nothing but that ROM.
     local_rom: bool,
     /// A ROM to upload has been asked for from a picker that answers later.
@@ -155,6 +158,8 @@ pub const LANGUAGE_KEY: &str = "language";
 pub const THEME_KEY: &str = "theme";
 /// Where the canvas toolbar's switches are kept.
 pub const CANVAS_OPTIONS_KEY: &str = "canvas_options";
+/// Where the graphics canvases' grid switches are kept.
+pub const GRIDS_KEY: &str = "graphics_grids";
 
 /// The Preferences window: the language is this machine's; the autosave interval and the backups kept are the open
 /// project's, kept by its host.
@@ -190,6 +195,7 @@ impl BigStarApp {
         let language = services.load(LANGUAGE_KEY).map_or_else(Language::default, |code| Language::from_code(&code));
         let theme = services.load(THEME_KEY).map_or_else(Theme::default, |stored| Theme::parse(&stored));
         let canvas_options = services.load(CANVAS_OPTIONS_KEY).and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default();
+        let grids = services.load(GRIDS_KEY).and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default();
         Self {
             services,
             language,
@@ -214,6 +220,7 @@ impl BigStarApp {
             left: Left::default(),
             side: Side::default(),
             canvas_options,
+            grids,
             data_drafts: level_data::Drafts::new(),
             local_rom: false,
             awaiting_upload: false,
@@ -241,6 +248,20 @@ impl BigStarApp {
         session.canvas_options = self.canvas_options;
         for view in session.levels.values_mut() {
             view.options = self.canvas_options;
+        }
+    }
+
+    /// The graphics canvases' grid switches: handed to them on the first frame, and remembered when one is flipped.
+    fn share_grids(&mut self, ctx: &egui::Context) {
+        match Grids::stored(ctx) {
+            None => self.grids.set(ctx),
+            Some(grids) if grids != self.grids => {
+                self.grids = grids;
+                if let Ok(stored) = serde_json::to_string(&grids) {
+                    self.services.store(GRIDS_KEY, &stored);
+                }
+            }
+            Some(_) => {}
         }
     }
 
@@ -491,6 +512,7 @@ impl BigStarApp {
         let ctx = ui.ctx().clone();
         self.style(&ctx);
         self.share_canvas_options();
+        self.share_grids(&ctx);
         self.logic(&ctx);
         if self.session.is_none() {
             self.load_form();
@@ -647,11 +669,15 @@ impl BigStarApp {
             let rom_mode = session.rom_mode();
             let has_project = session.project.is_some();
             // What undo and redo would take back, for the Edit menu and the toolbar both.
-            let (undo_names, redo_names, can_undo, can_redo, can_save) =
+            let (mut undo_names, mut redo_names, mut can_undo, mut can_redo, can_save) =
                 session.level().map_or((Vec::new(), Vec::new(), false, false, false), |view| {
                     let s = &view.snapshot;
                     (s.undo_names.clone(), s.redo_names.clone(), idle && s.can_undo, idle && s.can_redo, idle && s.dirty)
                 });
+            // A graphics editor in front keeps its own history.
+            if let Some(history) = workspace.editor_history() {
+                (undo_names, redo_names, can_undo, can_redo) = history;
+            }
             // A ROM opened without a workspace is the whole connection, so closing it ends the connection.
             let close_host = if session.has_workspace() {
                 "Close Workspace"
@@ -1306,7 +1332,9 @@ impl BigStarApp {
 
     fn shortcuts(&mut self, ctx: &egui::Context) {
         // A hex editor with the keyboard undoes its own typing.
-        if self.session.as_ref().is_none_or(|s| s.active.is_none()) || self.confirm.is_some() || crate::hex_editor::has_keyboard(ctx) {
+        let level = self.session.as_ref().is_some_and(|s| s.active.is_some());
+        let editor = self.workspace.editor_history().is_some();
+        if !(level || editor) || self.confirm.is_some() || crate::hex_editor::has_keyboard(ctx) {
             return;
         }
         // Redo first: Cmd+Shift+Z would otherwise also match Cmd+Z.
@@ -1341,6 +1369,17 @@ impl BigStarApp {
                 return;
             }
             _ => {}
+        }
+        let step = match action {
+            Action::Undo => Some((true, 1)),
+            Action::Redo => Some((false, 1)),
+            Action::History { undo, steps } => Some((undo, steps)),
+            _ => None,
+        };
+        if let Some((undo, steps)) = step
+            && self.workspace.editor_step(undo, steps)
+        {
+            return;
         }
         let Some(session) = &mut self.session else { return };
         match action {
