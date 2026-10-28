@@ -898,6 +898,9 @@ impl BigStarApp {
         let Some(session) = &mut self.session else { return };
         let ctx = ui.ctx().clone();
         egui::Panel::left("left").resizable(true).default_size(280.0).show(ui, |ui| {
+            // As wide as it is dragged: egui fits a panel to what it holds, so a line of text alone would pull its edge
+            // back to where the text wraps.
+            ui.set_min_width(ui.available_width());
             let filesystem = self.language.tr("Filesystem");
             controls::tabs(ui, "left", &mut self.left, &[(Left::Levels, "Levels"), (Left::Palette, "Palette"), (Left::Filesystem, filesystem)]);
             ui.add_space(2.0);
@@ -936,6 +939,8 @@ impl BigStarApp {
         let mut edit = None;
         let mut error = None;
         egui::Panel::right("properties").resizable(true).default_size(330.0).show(ui, |ui| {
+            // As wide as it is dragged, as the left panel is.
+            ui.set_min_width(ui.available_width());
             // The Level Data tab edits glue, which only the module's code reads; a ROM edited directly keeps it as it is.
             if rom_mode {
                 self.side = Side::Properties;

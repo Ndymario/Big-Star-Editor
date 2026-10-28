@@ -2526,3 +2526,28 @@ fn side_panels_shrink_as_far_as_they_are_dragged_whatever_tab_is_in_front() {
         assert!(width(&harness) < 120.0, "{tab} keeps the {panel} panel {} wide", width(&harness));
     }
 }
+
+/// egui fits a panel to what it holds: with no level open the Palette tab is one line of text, and the panel's edge
+/// came back to where that line wrapped rather than where it was dragged.
+#[test]
+fn a_side_panel_holding_only_text_stays_as_wide_as_it_is_dragged() {
+    let mut harness = harness();
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    harness.get_by_label("Palette").click();
+    harness.run();
+    let edge = egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new("left")).unwrap().outer_rect.right();
+    let at = |x: f32| Pos2::new(x, 400.0);
+    harness.hover_at(at(edge));
+    harness.run();
+    button(&harness, at(edge), PointerButton::Primary, true, Modifiers::NONE);
+    for step in 1..=20 {
+        harness.hover_at(at(edge + step as f32 * 10.0));
+        harness.run();
+    }
+    button(&harness, at(edge + 200.0), PointerButton::Primary, false, Modifiers::NONE);
+    harness.run();
+    let right = egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new("left")).unwrap().outer_rect.right();
+    assert!((right - (edge + 200.0)).abs() < 2.0, "dragged to {} but the panel ends at {right}", edge + 200.0);
+}
