@@ -48,8 +48,9 @@ pub struct FileDoc {
     /// What the editor that understands it is, when one does.
     pub kind: EditorKind,
     pub view: FileView,
-    /// Companion files asked for and not arrived: (path, as the palette rather than the graphics).
-    pub waiting: Vec<(String, bool)>,
+    /// Companion files asked for and not arrived: (path, as the palette rather than the graphics, or as whichever it
+    /// turns out to be).
+    pub waiting: Vec<(String, Option<bool>)>,
     pub destination: Destination,
 }
 
@@ -111,13 +112,24 @@ impl FileDoc {
         let (arrived, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.waiting).into_iter().partition(|(wanted, _)| wanted == path);
         self.waiting = waiting;
         for (_, palette) in arrived {
-            if palette {
-                doc.set_companion_palette(Some(path.to_owned()), Some(bytes));
-            } else {
-                doc.set_companion_characters(Some(path.to_owned()), Some(bytes));
+            match palette {
+                Some(true) => doc.set_companion_palette(Some(path.to_owned()), Some(bytes)),
+                Some(false) => doc.set_companion_characters(Some(path.to_owned()), Some(bytes)),
+                None => doc.attach(path, bytes),
             }
         }
     }
+}
+
+/// A palette or graphics file being opened while graphics editors that could take it are open: the person is asked
+/// which to attach it to, or to open it on its own.
+pub struct AttachPrompt {
+    pub path: String,
+    pub bytes: Vec<u8>,
+    pub kind: EditorKind,
+    pub metadata: bool,
+    /// The open editors it can go to: their key and path.
+    pub targets: Vec<(u64, String)>,
 }
 
 /// What a workspace remembers about a project between runs.
@@ -158,6 +170,8 @@ pub struct Workspace {
     last_saved: Option<String>,
     /// A document whose unsaved edits the person is being asked about before it closes.
     pub asking_close: Option<LevelId>,
+    /// A palette or graphics file the person is being asked where to attach.
+    pub asking_attach: Option<AttachPrompt>,
     pub files: BTreeMap<u64, FileDoc>,
     next_file: u64,
     /// Tileset workspaces, by the level they belong to.
@@ -181,6 +195,7 @@ impl Default for Workspace {
             to_select: None,
             last_saved: None,
             asking_close: None,
+            asking_attach: None,
             files: BTreeMap::new(),
             next_file: 1,
             tilesets: BTreeMap::new(),
@@ -269,8 +284,8 @@ impl Workspace {
                         let mut doc = GraphicsDoc::open(path, bytes);
                         if let Some(pairing) = pairing {
                             doc.set_width(pairing.width);
-                            waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, true)));
-                            waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, false)));
+                            waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, Some(true))));
+                            waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, Some(false))));
                             reads.extend(waiting.iter().map(|(p, _)| p.clone()));
                         }
                         FileView::Graphics(Box::new(doc), Box::default())
@@ -282,6 +297,44 @@ impl Workspace {
         };
         self.raise_file(key);
         reads
+    }
+
+    /// Asks where a file being opened goes, when it is a palette or graphics and an open graphics editor could take
+    /// it. False when there is nothing to ask, and the file opens as usual.
+    pub fn offer_attach(&mut self, path: &str, bytes: &[u8], kind: EditorKind, metadata: bool) -> bool {
+        if kind != EditorKind::Graphics {
+            return false;
+        }
+        let targets: Vec<(u64, String)> = self
+            .files
+            .iter()
+            .filter(|(_, doc)| doc.path != path)
+            .filter_map(|(key, doc)| match &doc.view {
+                FileView::Graphics(graphics, _) if graphics.error.is_none() && graphics.attaches_as(path, bytes).is_some() => {
+                    Some((*key, doc.path.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        if targets.is_empty() {
+            return false;
+        }
+        let bytes = bytes.to_vec();
+        self.asking_attach = Some(AttachPrompt { path: path.to_owned(), bytes, kind, metadata, targets });
+        true
+    }
+
+    /// Attaches a file to the graphics editor under `key`, as whichever of its palette or graphics it is, and brings
+    /// that editor forward.
+    pub fn attach(&mut self, key: u64, path: &str, bytes: &[u8]) {
+        let Some(doc) = self.files.get_mut(&key) else { return };
+        if let FileView::Graphics(graphics, _) = &mut doc.view {
+            let role = graphics.attaches_as(path, bytes);
+            // What was asked for before, for the same place, would otherwise arrive after and replace it.
+            doc.waiting.retain(|(_, waiting)| role.is_none() || *waiting != role);
+            graphics.attach(path, bytes);
+        }
+        self.raise_file(key);
     }
 
     /// Opens the ROM banner in the banner page, saved to `target`, or brings forward the one already open.
@@ -871,22 +924,6 @@ fn save_tilesets(session: &mut Session, doc: &TilesetDoc) -> bool {
     true
 }
 
-/// The files beside `path`: in its folder, or inside an archive the other members of its folder there.
-fn siblings(session: &Session, path: &str) -> Vec<String> {
-    let folder = |address: &str| {
-        let segments = crate::files::split_address(address);
-        segments.len().checked_sub(2).and_then(|i| segments.get(i)).map(|(_, key)| key.clone()).unwrap_or_default()
-    };
-    let own = folder(path);
-    let mut found: Vec<String> = session
-        .filesystem
-        .as_ref()
-        .map(|listing| listing.entries.iter().filter(|e| e.path != path && folder(&e.path) == own).map(|e| e.path.clone()).collect())
-        .unwrap_or_default();
-    found.sort();
-    found
-}
-
 /// A file in its editor. Saving writes it into the module that supplies the file, or the active one.
 fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, doc: &mut FileDoc) {
     let FileDoc { path, kind, view, waiting, destination } = doc;
@@ -926,11 +963,10 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
             return;
         }
         FileView::Graphics(graphics, state) => {
-            let siblings = siblings(session, path);
-            for action in crate::graphics_editor::show(ui, graphics, state, &siblings, services) {
+            for action in crate::graphics_editor::show(ui, graphics, state, services) {
                 match action {
                     GraphicsAction::Load { path: companion, palette } => {
-                        waiting.retain(|(_, p)| *p != palette);
+                        waiting.retain(|(_, p)| palette.is_none() || *p != palette);
                         waiting.push((companion.clone(), palette));
                         session.read_file(&companion, FileRead::Companion);
                     }

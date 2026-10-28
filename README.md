@@ -42,7 +42,8 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
   docked beside the canvas, as in NSMB Editor: the left button paints one colour and the right another, with brush,
   fill, line, rectangle, eyedropper and selection tools, zoom, and undo. Bitmaps and palettes are listed side by side,
   as in NSMB Editor's image manager, with its PNG buttons: export a bitmap, import one with the existing palette or
-  recreating it, and export or import every bitmap with every palette at once.
+  recreating it, and export or import every bitmap with every palette at once. Any palette goes with any graphics:
+  drag one from the Filesystem dock onto an open editor, or open it and choose which editor to attach it to.
 - **Tilesets and backgrounds**: paint Map16 blocks and background layers from a tile picker beside them, build objects
   by clicking blocks, set behaviours on many blocks at once, and share tilesets as files.
 - **Text**: edit the game's messages, with their special codes, and export or import them as text.

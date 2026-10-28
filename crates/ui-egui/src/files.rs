@@ -238,6 +238,9 @@ enum Prompt {
     },
 }
 
+/// A file dragged out of the tree: an open graphics editor takes it as its palette or its graphics.
+pub struct DraggedFile(pub String);
+
 /// What the dock asks the workspace to open.
 pub enum OpenRequest {
     Hex {
@@ -483,6 +486,15 @@ impl FilesDock {
             let icon = entry.map_or(icons::FOLDER, |e| glyph(e.icon));
             let chosen = entry.is_some() && self.selected.as_deref() == entry.map(|e| e.path.as_str());
             let response = Row::new(&node.name).icon(icon).selected(chosen).fit().min_width(right - ui.cursor().left()).show(ui);
+            // A file is dragged onto an editor to pair it there, as NSMB Editor's palettes are chosen for any graphics.
+            let response = if entry.is_some() { response.interact(egui::Sense::drag()) } else { response };
+            if let Some(entry) = entry.filter(|_| response.drag_started()) {
+                response.dnd_set_drag_payload(DraggedFile(entry.path.clone()));
+            }
+            if response.dragged() {
+                egui::Tooltip::always_open(ui.ctx().clone(), ui.layer_id(), response.id.with("dragged"), egui::PopupAnchor::Pointer)
+                    .show(|ui| ui.label(&node.name));
+            }
             if chosen && std::mem::take(&mut self.reveal) {
                 response.scroll_to_me(Some(egui::Align::Center));
             }

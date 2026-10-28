@@ -1,6 +1,6 @@
 //! The graphics editor: every NNS G2D format and TEX0, as a document. A palette lives in a different file from the
-//! graphics it colours and a screen map in a third, so the editor pairs a file with its siblings, and remembers the
-//! pairing per file. A port of `GraphicsEditorPanel` and `GraphicsCanvas`; the model here is pure, `show` draws it.
+//! graphics it colours and a screen map in a third, and any of them can go with any other, so the person attaches the
+//! palette and graphics a file is shown with, and the pairing is remembered per file. A port of `GraphicsEditorPanel` and `GraphicsCanvas`; the model here is pure, `show` draws it.
 
 use crate::controls::{self, Choice as _};
 use bigstar_formats::{
@@ -12,12 +12,14 @@ use egui::Ui;
 use serde::{Deserialize, Serialize};
 
 use crate::editors::{rewrap, unwrap_with};
+use crate::files::DraggedFile;
 use crate::history::History;
 use crate::image_manager::{self, Bitmap, Images, Lists, ManagerState};
 use crate::paint::{Grid, IndexedSheet, Pattern, RawScreen};
 use crate::palette_panel;
 use crate::pixel_editor::{self, Command, HistoryButton, PixelEditor};
 use crate::services::Services;
+use crate::theme::Tokens;
 use crate::tile_picker::{self, PickerState};
 use crate::tilemap_editor::TilemapEditor;
 use crate::zoom_canvas::{self, CanvasState, Steps};
@@ -324,22 +326,42 @@ impl GraphicsDoc {
         self.touched(false);
     }
 
-    /// Which of `siblings` could be this file's palette, and which its graphics, by name.
-    pub fn candidates(siblings: &[String]) -> (Vec<String>, Vec<String>) {
-        let (mut palettes, mut characters) = (Vec::new(), Vec::new());
-        for path in siblings {
-            match identify_graphics_format(&[], path) {
-                GraphicsFormatKind::NitroPalette | GraphicsFormatKind::RawPaletteCandidate => palettes.push(path.clone()),
-                GraphicsFormatKind::NitroCharacterGraphics | GraphicsFormatKind::RawCharacterGraphicsCandidate => characters.push(path.clone()),
-                _ => {}
+    /// Whether a file attached here, without saying as what, is taken as the palette (`true`) or the graphics
+    /// (`false`): by what it is, and a file of no known kind as whichever of the two this file pairs. `None` when it
+    /// could be either, or neither is wanted.
+    pub fn attaches_as(&self, path: &str, bytes: &[u8]) -> Option<bool> {
+        let (palette, characters) = (self.pairs_palette(), self.pairs_characters());
+        match identify_graphics_format(&unwrap_with(bytes).1, path) {
+            GraphicsFormatKind::NitroPalette | GraphicsFormatKind::RawPaletteCandidate => palette.then_some(true),
+            GraphicsFormatKind::NitroCharacterGraphics | GraphicsFormatKind::RawCharacterGraphicsCandidate => characters.then_some(false),
+            GraphicsFormatKind::Unknown if palette && !characters => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Attaches a file as the palette or the graphics, as [`GraphicsDoc::attaches_as`] decides; says why not otherwise.
+    pub fn attach(&mut self, path: &str, bytes: &[u8]) {
+        match self.attaches_as(path, bytes) {
+            Some(true) => self.set_companion_palette(Some(path.to_owned()), Some(bytes)),
+            Some(false) => self.set_companion_characters(Some(path.to_owned()), Some(bytes)),
+            None => {
+                let name = path.rsplit(['/', '!']).next().unwrap_or(path);
+                self.companion_error = Some(if self.pairs_characters() {
+                    format!("{name} was not attached: drop it on the Palette file or Graphics file row to say which it is.")
+                } else if self.pairs_palette() {
+                    format!("{name} is not a palette: drop it on the Palette file row to read it as one.")
+                } else {
+                    format!("{name} was not attached: this file is drawn without a palette or graphics file.")
+                });
+                self.touched(false);
             }
         }
-        (palettes, characters)
     }
 
     /// Takes a companion palette's bytes; an NCLR gives its palette, anything else is taken as raw BGR555.
     pub fn set_companion_palette(&mut self, path: Option<String>, bytes: Option<&[u8]>) {
         self.pairing.palette = path;
+        self.companion_error = None;
         self.companion_original = bytes.map(<[u8]>::to_vec).unwrap_or_default();
         let plain = bytes.map(|b| unwrap_with(b).1).unwrap_or_default();
         self.companion_nclr = parse_nclr(&plain).ok();
@@ -406,6 +428,7 @@ impl GraphicsDoc {
     /// Takes companion graphics: an NCGR's characters (and bit depth), or raw 4bpp tiles.
     pub fn set_companion_characters(&mut self, path: Option<String>, bytes: Option<&[u8]>) {
         self.pairing.characters = path;
+        self.companion_error = None;
         let plain = bytes.map(|b| unwrap_with(b).1).unwrap_or_default();
         (self.companion_characters, self.companion_8bpp) = match parse_ncgr(&plain) {
             Ok(ncgr) => (ncgr.characters, ncgr.pixel_format == 4),
@@ -521,7 +544,7 @@ impl GraphicsDoc {
             if self.mode == Mode::Ncgr { "NCGR" } else { "Raw graphics" },
             if eight { 8 } else { 4 },
             if linear { "bitmap arrangement (NCBR)" } else { "8x8 tiled" },
-            if self.companion_palette.is_empty() { " Indices are shown as greys until a palette file is chosen." } else { "" }
+            if self.companion_palette.is_empty() { " Indices are shown as greys until a palette file is attached." } else { "" }
         );
         let swatches = (0..colours).map(|i| unpack(&palette, i)).collect();
         Rendered { image: Some(image), grid: 1, info, swatches, swatches_editable: !self.companion_palette.is_empty() }
@@ -1008,10 +1031,11 @@ pub(crate) fn picture(
 
 /// What the person did in the editor that the workspace carries out.
 pub enum GraphicsAction {
-    /// Read this sibling as the palette (`true`) or the graphics (`false`).
+    /// Read this file as the palette (`Some(true)`) or the graphics (`Some(false)`), or as whichever it turns out to
+    /// be (`None`).
     Load {
         path: String,
-        palette: bool,
+        palette: Option<bool>,
     },
     /// The pairing changed and should be remembered.
     Remember,
@@ -1033,8 +1057,9 @@ pub struct GraphicsView {
     notice: Option<String>,
 }
 
-pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, siblings: &[String], services: &dyn Services) -> Vec<GraphicsAction> {
+pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services: &dyn Services) -> Vec<GraphicsAction> {
     let mut actions = Vec::new();
+    let whole = ui.max_rect();
     if view.rendered.as_ref().is_none_or(|(version, _)| *version != doc.version) {
         view.rendered = Some((doc.version, doc.render()));
     }
@@ -1054,7 +1079,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
     }
     egui::Panel::left(egui::Id::new(("graphics-options", &doc.path))).resizable(true).default_size(240.0).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
-            options(ui, doc, siblings, &mut actions);
+            options(ui, doc, &mut actions);
             if doc.manages_images() {
                 ui.separator();
                 manager(ui, doc, view, services);
@@ -1099,11 +1124,52 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, sibling
             picture(ui, &doc.path, image, doc.version, &mut view.texture, &mut view.still, ui.available_height());
         }
     });
+    // A file dropped anywhere else on the editor is attached as whatever it is; the rows above take it as they say.
+    if doc.pairs_palette() && egui::DragAndDrop::has_payload_of_type::<DraggedFile>(ui.ctx()) && ui.rect_contains_pointer(whole) {
+        let t = Tokens::get(ui.ctx());
+        ui.painter().rect_stroke(whole.shrink(1.0), 4.0, egui::Stroke::new(2.0, t.primary), egui::StrokeKind::Inside);
+        if ui.input(|i| i.pointer.any_released())
+            && let Some(dropped) = egui::DragAndDrop::take_payload::<DraggedFile>(ui.ctx())
+        {
+            actions.push(GraphicsAction::Load { path: dropped.0.clone(), palette: None });
+        }
+    }
     actions
 }
 
+/// A row naming the file attached as the palette or the graphics, that a file from the tree is dropped on to attach
+/// it as that. Returns the file dropped, and whether the attached one was taken off.
+fn attached_slot(ui: &mut Ui, current: Option<&str>) -> (Option<String>, bool) {
+    let t = Tokens::get(ui.ctx());
+    let dragging = egui::DragAndDrop::has_payload_of_type::<DraggedFile>(ui.ctx());
+    let mut detached = false;
+    let inner = ui.horizontal(|ui| {
+        let name = current.map_or("(none)", |path| path.rsplit(['/', '!']).next().unwrap_or(path));
+        let label = ui.add(egui::Label::new(egui::RichText::new(name).color(if current.is_some() { t.foreground } else { t.muted })).truncate());
+        if let Some(path) = current {
+            label.on_hover_text(path);
+            detached = controls::icon_button(ui, crate::icons::CLOSE, "Detach").clicked();
+        }
+    });
+    let rect = inner.response.rect.expand(2.0);
+    let over = dragging && ui.rect_contains_pointer(rect);
+    if dragging {
+        ui.painter().rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(if over { 2.0 } else { 1.0 }, if over { t.primary } else { t.border }),
+            egui::StrokeKind::Inside,
+        );
+    }
+    let dropped = (over && ui.input(|i| i.pointer.any_released()))
+        .then(|| egui::DragAndDrop::take_payload::<DraggedFile>(ui.ctx()))
+        .flatten()
+        .map(|file| file.0.clone());
+    (dropped, detached)
+}
+
 /// The pairing, the cell or texture shown, and the width a headerless file is read at.
-fn options(ui: &mut Ui, doc: &mut GraphicsDoc, siblings: &[String], actions: &mut Vec<GraphicsAction>) {
+fn options(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>) {
     egui::Grid::new(("graphics-form", &doc.path)).num_columns(2).show(ui, |ui| {
         // A TEX0's textures and palettes are the image manager's lists instead.
         let listed = doc.mode == Mode::Tex0;
@@ -1135,36 +1201,29 @@ fn options(ui: &mut Ui, doc: &mut GraphicsDoc, siblings: &[String], actions: &mu
             }
             ui.end_row();
         }
-        // A palette lives in a different file from the graphics it colours, and a screen map in a third: pairing them
-        // is the point of one graphics editor rather than a viewer per file.
-        let (palettes, characters) = GraphicsDoc::candidates(siblings);
-        for (show, label, choices, current, palette) in [
-            (doc.pairs_palette(), "Palette file", palettes, doc.pairing.palette.clone(), true),
-            (doc.pairs_characters(), "Graphics file", characters, doc.pairing.characters.clone(), false),
+        // A palette lives in a different file from the graphics it colours, and a screen map in a third, and nothing
+        // ties one to another but the game's code: as in NSMB Editor, the person says which go together, by dragging
+        // a file from the tree onto its row, or by opening it and choosing this editor.
+        for (show, label, current, palette) in [
+            (doc.pairs_palette(), "Palette file", doc.pairing.palette.clone(), true),
+            (doc.pairs_characters(), "Graphics file", doc.pairing.characters.clone(), false),
         ] {
-            if !show || choices.is_empty() {
+            if !show {
                 continue;
             }
             ui.label(label);
-            controls::drop_down(("graphics-source", palette))
-                .width(140.0)
-                .truncate()
-                .selected_text(current.clone().unwrap_or_else(|| "(none)".to_owned()))
-                .show_ui(ui, |ui| {
-                    if ui.choice(current.is_none(), "(none)").clicked() {
-                        if palette {
-                            doc.set_companion_palette(None, None);
-                        } else {
-                            doc.set_companion_characters(None, None);
-                        }
-                        actions.push(GraphicsAction::Remember);
-                    }
-                    for choice in &choices {
-                        if ui.choice(current.as_ref() == Some(choice), choice).clicked() {
-                            actions.push(GraphicsAction::Load { path: choice.clone(), palette });
-                        }
-                    }
-                });
+            let (dropped, detached) = attached_slot(ui, current.as_deref());
+            if detached {
+                if palette {
+                    doc.set_companion_palette(None, None);
+                } else {
+                    doc.set_companion_characters(None, None);
+                }
+                actions.push(GraphicsAction::Remember);
+            }
+            if let Some(path) = dropped {
+                actions.push(GraphicsAction::Load { path, palette: Some(palette) });
+            }
             ui.end_row();
         }
         if doc.uses_width() {
@@ -1371,9 +1430,12 @@ mod tests {
         let encoded = write_nclr(&nclr).unwrap();
         let mut doc = GraphicsDoc::open("pair/sheet.ncgr", &sheet);
         assert_eq!(pixel(doc.render().image.as_ref().unwrap(), 0, 0)[..3], [16, 16, 16], "index 1 of a grey ramp, in BGR555");
-        let (palettes, _) = GraphicsDoc::candidates(&["pair/red.nclr".to_owned(), "pair/other.ncgr".to_owned()]);
-        assert_eq!(palettes, ["pair/red.nclr"]);
-        doc.set_companion_palette(Some("pair/red.nclr".to_owned()), Some(&encoded));
+        // Any palette goes with any graphics, whatever it is called or wherever it is.
+        assert_eq!(doc.attaches_as("elsewhere/red.nclr", &encoded), Some(true));
+        assert_eq!(doc.attaches_as("elsewhere/other.ncgr", &sheet), None, "graphics are not a sheet's palette");
+        assert_eq!(doc.attaches_as("elsewhere/unnamed.bin", &[0; 32]), Some(true), "a file of no known kind is read as one");
+        doc.attach("elsewhere/red.nclr", &encoded);
+        assert_eq!(doc.pairing.palette.as_deref(), Some("elsewhere/red.nclr"));
         let [r, g, b, _] = pixel(doc.render().image.as_ref().unwrap(), 0, 0);
         assert!(r > g + 40 && r > b + 40, "{r} {g} {b}");
         assert!(!doc.dirty, "pairing is not an edit");

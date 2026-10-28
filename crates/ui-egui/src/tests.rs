@@ -1617,12 +1617,12 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     harness.run();
     let key = *harness.state().workspace.files.keys().next().unwrap();
     assert!(matches!(harness.state().workspace.files[&key].view, crate::workspace::FileView::Graphics(..)));
-    harness.get_by_label_contains("Indices are shown as greys until a palette file is chosen.");
+    harness.get_by_label_contains("Indices are shown as greys until a palette file is attached.");
 
-    // Pairing the sibling palette (as its combo box does) reads it from the host and colours the sheet.
+    // Attaching a palette (as dropping it on its row does) reads it from the host and colours the sheet.
     {
         let doc = harness.state_mut().workspace.files.get_mut(&key).unwrap();
-        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), true));
+        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), Some(true)));
     }
     harness.state_mut().session_mut().unwrap().read_file("BG_ncg/demo_ncl.bin", crate::session::FileRead::Companion);
     harness.run();
@@ -1659,6 +1659,50 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
 }
 
 #[test]
+fn opening_a_palette_asks_which_graphics_editor_it_goes_to() {
+    let (mut harness, _) = filesystem();
+    harness.state_mut().files.expanded.insert("BG_ncg".to_owned());
+    harness.run();
+    harness.get_by_label("demo_ncg.bin").click();
+    harness.run();
+    harness.get_by_label("Open").click();
+    harness.run();
+    let key = *harness.state().workspace.files.keys().next().unwrap();
+    // No palette is guessed from the folder: the sheet has none until one is attached.
+    harness.get_by_label("Palette file");
+    harness.get_by_label("(none)");
+
+    // Opening a palette while the sheet is open asks whether it is for the sheet.
+    harness.get_by_label("demo_ncl.bin").click();
+    harness.run();
+    harness.get_by_label("Open").click();
+    harness.run();
+    harness.run();
+    assert!(harness.state().workspace.asking_attach.is_some());
+    harness.get_by_label("Attach to BG_ncg/demo_ncg.bin").click();
+    harness.run();
+    assert!(harness.state().workspace.asking_attach.is_none());
+    assert_eq!(harness.state().workspace.files.len(), 1, "attached, not opened in its own editor");
+    let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
+    assert_eq!(doc.pairing.palette.as_deref(), Some("BG_ncg/demo_ncl.bin"));
+    assert!(!doc.render().info.contains("greys"));
+
+    // Detaching it goes back to the greys.
+    harness.get_by_label("Detach").click();
+    harness.run();
+    let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
+    assert_eq!(doc.pairing.palette, None);
+
+    // Asked again, it can still be opened on its own.
+    harness.get_by_label("Open").click();
+    harness.run();
+    harness.run();
+    harness.get_by_label("Open on its own").click();
+    harness.run();
+    assert_eq!(harness.state().workspace.files.len(), 2);
+}
+
+#[test]
 fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_file() {
     let (mut harness, shelf) = filesystem();
     harness.state_mut().files.expanded.insert("BG_ncg".to_owned());
@@ -1675,7 +1719,7 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     assert!(egui_kittest::kittest::NodeT::accesskit_node(&import).is_disabled(), "nothing to match colours to yet");
     {
         let doc = harness.state_mut().workspace.files.get_mut(&key).unwrap();
-        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), true));
+        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), Some(true)));
     }
     harness.state_mut().session_mut().unwrap().read_file("BG_ncg/demo_ncl.bin", crate::session::FileRead::Companion);
     harness.run();

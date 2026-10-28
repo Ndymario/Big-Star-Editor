@@ -332,11 +332,11 @@ impl BigStarApp {
         }
     }
 
-    /// Pairs an open graphics document with a palette from anywhere, as its combo box would from its folder
+    /// Pairs an open graphics document with a palette from anywhere, as dropping it on its palette row would
     /// (screenshots).
     pub fn pair_for_screenshot(&mut self, path: &str, palette: &str) {
         if let Some(doc) = self.workspace.files.values_mut().find(|doc| doc.path == path) {
-            doc.waiting.push((palette.to_owned(), true));
+            doc.waiting.push((palette.to_owned(), Some(true)));
         }
         if let Some(session) = &mut self.session {
             session.read_file(palette, crate::session::FileRead::Companion);
@@ -488,11 +488,10 @@ impl BigStarApp {
         for request in self.files.follow(session, &*self.services) {
             let reads = match request {
                 OpenRequest::Hex { path, bytes } => self.workspace.open_file(&path, &bytes, crate::editors::EditorKind::None, None, false),
+                // A palette or graphics opened while an editor could take it may be meant for that editor.
+                OpenRequest::Editor { path, bytes, kind, metadata } if self.workspace.offer_attach(&path, &bytes, kind, metadata) => Vec::new(),
                 OpenRequest::Editor { path, bytes, kind, metadata } => {
-                    // What the file was paired with last time is paired again.
-                    let key = crate::graphics_editor::pairing_key(&path);
-                    let pairing = self.services.load(&key).and_then(|text| serde_json::from_str(&text).ok());
-                    self.workspace.open_file(&path, &bytes, kind, pairing, metadata)
+                    open_editor(&*self.services, &mut self.workspace, &path, &bytes, kind, metadata)
                 }
             };
             for companion in reads {
@@ -524,7 +523,7 @@ impl BigStarApp {
         self.top_bar(ui);
         self.bottom_bar(ui);
         // The canvas takes keys only when nothing else wants them: no text field, no question waiting.
-        let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm.is_none();
+        let keyboard = !ctx.egui_wants_keyboard_input() && self.confirm.is_none() && self.workspace.asking_attach.is_none();
         let project_open = self.session.as_ref().is_some_and(|s| s.connected() && s.project.is_some());
         if project_open {
             self.left_panel(ui);
@@ -556,6 +555,7 @@ impl BigStarApp {
         self.clean_rom_window(&ctx);
         self.recovery_window(&ctx);
         self.confirm_window(&ctx);
+        self.attach_window(&ctx);
         for action in std::mem::take(&mut self.actions) {
             self.apply(action);
         }
@@ -1280,6 +1280,47 @@ impl BigStarApp {
         }
     }
 
+    /// Asks which open graphics editor a palette or graphics file being opened goes to, as NSMB Editor's palettes are
+    /// chosen for any graphics; or opens it on its own.
+    fn attach_window(&mut self, ctx: &egui::Context) {
+        let Some(prompt) = &self.workspace.asking_attach else { return };
+        let name = prompt.path.rsplit(['/', '!']).next().unwrap_or(&prompt.path).to_owned();
+        let (mut decision, mut cancelled) = (None, false);
+        let (_, dismissed) = dialogs::modal(ctx, "attach", &format!("Open {name}"), 460.0, |ui| {
+            ui.label("Attach it to an open graphics editor, to draw that file with it, or open it in its own editor.");
+            ui.add_space(6.0);
+            for (key, path) in &prompt.targets {
+                if Row::new(format!("Attach to {path}")).icon(crate::icons::IMAGE).show(ui).clicked() {
+                    decision = Some(Some(*key));
+                }
+            }
+            dialogs::actions(ui, |ui| {
+                if Button::new("Open on its own").show(ui).clicked() {
+                    decision = Some(None);
+                }
+                if Button::new("Cancel").show(ui).clicked() {
+                    cancelled = true;
+                }
+            });
+        });
+        if cancelled || (dismissed && decision.is_none()) {
+            self.workspace.asking_attach = None;
+        }
+        let Some(decision) = decision else { return };
+        let Some(prompt) = self.workspace.asking_attach.take() else { return };
+        match decision {
+            Some(key) => self.workspace.attach(key, &prompt.path, &prompt.bytes),
+            None => {
+                let reads = open_editor(&*self.services, &mut self.workspace, &prompt.path, &prompt.bytes, prompt.kind, prompt.metadata);
+                if let Some(session) = &mut self.session {
+                    for companion in reads {
+                        session.read_file(&companion, crate::session::FileRead::Companion);
+                    }
+                }
+            }
+        }
+    }
+
     fn confirm_window(&mut self, ctx: &egui::Context) {
         let Some(question) = self.confirm else { return };
         let undownloaded = self.session.as_ref().is_some_and(|session| session.undownloaded);
@@ -1334,7 +1375,7 @@ impl BigStarApp {
         // A hex editor with the keyboard undoes its own typing.
         let level = self.session.as_ref().is_some_and(|s| s.active.is_some());
         let editor = self.workspace.editor_history().is_some();
-        if !(level || editor) || self.confirm.is_some() || crate::hex_editor::has_keyboard(ctx) {
+        if !(level || editor) || self.confirm.is_some() || self.workspace.asking_attach.is_some() || crate::hex_editor::has_keyboard(ctx) {
             return;
         }
         // Redo first: Cmd+Shift+Z would otherwise also match Cmd+Z.
@@ -1561,4 +1602,18 @@ fn about_icon(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>) -> Op
         *slot = Some(ctx.load_texture("bigstar:icon", image, egui::TextureOptions::LINEAR));
     }
     slot.as_ref().map(egui::TextureHandle::id)
+}
+
+/// Opens a file in its editor, paired with what it was paired with last time. Returns the companion files to read.
+fn open_editor(
+    services: &dyn Services,
+    workspace: &mut crate::workspace::Workspace,
+    path: &str,
+    bytes: &[u8],
+    kind: crate::editors::EditorKind,
+    metadata: bool,
+) -> Vec<String> {
+    let key = crate::graphics_editor::pairing_key(path);
+    let pairing = services.load(&key).and_then(|text| serde_json::from_str(&text).ok());
+    workspace.open_file(path, bytes, kind, pairing, metadata)
 }
