@@ -120,7 +120,12 @@ pub fn show(ui: &mut Ui, session: &mut Session, previewed: Option<LevelId>) -> O
     let shown = previewed.and_then(|level| session.levels.get(&level)).map(|view| view.snapshot.area.clone());
     let root = level_groups(&session.worlds);
     let mut picked = Picked::default();
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| group_ui(ui, &root, "", shown.as_deref(), &mut picked));
+    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // The rows end short of the scroll bar, which floats over the right edge where their Edit buttons are.
+        let scroll = ui.spacing().scroll;
+        ui.set_max_width(ui.available_width() - scroll.bar_width - scroll.bar_outer_margin);
+        group_ui(ui, &root, "", shown.as_deref(), &mut picked)
+    });
     if let Some(area) = picked.open {
         session.open_level(&area);
     } else if let Some(area) = picked.preview {
