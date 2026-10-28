@@ -348,7 +348,7 @@ impl FilesDock {
             return;
         };
         let rom_mode = session.rom_mode();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // Where add and replace write, not what the tree shows. A ROM edited directly is written into itself.
             if !rom_mode {
                 ui.label("Save to module");

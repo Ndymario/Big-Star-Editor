@@ -1527,8 +1527,9 @@ fn filesystem() -> (Harness<'static, BigStarApp>, std::sync::Arc<std::sync::Mute
     let services = MemoryServices::default();
     let shelf = services.shelf.clone();
     let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
+    // Tall enough for the rows the tests pick to be in view above the dock's buttons.
     let mut harness =
-        Harness::builder().with_size(Vec2::new(1500.0, 800.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+        Harness::builder().with_size(Vec2::new(1500.0, 1000.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
     harness.run();
     harness.state_mut().session_mut().unwrap().open_project("demo");
     harness.run();
@@ -2488,4 +2489,30 @@ fn the_menu_bar_opens_its_menus_under_the_pointer() {
     harness.event(egui::Event::PointerMoved(egui::pos2(600.0, 400.0)));
     harness.run();
     assert!(harness.query_by_label("Find Sprite…").is_none());
+}
+
+/// Content that cannot shrink with a side panel kept the panel's width while it was drawn only as wide as it was dragged,
+/// leaving a black bar between the two.
+#[test]
+fn side_panels_shrink_as_far_as_they_are_dragged_whatever_tab_is_in_front() {
+    let mut harness = level_with(LevelEntityInsertions::default());
+    for (panel, tab) in [("left", "Levels"), ("left", "Palette"), ("left", "Filesystem"), ("properties", "Level Data")] {
+        harness.get_by_label(tab).click();
+        harness.run();
+        let width =
+            |harness: &Harness<'_, BigStarApp>| egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new(panel)).unwrap().size().x;
+        let rect = egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new(panel)).unwrap().outer_rect;
+        let (edge, inward) = if panel == "left" { (rect.right(), -1.0) } else { (rect.left(), 1.0) };
+        let at = |step: f32| Pos2::new(edge + inward * step * 12.0, 400.0);
+        harness.hover_at(at(0.0));
+        harness.run();
+        button(&harness, at(0.0), PointerButton::Primary, true, Modifiers::NONE);
+        for step in 1..=24 {
+            harness.hover_at(at(step as f32));
+            harness.run();
+        }
+        button(&harness, at(24.0), PointerButton::Primary, false, Modifiers::NONE);
+        harness.run();
+        assert!(width(&harness) < 120.0, "{tab} keeps the {panel} panel {} wide", width(&harness));
+    }
 }

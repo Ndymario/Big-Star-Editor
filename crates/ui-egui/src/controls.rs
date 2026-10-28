@@ -218,19 +218,15 @@ impl egui::Widget for Button<'_> {
             }
             Kind::Plain => {}
         }
-        let response = if self.small || !self.enabled {
-            ui.scope(|ui| {
-                if !self.enabled {
-                    ui.disable();
-                }
-                if self.small {
-                    compact(ui);
-                }
-                ui.add(button)
-            })
-            .inner
+        // Not in a child `Ui`: a row that wraps can move only what is placed in it directly to its next line.
+        let response = if self.small {
+            let style = ui.style().clone();
+            compact(ui);
+            let response = ui.add_enabled(self.enabled, button);
+            ui.set_style(style);
+            response
         } else {
-            ui.add(button)
+            ui.add_enabled(self.enabled, button)
         };
         let state = if response.is_pointer_button_down_on() {
             Pointer::Down
@@ -747,49 +743,52 @@ pub fn drop_down(id: impl egui::AsIdSalt) -> egui::ComboBox {
 }
 
 /// A row of tabs over a line, the chosen one underlined; the underline slides to the tab chosen next. Returns whether
-/// another tab was chosen.
+/// another tab was chosen. A row wider than its place scrolls sideways: claiming its whole width would make a panel
+/// dragged narrower than the row keep that width while drawing only what it was dragged to.
 pub fn tabs<T: PartialEq + Copy>(ui: &mut Ui, id: impl egui::AsIdSalt, current: &mut T, tabs: &[(T, &str)]) -> bool {
     let t = Tokens::get(ui.ctx());
     let before = *current;
-    let mut chosen: Option<Rect> = None;
-    let row = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 2.0;
-            for (value, label) in tabs {
-                let active = *value == *current;
-                let font = theme::body(13.5);
-                let size = ui.painter().layout_no_wrap((*label).to_owned(), font.clone(), t.muted).size();
-                let (rect, response) = ui.allocate_exact_size(size + vec2(20.0, 12.0), Sense::click());
-                let enabled = ui.is_enabled();
-                response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, active, *label));
-                let color = if active {
-                    t.primary_text
-                } else {
-                    let hover = motion::hover(ui, &response, motion::COLOR);
-                    motion::mix(t.muted, t.foreground, hover)
-                };
-                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, *label, font, color);
-                if response.clicked() && !active {
-                    *current = *value;
+    let base = egui::Id::new("tabs").with(id);
+    let width = ui.available_width();
+    egui::ScrollArea::horizontal().id_salt(base).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+        let mut chosen: Option<Rect> = None;
+        let row = ui
+            .horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (value, label) in tabs {
+                    let active = *value == *current;
+                    let font = theme::body(13.5);
+                    let size = ui.painter().layout_no_wrap((*label).to_owned(), font.clone(), t.muted).size();
+                    let (rect, response) = ui.allocate_exact_size(size + vec2(20.0, 12.0), Sense::click());
+                    let enabled = ui.is_enabled();
+                    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, active, *label));
+                    let color = if active {
+                        t.primary_text
+                    } else {
+                        let hover = motion::hover(ui, &response, motion::COLOR);
+                        motion::mix(t.muted, t.foreground, hover)
+                    };
+                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, *label, font, color);
+                    if response.clicked() && !active {
+                        *current = *value;
+                    }
+                    if *value == *current {
+                        chosen = Some(rect);
+                    }
                 }
-                if *value == *current {
-                    chosen = Some(rect);
-                }
-            }
-        })
-        .response
-        .rect;
-    let bottom = row.bottom();
-    ui.painter()
-        .line_segment([pos2(row.left(), bottom), pos2(row.left() + ui.available_width().max(row.width()), bottom)], Stroke::new(1.0, t.border));
-    if let Some(chosen) = chosen {
-        let base = egui::Id::new("tabs").with(id);
-        // Measured from the row, so scrolling moves nothing.
-        let left = motion::slide(ui.ctx(), base.with("left"), chosen.left() - row.left(), motion::SLOW);
-        let width = motion::slide(ui.ctx(), base.with("width"), chosen.width(), motion::SLOW);
-        let line = Rect::from_min_size(pos2(row.left() + left, bottom - 1.0), vec2(width, 2.0));
-        ui.painter().rect_filled(line, 0.0, t.primary);
-    }
+            })
+            .response
+            .rect;
+        let bottom = row.bottom();
+        ui.painter().line_segment([pos2(row.left(), bottom), pos2(row.left() + width.max(row.width()), bottom)], Stroke::new(1.0, t.border));
+        if let Some(chosen) = chosen {
+            // Measured from the row, so scrolling moves nothing.
+            let left = motion::slide(ui.ctx(), base.with("left"), chosen.left() - row.left(), motion::SLOW);
+            let width = motion::slide(ui.ctx(), base.with("width"), chosen.width(), motion::SLOW);
+            let line = Rect::from_min_size(pos2(row.left() + left, bottom - 1.0), vec2(width, 2.0));
+            ui.painter().rect_filled(line, 0.0, t.primary);
+        }
+    });
     *current != before
 }
 

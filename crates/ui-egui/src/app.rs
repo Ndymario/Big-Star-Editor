@@ -956,7 +956,8 @@ impl BigStarApp {
                 }
                 Side::LevelData => {
                     let modules = session.project_data.as_ref().map(|d| &d.modules);
-                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    // Scrolls sideways too: its value fields cannot shrink with the panel.
+                    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
                         match level_data::show(ui, &view.snapshot, modules, &mut self.data_drafts, busy) {
                             Some(level_data::Outcome::Edit(made)) => edit = Some(made),
                             Some(level_data::Outcome::Error(message)) => error = Some(message),
