@@ -360,6 +360,35 @@ fn a_saved_level_reads_back_through_the_build_plan() {
     assert_eq!((reopened.objects[0].x, reopened.dirty, reopened.revision), (40, false, 1));
 }
 
+/// A level a module adds under a name of its own is listed by its `_bgdat.bin`, under the module, and opens like any
+/// other -- before a build has put it in the ROM. A module's copy of a vanilla level stays under its vanilla name.
+#[cfg(unix)]
+#[test]
+fn a_modules_own_levels_are_listed_under_it() {
+    let sources = [
+        ("course/A01_1.bin", 0, "modules/mine/nitrofs/course/A01_1.bin"),
+        ("course/A01_1_bgdat.bin", 1, "modules/mine/nitrofs/course/A01_1_bgdat.bin"),
+        ("z_new/mine/Bonus.bin", 400, "modules/mine/nitrofs/z_new/mine/Bonus.bin"),
+        ("z_new/mine/Bonus_bgdat.bin", 401, "modules/mine/nitrofs/z_new/mine/Bonus_bgdat.bin"),
+        ("z_new/mine/Lonely_bgdat.bin", 402, "modules/mine/nitrofs/z_new/mine/Lonely_bgdat.bin"),
+    ];
+    let (fixture, mut session) = with_plan("host-custom-levels", &sources);
+    let (course, bgdat) = level_files();
+    let tree = fixture.root.path().join("proj/modules/mine/nitrofs");
+    write_bytes(&tree.join("z_new/mine/Bonus.bin"), &course);
+    write_bytes(&tree.join("z_new/mine/Bonus_bgdat.bin"), &bgdat);
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let custom: Vec<_> = worlds.iter().filter(|world| world.name.starts_with("Custom Levels")).collect();
+    assert_eq!(custom.len(), 1, "{custom:?}");
+    assert_eq!(custom[0].name, "Custom Levels > mine");
+    let [level] = custom[0].levels.as_slice() else { panic!("{custom:?}") };
+    assert_eq!((level.display_name.as_str(), level.areas[0].token.as_str()), ("Bonus", "z_new/mine/Bonus"));
+    assert_eq!(level.areas[0].bgdat_path, "z_new/mine/Bonus_bgdat.bin");
+    let opened = open_level(&mut session, "z_new/mine/Bonus");
+    assert_eq!(opened.title, "Bonus (mine)");
+    assert!(!opened.objects.is_empty());
+}
+
 #[test]
 fn stale_and_unknown_edits_are_refused() {
     let (_fixture, mut session) = Fixture::with_project("host-stale");

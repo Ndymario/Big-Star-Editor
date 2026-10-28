@@ -22,7 +22,7 @@ use bigstar_protocol::{
 };
 
 use crate::graphics::ProjectGraphics;
-use crate::levels::{LevelFiles, RomIndex, Source, address, locate};
+use crate::levels::{CustomLevel, LevelFiles, RomIndex, Source, address, custom_levels, locate};
 use crate::settings::{clean_rom_file, clean_rom_problem, load_settings, relative_to_project, save_settings};
 use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
@@ -474,6 +474,7 @@ impl Shared {
     fn list_levels(&self) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        self.ensure_patcher(open);
         let mut worlds: Vec<LevelWorld> = Vec::new();
         for entry in nsmb_level_catalog() {
             let areas = entry
@@ -494,6 +495,22 @@ impl Shared {
                 _ => worlds.push(LevelWorld { name: entry.world.clone(), levels: vec![level] }),
             }
         }
+        // A module's own levels, under the module that adds them; each is one area, named by its file.
+        for custom in custom_levels_of(open) {
+            let world = if custom.module.is_empty() { "Custom Levels".to_owned() } else { format!("Custom Levels > {}", custom.module) };
+            let area = AreaSummary {
+                token: custom.token.clone(),
+                display_name: custom.name.clone(),
+                available: true,
+                course_path: address(&custom.files.course).unwrap_or_default(),
+                bgdat_path: address(&custom.files.bgdat).unwrap_or_default(),
+            };
+            let level = LevelSummary { display_name: custom.name, areas: vec![area] };
+            match worlds.last_mut() {
+                Some(last) if last.name == world => last.levels.push(level),
+                _ => worlds.push(LevelWorld { name: world, levels: vec![level] }),
+            }
+        }
         Ok(Response::Levels(worlds))
     }
 
@@ -503,16 +520,24 @@ impl Shared {
         if let Some((id, session)) = open.levels.iter().find(|(_, session)| session.area == area_token) {
             return Ok(Response::Level(Box::new(snapshot(*id, session))));
         }
-        let (entry, area) = find_area(area_token).ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
-        let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
-        let files = locate(rom, &open.index, area).ok_or_else(|| not_found(format!("the ROM does not hold {area_token}")))?;
+        let (title, files) = match find_area(area_token) {
+            Some((entry, area)) => {
+                let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
+                let files = locate(rom, &open.index, area).ok_or_else(|| not_found(format!("the ROM does not hold {area_token}")))?;
+                (area_title(entry, area), files)
+            }
+            None => {
+                self.ensure_patcher(open);
+                let custom = find_custom(open, area_token).ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
+                (custom.title(), custom.files)
+            }
+        };
         // Read as a build would use them: the module's copy when there is one, else the ROM's.
         let (course_address, bgdat_address) = (address(&files.course)?, address(&files.bgdat)?);
         let graphics = self.ensure_graphics(open)?;
         let course = graphics.read_file(&course_address)?;
         let bgdat = graphics.read_file(&bgdat_address)?;
         let level = EditableLevel::load(&course, &bgdat, Some(&open.catalog))?;
-        let title = area_title(entry, area);
         let id = open.next_level;
         open.next_level += 1;
         let session = LevelSession { area: area_token.to_owned(), title, files, level, revision: 1 };
@@ -780,35 +805,39 @@ impl Shared {
         // Levels not open are read as a build would use them; the graphics own that view of the files.
         self.ensure_graphics(open)?;
         let mut graphics = open.graphics.take();
-        let mut found = Vec::new();
+        // Every area by token and title, with its files when it has them.
+        let mut areas: Vec<(String, String, Option<LevelFiles>)> = Vec::new();
         for entry in nsmb_level_catalog() {
             for area in &entry.areas {
-                let title = area_title(entry, area);
-                let loaded;
-                let level = match open.levels.values().find(|session| session.area == area.source_token) {
-                    Some(session) => &session.level,
-                    None => {
-                        let Some(rom) = open.rom.as_mut() else { continue };
-                        let Some(files) = locate(rom, &open.index, area) else { continue };
-                        let (Ok(course_address), Ok(bgdat_address)) = (address(&files.course), address(&files.bgdat)) else { continue };
-                        let Some(graphics) = graphics.as_mut() else { continue };
-                        let (Ok(course), Ok(bgdat)) = (graphics.read_file(&course_address), graphics.read_file(&bgdat_address)) else {
-                            continue;
-                        };
-                        let Ok(level) = EditableLevel::load(&course, &bgdat, Some(&open.catalog)) else { continue };
-                        loaded = level;
-                        &loaded
-                    }
-                };
-                let place =
-                    |index, x: i32, y: i32, settings| FoundEntity { area: area.source_token.clone(), title: title.clone(), index, x, y, settings };
-                if sprites {
-                    let matches = level.course().sprites.iter().enumerate().filter(|(_, s)| s.id == id);
-                    found.extend(matches.map(|(i, s)| place(i, i32::from(s.x), i32::from(s.y), Some(s.settings))));
-                } else {
-                    let matches = level.objects().iter().enumerate().filter(|(_, o)| o.object_id == id);
-                    found.extend(matches.map(|(i, o)| place(i, i32::from(o.x), i32::from(o.y), None)));
+                let files = open.rom.as_mut().and_then(|rom| locate(rom, &open.index, area));
+                areas.push((area.source_token.clone(), area_title(entry, area), files));
+            }
+        }
+        areas.extend(custom_levels_of(open).into_iter().map(|custom| (custom.token.clone(), custom.title(), Some(custom.files))));
+        let mut found = Vec::new();
+        for (token, title, files) in areas {
+            let loaded;
+            let level = match open.levels.values().find(|session| session.area == token) {
+                Some(session) => &session.level,
+                None => {
+                    let Some(files) = files else { continue };
+                    let (Ok(course_address), Ok(bgdat_address)) = (address(&files.course), address(&files.bgdat)) else { continue };
+                    let Some(graphics) = graphics.as_mut() else { continue };
+                    let (Ok(course), Ok(bgdat)) = (graphics.read_file(&course_address), graphics.read_file(&bgdat_address)) else {
+                        continue;
+                    };
+                    let Ok(level) = EditableLevel::load(&course, &bgdat, Some(&open.catalog)) else { continue };
+                    loaded = level;
+                    &loaded
                 }
+            };
+            let place = |index, x: i32, y: i32, settings| FoundEntity { area: token.clone(), title: title.clone(), index, x, y, settings };
+            if sprites {
+                let matches = level.course().sprites.iter().enumerate().filter(|(_, s)| s.id == id);
+                found.extend(matches.map(|(i, s)| place(i, i32::from(s.x), i32::from(s.y), Some(s.settings))));
+            } else {
+                let matches = level.objects().iter().enumerate().filter(|(_, o)| o.object_id == id);
+                found.extend(matches.map(|(i, o)| place(i, i32::from(o.x), i32::from(o.y), None)));
             }
         }
         open.graphics = graphics;
@@ -863,7 +892,10 @@ impl Shared {
             if open.levels.values().any(|session| session.area == area) {
                 continue;
             }
-            let title = find_area(&area).map_or_else(|| area.clone(), |(entry, found)| area_title(entry, found));
+            let title = match find_area(&area) {
+                Some((entry, found)) => area_title(entry, found),
+                None => find_custom(open, &area).map_or_else(|| area.clone(), |custom| custom.title()),
+            };
             levels.push(RecoverableLevel { area, title });
         }
         Ok(Response::Recovery(levels))
@@ -1439,6 +1471,14 @@ fn recovery_files(root: &Path) -> Vec<(String, PathBuf)> {
 
 fn find_area(token: &str) -> Option<(&'static LevelCatalogEntry, &'static LevelCatalogArea)> {
     nsmb_level_catalog().iter().find_map(|entry| entry.areas.iter().find(|area| area.source_token == token).map(|area| (entry, area)))
+}
+
+fn custom_levels_of(open: &OpenProject) -> Vec<CustomLevel> {
+    custom_levels(&open.index, open.patcher.as_ref().and_then(|(_, plan)| plan.as_ref()))
+}
+
+fn find_custom(open: &OpenProject, token: &str) -> Option<CustomLevel> {
+    custom_levels_of(open).into_iter().find(|custom| custom.token == token)
 }
 
 /// "1-1", or "1-1 Area 2" for a level of several areas.

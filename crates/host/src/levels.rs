@@ -1,9 +1,10 @@
 //! Where a catalog area's two files live in a ROM, by the addresses the effective filesystem and module targets use.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use bigstar_core::{Error, ErrorCode, Result};
-use bigstar_project::{LevelCatalogArea, RomReader};
+use bigstar_patching::FileManifest;
+use bigstar_project::{LevelCatalogArea, RomReader, nsmb_level_catalog};
 
 /// One file of a level: a plain file of the ROM, or a member of an archive in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +78,58 @@ pub(crate) fn locate(rom: &mut RomReader, index: &RomIndex, area: &LevelCatalogA
 
 fn unsafe_name(name: &str) -> bool {
     name.starts_with('/') || name.contains('\\') || name.contains('\0') || name.split('/').any(|part| part == "..")
+}
+
+/// A level the catalog does not name: a module's own, found by its `_bgdat.bin` beside a course file of the same name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CustomLevel {
+    /// The two files' shared path without its suffix, `z_new/coop/W2UnlockCutscene`. Catalog tokens never hold a `/`.
+    pub token: String,
+    /// The module the plan says supplies the background file; empty when nothing says.
+    pub module: String,
+    /// The level's file name, `W2UnlockCutscene`.
+    pub name: String,
+    pub files: LevelFiles,
+}
+
+impl CustomLevel {
+    /// "W2UnlockCutscene (coop)".
+    pub fn title(&self) -> String {
+        if self.module.is_empty() { self.name.clone() } else { format!("{} ({})", self.name, self.module) }
+    }
+}
+
+/// Every level the ROM or the plan holds besides the catalog's, by module and then name. A file the plan adds is
+/// listed before a build places it, since reads take the module's copy first.
+pub(crate) fn custom_levels(index: &RomIndex, plan: Option<&FileManifest>) -> Vec<CustomLevel> {
+    let vanilla: BTreeSet<&str> = nsmb_level_catalog()
+        .iter()
+        .flat_map(|entry| &entry.areas)
+        .filter(|area| area.narc_name.is_none())
+        .map(|area| area.course_token.as_str())
+        .collect();
+    let paths: BTreeSet<&str> =
+        index.sorted.iter().map(String::as_str).chain(plan.iter().flat_map(|plan| &plan.files).map(|file| file.path.as_str())).collect();
+    let mut levels: Vec<CustomLevel> = paths
+        .iter()
+        .filter_map(|path| {
+            let token = path.strip_suffix("_bgdat.bin")?;
+            let name = file_name(token);
+            let course = format!("{token}.bin");
+            if name.is_empty() || vanilla.contains(name) || !paths.contains(course.as_str()) {
+                return None;
+            }
+            let module = plan.and_then(|plan| plan.find(path)).map(|file| file.module.clone()).unwrap_or_default();
+            Some(CustomLevel {
+                token: token.to_owned(),
+                module,
+                name: name.to_owned(),
+                files: LevelFiles { course: Source::File(course), bgdat: Source::File((*path).to_owned()) },
+            })
+        })
+        .collect();
+    levels.sort_by(|a, b| (&a.module, &a.name, &a.token).cmp(&(&b.module, &b.name, &b.token)));
+    levels
 }
 
 /// A level file's address, as the filesystem view, the effective filesystem and module targets name it: a plain path,
