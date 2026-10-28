@@ -1628,7 +1628,7 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     harness.run();
     harness.run();
     let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
-    assert_eq!(doc.pairing.palette.as_deref(), Some("BG_ncg/demo_ncl.bin"));
+    assert_eq!(doc.pairing.palettes, ["BG_ncg/demo_ncl.bin"]);
     assert!(!doc.render().info.contains("greys"));
 
     // A click on the first pixel paints it: the left button colour 1, the right colour 0, whichever changes it. Ctrl+Z
@@ -1669,8 +1669,7 @@ fn opening_a_palette_asks_which_graphics_editor_it_goes_to() {
     harness.run();
     let key = *harness.state().workspace.files.keys().next().unwrap();
     // No palette is guessed from the folder: the sheet has none until one is attached.
-    harness.get_by_label("Palette file");
-    harness.get_by_label("(none)");
+    harness.get_by_label("Greys (no palette file)");
 
     // Opening a palette while the sheet is open asks whether it is for the sheet.
     harness.get_by_label("demo_ncl.bin").click();
@@ -1684,14 +1683,14 @@ fn opening_a_palette_asks_which_graphics_editor_it_goes_to() {
     assert!(harness.state().workspace.asking_attach.is_none());
     assert_eq!(harness.state().workspace.files.len(), 1, "attached, not opened in its own editor");
     let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
-    assert_eq!(doc.pairing.palette.as_deref(), Some("BG_ncg/demo_ncl.bin"));
+    assert_eq!(doc.pairing.palettes, ["BG_ncg/demo_ncl.bin"]);
     assert!(!doc.render().info.contains("greys"));
 
     // Detaching it goes back to the greys.
-    harness.get_by_label("Detach").click();
+    harness.get_by_label("Detach demo_ncl.bin").click();
     harness.run();
     let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
-    assert_eq!(doc.pairing.palette, None);
+    assert!(doc.pairing.palettes.is_empty());
 
     // Asked again, it can still be opened on its own.
     harness.get_by_label("Open").click();
@@ -1755,7 +1754,8 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     harness.run();
     {
         let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
-        let (palette, bytes) = doc.companion_output().expect("the palette file changed").unwrap();
+        let outputs = doc.companion_outputs().unwrap();
+        let [(palette, bytes)] = &outputs[..] else { panic!("the palette file changed") };
         assert_eq!(palette, "BG_ncg/demo_ncl.bin");
         let colours: Vec<u16> = bytes.chunks(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
         assert!(colours.contains(&0x7c00) && colours.contains(&0x03e0), "blue and the sheet's green: {colours:x?}");

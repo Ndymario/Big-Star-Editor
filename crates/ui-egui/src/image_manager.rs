@@ -273,12 +273,22 @@ pub enum ManagerAction {
     ImportRecreate,
     ExportAll,
     ImportAll,
+    /// The palette file heading group `n` of the Palettes list was taken off.
+    Detach(usize),
+}
+
+/// A heading in the Palettes list: the file the palettes from `start` on come from, with a button to take it off.
+pub struct Group {
+    pub name: String,
+    pub start: usize,
 }
 
 /// What the lists show.
 pub struct Lists<'a> {
     pub bitmaps: &'a [String],
     pub palettes: &'a [String],
+    /// The files the palettes come from, as headings over them; none when the palettes are the editor's own.
+    pub groups: &'a [Group],
     /// Every bitmap is drawn in the same palettes, so "all" means all of them; otherwise it is the chosen bitmap in
     /// each of its own palettes.
     pub shared: bool,
@@ -291,7 +301,8 @@ pub fn show(ui: &mut Ui, id: &str, state: &mut ManagerState, lists: &Lists) -> (
     let before = *state;
     state.bitmap = state.bitmap.min(lists.bitmaps.len().saturating_sub(1));
     state.palette = state.palette.min(lists.palettes.len().saturating_sub(1));
-    let list = |ui: &mut Ui, title: &str, names: &[String], chosen: &mut usize| {
+    let mut detached = None;
+    let mut list = |ui: &mut Ui, title: &str, names: &[String], groups: &[Group], chosen: &mut usize| {
         ui.strong(title);
         egui::Frame::group(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -300,25 +311,35 @@ pub fn show(ui: &mut Ui, id: &str, state: &mut ManagerState, lists: &Lists) -> (
                     ui.weak("(none)");
                 }
                 for (i, name) in names.iter().enumerate() {
+                    for (n, group) in groups.iter().enumerate().filter(|(_, g)| g.start == i) {
+                        ui.horizontal(|ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(&group.name).strong()).truncate());
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                if controls::icon_button(ui, crate::icons::CLOSE, &format!("Detach {}", group.name)).clicked() {
+                                    detached = Some(n);
+                                }
+                            });
+                        });
+                    }
                     ui.choice_value(chosen, i, name);
                 }
             });
         });
     };
     let mut bitmap = state.bitmap;
-    list(ui, "Bitmaps", lists.bitmaps, &mut bitmap);
+    list(ui, "Bitmaps", lists.bitmaps, &[], &mut bitmap);
     if bitmap != state.bitmap {
         state.bitmap = bitmap;
         if state.auto_palette && bitmap < lists.palettes.len() {
             state.palette = bitmap;
         }
     }
-    list(ui, "Palettes", lists.palettes, &mut state.palette);
+    list(ui, "Palettes", lists.palettes, lists.groups, &mut state.palette);
     controls::checkbox(ui, &mut state.auto_palette, "Auto palette select")
         .on_hover_text("Choosing a bitmap chooses the palette in the same place in the list");
     ui.add_space(4.0);
 
-    let mut action = None;
+    let mut action = detached.map(ManagerAction::Detach);
     let chosen = !lists.bitmaps.is_empty() && !lists.palettes.is_empty();
     let all_label = if lists.shared { "all bitmaps" } else { "this bitmap" };
     let imports = chosen && lists.no_import.is_none();
@@ -441,6 +462,7 @@ pub fn run(
             }
             Ok(true)
         }
+        ManagerAction::Detach(_) => Ok(false),
     }
 }
 

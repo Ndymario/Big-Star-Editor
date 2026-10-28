@@ -1020,7 +1020,7 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     egui::Panel::left("tileset-graphics-images").resizable(true).default_size(240.0).show(ui, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             let names: Vec<String> = sheets.iter().map(|(_, name)| name.clone()).collect();
-            let lists = Lists { bitmaps: &names, palettes: &palette_names, shared: false, no_import: None };
+            let lists = Lists { bitmaps: &names, palettes: &palette_names, groups: &[], shared: false, no_import: None };
             let (_, action) = image_manager::show(ui, "tileset-graphics", &mut view.graphics, &lists);
             if let Some(&(chosen, _)) = sheets.get(view.graphics.bitmap)
                 && chosen != shown

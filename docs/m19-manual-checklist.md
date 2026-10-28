@@ -27,9 +27,12 @@ to NSMB Editor finds every step where they expect it.
 9. On **Background**, pick tiles and paint the layer; zoom with Ctrl+wheel and pan with the middle button. Save, reopen
    the level and confirm the background renders as painted.
 10. From the Filesystem dock, open an NCGR, then open an NCLR from another folder and choose **Attach to** the NCGR
-    in the question that comes up; confirm the sheet is drawn in it. Detach it with the button beside its name, then
-    drag the NCLR from the tree onto the **Palette file** row, and once more onto the canvas. Choose another palette
-    row in the Palettes list and paint it. Change a colour and confirm Save writes the NCLR as well. Open an NSCR, drag
-    an NCGR onto its **Graphics file** row and an NCLR onto its **Palette file** row, and paint it from the tile
-    picker. Save both and confirm the module holds the edits. Open an NCLR once more and choose **Open on its own**.
+    in the question that comes up; confirm the sheet is drawn in it. Drag a second palette file from the tree onto
+    the Palettes list and confirm both files are listed with their rows, the new one shown; choose a row of the first
+    and confirm the sheet redraws in it. Export with all palettes and confirm the PNG holds every row of both. Detach
+    one with the button beside its name and confirm the other stays. Change a colour and confirm Save writes that
+    NCLR as well. Close and reopen the NCGR and confirm the same palettes come back, the same one shown. Open an NSCR,
+    drag an NCGR onto its **Graphics file** row and two NCLRs onto its palette list, switch between them, and paint
+    it from the tile picker. Save both and confirm the module holds the edits. Open an NCLR once more and choose
+    **Open on its own**.
 11. Open the ROM banner and paint the icon with the same tools; confirm undo works there too.

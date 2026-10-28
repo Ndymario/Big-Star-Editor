@@ -113,7 +113,7 @@ impl FileDoc {
         self.waiting = waiting;
         for (_, palette) in arrived {
             match palette {
-                Some(true) => doc.set_companion_palette(Some(path.to_owned()), Some(bytes)),
+                Some(true) => doc.attach_palette(path, bytes),
                 Some(false) => doc.set_companion_characters(Some(path.to_owned()), Some(bytes)),
                 None => doc.attach(path, bytes),
             }
@@ -283,8 +283,10 @@ impl Workspace {
                     EditorKind::Graphics if GraphicsDoc::supports(bytes, path) => {
                         let mut doc = GraphicsDoc::open(path, bytes);
                         if let Some(pairing) = pairing {
-                            doc.set_width(pairing.width);
-                            waiting.extend(pairing.palette.filter(|_| doc.pairs_palette()).map(|p| (p, Some(true))));
+                            doc.restore_pairing(&pairing);
+                            if doc.pairs_palette() {
+                                waiting.extend(pairing.palette_files().into_iter().map(|p| (p, Some(true))));
+                            }
                             waiting.extend(pairing.characters.filter(|_| doc.pairs_characters()).map(|p| (p, Some(false))));
                             reads.extend(waiting.iter().map(|(p, _)| p.clone()));
                         }
@@ -330,8 +332,8 @@ impl Workspace {
         let Some(doc) = self.files.get_mut(&key) else { return };
         if let FileView::Graphics(graphics, _) = &mut doc.view {
             let role = graphics.attaches_as(path, bytes);
-            // What was asked for before, for the same place, would otherwise arrive after and replace it.
-            doc.waiting.retain(|(_, waiting)| role.is_none() || *waiting != role);
+            // Graphics asked for before would otherwise arrive after and replace these; palettes are added alongside.
+            doc.waiting.retain(|(wanted, waiting)| wanted != path && (role != Some(false) || *waiting != role));
             graphics.attach(path, bytes);
         }
         self.raise_file(key);
@@ -966,16 +968,17 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
             for action in crate::graphics_editor::show(ui, graphics, state, services) {
                 match action {
                     GraphicsAction::Load { path: companion, palette } => {
-                        waiting.retain(|(_, p)| palette.is_none() || *p != palette);
+                        // There is one graphics file, and any number of palettes.
+                        waiting.retain(|(wanted, p)| *wanted != companion && (palette != Some(false) || *p != palette));
                         waiting.push((companion.clone(), palette));
                         session.read_file(&companion, FileRead::Companion);
                     }
                     GraphicsAction::Remember => {}
-                    GraphicsAction::Save => match (graphics.output(), graphics.companion_output().transpose()) {
-                        (Ok(bytes), Ok(companion)) => {
+                    GraphicsAction::Save => match (graphics.output(), graphics.companion_outputs()) {
+                        (Ok(bytes), Ok(companions)) => {
                             session.write_file(path, bytes);
                             // A palette changed here belongs to the palette file it was read from.
-                            if let Some((palette, bytes)) = companion {
+                            for (palette, bytes) in companions {
                                 session.write_file(&palette, bytes);
                             }
                             graphics.mark_saved();
