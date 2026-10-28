@@ -187,7 +187,8 @@ pub fn show(
     let tab = view.panel.tab;
     let count = item_count(&view.snapshot, tab);
 
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    // Scrolls sideways too: its number boxes and drop-downs stop shrinking before the panel does.
+    egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
         if tab == Tab::Entity(Kind::Sprite) {
             sprite_header(ui, view, &shown);
             bank_edit = missing_banks(ui, view, &shown, busy);

@@ -49,35 +49,39 @@ struct Picked {
 }
 
 fn area_row(ui: &mut Ui, label: &str, area: &AreaSummary, shown: Option<&str>, picked: &mut Picked) {
+    // Edit first, from the right, so the row takes what is left and its name is cut short to it rather than holding the
+    // panel open.
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(area.available, |ui| {
-            let tip = format!(
-                "{label}\nToken: {}\nCourse: {}\nBGDat: {}",
-                area.token,
-                if area.course_path.is_empty() { "missing" } else { &area.course_path },
-                if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
-            );
-            let response = Row::new(label).selected(shown == Some(area.token.as_str())).fit().show(ui).on_hover_text(tip);
-            if response.double_clicked() {
-                picked.open = Some(area.token.clone());
-            } else if response.clicked() {
-                picked.preview = Some(area.token.clone());
-            }
-            controls::context_menu(&response, |ui| {
-                if Button::menu("Open").show(ui).clicked() {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_enabled_ui(area.available, |ui| {
+                if Button::new("Edit").small().quiet().show(ui).clicked() {
                     picked.open = Some(area.token.clone());
-                    ui.close();
                 }
-                for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
-                    if Button::menu(name).enabled(!path.is_empty()).show(ui).clicked() {
-                        picked.reveal = Some(path.clone());
+                let tip = format!(
+                    "{label}\nToken: {}\nCourse: {}\nBGDat: {}",
+                    area.token,
+                    if area.course_path.is_empty() { "missing" } else { &area.course_path },
+                    if area.bgdat_path.is_empty() { "missing" } else { &area.bgdat_path }
+                );
+                let response = Row::new(label).selected(shown == Some(area.token.as_str())).show(ui).on_hover_text(tip);
+                if response.double_clicked() {
+                    picked.open = Some(area.token.clone());
+                } else if response.clicked() {
+                    picked.preview = Some(area.token.clone());
+                }
+                controls::context_menu(&response, |ui| {
+                    if Button::menu("Open").show(ui).clicked() {
+                        picked.open = Some(area.token.clone());
                         ui.close();
                     }
-                }
+                    for (name, path) in [("Show Course in Filesystem", &area.course_path), ("Show BGDat in Filesystem", &area.bgdat_path)] {
+                        if Button::menu(name).enabled(!path.is_empty()).show(ui).clicked() {
+                            picked.reveal = Some(path.clone());
+                            ui.close();
+                        }
+                    }
+                });
             });
-            if Button::new("Edit").small().quiet().show(ui).clicked() {
-                picked.open = Some(area.token.clone());
-            }
         });
     });
 }

@@ -378,24 +378,22 @@ pub fn disclosure(ui: &mut Ui, open: bool) -> Response {
     response
 }
 
-/// A titled group that folds away, its arrow the one [`disclosure`] draws.
+/// A titled group that folds away, its arrow the one [`disclosure`] draws. The title is cut short to the width there is:
+/// egui's own collapsing header keeps its whole title, holding a panel open past where it is dragged.
 pub fn group<R>(
     ui: &mut Ui,
     id: impl egui::AsIdSalt,
     title: impl Into<WidgetText>,
     default_open: bool,
     body: impl FnOnce(&mut Ui) -> R,
-) -> egui::CollapsingResponse<R> {
-    egui::CollapsingHeader::new(title)
-        .id_salt(id)
-        .default_open(default_open)
-        .icon(|ui, openness, response| {
-            let t = Tokens::get(ui.ctx());
-            let icon = if openness > 0.5 { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT };
-            let color = if response.hovered() { t.foreground } else { t.muted };
-            icon.paint(ui.painter(), response.rect.expand(2.0), color);
-        })
-        .show(ui, body)
+) -> Option<R> {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), ui.make_persistent_id(id), default_open);
+    let icon = if state.is_open() { icons::CHEVRON_DOWN } else { icons::CHEVRON_RIGHT };
+    let header = Row::new(title).icon(icon).show(ui);
+    if header.clicked() {
+        state.toggle(ui);
+    }
+    state.show_body_indented(&header, ui, body).map(|body| body.inner)
 }
 
 /// One line of a list or a tree that can be the chosen one. As wide as the space it is put in unless [`Row::fit`].

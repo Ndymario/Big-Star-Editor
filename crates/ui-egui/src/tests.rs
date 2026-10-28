@@ -2496,8 +2496,18 @@ fn the_menu_bar_opens_its_menus_under_the_pointer() {
 #[test]
 fn side_panels_shrink_as_far_as_they_are_dragged_whatever_tab_is_in_front() {
     let mut harness = level_with(LevelEntityInsertions::default());
-    for (panel, tab) in [("left", "Levels"), ("left", "Palette"), ("left", "Filesystem"), ("properties", "Level Data")] {
-        harness.get_by_label(tab).click();
+    // Names longer than the panel is dragged to, in a world opened to show its levels and their areas.
+    let world = &mut harness.state_mut().session_mut().unwrap().worlds[0];
+    world.name = "Mario vs. Luigi Multicard Courses".to_owned();
+    world.levels[0].display_name = "A level with a long name".to_owned();
+    world.levels[0].areas[0].display_name = "An area with a long name".to_owned();
+    harness.run();
+    harness.get_by_label("Mario vs. Luigi Multicard Courses").click();
+    harness.run();
+    harness.get_by_label("An area with a long name");
+    for (panel, tab) in [("left", "Levels"), ("left", "Palette"), ("left", "Filesystem"), ("properties", "Level Data"), ("properties", "Properties")]
+    {
+        harness.get_all_by_label(tab).next().unwrap().click();
         harness.run();
         let width =
             |harness: &Harness<'_, BigStarApp>| egui::containers::panel::PanelState::load(&harness.ctx, egui::Id::new(panel)).unwrap().size().x;
