@@ -491,7 +491,7 @@ impl BigStarApp {
                 // A palette or graphics opened while an editor could take it may be meant for that editor.
                 OpenRequest::Editor { path, bytes, kind, metadata } if self.workspace.offer_attach(&path, &bytes, kind, metadata) => Vec::new(),
                 OpenRequest::Editor { path, bytes, kind, metadata } => {
-                    open_editor(&*self.services, &mut self.workspace, &path, &bytes, kind, metadata)
+                    open_editor(&*self.services, &mut self.workspace, session.filesystem.as_ref(), &path, &bytes, kind, metadata)
                 }
             };
             for companion in reads {
@@ -1311,7 +1311,8 @@ impl BigStarApp {
         match decision {
             Some(key) => self.workspace.attach(key, &prompt.path, &prompt.bytes),
             None => {
-                let reads = open_editor(&*self.services, &mut self.workspace, &prompt.path, &prompt.bytes, prompt.kind, prompt.metadata);
+                let listing = self.session.as_ref().and_then(|session| session.filesystem.as_ref());
+                let reads = open_editor(&*self.services, &mut self.workspace, listing, &prompt.path, &prompt.bytes, prompt.kind, prompt.metadata);
                 if let Some(session) = &mut self.session {
                     for companion in reads {
                         session.read_file(&companion, crate::session::FileRead::Companion);
@@ -1604,16 +1605,23 @@ fn about_icon(ctx: &egui::Context, slot: &mut Option<egui::TextureHandle>) -> Op
     slot.as_ref().map(egui::TextureHandle::id)
 }
 
-/// Opens a file in its editor, paired with what it was paired with last time. Returns the companion files to read.
+/// Opens a file in its editor, paired with what it was paired with last time, or at first with the palette of its
+/// name in `listing`. Returns the companion files to read.
 fn open_editor(
     services: &dyn Services,
     workspace: &mut crate::workspace::Workspace,
+    listing: Option<&bigstar_protocol::FilesystemListing>,
     path: &str,
     bytes: &[u8],
     kind: crate::editors::EditorKind,
     metadata: bool,
 ) -> Vec<String> {
     let key = crate::graphics_editor::pairing_key(path);
-    let pairing = services.load(&key).and_then(|text| serde_json::from_str(&text).ok());
+    let pairing = services.load(&key).and_then(|text| serde_json::from_str(&text).ok()).or_else(|| {
+        // Never paired before: the palette of the same name, which is usually the one, until the person says else.
+        let files = listing.map(|l| l.entries.iter().map(|e| e.path.as_str())).into_iter().flatten();
+        let palette = crate::graphics_editor::namesake_palette(path, files)?;
+        Some(crate::graphics_editor::Pairing { palettes: vec![palette], ..Default::default() })
+    });
     workspace.open_file(path, bytes, kind, pairing, metadata)
 }

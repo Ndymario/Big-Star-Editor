@@ -1617,14 +1617,8 @@ fn a_tile_sheet_opens_in_the_graphics_editor_pairs_its_palette_and_saves_painted
     harness.run();
     let key = *harness.state().workspace.files.keys().next().unwrap();
     assert!(matches!(harness.state().workspace.files[&key].view, crate::workspace::FileView::Graphics(..)));
-    harness.get_by_label_contains("Indices are shown as greys until a palette file is attached.");
 
-    // Attaching a palette (as dropping it on its row does) reads it from the host and colours the sheet.
-    {
-        let doc = harness.state_mut().workspace.files.get_mut(&key).unwrap();
-        doc.waiting.push(("BG_ncg/demo_ncl.bin".to_owned(), Some(true)));
-    }
-    harness.state_mut().session_mut().unwrap().read_file("BG_ncg/demo_ncl.bin", crate::session::FileRead::Companion);
+    // Never paired before, it is drawn in the palette of its name, read from the host.
     harness.run();
     harness.run();
     let crate::workspace::FileView::Graphics(doc, _) = &harness.state().workspace.files[&key].view else { panic!() };
@@ -1668,7 +1662,11 @@ fn opening_a_palette_asks_which_graphics_editor_it_goes_to() {
     harness.get_by_label("Open").click();
     harness.run();
     let key = *harness.state().workspace.files.keys().next().unwrap();
-    // No palette is guessed from the folder: the sheet has none until one is attached.
+    // It comes with the palette of its name; taken off, the sheet has none until one is attached.
+    harness.run();
+    harness.run();
+    harness.get_by_label("Detach demo_ncl.bin").click();
+    harness.run();
     harness.get_by_label("Greys (no palette file)");
 
     // Opening a palette while the sheet is open asks whether it is for the sheet.
@@ -1712,7 +1710,11 @@ fn a_sheet_lists_its_palettes_moves_through_pngs_and_saves_an_edited_palette_fil
     harness.run();
     let key = *harness.state().workspace.files.keys().next().unwrap();
     // As NSMB Editor's image manager: the bitmap beside its palettes, and the PNG buttons under them.
+    harness.run();
+    harness.run();
     harness.get_by_label("Bitmaps");
+    harness.get_by_label("Detach demo_ncl.bin").click();
+    harness.run();
     harness.get_by_label("Greys (no palette file)");
     let import = harness.get_by_label("Import this bitmap with existing palette…");
     assert!(egui_kittest::kittest::NodeT::accesskit_node(&import).is_disabled(), "nothing to match colours to yet");

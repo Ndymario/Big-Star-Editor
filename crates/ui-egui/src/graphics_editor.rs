@@ -83,6 +83,16 @@ pub fn pairing_key(path: &str) -> String {
     format!("graphicsEditor/{path}")
 }
 
+/// The palette file named as `path` is, beside it: `x_ncl.bin` for `x_ncg.bin`, `x.nclr` for `x.ncgr`, and so on for
+/// screens and cells. What a file is paired with before the person says otherwise; any other palette can be added.
+pub fn namesake_palette<'a>(path: &str, files: impl IntoIterator<Item = &'a str>) -> Option<String> {
+    const SUFFIXES: [&str; 8] = ["_ncg.bin", "_nsc.bin", "_nce.bin", "_nan.bin", ".ncgr", ".nscr", ".ncer", ".nanr"];
+    let lower = path.to_ascii_lowercase();
+    let stem = SUFFIXES.iter().find_map(|suffix| lower.strip_suffix(suffix))?;
+    let wanted = [format!("{stem}_ncl.bin"), format!("{stem}.nclr")];
+    files.into_iter().find(|file| wanted.iter().any(|w| file.eq_ignore_ascii_case(w))).map(str::to_owned)
+}
+
 /// BGR555 to 8-bit channels, the low bits repeating the high ones.
 pub(crate) fn expand(channel: u16) -> u8 {
     ((channel << 3) | (channel >> 2)) as u8
@@ -1715,6 +1725,17 @@ mod tests {
         assert_eq!(doc.palette_files(), ["b/blue.nclr"]);
         assert_eq!(doc.pairing.palettes, ["b/blue.nclr"]);
         assert!(first(&doc)[2] > 200);
+    }
+
+    #[test]
+    fn the_palette_of_the_same_name_is_the_default() {
+        let files = ["bg/Demo_NCL.bin", "bg/other_ncl.bin", "obj/hero.nclr", "obj/hero.ncgr"];
+        assert_eq!(namesake_palette("bg/demo_ncg.bin", files).as_deref(), Some("bg/Demo_NCL.bin"));
+        assert_eq!(namesake_palette("bg/demo_nsc.bin", files).as_deref(), Some("bg/Demo_NCL.bin"));
+        assert_eq!(namesake_palette("obj/hero.ncgr", files).as_deref(), Some("obj/hero.nclr"));
+        assert_eq!(namesake_palette("bg/lonely_ncg.bin", files), None, "nothing of its name");
+        assert_eq!(namesake_palette("other/demo_ncg.bin", files), None, "only beside it");
+        assert_eq!(namesake_palette("bg/demo_ncl.bin", files), None, "a palette is not given one");
     }
 
     #[test]

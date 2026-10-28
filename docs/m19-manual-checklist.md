@@ -26,7 +26,8 @@ to NSMB Editor finds every step where they expect it.
 8. On **Behaviors**, drag over several blocks, tick a flag and confirm every chosen block has it.
 9. On **Background**, pick tiles and paint the layer; zoom with Ctrl+wheel and pan with the middle button. Save, reopen
    the level and confirm the background renders as painted.
-10. From the Filesystem dock, open an NCGR, then open an NCLR from another folder and choose **Attach to** the NCGR
+10. From the Filesystem dock, open an NCGR that has an NCLR of the same name beside it and confirm it opens drawn in
+    that palette. Detach it, close and reopen the NCGR, and confirm it stays detached. Then open an NCLR from another folder and choose **Attach to** the NCGR
     in the question that comes up; confirm the sheet is drawn in it. Drag a second palette file from the tree onto
     the Palettes list and confirm both files are listed with their rows, the new one shown; choose a row of the first
     and confirm the sheet redraws in it. Export with all palettes and confirm the PNG holds every row of both. Detach
