@@ -114,9 +114,6 @@ impl Shared {
             }
         }
         let original: Arc<[u8]> = read_file(&file)?.into();
-        if let Some(parent) = file.parent() {
-            adopt_retired_state(parent);
-        }
         let doc = RomDocument {
             name: file_name(&file),
             file: Some(file.clone()),

@@ -140,5 +140,4 @@ The host keeps its per-project choices (variant, module, the clean ROM, autosave
 it lives there rather than in `ncpatcher.yaml`, and reaches NCPatcher as `--rom`. See `docs/project-format.md`.
 
 Everything the editor writes for itself -- settings, backups, autosaves, build staging, trash, the virtual ROM's record
-and what it lost -- lives under the one `.bigstar/` folder, in the project or beside a ROM edited directly. The loose
-`.big-star-*` files and folders earlier versions wrote are moved into it when the project or ROM opens.
+and what it lost -- lives under the one `.bigstar/` folder, in the project or beside a ROM edited directly.

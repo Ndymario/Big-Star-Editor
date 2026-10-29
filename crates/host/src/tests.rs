@@ -195,29 +195,6 @@ fn ncpatcher_projects_are_listed_and_opened() {
 }
 
 #[test]
-fn opening_moves_what_an_earlier_version_left_loose_into_bigstar() {
-    let fixture = Fixture::new("host-retired-state");
-    let rom = make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]);
-    let project = fixture.root.path().join("proj");
-    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
-    write_bytes(&project.join("rom.nds"), &rom);
-    write_bytes(&project.join(".big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
-    write_bytes(&project.join(".big-star-trash/1/a.bin"), b"a");
-    // One already under `.bigstar` is the newer and is kept.
-    write_bytes(&project.join(".big-star-lost/old.txt"), b"old");
-    write_bytes(&project.join(".bigstar/lost/new.txt"), b"new");
-    let mut session = fixture.session();
-    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
-    assert!(info.rom_path.is_some());
-    assert!(project.join(".bigstar/workspace.json").is_file());
-    assert!(!project.join(".big-star-workspace.json").exists());
-    assert!(project.join(".bigstar/trash/1/a.bin").is_file());
-    assert!(!project.join(".big-star-trash").exists());
-    assert!(project.join(".big-star-lost/old.txt").is_file());
-    assert!(!project.join(".bigstar/lost/old.txt").exists());
-}
-
-#[test]
 fn the_clean_rom_is_asked_for_and_remembered() {
     let fixture = Fixture::new("host-clean-rom");
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]);

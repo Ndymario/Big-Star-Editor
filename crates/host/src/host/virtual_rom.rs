@@ -25,7 +25,7 @@ use super::*;
 pub(crate) const VIRTUAL_ROM_DIR: &str = "virtual-rom";
 /// What the mirror last wrote, relative to the project. Being under `.bigstar` keeps the watcher from treating it as an
 /// edit.
-pub(crate) const RECORD_FILE: &str = ".bigstar/virtual-rom.json";
+const RECORD_FILE: &str = ".bigstar/virtual-rom.json";
 /// Where files left in the folder that were never inserted go when it is removed, relative to the project.
 pub(crate) const LOST_DIR: &str = ".bigstar/lost";
 

@@ -438,7 +438,6 @@ impl Shared {
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
             return Err(invalid("save or close the open levels before opening another project"));
         }
-        adopt_retired_state(&directory);
         let mut settings = load_settings(&directory);
         if settings.generated_path.is_empty() {
             settings.generated_path = DEFAULT_GENERATED_DIR.to_owned();
@@ -1519,32 +1518,6 @@ fn back_up(project: &Path, kind: &str, targets: &[(PathBuf, Vec<u8>)]) -> Result
         std::fs::copy(target, &backup).map_err(|_| Error::new(ErrorCode::IoError, format!("could not back up {}", target.display())))?;
     }
     Ok(())
-}
-
-/// The editor's files, each under `.bigstar`, by what an earlier version named them in the project directory.
-const RETIRED_STATE_NAMES: [(&str, &str); 7] = [
-    (".big-star-workspace.json", crate::settings::SETTINGS_FILE_NAME),
-    (".big-star-virtual-rom.json", virtual_rom::RECORD_FILE),
-    (".big-star-backups", ".bigstar/backups"),
-    (".big-star-staging", ".bigstar/staging"),
-    (".big-star-autosave", AUTOSAVE_DIR),
-    (".big-star-trash", TRASH_DIR),
-    (".big-star-lost", virtual_rom::LOST_DIR),
-];
-
-/// Moves what an earlier version left loose in `directory` into `.bigstar`. One already there is the newer and stays;
-/// a move that fails leaves the old one where it was, to be tried again on the next open.
-pub(crate) fn adopt_retired_state(directory: &Path) {
-    for (old, new) in RETIRED_STATE_NAMES {
-        let (old, new) = (directory.join(old), directory.join(new));
-        if std::fs::symlink_metadata(&old).is_err() || std::fs::symlink_metadata(&new).is_ok() {
-            continue;
-        }
-        if let Some(parent) = new.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::rename(&old, &new);
-    }
 }
 
 /// Where removed module files go, relative to the project.
