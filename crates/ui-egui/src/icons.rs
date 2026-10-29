@@ -184,6 +184,12 @@ pub const SEARCH: Icon = Icon::new("search", 24.0, &[Part::Stroke("M21 21l-6-6m2
 
 pub const UNDO: Icon = Icon::new("undo", 24.0, &[Part::Stroke("M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6")]);
 
+pub const WARNING: Icon = Icon::new(
+    "warning",
+    24.0,
+    &[Part::Stroke("M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z"), Part::Stroke("M12 9v4M12 17h.01")],
+);
+
 // The graphics editors' tools.
 
 pub const ZOOM_IN: Icon = Icon::new("zoom_in", 24.0, &[Part::Stroke("M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0zM10 7v6M7 10h6")]);
@@ -231,6 +237,7 @@ const ALL: &[Icon] = &[
     SAVE,
     SEARCH,
     UNDO,
+    WARNING,
     ZOOM_IN,
     ZOOM_OUT,
     PENCIL,
@@ -257,7 +264,8 @@ mod tests {
         let mut output = ctx.run_ui(Default::default(), |_| {});
         output.textures_delta.clear();
         let font = egui::FontId::proportional(14.0);
-        let missing: Vec<&str> = ["…", "·", "•", "×", "—"].into_iter().filter(|mark| !ctx.fonts_mut(|fonts| fonts.has_glyphs(&font, mark))).collect();
+        let missing: Vec<&str> =
+            ["…", "·", "•", "×", "—", "–"].into_iter().filter(|mark| !ctx.fonts_mut(|fonts| fonts.has_glyphs(&font, mark))).collect();
         assert!(missing.is_empty(), "not in the fonts every build has: {missing:?}");
     }
 

@@ -7,10 +7,12 @@ use egui::{RichText, Ui};
 use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::level_view::{Item, Kind, LevelView};
 use crate::properties::{
-    Editor, PanelState, Row, Rows, Span, TABS, Tab, add_edit, add_node_edit, apply, apply_settings, common_settings, delete_edit, delete_node_edit,
-    format_settings, format_value, item_count, line_label, list_lines, parse_settings, parse_value, rows, sprite_types,
+    Editor, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings,
+    common_settings, delete_edit, delete_node_edit, delete_record_edit, format_settings, format_value, item_count, line_label, list_lines,
+    parse_settings, parse_value, record_lines, rows, sprite_types,
 };
 use crate::{dialogs, icons, level_data};
+use bigstar_level::ScreenBlock;
 
 const LABEL_WIDTH: f32 = 112.0;
 /// The least a number's box is wide; a longer value widens its own.
@@ -60,31 +62,12 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             }
             (response.changed() && !response.dragged() && value >= *min && Some(value) != row.value).then_some(value)
         }
-        Editor::Choice(choices) => {
-            let label = |value: i64| match choices.iter().find(|(v, _)| *v == value) {
-                Some((v, text)) => format!("{} — {text}", format_value(*v, hex)),
-                None => format!("{} — not listed", format_value(value, hex)),
-            };
-            let mut picked = None;
-            // A share of the line, so the label and the note's icon keep theirs. A drop-down that took the whole
-            // line would push them past the panel's edge, and the panel would widen to fit them every frame.
-            let width = (ui.available_width() * CHOICE_SHARE).max(80.0);
-            ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
-                controls::drop_down(("property-choice", index))
-                    .width(width)
-                    .truncate()
-                    .selected_text(row.value.map_or("—".to_owned(), label))
-                    .show_ui(ui, |ui| {
-                        for (value, text) in choices {
-                            let entry = format!("{} — {text}", format_value(*value, hex));
-                            if ui.choice(row.value == Some(*value), entry).on_hover_text(text).clicked() {
-                                picked = Some(*value);
-                            }
-                        }
-                    });
-            });
-            picked.filter(|v| Some(*v) != row.value)
-        }
+        // A share of the line, so the label and the note's icon keep theirs. A drop-down that took the whole line would
+        // push them past the panel's edge, and the panel would widen to fit them every frame.
+        Editor::Choice(choices) => controls::numbered_choice(("property-choice", index), choices)
+            .hex(hex)
+            .width((ui.available_width() * CHOICE_SHARE).max(80.0))
+            .show(ui, row.value),
         Editor::Boolean => {
             let mut on = row.value == Some(1);
             // Undecided is something the data says -- a disagreeing selection, or bits that are neither off nor on --
@@ -117,6 +100,9 @@ fn row_ui(ui: &mut Ui, row: &Row, editor: impl FnOnce(&mut Ui) -> Option<i64>) -
         if !row.note.is_empty() {
             controls::hint(ui, &row.note);
         }
+        if !row.warning.is_empty() {
+            controls::warning_hint(ui, &row.warning);
+        }
         ui.with_layout(leftwards, |ui| ui.add(egui::Label::new(&row.label).truncate()).on_hover_text(&row.label));
         written
     })
@@ -126,36 +112,13 @@ fn row_ui(ui: &mut Ui, row: &Row, editor: impl FnOnce(&mut Ui) -> Option<i64>) -
 /// A sprite's Object ID as a drop-down of the actors by name, in place of a number nobody knows by heart. Returns
 /// the type picked.
 fn sprite_type_editor(ui: &mut Ui, row: &Row, types: &[(u16, String)]) -> Option<i64> {
-    let selected = match row.value {
-        Some(value) => match types.iter().find(|(t, _)| i64::from(*t) == value) {
-            Some((t, name)) => format!("{t} — {name}"),
-            None => format!("Actor {value}"),
-        },
-        None => "—".to_owned(),
-    };
-    let width = (ui.available_width() * CHOICE_SHARE).max(80.0);
-    let filter_id = ui.id().with("sprite-picker-filter");
-    let mut picked = None;
-    ui.allocate_ui(egui::vec2(width, ui.spacing().interact_size.y), |ui| {
-        controls::drop_down("sprite-picker").width(width).truncate().selected_text(selected).height(320.0).show_ui(ui, |ui| {
-            // 300 actors are too many to address by number, so the list filters by what is typed.
-            let mut filter: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-            ui.add(TextField::new(&mut filter).hint("Filter actors…"));
-            ui.data_mut(|d| d.insert_temp(filter_id, filter.clone()));
-            let needle = filter.to_lowercase();
-            for (t, name) in types {
-                let entry = format!("{t} — {name}");
-                if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
-                    continue;
-                }
-                let value = i64::from(*t);
-                if ui.choice(row.value == Some(value), entry).clicked() && row.value != Some(value) {
-                    picked = Some(value);
-                }
-            }
-        });
-    });
-    picked
+    // 300 actors are too many to address by number, so the list filters by what is typed.
+    controls::numbered_choice("sprite-picker", types)
+        .width((ui.available_width() * CHOICE_SHARE).max(80.0))
+        .height(320.0)
+        .filter("Filter actors…")
+        .show(ui, row.value)
+        .map(i64::from)
 }
 
 fn pairs_up(row: &Row) -> bool {
@@ -196,6 +159,7 @@ pub fn show(
 
         match tab {
             Tab::Entity(kind) => edit = item_list(ui, view, kind, &shown, reveal, busy),
+            Tab::Layers | Tab::Cameras => edit = record_list(ui, view, tab, &shown, busy),
             // Its rows are every slot at once, so there is nothing to pick between.
             Tab::Banks => {}
             Tab::Course => {
@@ -222,6 +186,11 @@ pub fn show(
             ui.add_enabled_ui(!busy, |ui| {
                 let mut index = 0;
                 while let Some(row) = shown.rows.get(index) {
+                    if !row.heading.is_empty() {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.label(egui::RichText::new(&row.heading).strong());
+                    }
                     match shown.rows.get(index + 1).filter(|next| pairs_up(row) && pairs_up(next)) {
                         Some(next) => {
                             // Peers share a line under the name of what they are together: that on the left, and each
@@ -257,6 +226,13 @@ pub fn show(
                 }
             });
             controls::checkbox(ui, &mut view.panel.hex, "Display as hex");
+            if tab == Tab::Course
+                && controls::checkbox(ui, &mut view.panel.advanced, "Advanced view")
+                    .on_hover_text("All three of the header's graphics sets, of which the game loads the first.")
+                    .changed()
+            {
+                view.panel.dragging = None;
+            }
             if let Some((row, value)) = written {
                 edit = apply(view, &view.panel, &shown, row, value);
             }
@@ -372,6 +348,71 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
     });
     if let Some((item, add)) = picked {
         view.pick(item, add);
+    }
+    edit
+}
+
+/// The records of the Layers or Cameras tab, one line each, with what adds to them and takes from them. They are
+/// not on the canvas, so picking one only shows it here. Returns the edit one of the buttons made.
+fn record_list(ui: &mut Ui, view: &mut LevelView, tab: Tab, shown: &Rows, busy: bool) -> Option<LevelEdit> {
+    let lines = record_lines(view, tab);
+    let current = shown.indices.first().copied();
+    let mut edit = None;
+    let mut picked = None;
+    let title = if tab == Tab::Cameras { "Camera settings" } else { "Entries" };
+    controls::section(ui, title, |ui| {
+        let step = controls::HEIGHT_SM + ui.spacing().item_spacing.y;
+        let t = crate::theme::Tokens::get(ui.ctx());
+        egui::Frame::NONE
+            .fill(t.well)
+            .stroke(egui::Stroke::new(1.0, t.border))
+            .corner_radius(egui::CornerRadius::same(controls::RADIUS))
+            .inner_margin(egui::Margin::same(3))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if lines.is_empty() {
+                    ui.weak("None in this level.");
+                    return;
+                }
+                egui::ScrollArea::vertical().id_salt("record-list").max_height(LIST_ROWS * step).auto_shrink([false, true]).show_rows(
+                    ui,
+                    controls::HEIGHT_SM,
+                    lines.len(),
+                    |ui, range| {
+                        for index in range {
+                            let Some(line) = lines.get(index) else { continue };
+                            if controls::Row::new(line).selected(current == Some(index)).show(ui).clicked() {
+                                picked = Some(index);
+                            }
+                        }
+                    },
+                );
+            });
+        ui.add_enabled_ui(!busy, |ui| {
+            let course = &view.snapshot.course;
+            if tab == Tab::Layers {
+                // The game reads three blocks of these, so each has its own way in.
+                let third = egui::vec2(((ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0).max(0.0), controls::HEIGHT);
+                ui.horizontal_top(|ui| {
+                    for (block, label) in
+                        [(ScreenBlock::Background, "Add BG"), (ScreenBlock::Tileset, "Add Tileset"), (ScreenBlock::Foreground, "Add FG")]
+                    {
+                        if ui.add_sized(third, Button::new(label)).on_hover_text(format!("Adds a {} entry", block.name())).clicked() {
+                            edit = add_screen_edit(course, block);
+                        }
+                    }
+                });
+            } else if ui.add_sized(egui::vec2(ui.available_width(), controls::HEIGHT), Button::new("Add")).clicked() {
+                edit = add_camera_edit(course);
+            }
+            let delete = Button::new("Delete").enabled(!lines.is_empty());
+            if ui.add_sized(egui::vec2(ui.available_width(), controls::HEIGHT), delete).clicked() {
+                edit = delete_record_edit(course, tab, shown);
+            }
+        });
+    });
+    if let Some(index) = picked {
+        view.panel_item(index);
     }
     edit
 }

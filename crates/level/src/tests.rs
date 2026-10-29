@@ -737,3 +737,41 @@ fn camera_settings_are_edited_saved_and_undone() {
     assert!(level.course().cameras.is_empty());
     assert!(level.set_cameras(vec![NsmbLevelCamera::default(); 256], "x").is_err());
 }
+
+#[test]
+fn the_header_and_every_screen_record_are_edited_saved_and_undone() {
+    let mut level = EditableLevel::load(&empty_course(), &[], None).unwrap();
+    let header =
+        NsmbLevelHeader { entrances: [1, 2], settings: 0x21, timer: 300, sound_group: 4, mega_drop_chance: 2, ..level.course().header.clone() };
+    level.set_header(header.clone(), "Edit course").unwrap();
+    // A rotator level: its second tileset record marks the views naming it as rotating with the stage.
+    let tilesets = vec![
+        NsmbLevelScreen { palette_id: 41, ..Default::default() },
+        NsmbLevelScreen { id: 1, screen_id: 0xff00, palette_id: 41, ..Default::default() },
+    ];
+    level.set_screens(ScreenBlock::Tileset, tilesets.clone(), "Edit tileset").unwrap();
+    let backgrounds =
+        vec![NsmbLevelScreen { screen_id: 3, ..Default::default() }, NsmbLevelScreen { id: 1, screen_id: 9, scroll_y: 0x12, ..Default::default() }];
+    level.set_screens(ScreenBlock::Background, backgrounds.clone(), "Edit background").unwrap();
+    assert_eq!(level.tileset_references().background_screen_id, 3, "the first entry is still the one the game loads colours from");
+    let course = level.serialize_course().unwrap();
+    let again = EditableLevel::load(&course, &[], None).unwrap();
+    assert_eq!((&again.course().header, &again.course().tilesets, &again.course().backgrounds), (&header, &tilesets, &backgrounds));
+    assert_eq!(again.serialize_course().unwrap(), course);
+    level.undo().unwrap();
+    level.undo().unwrap();
+    assert!(level.course().tilesets.is_empty());
+    level.undo().unwrap();
+    assert_eq!(level.course().header, NsmbLevelHeader::default());
+    assert!(level.set_screens(ScreenBlock::Foreground, vec![NsmbLevelScreen::default(); 256], "x").is_err());
+    // A layer's graphics and its first record change together, and come back together.
+    let before = level.course().backgrounds.clone();
+    let header = NsmbLevelHeader { background_theme: [7, 0, 0], ..NsmbLevelHeader::default() };
+    let backgrounds = vec![NsmbLevelScreen { screen_id: 7, palette_id: 7, ..Default::default() }];
+    level.set_layer(header.clone(), ScreenBlock::Background, backgrounds.clone(), "Edit course").unwrap();
+    assert_eq!((&level.course().header, &level.course().backgrounds), (&header, &backgrounds));
+    level.undo().unwrap();
+    assert_eq!((&level.course().header, &level.course().backgrounds), (&NsmbLevelHeader::default(), &before));
+    assert!(level.set_layer(header, ScreenBlock::Foreground, vec![NsmbLevelScreen::default(); 256], "x").is_err());
+    assert_eq!(level.course().header, NsmbLevelHeader::default(), "a refused layer edit changes nothing");
+}

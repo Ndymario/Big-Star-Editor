@@ -36,7 +36,7 @@ use crate::zoom_canvas::{self, CanvasInput, upload};
 pub const GRAPHICS_COLUMNS: usize = 32;
 pub const MAP16_COLUMNS: usize = 16;
 
-pub const SLOT_NAMES: [&str; 3] = ["0 — shared", "1 — level", "2 — sub-unit"];
+pub const SLOT_NAMES: [(u8, &str); 3] = [(0, "shared"), (1, "level"), (2, "sub-unit")];
 /// A bitmap the Graphics tab lists: one of the tilesets' graphics, or the background's (0) or foreground's (1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Sheet {
@@ -242,12 +242,12 @@ impl TilesetDoc {
 
     /// The bitmaps the Graphics tab lists: every tileset that has graphics, then the background and foreground's.
     pub fn sheets(&self) -> Vec<(Sheet, String)> {
-        let tilesets = self
-            .tilesets
-            .iter()
-            .enumerate()
-            .filter(|(_, t)| !t.graphics.is_empty())
-            .map(|(i, _)| (Sheet::Tileset(i), format!("Tileset {}", SLOT_NAMES.get(i).copied().unwrap_or_default())));
+        let tilesets = self.tilesets.iter().enumerate().filter(|(_, t)| !t.graphics.is_empty()).map(|(i, _)| {
+            (
+                Sheet::Tileset(i),
+                format!("Tileset {}", SLOT_NAMES.get(i).map(|(n, name)| controls::numbered(i64::from(*n), name, false)).unwrap_or_default()),
+            )
+        });
         let layers = self
             .tilemaps
             .iter()
@@ -788,11 +788,9 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     ui.horizontal_wrapped(|ui| {
         ui.label("Tileset slot");
         let mut slot = doc.slot;
-        controls::drop_down("tileset-slot").selected_text(SLOT_NAMES.get(slot).copied().unwrap_or_default()).show_ui(ui, |ui| {
-            for (i, name) in SLOT_NAMES.iter().enumerate() {
-                ui.choice_value(&mut slot, i, *name);
-            }
-        });
+        if let Some(picked) = controls::numbered_choice("tileset-slot", &SLOT_NAMES).show(ui, i64::try_from(slot).ok()) {
+            slot = usize::from(picked);
+        }
         if slot != doc.slot {
             doc.set_slot(slot);
             view.brushes = [false; 3];
@@ -864,17 +862,10 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
 /// The level tileset, picked by name. A number the game's tables have no room for stays as it is until another is
 /// picked.
 fn tileset_choice(ui: &mut Ui, id: &str, value: &mut u16) {
-    let label = |id: u16| match TILESET_NAMES.get(usize::from(id)) {
-        Some(name) => format!("{id} — {name}"),
-        None => format!("{id} — not listed"),
-    };
-    controls::drop_down(("tileset-choice", id)).width(260.0).truncate().selected_text(label(*value)).show_ui(ui, |ui| {
-        for id in (0u16..).take(TILESET_NAMES.len()) {
-            if ui.choice(*value == id, label(id)).clicked() {
-                *value = id;
-            }
-        }
-    });
+    let choices: Vec<(u16, &str)> = (0u16..).zip(TILESET_NAMES).collect();
+    if let Some(picked) = controls::numbered_choice(("tileset-choice", id), &choices).width(260.0).show(ui, Some(i64::from(*value))) {
+        *value = picked;
+    }
 }
 
 fn entry_fields(
@@ -1595,7 +1586,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                 let filter = view.behavior_search.to_lowercase();
                 egui::ScrollArea::vertical().id_salt("behavior-values").max_height(220.0).show(ui, |ui| {
                     for (value, name) in named.iter().filter(|(_, name)| name.to_lowercase().contains(&filter)) {
-                        if ui.choice(edited.parameter == *value, format!("{value} — {name}")).clicked() {
+                        if ui.choice(edited.parameter == *value, controls::numbered(i64::from(*value), name, false)).clicked() {
                             edited.parameter = *value;
                         }
                     }

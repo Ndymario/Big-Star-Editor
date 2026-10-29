@@ -1,12 +1,14 @@
 use bigstar_core::Error;
-use bigstar_formats::{GlueBlock, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelObject, RgbaImage};
-use bigstar_level::{LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind};
+use bigstar_formats::{GlueBlock, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelHeader, NsmbLevelObject, NsmbLevelScreen, RgbaImage};
+use bigstar_level::{
+    LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind, ScreenBlock,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 pub type RequestId = u64;
 
@@ -360,6 +362,25 @@ pub enum LevelEdit {
     },
     SetTilesetReferences {
         references: LevelTilesetReferences,
+    },
+    /// Replaces the level's header.
+    SetHeader {
+        header: NsmbLevelHeader,
+        name: String,
+    },
+    /// Replaces one block of the level's screen records, which its views name by id.
+    SetScreens {
+        block: ScreenBlock,
+        screens: Vec<NsmbLevelScreen>,
+        name: String,
+    },
+    /// Replaces the level's header and one block of its screen records as one undo step: a layer's graphics with its
+    /// first record's palette and screen.
+    SetLayer {
+        header: NsmbLevelHeader,
+        block: ScreenBlock,
+        screens: Vec<NsmbLevelScreen>,
+        name: String,
     },
     /// Replaces the level's camera settings, which its views name by id.
     SetCameras {

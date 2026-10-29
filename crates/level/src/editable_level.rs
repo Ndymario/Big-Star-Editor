@@ -1,7 +1,8 @@
 use bigstar_core::{CommandHistory, Error, ErrorCode, Result};
 use bigstar_formats::{
-    GlueBlock, NSMB_HEADER_SIZE, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelSprite, NsmbLevelView,
-    NsmbLevelZone, parse_glue_block, parse_nsmb_bgdat_objects, parse_nsmb_level_course, write_glue_block,
+    GlueBlock, NSMB_HEADER_SIZE, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelHeader, NsmbLevelObject, NsmbLevelPath,
+    NsmbLevelScreen, NsmbLevelSprite, NsmbLevelView, NsmbLevelZone, parse_glue_block, parse_nsmb_bgdat_objects, parse_nsmb_level_course,
+    write_glue_block,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,6 +55,35 @@ pub struct LevelEntityInsertions {
     pub progress_paths: Vec<NsmbLevelPath>,
 }
 
+/// The three blocks of screen records a view picks one of each from by id: the background's, the tileset's and the
+/// foreground's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ScreenBlock {
+    Background,
+    Tileset,
+    Foreground,
+}
+
+impl ScreenBlock {
+    pub const ALL: [Self; 3] = [Self::Background, Self::Tileset, Self::Foreground];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Tileset => "tileset",
+            Self::Foreground => "foreground",
+        }
+    }
+
+    pub fn records(self, course: &NsmbLevelCourse) -> &Vec<NsmbLevelScreen> {
+        match self {
+            Self::Background => &course.backgrounds,
+            Self::Tileset => &course.tilesets,
+            Self::Foreground => &course.foregrounds,
+        }
+    }
+}
+
 /// The entity lists whose order is the draw order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ReorderKind {
@@ -68,6 +98,18 @@ pub enum ReorderKind {
 pub struct EditableLevel {
     state: LevelState,
     history: CommandHistory<LevelState>,
+}
+
+/// Where a block's screen records live, once `screens` is known to fit in a level.
+fn screens_field(block: ScreenBlock, screens: &[NsmbLevelScreen]) -> Result<Field<Vec<NsmbLevelScreen>>> {
+    if screens.len() > 255 {
+        return Err(invalid(&format!("a level holds at most 255 {} entries", block.name())));
+    }
+    Ok(match block {
+        ScreenBlock::Background => |s| &mut s.course.backgrounds,
+        ScreenBlock::Tileset => |s| &mut s.course.tilesets,
+        ScreenBlock::Foreground => |s| &mut s.course.foregrounds,
+    })
 }
 
 fn invalid(message: &str) -> Error {
@@ -396,6 +438,29 @@ impl EditableLevel {
         }
         let command = Value::new(&mut self.state, |s| &mut s.course.cameras, cameras, name);
         self.run(Box::new(command))
+    }
+
+    /// Replaces the level's header: its start entrances, settings, timer, graphics and sound group.
+    pub fn set_header(&mut self, header: NsmbLevelHeader, name: &str) -> Result<()> {
+        let command = Value::new(&mut self.state, |s| &mut s.course.header, header, name);
+        self.run(Box::new(command))
+    }
+
+    /// Replaces one block of screen records, which views name by id.
+    pub fn set_screens(&mut self, block: ScreenBlock, screens: Vec<NsmbLevelScreen>, name: &str) -> Result<()> {
+        let command = Value::new(&mut self.state, screens_field(block, &screens)?, screens, name);
+        self.run(Box::new(command))
+    }
+
+    /// Replaces the header and one block of screen records as one undo step: a layer's graphics, which the header
+    /// names, with the palette and screen of its first record.
+    pub fn set_layer(&mut self, header: NsmbLevelHeader, block: ScreenBlock, screens: Vec<NsmbLevelScreen>, name: &str) -> Result<()> {
+        let field = screens_field(block, &screens)?;
+        let commands: Vec<Cmd> = vec![
+            Box::new(Value::new(&mut self.state, |s| &mut s.course.header, header, name)),
+            Box::new(Value::new(&mut self.state, field, screens, name)),
+        ];
+        self.run(Box::new(Composite::new(commands, name)))
     }
 
     pub fn set_object_bank(&mut self, slot: usize, value: u8) -> Result<()> {

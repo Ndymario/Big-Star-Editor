@@ -735,9 +735,123 @@ pub fn hint(ui: &mut Ui, text: &str) -> Response {
     icons::INFO.show(ui, icons::SIZE_SM, t.subtle).on_hover_text(text)
 }
 
+/// A warning sign that says, on hover, what is wrong.
+pub fn warning_hint(ui: &mut Ui, text: &str) -> Response {
+    let t = Tokens::get(ui.ctx());
+    icons::WARNING.show(ui, icons::SIZE_SM, t.warning).on_hover_text(text)
+}
+
 /// A drop-down whose choices the caller draws with [`Choice`]: finish it with `.selected_text(..).show_ui(ui, |ui| ..)`.
 pub fn drop_down(id: impl egui::AsIdSalt) -> egui::ComboBox {
     egui::ComboBox::from_id_salt(id)
+}
+
+/// One reading of a value, so a choice entry and the box beside it never disagree about the base.
+pub fn format_value(value: i64, hex: bool) -> String {
+    match (hex, value < 0) {
+        (false, _) => value.to_string(),
+        (true, false) => format!("0x{value:X}"),
+        (true, true) => format!("-0x{:X}", value.unsigned_abs()),
+    }
+}
+
+/// A number with its name, as every numbered choice shows it: `1 – Castle`.
+pub fn numbered(value: i64, name: &str, hex: bool) -> String {
+    format!("{} – {name}", format_value(value, hex))
+}
+
+/// A number picked by its name, from a drop-down of `choices` that each show as [`numbered`]. A value no choice
+/// names shows as not listed, and none, a selection that disagrees, as a dash. Finish it with [`NumberedChoice::show`].
+pub fn numbered_choice<'a, T, S>(id: impl std::hash::Hash + std::fmt::Debug, choices: &'a [(T, S)]) -> NumberedChoice<'a, T, S> {
+    NumberedChoice { id: egui::Id::new(id), choices, hex: false, width: None, height: None, filter: None }
+}
+
+pub struct NumberedChoice<'a, T, S> {
+    id: egui::Id,
+    choices: &'a [(T, S)],
+    hex: bool,
+    width: Option<f32>,
+    height: Option<f32>,
+    filter: Option<&'a str>,
+}
+
+impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
+    /// Shows the numbers in hexadecimal.
+    pub fn hex(mut self, hex: bool) -> Self {
+        self.hex = hex;
+        self
+    }
+
+    /// How wide the closed drop-down is, its text cut short to fit. It takes the width it is given and no more, so a
+    /// long name cannot widen the panel it sits in.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = Some(width);
+        self
+    }
+
+    /// How tall the open list gets before it scrolls.
+    pub fn height(mut self, height: f32) -> Self {
+        self.height = Some(height);
+        self
+    }
+
+    /// A box above the list that keeps only the choices whose number or name holds what is typed, for a list too long
+    /// to scroll through. `hint` fills the empty box.
+    pub fn filter(mut self, hint: &'a str) -> Self {
+        self.filter = Some(hint);
+        self
+    }
+
+    /// Returns the choice picked, when it is not `current` already.
+    pub fn show(self, ui: &mut Ui, current: Option<i64>) -> Option<T> {
+        let Self { id, choices, hex, width, height, filter } = self;
+        let selected = match current {
+            Some(value) => match choices.iter().find(|(v, _)| (*v).into() == value) {
+                Some((_, name)) => numbered(value, name.as_ref(), hex),
+                None => numbered(value, "not listed", hex),
+            },
+            None => "—".to_owned(),
+        };
+        let mut picked = None;
+        let list = |ui: &mut Ui| {
+            let mut combo = drop_down(id).selected_text(selected);
+            if let Some(width) = width {
+                combo = combo.width(width).truncate();
+            }
+            if let Some(height) = height {
+                combo = combo.height(height);
+            }
+            combo.show_ui(ui, |ui| {
+                let filter_id = id.with("filter");
+                let needle = match filter {
+                    Some(hint) => {
+                        let mut text: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
+                        ui.add(TextField::new(&mut text).hint(hint));
+                        ui.data_mut(|d| d.insert_temp(filter_id, text.clone()));
+                        text.to_lowercase()
+                    }
+                    None => String::new(),
+                };
+                for (value, name) in choices {
+                    let value_i64 = (*value).into();
+                    let entry = numbered(value_i64, name.as_ref(), hex);
+                    if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
+                        continue;
+                    }
+                    if ui.choice(current == Some(value_i64), entry).on_hover_text(name.as_ref()).clicked() && current != Some(value_i64) {
+                        picked = Some(*value);
+                    }
+                }
+            });
+        };
+        match width {
+            Some(width) => {
+                ui.allocate_ui(vec2(width, ui.spacing().interact_size.y), list);
+            }
+            None => list(ui),
+        }
+        picked
+    }
 }
 
 /// A row of tabs over a line, the chosen one underlined; the underline slides to the tab chosen next. Returns whether

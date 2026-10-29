@@ -12,7 +12,7 @@ mod tilemap;
 
 pub use backgrounds::*;
 pub use editable_level::{
-    EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, ReorderKind, SpriteInsertion,
+    EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, ReorderKind, ScreenBlock, SpriteInsertion,
 };
 pub use exchange::*;
 pub use module_data::{

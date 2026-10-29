@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use bigstar_core::{Error, ErrorCode, LittleEndianReader, LittleEndianWriter, Result};
+use bigstar_core::{Error, ErrorCode, LittleEndianReader, Result};
 use bigstar_formats::{
     GlueBlock, GlueValue, NSMB_BGDAT_OBJECT_SIZE, NSMB_HEADER_SIZE, NSMB_LEVEL_BLOCK_COUNT, NSMB_OBJECT_BANK_SLOT_COUNT, NsmbLevelCourse,
-    NsmbLevelObject, NsmbLevelPath, NsmbLevelScreen, fnv1a_32, write_glue_block,
+    NsmbLevelObject, NsmbLevelPath, fnv1a_32, write_glue_block,
 };
 use serde::{Deserialize, Serialize};
 
@@ -120,13 +120,11 @@ fn encode_paths(paths: &[NsmbLevelPath]) -> Result<(Vec<u8>, Vec<u8>)> {
     Ok((headers, nodes))
 }
 
-fn patch_screen_ids(block: &mut Vec<u8>, screen: &NsmbLevelScreen) -> Result<()> {
-    if block.len() < 20 {
-        block.resize(20, 0);
+/// Writes `records` over a block, unless the block already starts with them and holds as many whole records.
+fn keep_or_replace(block: &mut Vec<u8>, records: Vec<u8>, size: usize) {
+    if block.len() / size != records.len() / size || !block.starts_with(&records) {
+        *block = records;
     }
-    let mut writer = LittleEndianWriter::new(block);
-    writer.u16(2, screen.screen_id)?;
-    writer.u16(4, screen.palette_id)
 }
 
 impl LevelState {
@@ -207,28 +205,25 @@ impl LevelState {
                     .ok_or_else(|| error(ErrorCode::InvalidArgument, "custom stage-object IDs exceed the level format"))?;
             }
             let glue = glue_with_registration(&self.glue, &registration, true);
-            let tail = write_glue_block(&glue)?;
-            let h = &self.course.header;
-            let mut header = vec![h.entrances[0], h.entrances[1]];
-            put16(&mut header, h.settings);
-            put16(&mut header, h.timer);
-            for value in h.background_theme {
-                put16(&mut header, value);
-            }
-            for value in h.tileset_theme {
-                put16(&mut header, value);
-            }
-            for value in h.foreground_theme {
-                put16(&mut header, value);
-            }
-            for value in [h.events, h.sound_group, h.sprite_priority, h.mega_drop_chance] {
-                put16(&mut header, value);
-            }
-            header.extend_from_slice(&tail);
-            blocks[0] = header;
+            blocks[0] = write_glue_block(&glue)?;
+        } else {
+            // Glue that cannot be read is saved back exactly as it was.
+            blocks[0] = blocks[0].split_off(NSMB_HEADER_SIZE);
         }
-        // The camera settings are written from what the level holds; bytes after the last whole record are kept while
-        // the records before them are unchanged.
+        let h = &self.course.header;
+        let mut header = vec![h.entrances[0], h.entrances[1]];
+        put16(&mut header, h.settings);
+        put16(&mut header, h.timer);
+        for value in h.background_theme.iter().chain(&h.tileset_theme).chain(&h.foreground_theme) {
+            put16(&mut header, *value);
+        }
+        for value in [h.events, h.sound_group, h.sprite_priority, h.mega_drop_chance] {
+            put16(&mut header, value);
+        }
+        header.append(&mut blocks[0]);
+        blocks[0] = header;
+        // The camera settings and the screen records are written from what the level holds; bytes after the last whole
+        // record are kept while the records before them are unchanged.
         let mut cameras = Vec::with_capacity(self.course.cameras.len() * 24);
         for c in &self.course.cameras {
             for value in [c.top_offset, c.bottom_offset, c.top_offset_special, c.bottom_offset_special] {
@@ -238,17 +233,28 @@ impl LevelState {
             put16(&mut cameras, c.scroll_height);
             put32(&mut cameras, c.unknown);
         }
-        if blocks[1].len() / 24 != self.course.cameras.len() || !blocks[1].starts_with(&cameras) {
-            blocks[1] = cameras;
-        }
-        if let Some(screen) = self.course.backgrounds.first() {
-            patch_screen_ids(&mut blocks[2], screen)?;
-        }
-        if let Some(screen) = self.course.tilesets.first() {
-            patch_screen_ids(&mut blocks[3], screen)?;
-        }
-        if let Some(screen) = self.course.foregrounds.first() {
-            patch_screen_ids(&mut blocks[4], screen)?;
+        keep_or_replace(&mut blocks[1], cameras, 24);
+        let [_, _, backgrounds, tilesets, foregrounds, ..] = &mut blocks;
+        for (block, screens) in [(backgrounds, &self.course.backgrounds), (tilesets, &self.course.tilesets), (foregrounds, &self.course.foregrounds)]
+        {
+            let mut records = Vec::with_capacity(screens.len() * 20);
+            for screen in screens {
+                for value in [
+                    screen.id,
+                    screen.screen_id,
+                    screen.palette_id,
+                    screen.parallax_x,
+                    screen.parallax_y,
+                    screen.scroll_x,
+                    screen.scroll_y,
+                    screen.vertical_offset,
+                    screen.unused_10,
+                    screen.unused_12,
+                ] {
+                    put16(&mut records, value);
+                }
+            }
+            keep_or_replace(block, records, 20);
         }
 
         blocks[5].clear();
