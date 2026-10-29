@@ -222,10 +222,11 @@ pub fn show(
             });
             controls::checkbox(ui, &mut view.panel.hex, "Display as hex");
             controls::checkbox(ui, &mut view.panel.raw, "Raw input").on_hover_text("Every drop-down as the number it writes.");
-            if tab == Tab::Course
-                && controls::checkbox(ui, &mut view.panel.advanced, "Advanced mode")
-                    .on_hover_text("All three of the header's graphics sets, of which the game loads the first.")
-                    .changed()
+            if controls::checkbox(ui, &mut view.panel.advanced, "Advanced mode")
+                .on_hover_text(
+                    "Fields the game ignores or that are best left alone: all three of the header's graphics sets, of which the game loads the first, and a tileset entry's raw rotation, scroll speeds and unused fields.",
+                )
+                .changed()
             {
                 view.panel.dragging = None;
             }

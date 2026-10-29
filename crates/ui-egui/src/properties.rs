@@ -53,7 +53,9 @@ pub struct PanelState {
     /// Two or more items of the tab's kind, when the canvas selected several.
     pub multi: Vec<usize>,
     pub hex: bool,
-    /// The Course tab shows all three of the header's graphics sets, rather than the first with its palettes.
+    /// The panel shows fields the game ignores or that are best left alone: the Course tab all three of the header's
+    /// graphics sets, rather than the first with its palettes, and a tileset entry its raw rotation, scroll speeds and
+    /// unused fields.
     pub advanced: bool,
     /// Every drop-down a spin box of the number it writes, for values it does not name.
     pub raw: bool,
@@ -892,9 +894,11 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     // The same field as a number, for what the checkbox cannot say: two of Nintendo's levels hold their
                     // tileset's number here, as a background record holds its screen's, though the game loads no
                     // tileset from it.
-                    full(rows, "Rotates (raw)", Some(i64::from(record.screen_id)), 0, 65535);
-                    if let Some(row) = rows.last_mut() {
-                        row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
+                    if panel.advanced {
+                        full(rows, "Rotates (raw)", Some(i64::from(record.screen_id)), 0, 65535);
+                        if let Some(row) = rows.last_mut() {
+                            row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
+                        }
                     }
                 } else {
                     let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
@@ -949,6 +953,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Unused 0x10", record.unused_10, ""),
                     ("Unused 0x12", record.unused_12, ""),
                 ] {
+                    // A tileset scrolls with the level, so only the advanced mode shows its scroll speeds and unused fields.
+                    if block == ScreenBlock::Tileset && !panel.advanced && label != "Vertical offset" {
+                        continue;
+                    }
                     full(rows, label, Some(i64::from(value)), 0, 65535);
                     if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || [UNUSED_06, UNUSED_08].contains(&note)) {
                         row.note = note.to_owned();
@@ -1383,26 +1391,23 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             let mut screens = block.records(course).clone();
             let record = screens.get_mut(at)?;
             let name = format!("Edit {} entry", block.name());
-            // A tileset record has its rotation field twice, as a checkbox and as a number, so its later rows sit one down.
-            let changed = match (block, changed) {
-                (ScreenBlock::Tileset, 1) => {
+            // A tileset record has its rotation field twice, as a checkbox and as a number, and outside the advanced
+            // mode it hides some rows, so each row finds its field by its label.
+            let field = match rows.rows.get(changed)?.label.as_str() {
+                "Rotates" => {
                     record.screen_id = if value != 0 { ROTATING_TILESET } else { 0 };
                     return Some(LevelEdit::SetScreens { block, screens, name });
                 }
-                (ScreenBlock::Tileset, row) if row >= 2 => row - 1,
-                (_, row) => row,
-            };
-            let field = match changed {
-                0 => &mut record.id,
-                1 => &mut record.screen_id,
-                2 => &mut record.palette_id,
-                3 => &mut record.unused_06,
-                4 => &mut record.unused_08,
-                5 => &mut record.scroll_x,
-                6 => &mut record.scroll_y,
-                7 => &mut record.vertical_offset,
-                8 => &mut record.unused_10,
-                9 => &mut record.unused_12,
+                "ID" => &mut record.id,
+                "Screen" | "Rotates (raw)" => &mut record.screen_id,
+                "Palette" => &mut record.palette_id,
+                "Unused 0x06" => &mut record.unused_06,
+                "Unused 0x08" => &mut record.unused_08,
+                "Scroll speed X" => &mut record.scroll_x,
+                "Scroll speed Y" => &mut record.scroll_y,
+                "Vertical offset" => &mut record.vertical_offset,
+                "Unused 0x10" => &mut record.unused_10,
+                "Unused 0x12" => &mut record.unused_12,
                 _ => return None,
             };
             *field = narrow(value, *field);
@@ -1927,6 +1932,13 @@ mod tests {
         assert_eq!(record_lines(&view, Tab::Layers), ["Background 0 · screen 41", "Tileset 0", "Tileset 1 · rotates", "Foreground 0 · no screen"]);
         // The second tileset record: the rotator, which view 0 names and view 1 falls back past.
         view.panel_item(2);
+        // Without the advanced mode a tileset entry hides its raw rotation, scroll speeds and unused fields.
+        let shown = rows(&view, &view.panel, None);
+        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["ID", "Rotates", "Palette", "Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 3, 5) else { panic!() };
+        assert_eq!(screens[1].vertical_offset, 5);
+        view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
         assert!(shown.rows[0].note.contains("Used by views 0."), "{}", shown.rows[0].note);
         assert_eq!((shown.rows[1].label.as_str(), &shown.rows[1].editor, shown.rows[1].value), ("Rotates", &Editor::Boolean, Some(1)));
