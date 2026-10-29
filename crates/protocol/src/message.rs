@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 20;
+pub const PROTOCOL_VERSION: u32 = 21;
 
 pub type RequestId = u64;
 
@@ -128,6 +128,12 @@ pub enum Request {
     SetActiveModule {
         module: String,
     },
+    /// Mirrors the ROM, as the active module and those after it see it, into `virtual-rom/` in the project, archives
+    /// as folders of their members; a file changed there is inserted into the active module. Answers with the
+    /// refreshed `Filesystem` listing. Only a host on the same machine as its frontend offers it.
+    ExposeVirtualRom,
+    /// Stops mirroring. The folder is left as it is.
+    HideVirtualRom,
     /// The clean ROM the open project is built from, a `.nds` under the root, or anywhere by its full path when the host
     /// is the desktop app's own. It is kept in the project's settings,
     /// not in `ncpatcher.yaml`, and refused unless it is New Super Mario Bros.
@@ -506,6 +512,8 @@ pub struct FilesystemListing {
     pub active_variant: String,
     /// Why there is no plan, when NCPatcher could not be asked.
     pub error: Option<String>,
+    /// The folder the ROM is mirrored into, while it is.
+    pub virtual_rom: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]

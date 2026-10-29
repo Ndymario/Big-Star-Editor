@@ -3,7 +3,9 @@
 //!
 //! It answers a subcommand by printing a file the test wrote next to the project:
 //! `<project>/fake-ncpatcher/<command>.json`, where `<command>` is `config-dump`, `modules-dump`, `files-plan` or
-//! `rom-files`. A command with no file behind it exits 3, which is what NCPatcher does when it cannot make sense of
+//! `rom-files`; a plan scoped with `--from-module` or `--below-module` reads `files-plan-from.json` or
+//! `files-plan-below.json`, and with neither staged, refuses the option as an NCPatcher before 2.1 does. A command
+//! with no file behind it exits 3, which is what NCPatcher does when it cannot make sense of
 //! the project -- so "the editor was not given an answer" is a case the tests can set up as easily as any other.
 //! The `--rom` a command was given is recorded in `<project>/fake-ncpatcher/rom.txt`, and removed when none was.
 
@@ -39,7 +41,15 @@ fn main() -> ExitCode {
     } else if has("modules") && has("dump") {
         "modules-dump"
     } else if has("files") && has("plan") {
-        "files-plan"
+        let scope = [("--from-module", "files-plan-from"), ("--below-module", "files-plan-below")].into_iter().find(|(flag, _)| has(flag));
+        match scope {
+            Some((flag, command)) if !std::path::Path::new(&format!("{project}/fake-ncpatcher/{command}.json")).is_file() => {
+                eprintln!("The following argument was not expected: {flag}");
+                return ExitCode::from(2);
+            }
+            Some((_, command)) => command,
+            None => "files-plan",
+        }
     } else if has("rom") && has("files") {
         "rom-files"
     } else {

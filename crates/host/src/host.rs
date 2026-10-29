@@ -28,8 +28,10 @@ use crate::watch::ProjectWatcher;
 use crate::workspace::Workspace;
 
 mod build;
+mod layers;
 mod rom;
 mod uploads;
+mod virtual_rom;
 
 use rom::Backing;
 
@@ -116,12 +118,26 @@ struct OpenProject {
     /// The level list in force, and why the project's own was passed over when it was; dropped when files change.
     level_list: Option<(Arc<LevelCatalog>, Option<String>)>,
     graphics: Option<ProjectGraphics>,
+    /// What lies beneath each module, read from the clean ROM; dropped with the plan.
+    layers: layers::Layers,
+    /// The ROM mirrored into `virtual-rom/`, while it is.
+    virtual_rom: Option<virtual_rom::VirtualRom>,
     /// Level files the host itself wrote, which the watcher is not to treat as someone else's change.
     own_writes: std::collections::HashSet<PathBuf>,
     /// Where an edited ROM banner goes, from NCPatcher's configuration; asked with the rest of it.
     banner: BannerTarget,
     _watcher: Option<ProjectWatcher>,
     backing: Backing,
+}
+
+/// What writing one file into a module came to.
+enum Written {
+    /// Into this module.
+    Wrote(String),
+    /// The layers below give the same bytes, so this module's copy went to the trash.
+    Dropped(String),
+    /// The layers below give the same bytes, and the module had no copy to drop.
+    Unchanged,
 }
 
 /// What NCPatcher's configuration says about the ROM banner.
@@ -180,6 +196,11 @@ impl Host {
     /// as a clean ROM kept outside the workspace.
     pub fn for_desktop(root: &Path) -> Result<Self> {
         Ok(Self::start(Shared::new(Some(Workspace::new(root)?), true, HostOptions::default())))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_desktop_with_options(root: &Path, options: HostOptions) -> Result<Self> {
+        Ok(Self::start(Shared::new(Some(Workspace::new(root)?), true, options)))
     }
 
     /// The desktop app's host for a ROM picked on this machine: no workspace, and ROMs opened and saved by their path.
@@ -320,6 +341,8 @@ impl Shared {
             Request::ProjectSettings => self.project_settings(),
             Request::SetActiveVariant { variant } => self.ncpatcher_only().and_then(|()| self.set_active_variant(variant)),
             Request::SetActiveModule { module } => self.ncpatcher_only().and_then(|()| self.set_active_module(module)),
+            Request::ExposeVirtualRom => self.ncpatcher_only().and_then(|()| self.expose_virtual_rom()),
+            Request::HideVirtualRom => self.ncpatcher_only().and_then(|()| self.hide_virtual_rom()),
             Request::SetCleanRom { path } => self.ncpatcher_only().and_then(|()| self.set_clean_rom(&path)),
             Request::ProjectData => self.project_data(),
             Request::LevelBytes { level } => self.level_bytes(level),
@@ -441,6 +464,8 @@ impl Shared {
             filesystem: None,
             level_list: None,
             graphics: None,
+            layers: Default::default(),
+            virtual_rom: None,
             own_writes: std::collections::HashSet::new(),
             _watcher: None,
             backing: Backing::NcPatcher,
@@ -452,6 +477,7 @@ impl Shared {
         // A watcher that cannot start costs live refreshes, not the project.
         opening._watcher =
             ProjectWatcher::start(&directory, Arc::downgrade(self)).map_err(|e| log::warn!("not watching {}: {e}", directory.display())).ok();
+        self.resume_virtual_rom(&mut opening);
         state.open = Some(opening);
         drop(state);
         if had_project {
@@ -615,28 +641,69 @@ impl Shared {
         // Into the module that supplies each file, or the active one, as every other file edit; never the ROM.
         self.ensure_filesystem(open)?;
         let variant = open.settings.active_variant.clone();
-        let target = |path: &str| -> Result<PathBuf> {
-            let module = Self::target_module(open, path).map_err(|_| invalid("choose an active module in the Filesystem dock before saving"))?;
-            module_file_target(&module, &variant, path, &[])
+        let module = |open: &OpenProject, path: &str| {
+            Self::target_module(open, path).map_err(|_| invalid("choose an active module in the Filesystem dock before saving"))
         };
-        let targets = [(target(&course_address)?, course), (target(&bgdat_address)?, bgdat)];
-        back_up(&directory, "levels", &targets)?;
-        write_all_or_none(&targets)?;
+        let (course_module, bgdat_module) = (module(open, &course_address)?, module(open, &bgdat_address)?);
+        // A file that reads as the layers below already give it is no edit to keep. The lower pair is read the way a
+        // level is opened and written back out, so that a serializer spelling the same level differently is no edit
+        // either.
+        let lower_course = self.below_bytes(open, &course_module.key, &course_address);
+        let lower_bgdat = self.below_bytes(open, &bgdat_module.key, &bgdat_address);
+        let normalized = lower_course.as_deref().zip(lower_bgdat.as_deref()).and_then(|(course, bgdat)| {
+            let level = EditableLevel::load(course, bgdat, Some(&open.catalog)).ok()?;
+            Some((level.serialize_course().ok()?, level.serialize_bgdat().ok()?))
+        });
+        let (lower_course, lower_bgdat) = match normalized {
+            Some((course, bgdat)) => (Some(course), Some(bgdat)),
+            None => (lower_course, lower_bgdat),
+        };
+        let mut writes = Vec::new();
+        let mut drops = Vec::new();
+        for (module, address, bytes, lower) in
+            [(&course_module, &course_address, course, lower_course), (&bgdat_module, &bgdat_address, bgdat, lower_bgdat)]
+        {
+            let target = module_file_target(module, &variant, address, &[])?;
+            if lower.as_deref() != Some(bytes.as_slice()) {
+                writes.push((target, bytes));
+            } else if target.is_file() {
+                drops.push((module.clone(), address.clone(), target));
+            }
+        }
+        let backed_up: Vec<(PathBuf, Vec<u8>)> =
+            writes.iter().cloned().chain(drops.iter().map(|(_, _, target)| (target.clone(), Vec::new()))).collect();
+        back_up(&directory, "levels", &backed_up)?;
+        write_all_or_none(&writes)?;
+        for (module, address, _) in &drops {
+            layers::drop_override(open, module, address)?;
+        }
         prune_patch_backups(&directory, keep);
-        open.own_writes.extend(targets.iter().map(|(path, _)| path.clone()));
-        // The files are pending now: the dock and the plan reads go through are asked again.
-        open.filesystem = None;
-        open.patcher = None;
-        self.ensure_patcher(open);
-        let plan = open.patcher.as_ref().and_then(|(_, plan)| plan.clone());
-        if let Some(graphics) = open.graphics.as_mut() {
-            graphics.set_plan(plan);
+        let changed = !backed_up.is_empty();
+        if changed {
+            open.own_writes.extend(backed_up.into_iter().map(|(path, _)| path));
+            // The files are pending now: the dock and the plan reads go through are asked again.
+            open.filesystem = None;
+            open.patcher = None;
+            open.layers = Default::default();
+            self.ensure_patcher(open);
+            let plan = open.patcher.as_ref().and_then(|(_, plan)| plan.clone());
+            if let Some(graphics) = open.graphics.as_mut() {
+                graphics.set_plan(plan);
+            }
+            self.refresh_virtual_rom(open, [course_address, bgdat_address].into(), &[]);
         }
         let session = open.levels.get_mut(&id).ok_or_else(unknown_level)?;
         session.level.mark_clean();
         session.revision += 1;
         let (snapshot, event) = snapshot_and_event(id, session);
-        let message = format!("Saved {} to its module; run NCPatcher to build it into the ROM", session.title);
+        let mut message = match (writes.is_empty(), drops.is_empty()) {
+            (true, true) => format!("{} matches the layers below; nothing saved", session.title),
+            (false, _) => format!("Saved {} to its module; run NCPatcher to build it into the ROM", session.title),
+            (true, false) => format!("{} matches the layers below again", session.title),
+        };
+        for (module, address, _) in &drops {
+            message.push_str(&format!("; moved module {}'s copy of {address} to {TRASH_DIR}", module.key));
+        }
         drop(state);
         self.emit(event);
         self.log(LogLevel::Info, message);
@@ -675,7 +742,7 @@ impl Shared {
         }
         let modules = client.dump_modules(&open.directory).map_err(|e| errors.push(e.message)).ok();
         let plan = if config.is_some() {
-            client.plan_files(&open.directory, &open.settings.active_variant).map_err(|e| errors.push(e.message)).ok()
+            client.plan_files(&open.directory, &open.settings.active_variant, None).map_err(|e| errors.push(e.message)).ok()
         } else {
             None
         };
@@ -1011,6 +1078,7 @@ impl Shared {
             active_module,
             active_variant: open.settings.active_variant.clone(),
             error: open.settings.patcher_error.clone(),
+            virtual_rom: virtual_rom::listing_path(open),
         })))
     }
 
@@ -1073,27 +1141,36 @@ impl Shared {
         let mut failure = None;
         for file in files {
             let known = open.filesystem.as_ref().is_some_and(|view| view.find(&file.path).is_some());
-            match Self::write_one(known, open, &file.path, &file.bytes) {
-                Ok(module) => written.push((file.path.clone(), module)),
+            match self.write_one(known, open, &file.path, &file.bytes) {
+                Ok(outcome) => written.push((file.path.clone(), outcome)),
                 Err(error) => {
                     failure = Some(error);
                     break;
                 }
             }
         }
-        if !written.is_empty() {
+        let changed = written.iter().any(|(_, outcome)| !matches!(outcome, Written::Unchanged));
+        if changed {
             // What the dock shows and what graphics read from have both changed.
             open.filesystem = None;
             open.patcher = None;
+            open.layers = Default::default();
             open.graphics = None;
+            self.ensure_patcher(open);
+            self.refresh_virtual_rom(open, written.iter().map(|(path, _)| path.clone()).collect(), &[]);
         }
         drop(state);
-        if !written.is_empty() {
+        if changed {
             let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
             self.emit(Event::GraphicsChanged { generation });
-            for (path, module) in &written {
-                self.log(LogLevel::Info, format!("Wrote {path} to module {module}"));
-            }
+        }
+        for (path, outcome) in &written {
+            let message = match outcome {
+                Written::Wrote(module) => format!("Wrote {path} to module {module}"),
+                Written::Dropped(module) => format!("{path} matches the layers below; moved module {module}'s copy to {TRASH_DIR}"),
+                Written::Unchanged => format!("{path} matches the layers below; nothing written"),
+            };
+            self.log(LogLevel::Info, message);
         }
         match failure {
             Some(error) => Err(error),
@@ -1101,17 +1178,25 @@ impl Shared {
         }
     }
 
-    fn write_one(known: bool, open: &OpenProject, path: &str, bytes: &[u8]) -> Result<String> {
+    /// Writes a file into the module that supplies it, or the active one, unless the layers below that module already
+    /// give the same bytes: then the module's copy, if it has one, goes, and otherwise nothing is written.
+    fn write_one(&self, known: bool, open: &mut OpenProject, path: &str, bytes: &[u8]) -> Result<Written> {
         if !known && !path.starts_with("z_new/") {
             return Err(invalid("New NitroFS files must be under z_new/."));
         }
         let module = Self::target_module(open, path)?;
         let target = module_file_target(&module, &open.settings.active_variant, path, &[])?;
+        if self.matches_below(open, &module.key, path, bytes) {
+            return Ok(match layers::drop_override(open, &module, path)? {
+                Some(_) => Written::Dropped(module.key),
+                None => Written::Unchanged,
+            });
+        }
         if let Some(parent) = target.parent() {
             std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create module target directory"))?;
         }
         write_file_atomically(&target, bytes)?;
-        Ok(module.key)
+        Ok(Written::Wrote(module.key))
     }
 
     fn tileset_resources(&self, level: LevelId) -> Result<Response> {
@@ -1147,15 +1232,13 @@ impl Shared {
             return Err(invalid("only a file a module supplies can be removed"));
         }
         let source = if entry.source.is_absolute() { entry.source.clone() } else { open.directory.join(&entry.source) };
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let trash = open.directory.join(TRASH_DIR).join(stamp.to_string()).join(path.replace('!', "/"));
-        if let Some(parent) = trash.parent() {
-            std::fs::create_dir_all(parent).map_err(|_| Error::new(ErrorCode::IoError, "could not create the trash directory"))?;
-        }
-        std::fs::rename(&source, &trash).map_err(|_| Error::new(ErrorCode::IoError, "could not move the module file to the trash"))?;
+        layers::move_to_trash(&open.directory, path, &source)?;
         open.filesystem = None;
         open.patcher = None;
+        open.layers = Default::default();
         open.graphics = None;
+        self.ensure_patcher(open);
+        self.refresh_virtual_rom(open, [path.to_owned()].into(), &[]);
         drop(state);
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.emit(Event::GraphicsChanged { generation });
@@ -1229,12 +1312,14 @@ impl Shared {
         open.settings.active_variant = variant;
         open.levels.clear();
         open.patcher = None;
+        open.layers = Default::default();
         open.filesystem = None;
         open.graphics = None;
         save_settings(&open.directory, &open.settings)?;
         self.ensure_patcher(open);
         // Each variant builds to a ROM of its own.
         let changed = select_rom(open)?;
+        self.restart_virtual_rom(open);
         let announce = self.project_changed(open, changed);
         let settings = open.settings.clone();
         drop(state);
@@ -1269,8 +1354,12 @@ impl Shared {
     fn set_active_module(&self, module: String) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        let switched = open.settings.active_module != module;
         open.settings.active_module = module;
         save_settings(&open.directory, &open.settings)?;
+        if switched {
+            self.restart_virtual_rom(open);
+        }
         let settings = open.settings.clone();
         drop(state);
         self.emit(Event::SettingsChanged(settings.clone()));
@@ -1312,11 +1401,13 @@ impl Shared {
         save_settings(&open.directory, &settings)?;
         open.settings = settings;
         open.patcher = None;
+        open.layers = Default::default();
         open.filesystem = None;
         open.graphics = None;
         open.banner = BannerTarget::Unreported;
         self.ensure_patcher(open);
         let changed = select_rom(open)?;
+        self.restart_virtual_rom(open);
         let announce = self.project_changed(open, changed);
         let settings = open.settings.clone();
         drop(state);
@@ -1335,6 +1426,10 @@ impl Shared {
     pub(crate) fn files_changed(&self, paths: Vec<PathBuf>) {
         let mut state = lock(&self.state);
         let Some(open) = state.open.as_mut() else { return };
+        // The ROM's folder is no file of the project's: an edit there is inserted into the active module, and that is
+        // the change the rest of the editor hears about.
+        let (mirrored, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|path| virtual_rom::in_virtual_rom(&open.directory, path));
+        let inserted = self.virtual_rom_changed(open, &mirrored);
         let written = std::mem::take(&mut open.own_writes);
         let own = |path: &Path| {
             written.contains(path)
@@ -1342,12 +1437,16 @@ impl Shared {
                     relative.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with(".big-star"))
                 })
         };
-        let stale = paths.iter().any(|path| !own(path));
-        if stale {
+        let external: Vec<PathBuf> = paths.iter().filter(|path| !own(path)).cloned().collect();
+        let stale = inserted || !external.is_empty();
+        if !external.is_empty() {
             open.graphics = None;
             open.filesystem = None;
             open.patcher = None;
             open.level_list = None;
+            open.layers = Default::default();
+            self.ensure_patcher(open);
+            self.refresh_virtual_rom(open, Default::default(), &external);
         }
         drop(state);
         let mut relative: Vec<String> =

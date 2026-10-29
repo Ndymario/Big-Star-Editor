@@ -18,4 +18,8 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("Paste", "Pegar"),
     ("Language", "Idioma"),
     ("World", "Mundo"),
+    ("Expose as folder", "Exponer como carpeta"),
+    ("Open folder", "Abrir carpeta"),
+    ("Stop exposing", "Dejar de exponer"),
+    ("Files changed in this folder go into the active module:", "Los archivos cambiados en esta carpeta van al módulo activo:"),
 ];

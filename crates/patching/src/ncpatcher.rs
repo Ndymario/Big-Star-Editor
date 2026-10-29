@@ -676,6 +676,30 @@ pub struct BuildRequest {
 /// Where the client's own log lines go. The default forwards to the `log` crate.
 pub type LogSink = Arc<dyn Fn(log::Level, &str) + Send + Sync>;
 
+/// Which part of the module stack a plan answers for; see [`NCPatcherClient::plan_files`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlanScope {
+    /// The module with this key and every module after it in `modules.enabled`, without the project's own files.
+    FromModule(String),
+    /// As `FromModule`, and without the layer of that module a write would land in.
+    BelowModule(String),
+}
+
+impl PlanScope {
+    fn flag(&self) -> &'static str {
+        match self {
+            Self::FromModule(_) => "--from-module",
+            Self::BelowModule(_) => "--below-module",
+        }
+    }
+
+    pub fn module(&self) -> &str {
+        match self {
+            Self::FromModule(key) | Self::BelowModule(key) => key,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct NCPatcherClient {
     executable: PathBuf,
@@ -836,15 +860,27 @@ impl NCPatcherClient {
     }
 
     /// Asks what a build would place, without building. The answer is the same document a build writes, with
-    /// `planned` set and prospective ids for the files it would append.
-    pub fn plan_files(&self, project_dir: &Path, variant: &str) -> Result<FileManifest> {
+    /// `planned` set and prospective ids for the files it would append. A `scope` asks for the ROM as one module and
+    /// those after it see it, or as the layers beneath that module's own write layer supply it.
+    pub fn plan_files(&self, project_dir: &Path, variant: &str, scope: Option<&PlanScope>) -> Result<FileManifest> {
         let mut arguments = self.project_arguments(project_dir, Path::new(""));
         if !variant.is_empty() {
             arguments.push("--variant".to_owned());
             arguments.push(variant.to_owned());
         }
         arguments.extend(["files", "plan", "--json"].map(str::to_owned));
+        if let Some(scope) = scope {
+            arguments.push(scope.flag().to_owned());
+            arguments.push(scope.module().to_owned());
+        }
         let run = self.capture(project_dir, arguments)?;
+        // An NCPatcher from before scoped plans refuses the option as a usage error, and names it.
+        if let Some(scope) = scope.filter(|scope| run.exit_code == 2 && run.stderr_text.contains(scope.flag())) {
+            return Err(Error::new(
+                ErrorCode::Unsupported,
+                format!("this NCPatcher does not know `files plan {}`; update NCPatcher to 2.1 or later", scope.flag()),
+            ));
+        }
         if run.exit_code != 0 {
             return Err(Self::stage_error(&run));
         }

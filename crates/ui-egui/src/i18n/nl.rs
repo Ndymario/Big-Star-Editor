@@ -18,4 +18,8 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("Paste", "Plakken"),
     ("Language", "Taal"),
     ("World", "Wereld"),
+    ("Expose as folder", "Als map tonen"),
+    ("Open folder", "Map openen"),
+    ("Stop exposing", "Stoppen met tonen"),
+    ("Files changed in this folder go into the active module:", "Bestanden die in deze map veranderen gaan naar de actieve module:"),
 ];

@@ -905,7 +905,7 @@ impl BigStarApp {
             controls::tabs(ui, "left", &mut self.left, &[(Left::Levels, "Levels"), (Left::Palette, "Palette"), (Left::Filesystem, filesystem)]);
             ui.add_space(2.0);
             match self.left {
-                Left::Filesystem => self.files.show(ui, session, &*self.services),
+                Left::Filesystem => self.files.show(ui, session, &*self.services, self.language),
                 Left::Levels => {
                     if let Some(path) = level_list::show(ui, session, self.workspace.previewed(), self.language) {
                         // A level row hands the person over to its file.

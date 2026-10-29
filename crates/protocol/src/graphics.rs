@@ -177,4 +177,6 @@ pub struct ProjectSettings {
     pub autosave_minutes: u32,
     /// How many level-save and patch-import backups of each kind are kept (1 to 100).
     pub backups_kept: u32,
+    /// Whether the ROM is mirrored into `virtual-rom/`, which resumes when the project opens again.
+    pub virtual_rom: bool,
 }

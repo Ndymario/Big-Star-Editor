@@ -183,6 +183,7 @@ fn graphics_messages_survive_the_wire() {
         active_module: "coop".into(),
         active_variant: "en".into(),
         error: None,
+        virtual_rom: Some("/projects/coop/virtual-rom".into()),
     };
     server_round_trip(ServerFrame::Response { id: 10, result: Ok(Response::Filesystem(Box::new(listing))) });
     server_round_trip(ServerFrame::Response { id: 11, result: Ok(Response::Files(vec![entry])) });

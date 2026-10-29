@@ -220,6 +220,7 @@ impl Shared {
         open.rom_file = Some(built_rom.to_path_buf());
         open.levels.clear();
         open.patcher = None;
+        open.layers = Default::default();
         open.filesystem = None;
         open.graphics = None;
         open.banner = BannerTarget::Unreported;

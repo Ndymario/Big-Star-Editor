@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bigstar_core::ErrorCode;
-use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, ProcessCancel, ProcessRequest, run_process};
+use bigstar_patching::{BuildObserver, BuildRequest, NCPatcherClient, PlanScope, ProcessCancel, ProcessRequest, run_process};
 
 fn self_path() -> PathBuf {
     std::env::current_exe().unwrap()
@@ -173,9 +173,17 @@ fn client_drives_the_fake_ncpatcher() {
 
     // A plan that does not say it is one is refused; one that does is read.
     project.stage("files-plan", r#"{"schema":"ncpatcher.files/1","count":0,"files":[]}"#);
-    assert_eq!(client.plan_files(&project.0, "fr").unwrap_err().code, ErrorCode::ParseError);
+    assert_eq!(client.plan_files(&project.0, "fr", None).unwrap_err().code, ErrorCode::ParseError);
     project.stage("files-plan", r#"{"schema":"ncpatcher.files/1","planned":true,"count":0,"files":[]}"#);
-    assert!(client.plan_files(&project.0, "fr").unwrap().planned);
+    assert!(client.plan_files(&project.0, "fr", None).unwrap().planned);
+
+    // A scoped plan is answered from its own document; an NCPatcher that does not know the option says to update.
+    let below = PlanScope::BelowModule("coop".into());
+    let error = client.plan_files(&project.0, "fr", Some(&below)).unwrap_err();
+    assert_eq!(error.code, ErrorCode::Unsupported);
+    assert!(error.message.contains("update NCPatcher"), "{}", error.message);
+    project.stage("files-plan-below", r#"{"schema":"ncpatcher.files/1","planned":true,"count":1,"files":[{"id":1,"path":"a.bin","size":4}]}"#);
+    assert_eq!(client.plan_files(&project.0, "fr", Some(&below)).unwrap().files.len(), 1);
 
     // `build` is not something the fake answers: it exits 2 and writes no result, which reads as a failed run.
     std::fs::write(project.0.join("ncpatcher.yaml"), "version: 2\n").unwrap();

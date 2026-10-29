@@ -25,6 +25,10 @@ pub const KEYS: &[&str] = &[
     "Paste",
     "Language",
     "World",
+    "Expose as folder",
+    "Open folder",
+    "Stop exposing",
+    "Files changed in this folder go into the active module:",
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

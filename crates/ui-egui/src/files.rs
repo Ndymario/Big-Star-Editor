@@ -11,6 +11,7 @@ use bigstar_protocol::{FileEntry, FileIcon, FileStatus, FilesystemListing};
 use egui::{RichText, Ui};
 
 use crate::editors::{EditorKind, ROM_USER_METADATA_ID, classify, editor_name};
+use crate::i18n::Language;
 use crate::services::Services;
 use crate::session::{FileRead, Session};
 
@@ -267,6 +268,8 @@ pub struct FilesDock {
     waiting_targets: Option<(String, Vec<u8>)>,
     /// Scroll the selected row into view next frame.
     reveal: bool,
+    /// Why the ROM's folder could not be shown in the file manager.
+    folder_error: Option<String>,
 }
 
 impl Default for FilesDock {
@@ -279,6 +282,7 @@ impl Default for FilesDock {
             prompt: None,
             waiting_targets: None,
             reveal: false,
+            folder_error: None,
         }
     }
 }
@@ -341,7 +345,7 @@ impl FilesDock {
         opened
     }
 
-    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services) {
+    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services, language: Language) {
         session.refresh_filesystem_once();
         let Some(listing) = session.filesystem.clone() else {
             ui.add(controls::Spinner::new());
@@ -368,6 +372,25 @@ impl FilesDock {
                         }
                     });
                 });
+                // The ROM as a folder other programs can edit, which lives on the host's disk: offered only when that is
+                // this machine's.
+                if session.local_files {
+                    match &listing.virtual_rom {
+                        None => {
+                            if Button::new(language.tr("Expose as folder")).enabled(!listing.modules.is_empty()).show(ui).clicked() {
+                                session.expose_virtual_rom();
+                            }
+                        }
+                        Some(folder) => {
+                            if Button::new(language.tr("Open folder")).show(ui).clicked() {
+                                self.folder_error = services.open_folder(folder).err();
+                            }
+                            if Button::new(language.tr("Stop exposing")).show(ui).clicked() {
+                                session.hide_virtual_rom();
+                            }
+                        }
+                    }
+                }
             }
             ui.menu_button("Columns", |ui| {
                 for (column, name) in COLUMNS {
@@ -391,6 +414,12 @@ impl FilesDock {
         }
         if let Some(error) = &listing.error {
             ui.weak(format!("NCPatcher: {error}"));
+        }
+        if let Some(folder) = &listing.virtual_rom {
+            ui.weak(format!("{} {folder}", language.tr("Files changed in this folder go into the active module:")));
+        }
+        if let Some(error) = &self.folder_error {
+            ui.weak(error.as_str());
         }
         ui.separator();
         let tree = build_tree(&listing.entries);

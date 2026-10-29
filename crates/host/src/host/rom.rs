@@ -168,6 +168,8 @@ impl Shared {
             filesystem: None,
             level_list: None,
             graphics: None,
+            layers: Default::default(),
+            virtual_rom: None,
             own_writes: std::collections::HashSet::new(),
             _watcher: None,
             backing: Backing::Rom(doc),

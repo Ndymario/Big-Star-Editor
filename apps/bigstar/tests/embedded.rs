@@ -149,9 +149,10 @@ fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
     harness.get_by_label("Save").click();
     until(&mut harness, "the save", |app| app.session().and_then(|s| s.level()).is_some_and(|v| !v.snapshot.dirty));
 
-    // Into the module, for NCPatcher to build into the ROM.
-    let saved = std::fs::read(project.join("modules/mine/nitrofs/course/A01_1.bin")).unwrap();
+    // Into the module, for NCPatcher to build into the ROM: only the bgdat, which holds the objects; the course is as
+    // the clean ROM has it, so the module gets no copy.
+    assert!(!project.join("modules/mine/nitrofs/course/A01_1.bin").exists());
     let saved_bgdat = std::fs::read(project.join("modules/mine/nitrofs/course/A01_1_bgdat.bin")).unwrap();
-    let reloaded = EditableLevel::load(&saved, &saved_bgdat, None).unwrap();
+    let reloaded = EditableLevel::load(&course, &saved_bgdat, None).unwrap();
     assert_eq!(reloaded.objects()[0].x, 4);
 }

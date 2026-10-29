@@ -134,6 +134,19 @@ fn same_members(built: &[RomArchiveMember], planned: &[RomArchiveMember]) -> boo
     built.len() == planned.len() && built.iter().zip(planned).all(|(a, b)| a.id == b.id && same_member(a, b))
 }
 
+/// A ROM address spelled the way a module tree holds it: a loose file as it is, and an archive member (`a/b.narc!c/d`)
+/// under the archive-folder spelling (`a/b_narc/c/d`) NCPatcher sweeps back into the container, for any extension a
+/// game gives its archives. Spelling it is unambiguous, because the address already said which part is the archive.
+pub fn archive_folder_path(rom_path: &str) -> Result<String> {
+    let Some((archive, member)) = rom_path.split_once('!') else { return Ok(rom_path.to_owned()) };
+    let dot = archive.rfind('.');
+    let slash = archive.rfind('/');
+    let Some(dot) = dot.filter(|&dot| dot + 1 < archive.len() && slash.is_none_or(|slash| dot > slash)) else {
+        return Err(Error::new(ErrorCode::InvalidArgument, format!("archive destination has no extension to spell as a folder: {archive}")));
+    };
+    Ok(format!("{}_{}/{member}", archive.get(..dot).unwrap_or_default(), archive.get(dot + 1..).unwrap_or_default()))
+}
+
 /// Where in a module's tree a ROM path is written, which is the one direction no build document answers. Archive
 /// addresses (`a.narc!b/c`) become the archive-folder spelling (`a_narc/b/c`) NCPatcher sweeps back into the
 /// container.
@@ -143,17 +156,7 @@ pub fn module_file_target(module: &ModuleInfo, variant: &str, rom_path: &str, ma
         Some(tree) if module.enabled => tree,
         _ => return Err(invalid("target module has no enabled NitroFS tree".to_owned())),
     };
-    let mut relative = rom_path.to_owned();
-    if let Some((archive, member)) = rom_path.split_once('!') {
-        // `a/b.narc!c/d` is written as `a/b_narc/c/d`, and the same for any other extension a game gives its
-        // archives. Writing is unambiguous, because the address already said so.
-        let dot = archive.rfind('.');
-        let slash = archive.rfind('/');
-        let Some(dot) = dot.filter(|&dot| dot + 1 < archive.len() && slash.is_none_or(|slash| dot > slash)) else {
-            return Err(invalid(format!("archive destination has no extension to spell as a folder: {archive}")));
-        };
-        relative = format!("{}_{}/{member}", archive.get(..dot).unwrap_or_default(), archive.get(dot + 1..).unwrap_or_default());
-    }
+    let mut relative = archive_folder_path(rom_path)?;
     if !tree.into.is_empty() {
         let prefix = format!("{}/", tree.into);
         let Some(rest) = relative.strip_prefix(&prefix) else {

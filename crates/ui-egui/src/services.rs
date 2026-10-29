@@ -98,6 +98,11 @@ pub trait Services {
     fn take_picked_file(&self) -> Option<Result<(String, Vec<u8>), String>> {
         None
     }
+
+    /// Shows a folder on this machine in the system's file manager.
+    fn open_folder(&self, _path: &str) -> Result<(), String> {
+        Err("this build cannot open folders".to_owned())
+    }
 }
 
 /// Files a test hands the frontend, and the ones it saved.

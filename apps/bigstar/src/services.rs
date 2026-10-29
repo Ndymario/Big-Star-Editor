@@ -88,6 +88,17 @@ impl Services for NativeServices {
             .map(|path| path.to_string_lossy().into_owned())
     }
 
+    fn open_folder(&self, path: &str) -> Result<(), String> {
+        let opener = if cfg!(target_os = "macos") {
+            "open"
+        } else if cfg!(windows) {
+            "explorer"
+        } else {
+            "xdg-open"
+        };
+        std::process::Command::new(opener).arg(path).spawn().map(drop).map_err(|e| format!("could not run {opener}: {e}"))
+    }
+
     fn pick_folder(&self) -> Option<String> {
         rfd::FileDialog::new().set_title("Workspace folder").pick_folder().map(|path| path.to_string_lossy().into_owned())
     }

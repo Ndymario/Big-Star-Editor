@@ -539,6 +539,16 @@ impl Session {
         self.request(Request::SetActiveModule { module: module.to_owned() }, Pending::Settings);
     }
 
+    /// Mirrors the ROM into the project's `virtual-rom/` folder, from which changed files go into the active module.
+    pub fn expose_virtual_rom(&mut self) {
+        self.request(Request::ExposeVirtualRom, Pending::Filesystem);
+    }
+
+    /// Stops mirroring the ROM; the folder stays.
+    pub fn hide_virtual_rom(&mut self) {
+        self.request(Request::HideVirtualRom, Pending::Filesystem);
+    }
+
     /// Lists an archive's members the first time it is opened.
     pub fn list_archive(&mut self, path: &str) {
         if self.listed_archives.insert(path.to_owned()) {

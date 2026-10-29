@@ -23,8 +23,8 @@ pub mod test_support;
 
 pub use effective_filesystem::{EffectiveFilesystem, RomAddress, split_rom_address};
 pub use filesystem_view::{
-    FilesystemEntry, FilesystemStatus, FilesystemView, FilesystemViewRequest, ModuleVariantMapping, build_filesystem_view, filesystem_status_name,
-    module_file_target,
+    FilesystemEntry, FilesystemStatus, FilesystemView, FilesystemViewRequest, ModuleVariantMapping, archive_folder_path, build_filesystem_view,
+    filesystem_status_name, module_file_target,
 };
 pub use graphics_resources::{
     ActorResourceFiles, BackgroundAnimationStep, BackgroundAnimator, BackgroundFrames, BackgroundResourceFiles, LevelGraphicsResources,

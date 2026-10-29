@@ -700,6 +700,7 @@ impl DemoConnection {
             active_module: "demo".to_owned(),
             active_variant: String::new(),
             error: None,
+            virtual_rom: None,
         })
     }
 

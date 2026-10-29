@@ -709,3 +709,22 @@ fn lua_catalogs_can_cross_threads() {
     check::<LuaActorCatalog>();
     check::<TileOverlayCatalog>();
 }
+
+#[test]
+fn archive_members_are_spelled_as_the_folders_a_module_holds_them_in() {
+    assert_eq!(archive_folder_path("course/A01_1.bin").unwrap(), "course/A01_1.bin");
+    assert_eq!(archive_folder_path("dat/Dat_Field.narc!J01_1.bin").unwrap(), "dat/Dat_Field_narc/J01_1.bin");
+    assert_eq!(archive_folder_path("a.b/menu.carc!sub/c.bin").unwrap(), "a.b/menu_carc/sub/c.bin");
+    // The spelling is the one a module's tree uses, so a write lands where the sweep reads it back.
+    let module = bigstar_patching::ModuleInfo {
+        key: "m".to_owned(),
+        enabled: true,
+        nitrofs: Some(bigstar_patching::ModuleNitroFs { dir: std::path::PathBuf::from("/m"), ..Default::default() }),
+        ..Default::default()
+    };
+    let address = "dat/Dat_Field.narc!J01_1.bin";
+    assert_eq!(module_file_target(&module, "", address, &[]).unwrap(), std::path::Path::new("/m").join(archive_folder_path(address).unwrap()));
+    // No extension, or one that is really a directory's, has no folder spelling.
+    assert!(archive_folder_path("dat/archive!x.bin").is_err());
+    assert!(archive_folder_path("dat.d/archive!x.bin").is_err());
+}

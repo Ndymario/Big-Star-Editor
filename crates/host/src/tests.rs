@@ -392,12 +392,97 @@ fn edits_undo_redo_and_save() {
 
     let (saved, _) = edited(session.handle(Request::SaveLevel { level: opened.level }).unwrap());
     assert_eq!((saved.revision, saved.dirty), (5, false));
-    // Into the module, never the ROM: the ROM's copy is what it was.
+    // Into the module, never the ROM: the ROM's copy is what it was. Only the file the edit changed is written; the
+    // course still reads as the ROM has it, so the module is given no copy of it.
     let module = fixture.root.path().join("proj/modules/mine/nitrofs");
-    assert!(module.join("course/A01_1.bin").is_file());
+    assert!(!module.join("course/A01_1.bin").exists());
     assert!(module.join("course/A01_1_bgdat.bin").is_file());
     let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "course/A01_1.bin".into() }).unwrap() else { panic!() };
     assert_eq!(bytes, level_files().0, "without NCPatcher's plan, reads are the ROM's");
+}
+
+/// The files under a directory, relative to it, sorted.
+fn files_under(dir: &std::path::Path) -> Vec<String> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else {
+                out.push(path.strip_prefix(root).unwrap().to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, dir, &mut out);
+    out.sort();
+    out
+}
+
+fn logged(session: &mut HostSession) -> Vec<String> {
+    session.drain_events().into_iter().filter_map(|event| if let Event::Log { message, .. } = event { Some(message) } else { None }).collect()
+}
+
+#[test]
+fn a_level_that_reads_as_the_layers_below_is_not_saved() {
+    let (fixture, mut session) = with_module("host-save-unchanged");
+    let module = fixture.root.path().join("proj/modules/mine/nitrofs");
+    let opened = open_level(&mut session, "A01_1");
+    session.drain_events();
+    let (saved, _) = edited(session.handle(Request::SaveLevel { level: opened.level }).unwrap());
+    assert!(!saved.dirty);
+    assert!(files_under(&module).is_empty(), "{:?}", files_under(&module));
+    assert!(logged(&mut session).iter().any(|line| line.contains("matches the layers below; nothing saved")));
+
+    // An edit undone is no edit either.
+    let moved = move_first_object(&mut session, &saved, 40);
+    let (undone, _) = edited(session.handle(Request::UndoLevel { level: moved.level }).unwrap());
+    session.handle(Request::SaveLevel { level: undone.level }).unwrap();
+    assert!(files_under(&module).is_empty(), "{:?}", files_under(&module));
+}
+
+#[test]
+fn a_level_edited_back_drops_the_modules_copy() {
+    let (fixture, mut session) = with_module("host-save-revert");
+    let project = fixture.root.path().join("proj");
+    let module = project.join("modules/mine/nitrofs");
+    let opened = open_level(&mut session, "A01_1");
+    let moved = move_first_object(&mut session, &opened, 40);
+    let (saved, _) = edited(session.handle(Request::SaveLevel { level: moved.level }).unwrap());
+    assert_eq!(files_under(&module), ["course/A01_1_bgdat.bin"]);
+
+    // Put back where it was and saved again, the module's copy is only a copy of what lies below, so it goes -- to
+    // the trash, where it can be fetched back by hand.
+    let back = move_first_object(&mut session, &saved, opened.objects[0].x);
+    session.drain_events();
+    session.handle(Request::SaveLevel { level: back.level }).unwrap();
+    assert!(files_under(&module).is_empty(), "{:?}", files_under(&module));
+    let trashed = files_under(&project.join(super::host::TRASH_DIR));
+    assert_eq!(trashed.len(), 1);
+    assert!(trashed[0].ends_with("/course/A01_1_bgdat.bin"), "{trashed:?}");
+    assert!(logged(&mut session).iter().any(|line| line.contains("moved module mine's copy of course/A01_1_bgdat.bin")));
+    // What reads now is the ROM's own level again.
+    assert_eq!(open_level(&mut session, "A01_1").objects[0].x, opened.objects[0].x);
+}
+
+#[test]
+fn a_file_written_as_the_layers_below_have_it_is_not_kept() {
+    let (fixture, mut session) = with_module("host-write-unchanged");
+    let module = fixture.root.path().join("proj/modules/mine/nitrofs");
+    let (course, _) = level_files();
+    session.drain_events();
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: course.clone() }).unwrap();
+    assert!(files_under(&module).is_empty());
+    let lines = logged(&mut session);
+    assert!(lines.iter().any(|line| line == "course/A01_1.bin matches the layers below; nothing written"), "{lines:?}");
+
+    // Written differently, then back: the second write drops the first.
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: vec![1, 2, 3] }).unwrap();
+    assert_eq!(files_under(&module), ["course/A01_1.bin"]);
+    session.drain_events();
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: course }).unwrap();
+    assert!(files_under(&module).is_empty());
+    assert!(logged(&mut session).iter().any(|line| line.contains("moved module mine's copy to")));
 }
 
 #[test]
@@ -814,8 +899,11 @@ fn download_play_areas_are_read_from_their_archive() {
     assert_eq!(opened.objects.len(), 2);
     let moved = move_first_object(&mut session, &opened, 12);
     session.handle(Request::SaveLevel { level: moved.level }).unwrap();
-    // A member is saved beside its archive, for the next build to sweep back into the container.
-    assert!(fixture.root.path().join("proj/modules/mine/nitrofs/ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin").is_file());
+    // A member is saved beside its archive, for the next build to sweep back into the container. Objects are in the
+    // bgdat; the course is as the ROM has it, so it is not copied.
+    let archive = fixture.root.path().join("proj/modules/mine/nitrofs/ARCHIVE/Dat_Field_narc/Dat/Field");
+    assert!(archive.join("J01_1_bgdat.bin").is_file());
+    assert!(!archive.join("J01_1.bin").exists());
     assert_eq!(session.handle(Request::OpenLevel { area: "J01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(session.handle(Request::OpenLevel { area: "nope".into() }).unwrap_err().code, ErrorCode::NotFound);
 }
@@ -1156,6 +1244,21 @@ cp "$rom" "$out"
 /// with the documents given, the plan built from `planned` (path, id, module source) entries.
 #[cfg(unix)]
 fn with_plan(label: &str, planned: &[(&str, i64, &str)]) -> (Fixture, HostSession) {
+    with_plans(label, planned, &Scoped::default())
+}
+
+/// What a script NCPatcher answers a scoped plan with: `files plan --below-module` and `--from-module`, each refused
+/// as by an NCPatcher that does not know the option when absent. `desktop` opens the project in the desktop app's own
+/// host.
+#[derive(Default)]
+struct Scoped<'a> {
+    below: Option<&'a str>,
+    from: Option<&'a str>,
+    desktop: bool,
+}
+
+#[cfg(unix)]
+fn with_plans(label: &str, planned: &[(&str, i64, &str)], scoped: &Scoped) -> (Fixture, HostSession) {
     use std::os::unix::fs::PermissionsExt;
     let (fixture, _) = Fixture::with_project(label);
     let project = fixture.root.path().join("proj");
@@ -1177,15 +1280,27 @@ fn with_plan(label: &str, planned: &[(&str, i64, &str)]) -> (Fixture, HostSessio
     for (name, text) in [("config", config.to_owned()), ("modules", modules), ("plan", plan)] {
         write_bytes(&answers.join(format!("{name}.json")), text.as_bytes());
     }
+    for (name, text) in [("plan-below", scoped.below), ("plan-from", scoped.from)] {
+        if let Some(text) = text {
+            write_bytes(&answers.join(format!("{name}.json")), text.as_bytes());
+        }
+    }
     let script = fixture.root.path().join("ncpatcher.sh");
     let text = format!(
-        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in config|modules|plan) exec cat '{}/'\"$a\".json;; esac; done\nexit 3\n",
+        "#!/bin/sh\nd='{}'\ns=''\nfor a in \"$@\"; do case \"$a\" in --below-module) s=-below;; --from-module) s=-from;; esac; done\n\
+         for a in \"$@\"; do case \"$a\" in config|modules) exec cat \"$d/$a.json\";; \
+         plan) [ -f \"$d/plan$s.json\" ] || {{ echo \"The following argument was not expected: --${{s#-}}-module\" >&2; exit 2; }}; exec cat \"$d/plan$s.json\";; \
+         esac; done\nexit 3\n",
         answers.display()
     );
     write_bytes(&script, text.as_bytes());
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
     let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
-    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+    let host = match scoped.desktop {
+        true => Host::for_desktop_with_options(fixture.root.path(), options).unwrap(),
+        false => Host::with_options(fixture.root.path(), options).unwrap(),
+    };
+    let mut session = host.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     (fixture, session)
 }
@@ -1763,4 +1878,184 @@ fn real_levels_load_the_banks_their_sprites_need() {
     let shipped: Vec<_> = missing.iter().filter(|(course, _)| !course.starts_with("course/J")).collect();
     assert!(shipped.is_empty(), "{shipped:?}");
     assert!(missing.iter().any(|(course, _)| course == "course/J06_1.bin"), "the unused grassland level is missing some");
+}
+
+/// The project with module `mine`, opened by a desktop host whose NCPatcher is nowhere to be found.
+fn mirrored(label: &str) -> (Fixture, HostSession) {
+    let (fixture, _) = with_module(label);
+    let options = crate::HostOptions { ncpatcher: fixture.root.path().join("no-ncpatcher"), ..crate::HostOptions::default() };
+    let mut session = Host::for_desktop_with_options(fixture.root.path(), options).unwrap().session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    (fixture, session)
+}
+
+fn expose(session: &mut HostSession) -> bigstar_protocol::FilesystemListing {
+    match session.handle(Request::ExposeVirtualRom).unwrap() {
+        Response::Filesystem(listing) => *listing,
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Tells the host what the watcher would, without waiting for it.
+fn changed(session: &HostSession, paths: &[&std::path::Path]) {
+    session.shared().files_changed(paths.iter().map(|path| path.to_path_buf()).collect());
+}
+
+#[test]
+fn the_rom_is_exposed_as_a_folder_with_archives_unpacked() {
+    let (fixture, mut session) = mirrored("host-vrom-expose");
+    let folder = fixture.root.path().join("proj/virtual-rom");
+    let exposed = expose(&mut session);
+    assert_eq!(exposed.virtual_rom, Some(folder.canonicalize().unwrap().display().to_string()));
+    assert_eq!(
+        files_under(&folder),
+        [
+            "ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin",
+            "ARCHIVE/Dat_Field_narc/Dat/Field/J01_1_bgdat.bin",
+            "course/A01_1.bin",
+            "course/A01_1_bgdat.bin"
+        ]
+    );
+    let (course, bgdat) = level_files();
+    assert_eq!(std::fs::read(folder.join("course/A01_1.bin")).unwrap(), course);
+    assert_eq!(std::fs::read(folder.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1_bgdat.bin")).unwrap(), bgdat);
+
+    // The project remembers it, and exposes the folder again when it next opens.
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    assert!(listing(&mut session).virtual_rom.is_some());
+
+    // Stopping leaves the folder as it is.
+    let Response::Filesystem(hidden) = session.handle(Request::HideVirtualRom).unwrap() else { panic!() };
+    assert_eq!(hidden.virtual_rom, None);
+    assert_eq!(files_under(&folder).len(), 4);
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    assert_eq!(listing(&mut session).virtual_rom, None);
+}
+
+#[test]
+fn a_file_edited_in_the_folder_goes_into_the_active_module() {
+    let (fixture, mut session) = mirrored("host-vrom-edit");
+    let project = fixture.root.path().join("proj");
+    let (folder, module) = (project.join("virtual-rom"), project.join("modules/mine/nitrofs"));
+    expose(&mut session);
+    session.drain_events();
+
+    let course = folder.join("course/A01_1.bin");
+    write_bytes(&course, &[1, 2, 3]);
+    changed(&session, &[&course]);
+    assert_eq!(std::fs::read(module.join("course/A01_1.bin")).unwrap(), [1, 2, 3]);
+    let lines = logged(&mut session);
+    assert!(lines.iter().any(|line| line == "Inserted course/A01_1.bin into module mine"), "{lines:?}");
+    // Reads go through the module now, as a build would.
+    let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "course/A01_1.bin".into() }).unwrap() else { panic!() };
+    assert_eq!(bytes, level_files().0, "without NCPatcher's plan, reads are the ROM's");
+
+    // An archive member goes in beside its archive, as a module holds it.
+    let member = folder.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin");
+    write_bytes(&member, &[4]);
+    changed(&session, &[&member]);
+    assert_eq!(std::fs::read(module.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin")).unwrap(), [4]);
+
+    // Put back as the ROM has it, the module's copy is only a copy, and goes to the trash.
+    write_bytes(&course, &level_files().0);
+    changed(&session, &[&course]);
+    assert!(!module.join("course/A01_1.bin").exists());
+    let trashed = files_under(&project.join(super::host::TRASH_DIR));
+    assert!(trashed.iter().any(|path| path.ends_with("/course/A01_1.bin")), "{trashed:?}");
+    assert!(logged(&mut session).iter().any(|line| line.contains("course/A01_1.bin matches the layers below; moved module mine's copy")));
+    assert_eq!(std::fs::read(&course).unwrap(), level_files().0);
+
+    // A report of the same bytes again is the host's own write, and inserts nothing.
+    changed(&session, &[&member]);
+    assert!(!logged(&mut session).iter().any(|line| line.starts_with("Inserted")));
+}
+
+#[test]
+fn a_file_deleted_from_the_folder_comes_back() {
+    let (fixture, mut session) = mirrored("host-vrom-delete");
+    let project = fixture.root.path().join("proj");
+    let folder = project.join("virtual-rom");
+    expose(&mut session);
+    let bgdat = folder.join("course/A01_1_bgdat.bin");
+    std::fs::remove_file(&bgdat).unwrap();
+    changed(&session, &[&bgdat]);
+    assert_eq!(std::fs::read(&bgdat).unwrap(), level_files().1);
+    assert!(files_under(&project.join("modules/mine/nitrofs")).is_empty(), "deleting removes nothing from the module");
+}
+
+#[test]
+fn only_new_files_under_z_new_are_inserted_from_the_folder() {
+    let (fixture, mut session) = mirrored("host-vrom-new");
+    let project = fixture.root.path().join("proj");
+    let (folder, module) = (project.join("virtual-rom"), project.join("modules/mine/nitrofs"));
+    expose(&mut session);
+    session.drain_events();
+    let stray = folder.join("elsewhere/new.bin");
+    write_bytes(&stray, &[1]);
+    changed(&session, &[&stray]);
+    assert!(files_under(&module).is_empty());
+    assert!(logged(&mut session).iter().any(|line| line.contains("only new files under z_new/ are inserted")));
+
+    let added = folder.join("z_new/new.bin");
+    write_bytes(&added, &[7]);
+    changed(&session, &[&added]);
+    assert_eq!(std::fs::read(module.join("z_new/new.bin")).unwrap(), [7]);
+}
+
+#[test]
+fn a_module_write_reaches_the_folder() {
+    let (fixture, mut session) = mirrored("host-vrom-refresh");
+    let project = fixture.root.path().join("proj");
+    let folder = project.join("virtual-rom");
+    expose(&mut session);
+    session.handle(Request::WriteFile { path: "course/A01_1_bgdat.bin".into(), bytes: vec![5, 6] }).unwrap();
+    assert_eq!(std::fs::read(folder.join("course/A01_1_bgdat.bin")).unwrap(), [5, 6]);
+    // A level saved into the module reaches it too.
+    let opened = open_level(&mut session, "J01_1@Dat_Field");
+    let moved = move_first_object(&mut session, &opened, 12);
+    session.handle(Request::SaveLevel { level: moved.level }).unwrap();
+    let saved = std::fs::read(project.join("modules/mine/nitrofs/ARCHIVE/Dat_Field_narc/Dat/Field/J01_1_bgdat.bin")).unwrap();
+    assert_eq!(std::fs::read(folder.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1_bgdat.bin")).unwrap(), saved);
+
+    // An edit made in the folder while the editor was closed goes in when the project opens again.
+    session.handle(Request::CloseProject).unwrap();
+    write_bytes(&folder.join("course/A01_1.bin"), &[8]);
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    assert_eq!(std::fs::read(project.join("modules/mine/nitrofs/course/A01_1.bin")).unwrap(), [8]);
+}
+
+#[test]
+fn the_folder_is_only_for_a_project_on_the_desktop_hosts_machine() {
+    let (_fixture, mut session) = with_module("host-vrom-served");
+    let error = session.handle(Request::ExposeVirtualRom).unwrap_err();
+    assert!(error.message.contains("desktop app's own host"), "{}", error.message);
+    let (_fixture, mut session, _) = with_rom("host-vrom-rom");
+    assert_eq!(session.handle(Request::ExposeVirtualRom).unwrap_err().code, ErrorCode::InvalidArgument);
+}
+
+/// What lies below a module that supplies a file is NCPatcher's `--below-module` answer, and the folder reads the
+/// ROM through its `--from-module` one.
+#[cfg(unix)]
+#[test]
+fn ncpatcher_says_what_lies_below_and_what_the_folder_shows() {
+    let sources = [("course/A01_1.bin", 0, "modules/mine/nitrofs/course/A01_1.bin"), ("course/A01_1_bgdat.bin", 1, "elsewhere/bgdat.bin")];
+    let below = r#"{"schema":"ncpatcher.files/1","planned":true,"count":0,"files":[]}"#;
+    let from = r#"{"schema":"ncpatcher.files/1","planned":true,"count":1,"files":[{"id":1,"path":"course/A01_1_bgdat.bin","size":2,"action":"modified","source":"elsewhere/bgdat.bin","module":"mine"}]}"#;
+    let (fixture, mut session) = with_plans("host-below-plan", &sources, &Scoped { below: Some(below), from: Some(from), desktop: true });
+    let project = fixture.root.path().join("proj");
+    let module = project.join("modules/mine/nitrofs");
+    write_bytes(&module.join("course/A01_1.bin"), &[1, 2, 3]);
+    write_bytes(&project.join("elsewhere/bgdat.bin"), &[9, 9]);
+    listing(&mut session);
+
+    // Module `mine` supplies the course, so whether the ROM's own bytes are an edit is NCPatcher's to say: below
+    // `mine` there is nothing but the clean ROM, so they are not, and the copy goes.
+    session.handle(Request::WriteFile { path: "course/A01_1.bin".into(), bytes: level_files().0 }).unwrap();
+    assert!(!module.join("course/A01_1.bin").exists());
+
+    // The folder shows what the plan from `mine` down reads.
+    expose(&mut session);
+    assert_eq!(std::fs::read(project.join("virtual-rom/course/A01_1_bgdat.bin")).unwrap(), [9, 9]);
 }

@@ -25,6 +25,8 @@ struct Stored {
     autosave_minutes: u32,
     #[serde(default = "default_backups_kept")]
     backups_kept: u32,
+    #[serde(default)]
+    virtual_rom: bool,
 }
 
 pub(crate) const DEFAULT_AUTOSAVE_MINUTES: u32 = 1;
@@ -51,6 +53,7 @@ pub(crate) fn load_settings(directory: &Path) -> ProjectSettings {
         clean_rom: String::new(),
         autosave_minutes: default_autosave_minutes(),
         backups_kept: default_backups_kept(),
+        virtual_rom: false,
     });
     ProjectSettings {
         active_variant: stored.active_variant,
@@ -59,6 +62,7 @@ pub(crate) fn load_settings(directory: &Path) -> ProjectSettings {
         clean_rom: stored.clean_rom,
         autosave_minutes: stored.autosave_minutes.clamp(1, 60),
         backups_kept: stored.backups_kept.clamp(1, 100),
+        virtual_rom: stored.virtual_rom,
         ..Default::default()
     }
 }
@@ -71,6 +75,7 @@ pub(crate) fn save_settings(directory: &Path, settings: &ProjectSettings) -> Res
         clean_rom: settings.clean_rom.clone(),
         autosave_minutes: settings.autosave_minutes,
         backups_kept: settings.backups_kept,
+        virtual_rom: settings.virtual_rom,
     };
     let text = serde_json::to_string_pretty(&stored).map_err(|e| Error::new(ErrorCode::InvalidArgument, e.to_string()))?;
     write_text_file_atomically(&path(directory), &format!("{text}\n"))
