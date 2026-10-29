@@ -12,6 +12,7 @@ use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
 use crate::files::{FilesDock, OpenRequest};
 use crate::i18n::Language;
 use crate::level_view::CanvasOptions;
+use crate::motion;
 use crate::picker::{self, PickerState};
 use crate::services::{ROM_EXTENSIONS, Services, is_rom_name, rom_extension};
 use crate::session::Session;
@@ -110,6 +111,8 @@ pub struct BigStarApp {
     system: Option<egui::Theme>,
     /// The palette the style was last set from; `None` before the first frame.
     styled: Option<Tokens>,
+    /// The change to the palette now in effect, under way or done; `None` before the first frame.
+    fade: Option<Fade>,
     /// The Preferences window's choices while it is open.
     pub(crate) preferences: Option<Preferences>,
     /// Whether the About window is open.
@@ -134,6 +137,13 @@ pub struct BigStarApp {
     awaiting_upload: bool,
     /// Level-data value cells being typed in.
     data_drafts: level_data::Drafts,
+}
+
+/// From one palette to another, over [`motion::SLOW`] from `start`.
+struct Fade {
+    from: Tokens,
+    to: Tokens,
+    start: f64,
 }
 
 /// Where the interface language is kept.
@@ -189,6 +199,7 @@ impl BigStarApp {
             accent: None,
             system: None,
             styled: None,
+            fade: None,
             preferences: None,
             about: false,
             about_icon: None,
@@ -279,10 +290,22 @@ impl BigStarApp {
             Some(preferences) => preferences.theme.tokens(preferences.showing_dark, self.accent),
             None => self.theme.tokens(self.theme.is_dark(self.system), self.accent),
         };
-        if self.styled.as_ref() != Some(&tokens) {
-            crate::theme::apply(ctx, &tokens);
-            self.styled = Some(tokens);
+        // The first palette is taken at once; a later one fades in from what is on screen, even halfway through a fade.
+        let now = ctx.input(|i| i.time);
+        let fade = match self.fade.take() {
+            Some(fade) if fade.to == tokens => fade,
+            _ => Fade { from: self.styled.clone().unwrap_or_else(|| tokens.clone()), to: tokens, start: now },
+        };
+        let t = ((now - fade.start) as f32 / motion::SLOW).clamp(0.0, 1.0);
+        if t < 1.0 {
+            ctx.request_repaint();
         }
+        let shown = fade.from.mix(&fade.to, egui::emath::easing::cubic_in_out(t));
+        if self.styled.as_ref() != Some(&shown) {
+            crate::theme::apply(ctx, &shown);
+            self.styled = Some(shown);
+        }
+        self.fade = Some(fade);
     }
 
     pub fn session(&self) -> Option<&Session> {

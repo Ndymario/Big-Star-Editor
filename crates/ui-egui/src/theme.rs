@@ -387,6 +387,35 @@ impl Tokens {
         ctx.data(|data| data.get_temp::<Arc<Tokens>>(egui::Id::NULL)).unwrap_or_else(|| Arc::new(default_family().dark.clone()))
     }
 
+    /// The palette `t` of the way from this one to `to`, each colour mixed; past halfway it is in `to`'s mode.
+    pub fn mix(&self, to: &Tokens, t: f32) -> Tokens {
+        let mix = |a, b| crate::motion::mix(a, b, t);
+        Tokens {
+            dark: if t < 0.5 { self.dark } else { to.dark },
+            base: mix(self.base, to.base),
+            surface: mix(self.surface, to.surface),
+            surface_raised: mix(self.surface_raised, to.surface_raised),
+            well: mix(self.well, to.well),
+            overlay: mix(self.overlay, to.overlay),
+            foreground: mix(self.foreground, to.foreground),
+            muted: mix(self.muted, to.muted),
+            subtle: mix(self.subtle, to.subtle),
+            inverted: mix(self.inverted, to.inverted),
+            primary: mix(self.primary, to.primary),
+            primary_hover: mix(self.primary_hover, to.primary_hover),
+            primary_subtle: mix(self.primary_subtle, to.primary_subtle),
+            primary_text: mix(self.primary_text, to.primary_text),
+            border: mix(self.border, to.border),
+            border_strong: mix(self.border_strong, to.border_strong),
+            ring: mix(self.ring, to.ring),
+            success: mix(self.success, to.success),
+            warning: mix(self.warning, to.warning),
+            warning_subtle: mix(self.warning_subtle, to.warning_subtle),
+            danger: mix(self.danger, to.danger),
+            danger_subtle: mix(self.danger_subtle, to.danger_subtle),
+        }
+    }
+
     /// This palette with `accent` for its accent colour, and the colours that follow from one.
     pub fn with_accent(mut self, accent: Color32) -> Tokens {
         let white = Color32::WHITE;
@@ -675,6 +704,17 @@ mod tests {
         apply(&ctx, &ocean);
         assert_eq!(ctx.global_style().visuals.panel_fill, ocean.base);
         assert_ne!(ocean.base, Theme::default().tokens(true, None).base);
+    }
+
+    #[test]
+    fn palettes_mix_from_one_to_the_other() {
+        let (dark, light) = (Theme::default().tokens(true, None), Theme::default().tokens(false, None));
+        assert_eq!(dark.mix(&light, 0.0), dark);
+        assert_eq!(dark.mix(&light, 1.0), light);
+        let halfway = dark.mix(&light, 0.5);
+        assert!(!halfway.dark);
+        assert_ne!(halfway.base, dark.base);
+        assert_ne!(halfway.base, light.base);
     }
 
     #[test]

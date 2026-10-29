@@ -2245,6 +2245,26 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
 }
 
 #[test]
+fn a_new_palette_fades_in_rather_than_jumping() {
+    use crate::theme::{Theme, Tokens};
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    let (dark, light) = (Theme::default().tokens(true, None), Theme::default().tokens(false, None));
+    harness.get_by_label("Light").click();
+    // The first frame that shows a change shows neither palette.
+    let mut between = dark.base;
+    for _ in 0..4 {
+        harness.step();
+        between = Tokens::get(&harness.ctx).base;
+        if between != dark.base {
+            break;
+        }
+    }
+    assert!(between != dark.base && between != light.base, "{between:?}");
+    harness.run();
+    assert_eq!(*Tokens::get(&harness.ctx), light);
+}
+
+#[test]
 fn following_the_system_each_mode_keeps_the_theme_chosen_for_it() {
     use crate::theme::{Mode, Theme, Tokens};
     let (mut harness, stored) = preferences_open(MemoryServices::default());
