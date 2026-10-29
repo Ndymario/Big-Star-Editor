@@ -54,8 +54,8 @@ pub struct PanelState {
     pub multi: Vec<usize>,
     pub hex: bool,
     /// The panel shows fields the game ignores or that are best left alone: the Course tab all three of the header's
-    /// graphics sets, rather than the first with its palettes, and a tileset entry its raw rotation, scroll speeds and
-    /// unused fields.
+    /// graphics sets, rather than the first with its palettes, and a layer entry its unused fields, with a tileset's raw
+    /// rotation and scroll speeds.
     pub advanced: bool,
     /// Every drop-down a spin box of the number it writes, for values it does not name.
     pub raw: bool,
@@ -953,8 +953,9 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Unused 0x10", record.unused_10, ""),
                     ("Unused 0x12", record.unused_12, ""),
                 ] {
-                    // A tileset scrolls with the level, so only the advanced mode shows its scroll speeds and unused fields.
-                    if block == ScreenBlock::Tileset && !panel.advanced && label != "Vertical offset" {
+                    // Only the advanced mode shows the fields nothing reads, and a tileset's scroll speeds, as it scrolls
+                    // with the level.
+                    if !panel.advanced && (label.starts_with("Unused") || block == ScreenBlock::Tileset && label.starts_with("Scroll")) {
                         continue;
                     }
                     full(rows, label, Some(i64::from(value)), 0, 65535);
@@ -1956,9 +1957,15 @@ mod tests {
         let shown = rows(&view, &view.panel, None);
         assert_eq!((shown.rows[1].representable, shown.rows[2].value), (false, Some(13)));
         view.snapshot.course.tilesets[1].screen_id = ROTATING_TILESET;
-        // The first background record's screen, and its palette, which is the one the level loads.
+        // The first background record's screen, and its palette, which is the one the level loads. Without the
+        // advanced mode it hides the fields nothing reads.
         view.panel_item(0);
+        view.panel.advanced = false;
         let shown = rows(&view, &view.panel, None);
+        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["ID", "Screen", "Palette", "Scroll speed X", "Scroll speed Y", "Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 3, 2) else { panic!() };
+        assert_eq!(screens[0].scroll_x, 2);
         assert!(shown.rows[2].note.starts_with("The colours of the whole level's background"));
         let Some(LevelEdit::SetScreens { block, screens, .. }) = apply(&view, &view.panel, &shown, 1, 7) else { panic!() };
         assert_eq!((block, screens[0].screen_id), (ScreenBlock::Background, 7));
