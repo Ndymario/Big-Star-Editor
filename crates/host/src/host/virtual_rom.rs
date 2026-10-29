@@ -200,6 +200,12 @@ fn files_under(root: &Path) -> Vec<PathBuf> {
     out
 }
 
+/// Whether a path in the folder, relative to it, is or is under a dot file: something another tool keeps there
+/// (`.DS_Store`, an editor's swap file), never a file of the ROM.
+fn hidden(relative: &str) -> bool {
+    relative.split('/').any(|part| part.starts_with('.'))
+}
+
 /// Whether the watcher's `path` is in the mirror's folder.
 pub(super) fn in_virtual_rom(directory: &Path, path: &Path) -> bool {
     project_relative(directory, path).is_some_and(|relative| relative == VIRTUAL_ROM_DIR || relative.starts_with(&format!("{VIRTUAL_ROM_DIR}/")))
@@ -281,7 +287,7 @@ impl Shared {
     }
 
     /// Deletes the folder and its record, moving each file that is not what `written` says was last written or taken
-    /// from there into `.bigstar/lost`, under the time and where it was in the folder.
+    /// from there into `.bigstar/lost`, under the time and where it was in the folder. Dot files go with the folder.
     fn remove_virtual_rom(&self, project: &Path, written: &BTreeMap<String, Recorded>) {
         let root = project.join(VIRTUAL_ROM_DIR);
         let known: BTreeMap<&str, &str> = written.values().map(|recorded| (recorded.path.as_str(), recorded.hash.as_str())).collect();
@@ -290,6 +296,9 @@ impl Shared {
         let mut moved = 0;
         for file in files_under(&root) {
             let Some(relative) = project_relative(&root, &file) else { continue };
+            if hidden(&relative) {
+                continue;
+            }
             if read_file(&file).is_ok_and(|bytes| known.get(relative.as_str()) == Some(&hash(&bytes).as_str())) {
                 continue;
             }
@@ -439,7 +448,7 @@ impl Shared {
         for path in paths {
             let Some(relative) = project_relative(&open.directory, path) else { continue };
             let Some(relative) = relative.strip_prefix(&format!("{VIRTUAL_ROM_DIR}/")).map(str::to_owned) else { continue };
-            if !seen.insert(relative.clone()) || path.is_dir() {
+            if hidden(&relative) || !seen.insert(relative.clone()) || path.is_dir() {
                 continue;
             }
             let address = mirror.address_of(&relative);

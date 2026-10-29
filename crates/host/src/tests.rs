@@ -2024,6 +2024,26 @@ fn only_new_files_under_z_new_are_inserted_from_the_folder() {
 }
 
 #[test]
+fn dot_files_in_the_folder_are_ignored() {
+    let (fixture, mut session) = mirrored("host-vrom-dot");
+    let project = fixture.root.path().join("proj");
+    let (folder, module) = (project.join("virtual-rom"), project.join("modules/mine/nitrofs"));
+    expose(&mut session);
+    session.drain_events();
+    let (swap, store, nested) = (folder.join("z_new/.new.bin.swp"), folder.join(".DS_Store"), folder.join(".git/config"));
+    for path in [&swap, &store, &nested] {
+        write_bytes(path, &[1]);
+    }
+    changed(&session, &[&swap, &store, &nested]);
+    assert!(files_under(&module).is_empty(), "{:?}", files_under(&module));
+    assert!(logged(&mut session).iter().all(|line| !line.contains("only new files under z_new/ are inserted")));
+
+    session.handle(Request::HideVirtualRom).unwrap();
+    assert!(!folder.exists());
+    assert!(files_under(&project.join(".bigstar/lost")).is_empty());
+}
+
+#[test]
 fn a_module_write_reaches_the_folder() {
     let (fixture, mut session) = mirrored("host-vrom-refresh");
     let project = fixture.root.path().join("proj");
