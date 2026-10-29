@@ -21,6 +21,9 @@ use crate::tile_overlays::{TileOverlayCatalog, overlay_map16_images};
 pub struct NsmbGraphicsProfile {
     pub game_code: &'static str,
     pub file_id_offset: u16,
+    /// What the tables hold where a slot has no file: the release's file count, one past its last file. The game
+    /// checks for it before every load and skips the resource.
+    pub no_file: u16,
     pub tileset_index: usize,
     pub tileset_objects: usize,
     pub tileset_behaviors: usize,
@@ -149,10 +152,11 @@ pub fn find_object_bank_overlays(arm9: &[u8]) -> Result<ObjectBankOverlayTable> 
     Err(Error::new(ErrorCode::NotFound, "could not locate the object-bank overlay table in ARM9"))
 }
 
-const fn profile(game_code: &'static str, file_id_offset: u16, tables: [usize; 16]) -> NsmbGraphicsProfile {
+const fn profile(game_code: &'static str, file_id_offset: u16, no_file: u16, tables: [usize; 16]) -> NsmbGraphicsProfile {
     NsmbGraphicsProfile {
         game_code,
         file_id_offset,
+        no_file,
         tileset_index: tables[0],
         tileset_objects: tables[1],
         tileset_behaviors: tables[2],
@@ -178,6 +182,7 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DE",
         131,
+        0x7a5,
         [
             0x2F8E4, 0x2FA14, 0x2FB44, 0x30EA4, 0x31494, 0x316F4, 0x30D74, 0x31364, 0x31234, 0x30FD4, 0x315C4, 0x31104, 0x29BD8, 0x2FDA4, 0x2C930,
             0x30CD8,
@@ -186,6 +191,7 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DP",
         135,
+        0x90a,
         [
             0x2F0F8, 0x2F228, 0x2F358, 0x306B8, 0x30CA8, 0x30F08, 0x30588, 0x30B78, 0x30A48, 0x307E8, 0x30DD8, 0x30918, 0x290C4, 0x2F5B8, 0x2BDF0,
             0x304EC,
@@ -194,6 +200,7 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DJ",
         131,
+        0x7a6,
         [
             0x2ECE4, 0x2EE14, 0x2EF44, 0x302A4, 0x30894, 0x30AF4, 0x30174, 0x30764, 0x30634, 0x303D4, 0x309C4, 0x30504, 0x29008, 0x2F1A4, 0x2BD30,
             0x300D8,
@@ -202,6 +209,7 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DK",
         131,
+        0x798,
         [
             0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290E0, 0x2F264, 0x2BDF0,
             0x30198,
@@ -210,6 +218,7 @@ const PROFILES: [NsmbGraphicsProfile; 5] = [
     profile(
         "A2DC",
         131,
+        0x79a,
         [
             0x2EDA4, 0x2EED4, 0x2F004, 0x30364, 0x30954, 0x30BB4, 0x30234, 0x30824, 0x306F4, 0x30494, 0x30A84, 0x305C4, 0x290DC, 0x2F264, 0x2BDF0,
             0x30198,
@@ -245,10 +254,6 @@ fn shared_palette(overlay: &[u8], profile: &NsmbGraphicsProfile, background_scre
 
 /// The shared tileset's behaviour table: a word for each of its 256 blocks.
 const SHARED_BEHAVIORS_SIZE: usize = 256 * 4;
-
-/// What the game's tables hold where a slot has no file. The game checks for it before every load and skips the
-/// resource.
-const NO_FILE: u16 = 0x7a5;
 
 fn table_entry(overlay: &[u8], table: usize, id: u8) -> Result<u16> {
     let offset = table + usize::from(id) * 4;
@@ -399,7 +404,7 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
         }
         // A slot the game has no file for loads nothing, so the layer is not there to draw.
         let slots = [(graphics_table, graphics_id), (palette_table, palette_id), (screen_table, screen_id)];
-        if slots.iter().any(|&(offset, id)| table_entry(&overlay, offset, id as u8).is_ok_and(|entry| entry == NO_FILE)) {
+        if slots.iter().any(|&(offset, id)| table_entry(&overlay, offset, id as u8).is_ok_and(|entry| entry == profile.no_file)) {
             continue;
         }
         let graphics = table(files, graphics_table, graphics_id);
