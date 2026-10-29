@@ -1925,13 +1925,34 @@ fn the_rom_is_exposed_as_a_folder_with_archives_unpacked() {
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     assert!(listing(&mut session).virtual_rom.is_some());
 
-    // Stopping leaves the folder as it is.
+    // Stopping removes the folder and its record.
     let Response::Filesystem(hidden) = session.handle(Request::HideVirtualRom).unwrap() else { panic!() };
     assert_eq!(hidden.virtual_rom, None);
-    assert_eq!(files_under(&folder).len(), 4);
+    assert!(!folder.exists());
+    assert!(!fixture.root.path().join("proj/.big-star-virtual-rom.json").exists());
+    assert!(!fixture.root.path().join("proj/.big-star-lost").exists());
     session.handle(Request::CloseProject).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     assert_eq!(listing(&mut session).virtual_rom, None);
+}
+
+#[test]
+fn stopping_inserts_pending_edits_and_keeps_strays_in_lost() {
+    let (fixture, mut session) = mirrored("host-vrom-hide");
+    let project = fixture.root.path().join("proj");
+    let (folder, module) = (project.join("virtual-rom"), project.join("modules/mine/nitrofs"));
+    expose(&mut session);
+    session.drain_events();
+
+    // Neither has reached the watcher yet.
+    write_bytes(&folder.join("course/A01_1.bin"), &[1, 2, 3]);
+    write_bytes(&folder.join("notes.txt"), b"mine");
+    session.handle(Request::HideVirtualRom).unwrap();
+
+    assert!(!folder.exists());
+    assert_eq!(std::fs::read(module.join("course/A01_1.bin")).unwrap(), [1, 2, 3]);
+    assert_eq!(files_under(&project.join(".big-star-lost")).iter().filter(|path| path.ends_with("/notes.txt")).count(), 1);
+    assert_eq!(files_under(&project.join(".big-star-lost")).len(), 1);
 }
 
 #[test]

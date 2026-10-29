@@ -26,6 +26,8 @@ pub(crate) const VIRTUAL_ROM_DIR: &str = "virtual-rom";
 /// What the mirror last wrote, relative to the project. Its `.big-star` prefix keeps the watcher from treating it as an
 /// edit.
 const RECORD_FILE: &str = ".big-star-virtual-rom.json";
+/// Where files left in the folder that were never inserted go when it is removed, relative to the project.
+pub(crate) const LOST_DIR: &str = ".big-star-lost";
 
 /// One file of the folder: where it is under the folder (`/`-separated), and the SHA-256 of what was last written
 /// there or taken from there.
@@ -181,6 +183,23 @@ fn project_relative(directory: &Path, path: &Path) -> Option<String> {
     Some(relative.components().map(|part| part.as_os_str().to_string_lossy().into_owned()).collect::<Vec<_>>().join("/"))
 }
 
+fn read_record(project: &Path) -> Option<Record> {
+    std::fs::read_to_string(project.join(RECORD_FILE)).ok().and_then(|text| serde_json::from_str(&text).ok())
+}
+
+/// Every file under `root`, at any depth.
+fn files_under(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(&directory).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() { pending.push(path) } else { out.push(path) }
+        }
+    }
+    out
+}
+
 /// Whether the watcher's `path` is in the mirror's folder.
 pub(super) fn in_virtual_rom(directory: &Path, path: &Path) -> bool {
     project_relative(directory, path).is_some_and(|relative| relative == VIRTUAL_ROM_DIR || relative.starts_with(&format!("{VIRTUAL_ROM_DIR}/")))
@@ -232,18 +251,66 @@ impl Shared {
         self.filesystem()
     }
 
+    /// Stops the mirror and removes its folder. Edits the watcher has not reported yet are inserted first; a file that
+    /// still is not what the record says -- one that could not be inserted, or one nobody should have put there --
+    /// goes to `.big-star-lost` rather than with the folder.
     pub(super) fn hide_virtual_rom(&self) -> Result<Response> {
+        let mut inserted = false;
         {
             let mut state = lock(&self.state);
             let open = state.open.as_mut().ok_or_else(no_project)?;
-            if open.virtual_rom.take().is_some() || open.settings.virtual_rom {
+            if open.virtual_rom.is_some() || open.settings.virtual_rom {
+                let root = open.directory.join(VIRTUAL_ROM_DIR);
+                inserted = self.virtual_rom_changed(open, &files_under(&root));
+                let written = match open.virtual_rom.take() {
+                    Some(mirror) => mirror.written,
+                    None => read_record(&open.directory).map(|record| record.files).unwrap_or_default(),
+                };
+                self.remove_virtual_rom(&open.directory, &written);
                 open.settings.virtual_rom = false;
                 save_settings(&open.directory, &open.settings)?;
-                self.log(LogLevel::Info, "The ROM is no longer kept in step with its folder, which is left as it is");
+                self.log(LogLevel::Info, "The ROM is no longer exposed as a folder");
                 self.emit(Event::SettingsChanged(open.settings.clone()));
             }
         }
+        if inserted {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.emit(Event::GraphicsChanged { generation });
+        }
         self.filesystem()
+    }
+
+    /// Deletes the folder and its record, moving each file that is not what `written` says was last written or taken
+    /// from there into `.big-star-lost`, under the time and where it was in the folder.
+    fn remove_virtual_rom(&self, project: &Path, written: &BTreeMap<String, Recorded>) {
+        let root = project.join(VIRTUAL_ROM_DIR);
+        let known: BTreeMap<&str, &str> = written.values().map(|recorded| (recorded.path.as_str(), recorded.hash.as_str())).collect();
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let lost = project.join(LOST_DIR).join(stamp.to_string());
+        let mut moved = 0;
+        for file in files_under(&root) {
+            let Some(relative) = project_relative(&root, &file) else { continue };
+            if read_file(&file).is_ok_and(|bytes| known.get(relative.as_str()) == Some(&hash(&bytes).as_str())) {
+                continue;
+            }
+            let target = lost.join(&relative);
+            let rescued = target.parent().is_some_and(|parent| std::fs::create_dir_all(parent).is_ok()) && std::fs::rename(&file, &target).is_ok();
+            if rescued {
+                moved += 1;
+            } else {
+                self.log(LogLevel::Warning, format!("Could not move {VIRTUAL_ROM_DIR}/{relative} to {LOST_DIR}; the folder is left in place"));
+                return;
+            }
+        }
+        if moved > 0 {
+            self.log(LogLevel::Warning, format!("{moved} file(s) in the ROM's folder were never inserted; moved them to {}", lost.display()));
+        }
+        if root.exists()
+            && let Err(error) = std::fs::remove_dir_all(&root)
+        {
+            self.log(LogLevel::Warning, format!("Could not remove {}: {error}", root.display()));
+        }
+        let _ = std::fs::remove_file(project.join(RECORD_FILE));
     }
 
     /// Picks the mirror up again when the project opens, as it was left; a failure costs the folder, not the project.
@@ -272,7 +339,7 @@ impl Shared {
         self.ensure_patcher(open);
         let module = active_module(open)?;
         let variant = open.settings.active_variant.clone();
-        let record: Option<Record> = std::fs::read_to_string(open.directory.join(RECORD_FILE)).ok().and_then(|text| serde_json::from_str(&text).ok());
+        let record = read_record(&open.directory);
         // A record of another module or variant describes another view; its files are simply brought up to date.
         let written = record.filter(|record| record.module == module.key && record.variant == variant).map(|record| record.files).unwrap_or_default();
         let mut mirror =
