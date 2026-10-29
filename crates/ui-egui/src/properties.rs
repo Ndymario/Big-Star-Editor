@@ -54,8 +54,8 @@ pub struct PanelState {
     pub multi: Vec<usize>,
     pub hex: bool,
     /// The panel shows fields the game ignores or that are best left alone: the Course tab all three of the header's
-    /// graphics sets, rather than the first with its palettes, and a layer entry its unused fields, with a tileset's raw
-    /// rotation and scroll speeds.
+    /// graphics sets, rather than the first with its palettes, and a layer entry its screen, palette and unused fields,
+    /// with a tileset's raw rotation and scroll speeds.
     pub advanced: bool,
     /// Every drop-down a spin box of the number it writes, for values it does not name.
     pub raw: bool,
@@ -625,7 +625,7 @@ fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -
         return String::new();
     }
     format!(
-        "The first {} entry has {}, not {}. Picking here sets them to match; the advanced mode and the Layers tab keep them apart.",
+        "The first {} entry has {}, not {}. Picking here sets them to match; the advanced mode keeps them apart, here and in the Layers tab.",
         block.name(),
         differ.join(" and "),
         shown(graphics)
@@ -900,7 +900,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                             row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
                         }
                     }
-                } else {
+                } else if panel.advanced {
                     let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
                     full(rows, "Screen", Some(i64::from(record.screen_id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
@@ -911,26 +911,33 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         }
                     }
                 }
-                full(rows, "Palette", Some(i64::from(record.palette_id)), 0, 65535);
-                if let Some(row) = rows.last_mut() {
-                    row.note = if at == 0 {
-                        format!("The colours of the whole level's {}: the game loads them from the first {} entry only.", block.name(), block.name())
-                    } else {
-                        format!("Unused: the game loads the {}'s colours from the first entry only.", block.name())
-                    };
-                    // The game's tables hold a background's palette at its graphics' number, so the names are the same.
-                    let layer = match block {
-                        ScreenBlock::Tileset => None,
-                        ScreenBlock::Background => Some(BackgroundLayer::Background),
-                        ScreenBlock::Foreground => Some(BackgroundLayer::Foreground),
-                    };
-                    let choices = match layer {
-                        None => Some(tileset_choices()),
-                        Some(layer) => layer_choices(view, layer),
-                    };
-                    if let Some(choices) = choices {
-                        row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.palette_id));
-                        row.choose_filtered(choices, Some(layer_filter(layer)));
+                // Outside the advanced mode the Course tab sets the screen and palette, with the graphics they match.
+                if panel.advanced {
+                    full(rows, "Palette", Some(i64::from(record.palette_id)), 0, 65535);
+                    if let Some(row) = rows.last_mut() {
+                        row.note = if at == 0 {
+                            format!(
+                                "The colours of the whole level's {}: the game loads them from the first {} entry only.",
+                                block.name(),
+                                block.name()
+                            )
+                        } else {
+                            format!("Unused: the game loads the {}'s colours from the first entry only.", block.name())
+                        };
+                        // The game's tables hold a background's palette at its graphics' number, so the names are the same.
+                        let layer = match block {
+                            ScreenBlock::Tileset => None,
+                            ScreenBlock::Background => Some(BackgroundLayer::Background),
+                            ScreenBlock::Foreground => Some(BackgroundLayer::Foreground),
+                        };
+                        let choices = match layer {
+                            None => Some(tileset_choices()),
+                            Some(layer) => layer_choices(view, layer),
+                        };
+                        if let Some(choices) = choices {
+                            row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.palette_id));
+                            row.choose_filtered(choices, Some(layer_filter(layer)));
+                        }
                     }
                 }
                 // Read by nothing. Across the game's 578 entries, 0x06 mostly repeats the layer's number in the header's
@@ -1936,8 +1943,8 @@ mod tests {
         // Without the advanced mode a tileset entry hides its raw rotation, scroll speeds and unused fields.
         let shown = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(labels, ["ID", "Rotates", "Palette", "Vertical offset"]);
-        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 3, 5) else { panic!() };
+        assert_eq!(labels, ["ID", "Rotates", "Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 2, 5) else { panic!() };
         assert_eq!(screens[1].vertical_offset, 5);
         view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
@@ -1957,18 +1964,20 @@ mod tests {
         let shown = rows(&view, &view.panel, None);
         assert_eq!((shown.rows[1].representable, shown.rows[2].value), (false, Some(13)));
         view.snapshot.course.tilesets[1].screen_id = ROTATING_TILESET;
-        // The first background record's screen, and its palette, which is the one the level loads. Without the
-        // advanced mode it hides the fields nothing reads.
+        // The first background record's screen, and its palette, which is the one the level loads.
         view.panel_item(0);
-        view.panel.advanced = false;
         let shown = rows(&view, &view.panel, None);
-        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(labels, ["ID", "Screen", "Palette", "Scroll speed X", "Scroll speed Y", "Vertical offset"]);
-        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 3, 2) else { panic!() };
-        assert_eq!(screens[0].scroll_x, 2);
         assert!(shown.rows[2].note.starts_with("The colours of the whole level's background"));
         let Some(LevelEdit::SetScreens { block, screens, .. }) = apply(&view, &view.panel, &shown, 1, 7) else { panic!() };
         assert_eq!((block, screens[0].screen_id), (ScreenBlock::Background, 7));
+        // Without the advanced mode it hides the screen and palette, which the Course tab sets, and the fields
+        // nothing reads.
+        view.panel.advanced = false;
+        let shown = rows(&view, &view.panel, None);
+        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(labels, ["ID", "Scroll speed X", "Scroll speed Y", "Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 1, 2) else { panic!() };
+        assert_eq!(screens[0].scroll_x, 2);
         let Some(LevelEdit::SetScreens { block, screens, .. }) = add_screen_edit(&view.snapshot.course, ScreenBlock::Tileset) else { panic!() };
         assert_eq!((block, screens.len(), screens[2].id), (ScreenBlock::Tileset, 3, 2));
         view.panel_item(3);
