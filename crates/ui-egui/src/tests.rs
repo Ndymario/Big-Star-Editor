@@ -2584,3 +2584,14 @@ fn the_filesystem_dock_shrinks_as_far_as_it_is_dragged_however_full() {
     harness.run();
     assert!(panel(&harness).size().x < 120.0, "the dock stays {} wide", panel(&harness).size().x);
 }
+
+/// An iQue DS ROM is an `.ids`, and keeps that name when it is saved again.
+#[test]
+fn ique_roms_are_roms_and_keep_their_extension() {
+    use crate::services::{is_rom_name, rom_extension};
+    assert!(is_rom_name("game.nds") && is_rom_name("New Super Mario Bros. (China).IDS"));
+    assert!(!is_rom_name("notes.txt") && !is_rom_name("nds"));
+    assert_eq!(rom_extension("China.ids"), "ids");
+    assert_eq!(rom_extension("game.NDS"), "nds");
+    assert_eq!(rom_extension("rom"), "nds");
+}

@@ -6,7 +6,7 @@ use std::sync::Mutex;
 
 use bigstar_client::{Connection, HostInfo, InProcess, Waker};
 use bigstar_host::Host;
-use bigstar_ui_egui::Services;
+use bigstar_ui_egui::{ROM_EXTENSIONS, Services};
 
 pub struct NativeServices {
     file: Option<PathBuf>,
@@ -72,7 +72,11 @@ impl Services for NativeServices {
     }
 
     fn pick_rom(&self, title: &str) -> Option<String> {
-        rfd::FileDialog::new().set_title(title).add_filter("Nintendo DS ROM", &["nds"]).pick_file().map(|path| path.to_string_lossy().into_owned())
+        rfd::FileDialog::new()
+            .set_title(title)
+            .add_filter("Nintendo DS ROM", ROM_EXTENSIONS)
+            .pick_file()
+            .map(|path| path.to_string_lossy().into_owned())
     }
 
     fn pick_save_path(&self, title: &str, suggested: &str, extension: &str) -> Option<String> {
@@ -95,12 +99,9 @@ impl Services for NativeServices {
         bigstar_core::write_file_atomically(&path, bytes).map(|()| true).map_err(|e| e.message)
     }
 
-    fn open_file(&self, title: &str, extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
+    fn open_file(&self, title: &str, extensions: &[&str]) -> Option<Result<(String, Vec<u8>), String>> {
         let dialog = rfd::FileDialog::new().set_title(title);
-        let dialog = match extension {
-            Some(extension) => dialog.add_filter(extension, &[extension]),
-            None => dialog,
-        };
+        let dialog = if extensions.is_empty() { dialog } else { dialog.add_filter(extensions.join(", "), extensions) };
         let path = dialog.pick_file()?;
         let name = path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default();
         Some(std::fs::read(&path).map(|bytes| (name, bytes)).map_err(|e| format!("could not read {}: {e}", path.display())))

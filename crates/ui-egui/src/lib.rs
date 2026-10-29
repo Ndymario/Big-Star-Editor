@@ -43,7 +43,7 @@ mod zoom_canvas;
 pub use app::{BigStarApp, CANVAS_OPTIONS_KEY, EMBEDDED_ROOT_KEY, LANGUAGE_KEY, RECENT_HOSTS_KEY, THEME_KEY};
 pub use i18n::{KEYS as TRANSLATED_STRINGS, Language};
 pub use level_view::{DsScreens, Item, Kind, LevelView};
-pub use services::{FileShelf, MemoryServices, Services};
+pub use services::{FileShelf, MemoryServices, ROM_EXTENSIONS, Services, is_rom_name, rom_extension};
 pub use session::{BytesFor, FileRead, Opening, Session};
 pub use workspace::{DocTab, Memory};
 

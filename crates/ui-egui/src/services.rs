@@ -3,6 +3,24 @@
 
 use bigstar_client::{Connection, Waker};
 
+/// What a DS ROM file is called: `.nds`, or `.ids` for the iQue DS, which is the same format.
+pub const ROM_EXTENSIONS: &[&str] = &["nds", "ids"];
+
+fn own_rom_extension(name: &str) -> Option<&'static str> {
+    let own = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    ROM_EXTENSIONS.iter().copied().find(|extension| *extension == own)
+}
+
+/// Whether a file named `name` is called a ROM.
+pub fn is_rom_name(name: &str) -> bool {
+    own_rom_extension(name).is_some()
+}
+
+/// The extension a ROM named `name` keeps when it is saved: its own, or `nds` when it has none of `ROM_EXTENSIONS`.
+pub fn rom_extension(name: &str) -> &'static str {
+    own_rom_extension(name).unwrap_or("nds")
+}
+
 pub trait Services {
     /// A value stored under `key` by an earlier run, if any.
     fn load(&self, key: &str) -> Option<String>;
@@ -35,7 +53,7 @@ pub trait Services {
         Err("this build cannot open a ROM on this machine".to_owned())
     }
 
-    /// Asks the person for a `.nds` on this machine, in a dialog titled `title`: its full path, or `None` when they cancel
+    /// Asks the person for a ROM (`ROM_EXTENSIONS`) on this machine, in a dialog titled `title`: its full path, or `None` when they cancel
     /// or there is no dialog.
     fn pick_rom(&self, _title: &str) -> Option<String> {
         None
@@ -64,15 +82,15 @@ pub trait Services {
         Err("this build cannot save files".to_owned())
     }
 
-    /// Asks the person for a file (of type `extension`, or any) and reads it: its name and its bytes. `None` when they
-    /// cancelled.
-    fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
+    /// Asks the person for a file (of one of the types `extensions`, or any when there are none) and reads it: its name
+    /// and its bytes. `None` when they cancelled.
+    fn open_file(&self, _title: &str, _extensions: &[&str]) -> Option<Result<(String, Vec<u8>), String>> {
         None
     }
 
     /// Starts asking the person for a file whose bytes arrive later, from `take_picked_file`: a browser's file picker
     /// answers only after the frame that opened it. `false` where there is no such picker.
-    fn pick_file_later(&self, _extension: Option<&str>) -> bool {
+    fn pick_file_later(&self, _extensions: &[&str]) -> bool {
         false
     }
 
@@ -134,7 +152,7 @@ impl Services for MemoryServices {
         Ok(true)
     }
 
-    fn open_file(&self, _title: &str, _extension: Option<&str>) -> Option<Result<(String, Vec<u8>), String>> {
+    fn open_file(&self, _title: &str, _extensions: &[&str]) -> Option<Result<(String, Vec<u8>), String>> {
         self.shelf.lock().ok()?.to_open.pop_front().map(Ok)
     }
 

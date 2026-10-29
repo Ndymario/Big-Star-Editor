@@ -405,7 +405,7 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
             }
         }
         if Button::new("Import text…").show(ui).clicked() {
-            match services.open_file("Import messages", Some("txt")) {
+            match services.open_file("Import messages", &["txt"]) {
                 Some(Ok((_, bytes))) => {
                     let done = doc.import_text(&String::from_utf8_lossy(&bytes));
                     view.notice = Some(format!(

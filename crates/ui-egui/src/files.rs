@@ -435,7 +435,7 @@ impl FilesDock {
             controls::compact(ui);
             let has_target = !listing.modules.is_empty();
             if Button::new("Add file").enabled(has_target).show(ui).clicked()
-                && let Some(chosen) = services.open_file("Add file to module", None)
+                && let Some(chosen) = services.open_file("Add file to module", &[])
             {
                 match chosen {
                     Ok((name, bytes)) => self.prompt = Some(Prompt::Add { path: format!("z_new/{name}"), name, bytes }),
@@ -444,7 +444,7 @@ impl FilesDock {
             }
             let selected = entry.is_some();
             if Button::new("Replace").enabled(selected).show(ui).clicked()
-                && let (Some(entry), Some(chosen)) = (&entry, services.open_file("Replacement file", None))
+                && let (Some(entry), Some(chosen)) = (&entry, services.open_file("Replacement file", &[]))
             {
                 match chosen {
                     Ok((_, bytes)) => session.write_file(&entry.path, bytes),

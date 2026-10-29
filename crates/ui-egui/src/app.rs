@@ -13,7 +13,7 @@ use crate::files::{FilesDock, OpenRequest};
 use crate::i18n::Language;
 use crate::level_view::CanvasOptions;
 use crate::picker::{self, PickerState};
-use crate::services::Services;
+use crate::services::{ROM_EXTENSIONS, Services, is_rom_name, rom_extension};
 use crate::session::Session;
 use crate::theme::{Theme, Tokens};
 use crate::tools::{self, Tools};
@@ -382,10 +382,10 @@ impl BigStarApp {
     /// Asks for a ROM to send to the host and edit there.
     fn upload_rom(&mut self) {
         let Some(session) = &mut self.session else { return };
-        match self.services.open_file("Upload ROM", Some("nds")) {
+        match self.services.open_file("Upload ROM", ROM_EXTENSIONS) {
             Some(Ok((name, bytes))) => session.upload_rom(&name, &bytes),
             Some(Err(error)) => session.report(error),
-            None => self.awaiting_upload = self.services.pick_file_later(Some("nds")),
+            None => self.awaiting_upload = self.services.pick_file_later(ROM_EXTENSIONS),
         }
     }
 
@@ -449,7 +449,7 @@ impl BigStarApp {
             }
         }
         if let Some((name, bytes)) = session.downloaded.take()
-            && let Err(error) = self.services.save_file("Download ROM", &name, "nds", &bytes)
+            && let Err(error) = self.services.save_file("Download ROM", &name, rom_extension(&name), &bytes)
         {
             session.report(error);
         }
@@ -1099,7 +1099,7 @@ impl BigStarApp {
                                     actions.push(Action::Browse(full));
                                 }
                             }
-                            DirectoryEntryKind::File if entry.name.to_ascii_lowercase().ends_with(".nds") => {
+                            DirectoryEntryKind::File if is_rom_name(&entry.name) => {
                                 let chosen = browser.rom.as_deref() == Some(full.as_str());
                                 if Row::new(&entry.name).icon(icons::FILE).selected(chosen).show(ui).clicked() {
                                     actions.push(Action::ChooseRom(full));
@@ -1400,7 +1400,7 @@ impl BigStarApp {
             Action::UploadRom => return self.upload_rom(),
             Action::SaveRomAs => {
                 let suggested = self.session.as_ref().and_then(|s| s.project.as_ref()).map_or_else(|| "rom.nds".to_owned(), |p| p.name.clone());
-                if let Some(path) = self.services.pick_save_path("Save ROM As", &suggested, "nds")
+                if let Some(path) = self.services.pick_save_path("Save ROM As", &suggested, rom_extension(&suggested))
                     && let Some(session) = &mut self.session
                 {
                     session.save_rom_as(&path);

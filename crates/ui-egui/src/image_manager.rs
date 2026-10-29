@@ -422,7 +422,7 @@ pub fn run(
 ) -> Result<bool, String> {
     let bitmap = |images: &dyn Images, index: usize| images.bitmap(index).ok_or_else(|| "No bitmap is chosen.".to_owned());
     let palette = |images: &dyn Images, index: usize| images.palette(index).ok_or_else(|| "No palette is chosen.".to_owned());
-    let open = |title: &str| match services.open_file(title, Some("png")) {
+    let open = |title: &str| match services.open_file(title, &["png"]) {
         Some(Ok((_, bytes))) => decode_png(&bytes).map(Some),
         Some(Err(error)) => Err(error),
         None => Ok(None),

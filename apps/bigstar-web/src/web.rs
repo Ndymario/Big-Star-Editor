@@ -101,7 +101,7 @@ impl Services for WebServices {
         download(suggested, bytes).map(|()| true)
     }
 
-    fn pick_file_later(&self, extension: Option<&str>) -> bool {
+    fn pick_file_later(&self, extensions: &[&str]) -> bool {
         let Some(input) = document()
             .ok()
             .and_then(|document| document.create_element("input").ok())
@@ -110,8 +110,8 @@ impl Services for WebServices {
             return false;
         };
         input.set_type("file");
-        if let Some(extension) = extension {
-            input.set_accept(&format!(".{extension}"));
+        if !extensions.is_empty() {
+            input.set_accept(&extensions.iter().map(|extension| format!(".{extension}")).collect::<Vec<_>>().join(","));
         }
         let (picked, ctx, chosen) = (Rc::clone(&self.picked), self.ctx.clone(), input.clone());
         let changed = Closure::once_into_js(move || {

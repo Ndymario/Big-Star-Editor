@@ -803,7 +803,7 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             None => {}
         }
         if Button::new("Import tileset…").show(ui).clicked() {
-            match services.open_file("Import tileset", Some("bstileset")) {
+            match services.open_file("Import tileset", &["bstileset"]) {
                 Some(Ok((_, bytes))) => view.notice = doc.edit("Import tileset", |doc| doc.import_bundle(&bytes)).err(),
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
@@ -1669,7 +1669,7 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
         editor.toolbar(ui, None, palettes, &mut commands);
         ui.horizontal(|ui| {
             if Button::new("Import PNG…").show(ui).clicked() {
-                match services.open_file(&format!("Import {name}"), Some("png")) {
+                match services.open_file(&format!("Import {name}"), &["png"]) {
                     Some(Ok((_, bytes))) => {
                         view.notice = decode_png(&bytes).and_then(|image| doc.edit("Import image", |doc| doc.import_tilemap(which, &image))).err();
                     }
