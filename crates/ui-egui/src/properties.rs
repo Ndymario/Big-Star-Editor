@@ -623,7 +623,7 @@ fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -
         return String::new();
     }
     format!(
-        "The first {} entry has {}, not {}. Picking here sets them to match; the advanced view and the Layers tab keep them apart.",
+        "The first {} entry has {}, not {}. Picking here sets them to match; the advanced mode and the Layers tab keep them apart.",
         block.name(),
         differ.join(" and "),
         shown(graphics)
@@ -842,7 +842,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 // The set the game loads, one number for each layer: its graphics, which the header names, and the
                 // palette and screen of its first record, which are the whole level's and match the graphics in every
                 // level but a few. A level can go without a background or a foreground, but not without its
-                // tileset, which only the advanced view sets to none.
+                // tileset, which only the advanced mode sets to none.
                 for (i, ((name, values, layer), (choices, block))) in layers.iter().zip(choices.iter().zip(GRAPHICS_BLOCKS)).enumerate() {
                     let value = values.first().copied().unwrap_or_default();
                     full(rows, name, Some(i64::from(value)), 0, 65535);
@@ -1320,7 +1320,7 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
     match panel.tab {
         Tab::Course => {
             let mut h = course.header.clone();
-            // Without the advanced view, picking a layer's graphics sets its first record's palette, and screen, to the
+            // Without the advanced mode, picking a layer's graphics sets its first record's palette, and screen, to the
             // same number.
             if !panel.advanced
                 && let Some(&block) = changed.checked_sub(12).and_then(|at| GRAPHICS_BLOCKS.get(at))
@@ -2130,7 +2130,7 @@ mod tests {
         assert_eq!(header.settings, 0x01);
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 2, 400) else { panic!() };
         assert_eq!(header.timer, 400);
-        // Without the advanced view the panel shows the set the game loads, one picker for each layer, and the tileset
+        // Without the advanced mode the panel shows the set the game loads, one picker for each layer, and the tileset
         // is picked by name, with its number.
         view.snapshot.course.header.tileset_theme[0] = 9;
         view.snapshot.course.tilesets = vec![NsmbLevelScreen { palette_id: 9, ..Default::default() }];
@@ -2141,7 +2141,7 @@ mod tests {
         let tileset = &shown_rows.rows[12];
         let Editor::Choice { choices, .. } = &tileset.editor else { panic!("{:?}", tileset.editor) };
         assert_eq!((tileset.label.as_str(), choices.len(), &choices[1]), ("Tileset", 76, &(1, "Castle".to_owned())));
-        assert!(!choices.iter().any(|&(id, _)| id == 65535), "only the advanced view sets the tileset to none");
+        assert!(!choices.iter().any(|&(id, _)| id == 65535), "only the advanced mode sets the tileset to none");
         assert_eq!(tileset.warning, "", "the palette follows the graphics");
         // Picking one sets the first record's palette with it, and a background's screen too, as one edit.
         let Some(LevelEdit::SetLayer { header, block, screens, .. }) = apply(&view, &view.panel, &shown_rows, 12, 23) else { panic!() };
@@ -2163,7 +2163,7 @@ mod tests {
         assert!(shown_rows.rows[14].warning.contains("no foreground entry"));
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 14, 5) else { panic!() };
         assert_eq!(header.foreground_theme[0], 5);
-        // The advanced view shows all three of the header's sets: a tileset, a background and a foreground together
+        // The advanced mode shows all three of the header's sets: a tileset, a background and a foreground together
         // for each, each picked by name.
         view.panel.advanced = true;
         let shown_rows = rows(&view, &view.panel, None);
@@ -2174,7 +2174,7 @@ mod tests {
         assert_eq!(headings, ["Graphics set 1", "Graphics set 2", "Graphics set 3"]);
         assert_eq!(shown_rows.rows[15].heading, "Graphics set 2");
         assert!(matches!(shown_rows.rows[18].editor, Editor::Choice { .. }));
-        // Only the advanced view sets the level's tileset to none, and it warns of it; the other two sets' may be none.
+        // Only the advanced mode sets the level's tileset to none, and it warns of it; the other two sets' may be none.
         let Editor::Choice { choices, .. } = &shown_rows.rows[12].editor else { panic!() };
         assert_eq!(choices[0], (65535, "None".to_owned()));
         view.snapshot.course.header.tileset_theme = [u16::MAX; 3];

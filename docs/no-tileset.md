@@ -71,9 +71,9 @@ without checking for none.
 
 ## What the editor does
 
-- The **Course** tab without the advanced view offers none for the background
+- The **Course** tab without the advanced mode offers none for the background
   and the foreground, and not for the tileset.
-- The advanced view still offers none for every tileset, as the header can hold
+- The advanced mode still offers none for every tileset, as the header can hold
   it, and warns on the first set's when it is none.
 - A level whose tileset is none draws as the game loads it: jyotyu, nohara, the
   background and the foreground, and nothing for the level's own tileset.
