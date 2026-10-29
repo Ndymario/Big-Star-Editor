@@ -208,12 +208,14 @@ fn level_catalog_lists_worlds_and_download_play_levels() {
     assert_eq!(versus.groups.iter().map(|group| group.name.as_str()).collect::<Vec<_>>(), ["Multicard", "Download Play"]);
     // A one-area level shows the level's own name.
     assert_eq!(catalog.find("course/A03_1").unwrap().1.display_name, "1-3");
-    // Only the European ROM has a third W6 Castle area.
+    // Every ROM but the American one has a third W6 Castle area.
     assert!(catalog.find("course/F11_3").is_none());
-    let (castle, _) = builtin_level_catalog(Some("A2DP")).find("course/F11_3").unwrap();
-    assert_eq!((castle.display_name.as_str(), castle.areas.len()), ("W6 Castle", 3));
-    assert_eq!(builtin_level_catalog(Some("A2DP")).areas().len(), catalog.areas().len() + 1);
-    assert!(std::ptr::eq(builtin_level_catalog(None), catalog));
+    for code in [Some("A2DP"), Some("A2DJ"), Some("A2DK"), Some("A85E"), None] {
+        let (castle, _) = builtin_level_catalog(code).find("course/F11_3").unwrap();
+        assert_eq!((castle.display_name.as_str(), castle.areas.len()), ("W6 Castle", 3), "{code:?}");
+    }
+    assert_eq!(builtin_level_catalog(None).areas().len(), catalog.areas().len() + 1);
+    assert!(std::ptr::eq(builtin_level_catalog(Some("A2DJ")), builtin_level_catalog(None)));
 }
 
 #[test]

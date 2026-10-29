@@ -304,16 +304,16 @@ fn the_level_list_marks_the_areas_the_rom_holds() {
     assert_eq!(available, ["course/A01_1", "ARCHIVE/Dat_Field.narc/Dat/Field/J01_1"]);
     let versus = worlds.root.groups.iter().find(|group| group.name == "Mario vs. Luigi").unwrap();
     assert!(versus.groups[1].levels[0].areas[0].available, "under Download Play");
-    // Only the European ROM has a third W6 Castle area.
+    // The American ROM is the only one without a third W6 Castle area.
     assert!(worlds.root.areas().iter().all(|a| a.token != "course/F11_3"));
 }
 
 #[test]
-fn the_european_rom_lists_its_extra_area() {
-    let fixture = Fixture::new("host-levels-a2dp");
+fn roms_other_than_the_american_one_list_its_missing_area() {
+    let fixture = Fixture::new("host-levels-f11-3");
     let (course, bgdat) = level_files();
     let mut rom = make_rom(&[RomFile::new("course/F11_3.bin", &course), RomFile::new("course/F11_3_bgdat.bin", &bgdat)], &[0; 32]);
-    rom[0x00C..0x010].copy_from_slice(b"A2DP");
+    rom[0x00C..0x010].copy_from_slice(b"A2DJ");
     make_project(fixture.root.path(), "proj", &rom);
     let mut session = fixture.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();

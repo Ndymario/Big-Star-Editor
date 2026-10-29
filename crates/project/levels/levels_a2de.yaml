@@ -330,7 +330,6 @@ levels:
             areas:
               - course/F11_1
               - course/F11_2
-              - course/F11_3
         - level:
             name: "6-A"
             areas:

@@ -1,6 +1,6 @@
 //! The level list: groups of levels, each level's areas by their ROM path. The editor ships one for each ROM layout
-//! (`levels/levels.yaml`, and `levels/levels_a2dp.yaml` for the European ROM, which has a third W6 Castle area); a
-//! project's own `levels.yaml` takes their place.
+//! (`levels/levels.yaml`, and `levels/levels_a2de.yaml` for the American ROM, the only one without a third W6 Castle
+//! area); a project's own `levels.yaml` takes their place.
 
 use std::sync::OnceLock;
 
@@ -11,7 +11,7 @@ use serde::Deserialize;
 pub const PROJECT_LEVEL_LIST: &str = "levels.yaml";
 
 const LEVELS: &str = include_str!("../levels/levels.yaml");
-const LEVELS_A2DP: &str = include_str!("../levels/levels_a2dp.yaml");
+const LEVELS_A2DE: &str = include_str!("../levels/levels_a2de.yaml");
 
 /// Where an area's two files are, by their shared path without `.bin`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -169,10 +169,11 @@ pub fn parse_level_catalog(yaml: &str) -> Result<LevelCatalog> {
     Ok(catalog)
 }
 
-/// The list the editor ships for a ROM of `game_code`; the European ROM has an area the others lack.
+/// The list the editor ships for a ROM of `game_code`; the American ROM lacks an area every other one has, its own kiosk
+/// demo included.
 pub fn builtin_level_catalog(game_code: Option<&str>) -> &'static LevelCatalog {
     static LIST: OnceLock<LevelCatalog> = OnceLock::new();
-    static LIST_A2DP: OnceLock<LevelCatalog> = OnceLock::new();
-    let (cell, yaml) = if game_code == Some("A2DP") { (&LIST_A2DP, LEVELS_A2DP) } else { (&LIST, LEVELS) };
+    static LIST_A2DE: OnceLock<LevelCatalog> = OnceLock::new();
+    let (cell, yaml) = if game_code == Some("A2DE") { (&LIST_A2DE, LEVELS_A2DE) } else { (&LIST, LEVELS) };
     cell.get_or_init(|| parse_level_catalog(yaml).unwrap_or_default())
 }
