@@ -1228,7 +1228,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     full(rows, label, Some(i64::from(value)), 0, 255);
                     let Some(row) = rows.last_mut() else { continue };
                     match label {
-                        "BGM" => row.choose(music_choices()),
+                        "BGM" => row.choose_filtered(music_choices(), Some("Filter music…")),
                         "Camera settings" => row.note = camera_note(course, v),
                         // A view names a record of each layer, and the record says which screen scrolls there and how.
                         "Background" => row.note = layer_note(view, ScreenBlock::Background, v),
@@ -2051,8 +2051,11 @@ mod tests {
         assert!(shown.rows.iter().all(|row| !row.label.starts_with("Camera ") || row.label == "Camera settings"));
         assert!(shown.rows[row("Camera settings")].note.contains("Cameras tab"));
         // The music is picked by name, and a number nobody named is still there to pick.
-        let Editor::Choice { choices: music, .. } = &shown.rows[row("BGM")].editor else { panic!() };
-        assert_eq!((music.len(), &music[16], &music[200]), (256, &(16, "Ghost House".to_owned()), &(200, "unnamed".to_owned())));
+        let Editor::Choice { choices: music, filter, .. } = &shown.rows[row("BGM")].editor else { panic!() };
+        assert_eq!(
+            (music.len(), &music[16], &music[200], *filter),
+            (256, &(16, "Ghost House".to_owned()), &(200, "unnamed".to_owned()), Some("Filter music…"))
+        );
         // A view naming settings that do not exist reads the first, as the game does.
         view.panel.item = 1;
         assert!(rows(&view, &view.panel, None).rows[row("Camera settings")].note.contains("uses the level's first (2)"));
