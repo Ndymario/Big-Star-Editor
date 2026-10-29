@@ -872,8 +872,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             }
         }
         Tab::Layers => {
+            // Outside the advanced mode only entry 0 of each block is edited, the one views name unless they rotate.
             if let Some((block, at)) = screen_record(course, index)
                 && let Some(record) = block.records(course).get(at)
+                && (panel.advanced || record.id == 0)
             {
                 let users: Vec<String> = course
                     .views
@@ -2025,12 +2027,16 @@ mod tests {
         assert_eq!(record_lines(&view, Tab::Layers), ["Background 0 · screen 41", "Tileset 0", "Tileset 1 · rotates", "Foreground 0 · no screen"]);
         // The second tileset record: the rotator, which view 0 names and view 1 falls back past.
         view.panel_item(2);
-        // Without the advanced mode a tileset entry hides its ID, rotation, palette, scroll speeds and unused fields.
+        // Without the advanced mode only entry 0 is edited, and a tileset entry hides its ID, rotation, palette, scroll
+        // speeds and unused fields.
+        assert!(rows(&view, &view.panel, None).rows.is_empty());
+        view.panel_item(1);
         let shown = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Vertical offset"]);
         let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 0, 5) else { panic!() };
-        assert_eq!(screens[1].vertical_offset, 5);
+        assert_eq!(screens[0].vertical_offset, 5);
+        view.panel_item(2);
         view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
         assert!(shown.rows[0].note.contains("Used by views 0."), "{}", shown.rows[0].note);
