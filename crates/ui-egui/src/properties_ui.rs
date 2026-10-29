@@ -14,7 +14,6 @@ use crate::properties::{
 use crate::{dialogs, icons, level_data};
 use bigstar_level::ScreenBlock;
 
-const LABEL_WIDTH: f32 = 112.0;
 /// The least a number's box is wide; a longer value widens its own.
 const NUMBER_WIDTH: f32 = 52.0;
 /// How much of its line a drop-down takes.
@@ -162,19 +161,8 @@ pub fn show(
             Tab::Layers | Tab::Cameras => edit = record_list(ui, view, tab, &shown, busy),
             // Its rows are every slot at once, so there is nothing to pick between.
             Tab::Banks => {}
-            Tab::Course => {
-                controls::section(ui, "Selection", |ui| {
-                    ui.add_enabled_ui(tab != Tab::Course && count != 0, |ui| {
-                        ui.horizontal(|ui| {
-                            ui.add_sized([LABEL_WIDTH, 18.0], egui::Label::new("Item"));
-                            let mut item = view.panel.item.min(count.saturating_sub(1));
-                            if ui.add(controls::number(&mut item).range(0..=count.saturating_sub(1))).changed() {
-                                view.panel_item(item);
-                            }
-                        });
-                    });
-                });
-            }
+            // A level has one header.
+            Tab::Course => {}
         }
 
         controls::section(ui, "Properties", |ui| {
