@@ -34,6 +34,7 @@ mod uploads;
 mod virtual_rom;
 
 use rom::Backing;
+pub use virtual_rom::unmount_all as unmount_virtual_roms;
 
 /// What a host needs besides its root: where the shipped actor, tile and background scripts are, and which NCPatcher to ask.
 #[derive(Debug, Clone)]
@@ -44,6 +45,9 @@ pub struct HostOptions {
     pub max_rom_bytes: usize,
     /// How many uploaded ROMs the host holds at once, across every connection; each one is a whole ROM in memory.
     pub max_uploaded_roms: usize,
+    /// Whether the ROM's folder is mounted as a filesystem of its own (FUSE, on Linux) rather than written out as plain
+    /// files. Where it cannot be mounted it is written out anyway.
+    pub mount_virtual_rom: bool,
 }
 
 /// A retail NSMB ROM is 8 MiB and an expanded one rarely passes 32; this leaves room without letting one connection
@@ -58,6 +62,7 @@ impl Default for HostOptions {
             ncpatcher: PathBuf::from("ncpatcher"),
             max_rom_bytes: DEFAULT_MAX_ROM_BYTES,
             max_uploaded_roms: DEFAULT_MAX_UPLOADED_ROMS,
+            mount_virtual_rom: true,
         }
     }
 }
@@ -158,6 +163,8 @@ struct State {
 }
 
 pub(crate) struct Shared {
+    /// The host itself, for what has to call back into it from a thread of its own, such as the ROM's mounted folder.
+    this: std::sync::Weak<Shared>,
     /// The folder of NCPatcher projects this host serves. A host that only edits ROMs has none.
     workspace: Option<Workspace>,
     /// Whether ROMs may be opened and saved by their path on this machine: the desktop app's own host, never a served one.
@@ -282,7 +289,8 @@ impl Service for HostSession {
 
 impl Shared {
     fn new(workspace: Option<Workspace>, local_files: bool, options: HostOptions) -> Arc<Self> {
-        Arc::new(Shared {
+        Arc::new_cyclic(|this| Shared {
+            this: this.clone(),
             workspace,
             local_files,
             options,

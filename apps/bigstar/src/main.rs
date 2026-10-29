@@ -37,7 +37,7 @@ fn main() -> eframe::Result {
             .with_min_inner_size([640.0, 400.0]),
         ..Default::default()
     };
-    eframe::run_native(
+    let ran = eframe::run_native(
         "Big Star Editor",
         options,
         Box::new(move |cc| {
@@ -49,7 +49,10 @@ fn main() -> eframe::Result {
             let _ = cc;
             Ok(Box::new(Shell(BigStarApp::new(Box::new(services)))))
         }),
-    )
+    );
+    // The host is not wound down on the way out, so the ROM's folder, when it is mounted, would be left dead.
+    bigstar_host::unmount_virtual_roms();
+    ran
 }
 
 /// The window's icon. On Wayland winit drops it and the compositor looks for

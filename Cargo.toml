@@ -43,6 +43,9 @@ ctrlc = "3"
 sha2 = "0.11"
 serde_bytes = "0.11"
 notify = { version = "8", default-features = false, features = ["macos_fsevent"] }
+# Without libfuse: mounts through fusermount3, so nothing beyond the kernel module is needed to build or run.
+fuser = { version = "0.18", default-features = false }
+libc = "0.2"
 mlua = { version = "0.12", features = ["lua54", "vendored", "send"] }
 serde_norway = "0.9"
 

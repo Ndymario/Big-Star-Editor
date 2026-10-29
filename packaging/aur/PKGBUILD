@@ -21,7 +21,8 @@ depends=('glibc' 'gcc-libs' 'wayland' 'libxkbcommon' 'libx11' 'libxcursor'
 # Lua is built into the editor from the sources its crate carries, which
 # needs only the C compiler of base-devel.
 makedepends=('rust')
-optdepends=('xdg-desktop-portal: file and folder dialogs')
+optdepends=('xdg-desktop-portal: file and folder dialogs'
+            'fuse3: the ROM exposed as a mounted folder rather than one written out')
 # The C in the vendored Lua does not link when built with LTO.
 options=('!lto')
 source=("$pkgname-$pkgver.tar.gz::$_repo_url/archive/v$pkgver.tar.gz")

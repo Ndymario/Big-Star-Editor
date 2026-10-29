@@ -141,3 +141,12 @@ it lives there rather than in `ncpatcher.yaml`, and reaches NCPatcher as `--rom`
 
 Everything the editor writes for itself -- settings, backups, autosaves, build staging, trash, the virtual ROM's record
 and what it lost -- lives under the one `.bigstar/` folder, in the project or beside a ROM edited directly.
+
+"Expose as folder" in the Files dock shows the ROM, as the active module sees it, at `<project>/virtual-rom/`, with
+archives unpacked into folders. On Linux the desktop host mounts it there through FUSE (`fusermount3`, no libfuse
+needed): the files live in the host's memory, never on the disk, and a file reaches the host when its last descriptor
+closes or it is renamed over a ROM file, as most editors save. Elsewhere, or where FUSE cannot mount, the folder is
+written out as plain files and the watcher reports what changes there, recorded in `.bigstar/virtual-rom.json`.
+Either way, a changed file goes into the active module, new files are only taken under `z_new/`, and deleting a file
+moves the module's copy to the trash, so the file reads as the layers below give it, or is gone; a file the module
+has no copy of cannot be deleted.

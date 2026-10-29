@@ -24,5 +24,9 @@ serde.workspace = true
 serde_json.workspace = true
 log.workspace = true
 
+[target.'cfg(target_os = "linux")'.dependencies]
+fuser.workspace = true
+libc.workspace = true
+
 [dev-dependencies]
 bigstar-project = { workspace = true, features = ["test-support"] }

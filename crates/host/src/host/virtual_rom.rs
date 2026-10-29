@@ -4,8 +4,14 @@
 //! module holds them (`dat/Dat_Field_narc/J01_1.bin`).
 //!
 //! A file changed there is inserted into the active module, unless it reads as the layers below the module already
-//! give it, in which case the module's copy goes instead. A change to the modules is written back into the folder,
-//! only into the files whose bytes it changed, so a tool watching them sees nothing else move.
+//! give it, in which case the module's copy goes instead. A file deleted there takes the module's copy away with it,
+//! and so reads as the layers below give it, or is gone when they have nothing; a file the module has no copy of
+//! cannot be deleted, and comes back. A change to the modules is written back into the folder, only into the files
+//! whose bytes it changed, so a tool watching them sees nothing else move.
+//!
+//! On Linux the folder is mounted, through FUSE, as a filesystem of its own ([`mount`]): its files are never written
+//! to the disk, and an edit reaches the host as the file is closed rather than when the watcher reports it. Elsewhere,
+//! or where it cannot be mounted, it is a folder of plain files.
 //!
 //! What was last written is recorded, by ROM address, with a hash of the bytes. That is how the host tells its own
 //! writes from somebody else's when the watcher reports them, how a path in the folder is traced back to its address,
@@ -21,6 +27,43 @@ use sha2::{Digest, Sha256};
 
 use super::*;
 
+#[cfg(target_os = "linux")]
+mod mount;
+
+/// Only Linux mounts the folder; elsewhere there never is a mount.
+#[cfg(not(target_os = "linux"))]
+mod mount {
+    use super::*;
+
+    pub(in crate::host) enum Mounted {}
+
+    impl Mounted {
+        pub(in crate::host) fn start(_root: &Path, _host: std::sync::Weak<Shared>) -> std::io::Result<Self> {
+            Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only Linux mounts the ROM's folder"))
+        }
+
+        pub(in crate::host) fn id(&self) -> u64 {
+            match *self {}
+        }
+
+        pub(in crate::host) fn put(&self, _relative: &str, _address: &str, _bytes: &[u8]) {
+            match *self {}
+        }
+
+        pub(in crate::host) fn remove(&self, _relative: &str) {
+            match *self {}
+        }
+
+        pub(in crate::host) fn unsaved(&self) -> (Files, Files) {
+            match *self {}
+        }
+    }
+
+    pub fn unmount_all() {}
+}
+
+pub use mount::unmount_all;
+
 /// The mirror's folder, relative to the project.
 pub(crate) const VIRTUAL_ROM_DIR: &str = "virtual-rom";
 /// What the mirror last wrote, relative to the project. Being under `.bigstar` keeps the watcher from treating it as an
@@ -28,6 +71,9 @@ pub(crate) const VIRTUAL_ROM_DIR: &str = "virtual-rom";
 const RECORD_FILE: &str = ".bigstar/virtual-rom.json";
 /// Where files left in the folder that were never inserted go when it is removed, relative to the project.
 pub(crate) const LOST_DIR: &str = ".bigstar/lost";
+/// How long an edit made in the mounted folder waits for the host before it fails: the host may be busy with
+/// something that reads the folder itself.
+const MOUNT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// One file of the folder: where it is under the folder (`/`-separated), and the SHA-256 of what was last written
 /// there or taken from there.
@@ -55,10 +101,20 @@ pub(super) struct VirtualRom {
     plan: Option<FileManifest>,
     /// By ROM address.
     written: BTreeMap<String, Recorded>,
+    /// The folder mounted, while it is; its files are then in there, not on the disk.
+    mount: Option<mount::Mounted>,
 }
 
 fn hash(bytes: &[u8]) -> String {
     Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+/// Files with what they hold: by ROM address, or by where they are in the folder.
+type Files = Vec<(String, Vec<u8>)>;
+
+/// A path in the folder, relative to it, that holds a new file of the ROM's: one under `z_new/` that is not a dot file.
+fn new_file_address(relative: &str) -> Option<String> {
+    (relative.starts_with("z_new/") && !hidden(relative)).then(|| relative.to_owned())
 }
 
 /// What an edit made in the folder came to.
@@ -123,9 +179,13 @@ impl VirtualRom {
                 continue;
             };
             let Ok(relative) = archive_folder_path(address) else { continue };
-            let file = self.root.join(&relative);
-            if read_file(&file).ok().as_deref() != Some(bytes.as_slice()) {
-                write_file_atomically(&file, &bytes)?;
+            if let Some(mount) = &self.mount {
+                mount.put(&relative, address, &bytes);
+            } else {
+                let file = self.root.join(&relative);
+                if read_file(&file).ok().as_deref() != Some(bytes.as_slice()) {
+                    write_file_atomically(&file, &bytes)?;
+                }
             }
             self.written.insert(address.clone(), Recorded { path: relative, hash: hash(&bytes) });
         }
@@ -142,20 +202,33 @@ impl VirtualRom {
     /// inserted yet is not the mirror's to delete.
     fn forget(&mut self, address: &str) {
         let Some(recorded) = self.written.remove(address) else { return };
+        if let Some(mount) = &self.mount {
+            mount.remove(&recorded.path);
+            return;
+        }
         let file = self.root.join(&recorded.path);
-        if read_file(&file).is_ok_and(|bytes| hash(&bytes) == recorded.hash) {
-            let _ = std::fs::remove_file(&file);
-            let mut directory = file.parent();
-            while let Some(dir) = directory.filter(|dir| dir.starts_with(&self.root) && *dir != self.root) {
-                if std::fs::remove_dir(dir).is_err() {
-                    break;
-                }
-                directory = dir.parent();
+        match read_file(&file) {
+            Ok(bytes) if hash(&bytes) != recorded.hash => return,
+            Ok(_) => {
+                let _ = std::fs::remove_file(&file);
             }
+            // Deleted already, by whoever deleted it from the folder; the folders it leaves empty go all the same.
+            Err(_) => {}
+        }
+        let mut directory = file.parent();
+        while let Some(dir) = directory.filter(|dir| dir.starts_with(&self.root) && *dir != self.root) {
+            if std::fs::remove_dir(dir).is_err() {
+                break;
+            }
+            directory = dir.parent();
         }
     }
 
+    /// Keeps what was written for the next session; a mount writes nothing that would outlast it.
     fn save_record(&self, project: &Path) {
+        if self.mount.is_some() {
+            return;
+        }
         let record = Record { module: self.module.key.clone(), variant: self.variant.clone(), files: self.written.clone() };
         let saved = serde_json::to_string(&record)
             .map_err(|e| Error::new(ErrorCode::InvalidArgument, e.to_string()))
@@ -223,6 +296,27 @@ fn sources(plan: Option<&FileManifest>) -> BTreeMap<String, (String, String)> {
     out
 }
 
+/// What the dock shows, what graphics read from and what NCPatcher said have all changed with a module file.
+fn modules_changed(open: &mut OpenProject) {
+    open.filesystem = None;
+    open.patcher = None;
+    open.layers = Default::default();
+    open.graphics = None;
+}
+
+/// Locks `mutex`, waiting no longer than `patience`.
+fn lock_within<T>(mutex: &Mutex<T>, patience: std::time::Duration) -> Option<MutexGuard<'_, T>> {
+    let start = std::time::Instant::now();
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return Some(guard),
+            Err(std::sync::TryLockError::Poisoned(poisoned)) => return Some(poisoned.into_inner()),
+            Err(std::sync::TryLockError::WouldBlock) if start.elapsed() < patience => std::thread::sleep(std::time::Duration::from_millis(5)),
+            Err(std::sync::TryLockError::WouldBlock) => return None,
+        }
+    }
+}
+
 /// The module edits in the folder go to: the active one, or the first that can take files, as the dock shows it.
 fn active_module(open: &OpenProject) -> Result<ModuleInfo> {
     let mut modules = open.patcher.as_ref().map(|(modules, _)| modules.clone()).unwrap_or_default();
@@ -257,22 +351,28 @@ impl Shared {
         self.filesystem()
     }
 
-    /// Stops the mirror and removes its folder. Edits the watcher has not reported yet are inserted first; a file that
-    /// still is not what the record says -- one that could not be inserted, or one nobody should have put there --
-    /// goes to `.bigstar/lost` rather than with the folder.
+    /// Stops the mirror and removes its folder. Edits not inserted yet are inserted first; a file that still is not
+    /// what the record says -- one that could not be inserted, or one nobody should have put there -- goes to
+    /// `.bigstar/lost` rather than with the folder.
     pub(super) fn hide_virtual_rom(&self) -> Result<Response> {
         let mut inserted = false;
         {
             let mut state = lock(&self.state);
             let open = state.open.as_mut().ok_or_else(no_project)?;
             if open.virtual_rom.is_some() || open.settings.virtual_rom {
-                let root = open.directory.join(VIRTUAL_ROM_DIR);
-                inserted = self.virtual_rom_changed(open, &files_under(&root));
-                let written = match open.virtual_rom.take() {
-                    Some(mirror) => mirror.written,
-                    None => read_record(&open.directory).map(|record| record.files).unwrap_or_default(),
-                };
-                self.remove_virtual_rom(&open.directory, &written);
+                match open.virtual_rom.take() {
+                    Some(mirror) if mirror.mount.is_some() => inserted = self.unmount_virtual_rom(open, mirror),
+                    mirror => {
+                        let root = open.directory.join(VIRTUAL_ROM_DIR);
+                        open.virtual_rom = mirror;
+                        inserted = self.virtual_rom_changed(open, &files_under(&root));
+                        let written = match open.virtual_rom.take() {
+                            Some(mirror) => mirror.written,
+                            None => read_record(&open.directory).map(|record| record.files).unwrap_or_default(),
+                        };
+                        self.remove_virtual_rom(&open.directory, &written);
+                    }
+                }
                 open.settings.virtual_rom = false;
                 save_settings(&open.directory, &open.settings)?;
                 self.log(LogLevel::Info, "The ROM is no longer exposed as a folder");
@@ -284,6 +384,24 @@ impl Shared {
             self.emit(Event::GraphicsChanged { generation });
         }
         self.filesystem()
+    }
+
+    /// Inserts what the mount holds that was never inserted, unmounts it, and keeps the files made there that are no
+    /// file of the ROM's in `.bigstar/lost`. Returns whether any module file changed.
+    fn unmount_virtual_rom(&self, open: &mut OpenProject, mut mirror: VirtualRom) -> bool {
+        let (edits, strays) = mirror.mount.as_ref().map(mount::Mounted::unsaved).unwrap_or_default();
+        let inserted = !edits.is_empty() && self.import(open, &mut mirror, edits);
+        drop(mirror);
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let lost = open.directory.join(LOST_DIR).join(stamp.to_string());
+        let kept = strays.iter().filter(|(relative, bytes)| write_file_atomically(&lost.join(relative), bytes).is_ok()).count();
+        if kept > 0 {
+            self.log(LogLevel::Warning, format!("{kept} file(s) in the ROM's folder were never inserted; moved them to {}", lost.display()));
+        }
+        // Empty once unmounted; anything else in it is not the mirror's to remove.
+        let _ = std::fs::remove_dir(open.directory.join(VIRTUAL_ROM_DIR));
+        let _ = std::fs::remove_file(open.directory.join(RECORD_FILE));
+        inserted
     }
 
     /// Deletes the folder and its record, moving each file that is not what `written` says was last written or taken
@@ -334,9 +452,15 @@ impl Shared {
 
     /// Starts the mirror over for the active module and variant, after either changed or the clean ROM did.
     pub(super) fn restart_virtual_rom(&self, open: &mut OpenProject) {
-        if open.virtual_rom.take().is_some()
-            && let Err(error) = self.start_virtual_rom(open)
+        let Some(mut mirror) = open.virtual_rom.take() else { return };
+        // What the mount holds that was never inserted goes into the module it was meant for, before it unmounts.
+        if let Some((edits, _)) = mirror.mount.as_ref().map(mount::Mounted::unsaved)
+            && !edits.is_empty()
         {
+            self.import(open, &mut mirror, edits);
+        }
+        drop(mirror);
+        if let Err(error) = self.start_virtual_rom(open) {
             self.log(LogLevel::Warning, format!("Could not refresh the ROM's folder: {}", error.message));
         }
     }
@@ -351,8 +475,15 @@ impl Shared {
         let record = read_record(&open.directory);
         // A record of another module or variant describes another view; its files are simply brought up to date.
         let written = record.filter(|record| record.module == module.key && record.variant == variant).map(|record| record.files).unwrap_or_default();
-        let mut mirror =
-            VirtualRom { root: open.directory.join(VIRTUAL_ROM_DIR), module, variant, view: EffectiveFilesystem::new(), plan: None, written };
+        let mut mirror = VirtualRom {
+            root: open.directory.join(VIRTUAL_ROM_DIR),
+            module,
+            variant,
+            view: EffectiveFilesystem::new(),
+            plan: None,
+            written,
+            mount: None,
+        };
         self.plan_view(open, &mut mirror);
         // A file whose bytes are not the ones recorded was edited while nobody was watching, and goes in first.
         let offline: Vec<(String, Vec<u8>)> = mirror
@@ -367,14 +498,36 @@ impl Shared {
             self.import(open, &mut mirror, offline);
             self.plan_view(open, &mut mirror);
         }
+        if self.options.mount_virtual_rom && cfg!(target_os = "linux") {
+            self.mount_virtual_rom(open, &mut mirror);
+        }
         mirror.materialize(None)?;
         mirror.save_record(&open.directory);
         open.virtual_rom = Some(mirror);
         Ok(())
     }
 
+    /// Mounts the folder for `mirror`, once a folder of plain files left from before is cleared away; where it cannot
+    /// be mounted, the folder is written out as plain files instead.
+    fn mount_virtual_rom(&self, open: &OpenProject, mirror: &mut VirtualRom) {
+        if mirror.root.exists() {
+            self.remove_virtual_rom(&open.directory, &mirror.written);
+        }
+        match mount::Mounted::start(&mirror.root, self.this.clone()) {
+            Ok(mounted) => {
+                mirror.written.clear();
+                mirror.mount = Some(mounted);
+            }
+            Err(error) => {
+                self.log(LogLevel::Warning, format!("Could not mount the ROM's folder ({error}); writing its files out instead"));
+            }
+        }
+    }
+
     /// Asks NCPatcher for the ROM from the mirror's module down, and reads through that.
     fn plan_view(&self, open: &mut OpenProject, mirror: &mut VirtualRom) {
+        // An insertion forgets what NCPatcher said; it is asked again.
+        self.ensure_patcher(open);
         let scope = PlanScope::FromModule(mirror.module.key.clone());
         // Without a plan for the whole project NCPatcher is not there to ask, which the dock already says.
         let has_plan = open.patcher.as_ref().is_some_and(|(_, plan)| plan.is_some());
@@ -396,27 +549,32 @@ impl Shared {
     fn import(&self, open: &mut OpenProject, mirror: &mut VirtualRom, edits: Vec<(String, Vec<u8>)>) -> bool {
         let mut changed = false;
         for (address, bytes) in edits {
-            match self.import_one(open, mirror, &address, &bytes) {
-                Ok(Imported::Inserted) => {
-                    changed = true;
-                    self.log(LogLevel::Info, format!("Inserted {address} into module {}", mirror.module.key));
-                }
-                Ok(Imported::Dropped) => {
-                    changed = true;
-                    self.log(LogLevel::Info, format!("{address} matches the layers below; moved module {}'s copy to {TRASH_DIR}", mirror.module.key));
-                }
-                Ok(Imported::Unchanged) => {}
-                Err(error) => self.log(LogLevel::Warning, format!("Could not insert {address} into module {}: {}", mirror.module.key, error.message)),
-            }
-        }
-        if changed {
-            // What the dock shows and what graphics read from have both changed.
-            open.filesystem = None;
-            open.patcher = None;
-            open.layers = Default::default();
-            open.graphics = None;
+            changed |= self.import_logged(open, mirror, &address, &bytes).unwrap_or(false);
         }
         changed
+    }
+
+    /// [`Self::import_one`], said in the log. Returns whether any module file changed.
+    fn import_logged(&self, open: &mut OpenProject, mirror: &mut VirtualRom, address: &str, bytes: &[u8]) -> Result<bool> {
+        let changed = match self.import_one(open, mirror, address, bytes) {
+            Ok(Imported::Inserted) => {
+                self.log(LogLevel::Info, format!("Inserted {address} into module {}", mirror.module.key));
+                true
+            }
+            Ok(Imported::Dropped) => {
+                self.log(LogLevel::Info, format!("{address} matches the layers below; moved module {}'s copy to {TRASH_DIR}", mirror.module.key));
+                true
+            }
+            Ok(Imported::Unchanged) => false,
+            Err(error) => {
+                self.log(LogLevel::Warning, format!("Could not insert {address} into module {}: {}", mirror.module.key, error.message));
+                return Err(error);
+            }
+        };
+        if changed {
+            modules_changed(open);
+        }
+        Ok(changed)
     }
 
     fn import_one(&self, open: &mut OpenProject, mirror: &mut VirtualRom, address: &str, bytes: &[u8]) -> Result<Imported> {
@@ -438,12 +596,42 @@ impl Shared {
         Ok(outcome)
     }
 
-    /// The watcher's report of the folder: an edit is inserted, a deleted file comes back, and the host's own writes
-    /// are told apart by their hash. Returns whether any module file changed.
+    /// A file deleted from the folder: the active module's copy of it goes to the trash, so it reads as the layers
+    /// below give it, or is gone. Returns whether the module had one; without, there was nothing to delete.
+    fn delete_one(&self, open: &mut OpenProject, mirror: &VirtualRom, address: &str) -> bool {
+        match layers::drop_override(open, &mirror.module, address) {
+            Ok(Some(target)) => {
+                open.own_writes.insert(target);
+                modules_changed(open);
+                self.log(LogLevel::Info, format!("Moved {address} from module {} to {TRASH_DIR}", mirror.module.key));
+                true
+            }
+            Ok(None) => {
+                self.log(
+                    LogLevel::Warning,
+                    format!("{address} is not in module {}, so there is nothing to delete; the ROM's files stay", mirror.module.key),
+                );
+                false
+            }
+            Err(error) => {
+                self.log(LogLevel::Warning, format!("Could not delete {address} from module {}: {}", mirror.module.key, error.message));
+                false
+            }
+        }
+    }
+
+    /// The watcher's report of the folder: an edit is inserted, a deleted file is taken out of the module or comes
+    /// back, and the host's own writes are told apart by their hash. Returns whether any module file changed.
+    ///
+    /// A mounted folder reports its own edits as they are made; the watcher only hears them again, and reading the
+    /// folder here, with the state locked, would wait on the mount's threads waiting on that lock.
     pub(super) fn virtual_rom_changed(&self, open: &mut OpenProject, paths: &[PathBuf]) -> bool {
+        if open.virtual_rom.as_ref().is_some_and(|mirror| mirror.mount.is_some()) {
+            return false;
+        }
         let Some(mut mirror) = open.virtual_rom.take() else { return false };
         let mut edits = Vec::new();
-        let mut restore = BTreeSet::new();
+        let mut deleted = Vec::new();
         let mut seen = BTreeSet::new();
         for path in paths {
             let Some(relative) = project_relative(&open.directory, path) else { continue };
@@ -453,15 +641,13 @@ impl Shared {
             }
             let address = mirror.address_of(&relative);
             match (address, read_file(&mirror.root.join(&relative)).ok()) {
-                (Some(address), None) => {
-                    restore.insert(address);
-                }
+                (Some(address), None) => deleted.push(address),
                 (Some(address), Some(bytes)) => {
                     if mirror.written.get(&address).is_none_or(|recorded| recorded.hash != hash(&bytes)) {
                         edits.push((address, bytes));
                     }
                 }
-                (None, Some(bytes)) if relative.starts_with("z_new/") => edits.push((relative, bytes)),
+                (None, Some(bytes)) if new_file_address(&relative).is_some() => edits.push((relative, bytes)),
                 (None, Some(_)) => self.log(
                     LogLevel::Warning,
                     format!("{VIRTUAL_ROM_DIR}/{relative} is not a file the ROM has; only new files under z_new/ are inserted"),
@@ -469,7 +655,13 @@ impl Shared {
                 (None, None) => {}
             }
         }
-        let changed = !edits.is_empty() && self.import(open, &mut mirror, edits);
+        let mut changed = !edits.is_empty() && self.import(open, &mut mirror, edits);
+        // Each deleted file is written again as it now reads, or forgotten when nothing has it any more.
+        let mut restore = BTreeSet::new();
+        for address in deleted {
+            changed |= self.delete_one(open, &mirror, &address);
+            restore.insert(address);
+        }
         if changed {
             self.plan_view(open, &mut mirror);
         }
@@ -479,6 +671,70 @@ impl Shared {
         mirror.save_record(&open.directory);
         open.virtual_rom = Some(mirror);
         changed
+    }
+
+    /// A file the mount `id` took: closed after being written to, or renamed over a ROM file. It is inserted, and the
+    /// mount then holds what it reads as.
+    pub(super) fn mount_wrote(&self, id: u64, address: String, bytes: Vec<u8>) -> Result<()> {
+        self.with_mount(id, &address, |host, open, mirror| {
+            let changed = host.import_logged(open, mirror, &address, &bytes)?;
+            if changed {
+                host.plan_view(open, mirror);
+            }
+            Ok((changed, ()))
+        })
+        .map(|((), _)| ())
+    }
+
+    /// A ROM file deleted from the mount `id`. Returns whether it was the active module's to delete.
+    pub(super) fn mount_deleted(&self, id: u64, address: &str) -> Result<bool> {
+        self.with_mount(id, address, |host, open, mirror| {
+            let deleted = host.delete_one(open, mirror, address);
+            if deleted {
+                host.plan_view(open, mirror);
+            }
+            Ok((deleted, deleted))
+        })
+        .map(|(deleted, _)| deleted)
+    }
+
+    /// Runs `apply` on the mirror the mount `id` belongs to for `address`. When it says the modules changed, the
+    /// mount is brought up to date -- `address`, and every address whose source the plan now names differently --
+    /// and that is announced. The state lock is waited for only so long: the host may be holding it while something
+    /// reads the mount.
+    fn with_mount<T>(
+        &self,
+        id: u64,
+        address: &str,
+        apply: impl FnOnce(&Self, &mut OpenProject, &mut VirtualRom) -> Result<(bool, T)>,
+    ) -> Result<(T, bool)> {
+        let busy = || Error::new(ErrorCode::IoError, "the editor is busy; try again");
+        let gone = || invalid("the ROM's folder is no longer exposed");
+        let mut state = lock_within(&self.state, MOUNT_PATIENCE).ok_or_else(busy)?;
+        let open = state.open.as_mut().ok_or_else(gone)?;
+        let mut mirror = open.virtual_rom.take().ok_or_else(gone)?;
+        if mirror.mount.as_ref().is_none_or(|mount| mount.id() != id) {
+            open.virtual_rom = Some(mirror);
+            return Err(gone());
+        }
+        let before = sources(mirror.plan.as_ref());
+        let outcome = apply(self, open, &mut mirror);
+        if let Ok((true, _)) = &outcome {
+            let after = sources(mirror.plan.as_ref());
+            let mut addresses = BTreeSet::from([address.to_owned()]);
+            addresses.extend(before.keys().chain(after.keys()).filter(|address| before.get(*address) != after.get(*address)).cloned());
+            if let Err(error) = mirror.materialize(Some(&addresses)) {
+                self.log(LogLevel::Warning, format!("Could not refresh the ROM's folder: {}", error.message));
+            }
+        }
+        open.virtual_rom = Some(mirror);
+        drop(state);
+        let (changed, value) = outcome?;
+        if changed {
+            let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
+            self.emit(Event::GraphicsChanged { generation });
+        }
+        Ok((value, changed))
     }
 
     /// Brings the folder up to date with the modules: the addresses given, every address whose source the new plan

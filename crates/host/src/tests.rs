@@ -1295,7 +1295,7 @@ fn with_plans(label: &str, planned: &[(&str, i64, &str)], scoped: &Scoped) -> (F
     );
     write_bytes(&script, text.as_bytes());
     std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-    let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
+    let options = crate::HostOptions { ncpatcher: script, mount_virtual_rom: false, ..crate::HostOptions::default() };
     let host = match scoped.desktop {
         true => Host::for_desktop_with_options(fixture.root.path(), options).unwrap(),
         false => Host::with_options(fixture.root.path(), options).unwrap(),
@@ -1878,10 +1878,16 @@ fn real_levels_load_the_banks_their_sprites_need() {
     assert!(missing.iter().any(|(course, _)| course == "course/J06_1.bin"), "the unused grassland level is missing some");
 }
 
-/// The project with module `mine`, opened by a desktop host whose NCPatcher is nowhere to be found.
+/// The project with module `mine`, opened by a desktop host whose NCPatcher is nowhere to be found. The folder is
+/// written out as plain files; [`mounted`] mounts it.
 fn mirrored(label: &str) -> (Fixture, HostSession) {
+    mirrored_as(label, false)
+}
+
+fn mirrored_as(label: &str, mount: bool) -> (Fixture, HostSession) {
     let (fixture, _) = with_module(label);
-    let options = crate::HostOptions { ncpatcher: fixture.root.path().join("no-ncpatcher"), ..crate::HostOptions::default() };
+    let options =
+        crate::HostOptions { ncpatcher: fixture.root.path().join("no-ncpatcher"), mount_virtual_rom: mount, ..crate::HostOptions::default() };
     let mut session = Host::for_desktop_with_options(fixture.root.path(), options).unwrap().session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     (fixture, session)
@@ -1992,7 +1998,7 @@ fn a_file_edited_in_the_folder_goes_into_the_active_module() {
 }
 
 #[test]
-fn a_file_deleted_from_the_folder_comes_back() {
+fn a_file_of_the_roms_own_deleted_from_the_folder_comes_back() {
     let (fixture, mut session) = mirrored("host-vrom-delete");
     let project = fixture.root.path().join("proj");
     let folder = project.join("virtual-rom");
@@ -2002,6 +2008,144 @@ fn a_file_deleted_from_the_folder_comes_back() {
     changed(&session, &[&bgdat]);
     assert_eq!(std::fs::read(&bgdat).unwrap(), level_files().1);
     assert!(files_under(&project.join("modules/mine/nitrofs")).is_empty(), "deleting removes nothing from the module");
+}
+
+#[test]
+fn deleting_a_file_from_the_folder_takes_it_out_of_the_module() {
+    let (fixture, mut session) = mirrored("host-vrom-delete-own");
+    let project = fixture.root.path().join("proj");
+    let (folder, module) = (project.join("virtual-rom"), project.join("modules/mine/nitrofs"));
+    expose(&mut session);
+
+    // A new file goes, folder and all.
+    let added = folder.join("z_new/sub/new.bin");
+    write_bytes(&added, &[7]);
+    changed(&session, &[&added]);
+    assert!(module.join("z_new/sub/new.bin").exists());
+    std::fs::remove_file(&added).unwrap();
+    changed(&session, &[&added]);
+    assert!(!module.join("z_new/sub/new.bin").exists());
+    assert!(!added.exists());
+    assert!(!folder.join("z_new").exists());
+    session.drain_events();
+    changed(&session, &[&added]);
+    assert!(!added.exists(), "it stays gone");
+
+    // An edited ROM file reads as the ROM has it again.
+    let course = folder.join("course/A01_1.bin");
+    write_bytes(&course, &[1, 2, 3]);
+    changed(&session, &[&course]);
+    std::fs::remove_file(&course).unwrap();
+    changed(&session, &[&course]);
+    assert!(!module.join("course/A01_1.bin").exists());
+    assert_eq!(std::fs::read(&course).unwrap(), level_files().0);
+    let trashed = files_under(&project.join(super::host::TRASH_DIR));
+    assert!(trashed.iter().any(|path| path.ends_with("/z_new/sub/new.bin")), "{trashed:?}");
+    assert!(trashed.iter().any(|path| path.ends_with("/course/A01_1.bin")), "{trashed:?}");
+}
+
+/// The project with module `mine`, its ROM folder mounted; `None` where FUSE cannot mount here.
+#[cfg(target_os = "linux")]
+fn mounted(label: &str) -> Option<(Fixture, HostSession, std::path::PathBuf)> {
+    let (fixture, mut session) = mirrored_as(label, true);
+    expose(&mut session);
+    let folder = fixture.root.path().join("proj/virtual-rom");
+    let mounts = std::fs::read_to_string("/proc/self/mounts").unwrap_or_default();
+    if !mounts.lines().any(|line| line.split(' ').nth(1).is_some_and(|point| std::path::Path::new(point) == folder.canonicalize().unwrap())) {
+        eprintln!("FUSE cannot mount here; skipping");
+        return None;
+    }
+    Some((fixture, session, folder))
+}
+
+/// Waits a little for `holds` to be true: a file closed in the mount reaches the host just after `close` returns.
+#[cfg(target_os = "linux")]
+fn eventually(holds: impl Fn() -> bool) -> bool {
+    (0..200).any(|_| {
+        holds() || {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            false
+        }
+    }) || holds()
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_mounted_folder_reads_and_takes_edits_as_files_close() {
+    let Some((fixture, mut session, folder)) = mounted("host-vrom-mount") else { return };
+    let project = fixture.root.path().join("proj");
+    let module = project.join("modules/mine/nitrofs");
+    assert_eq!(
+        files_under(&folder),
+        [
+            "ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin",
+            "ARCHIVE/Dat_Field_narc/Dat/Field/J01_1_bgdat.bin",
+            "course/A01_1.bin",
+            "course/A01_1_bgdat.bin"
+        ]
+    );
+    assert_eq!(std::fs::read(folder.join("course/A01_1.bin")).unwrap(), level_files().0);
+    session.drain_events();
+
+    // Written and closed, it is in the module; no watcher is needed.
+    std::fs::write(folder.join("course/A01_1.bin"), [1, 2, 3]).unwrap();
+    assert!(eventually(|| std::fs::read(module.join("course/A01_1.bin")).is_ok_and(|bytes| bytes == [1, 2, 3])));
+    assert_eq!(std::fs::read(folder.join("course/A01_1.bin")).unwrap(), [1, 2, 3]);
+    assert!(logged(&mut session).iter().any(|line| line == "Inserted course/A01_1.bin into module mine"));
+
+    // Saved as most editors save: a new file renamed over the old.
+    let temporary = folder.join("ARCHIVE/Dat_Field_narc/Dat/Field/.J01_1.bin.tmp");
+    std::fs::write(&temporary, [4]).unwrap();
+    std::fs::rename(&temporary, folder.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin")).unwrap();
+    assert_eq!(std::fs::read(module.join("ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin")).unwrap(), [4]);
+    assert!(!temporary.exists());
+
+    // A change in the editor reaches the folder.
+    session.handle(Request::WriteFile { path: "course/A01_1_bgdat.bin".into(), bytes: vec![5, 6] }).unwrap();
+    assert_eq!(std::fs::read(folder.join("course/A01_1_bgdat.bin")).unwrap(), [5, 6]);
+
+    // Nothing was written to the disk but the module's files.
+    session.handle(Request::HideVirtualRom).unwrap();
+    assert!(!folder.exists());
+    assert!(!project.join(".bigstar/virtual-rom.json").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn files_deleted_from_the_mounted_folder_leave_the_module() {
+    let Some((fixture, mut session, folder)) = mounted("host-vrom-mount-delete") else { return };
+    let module = fixture.root.path().join("proj/modules/mine/nitrofs");
+
+    // A file of the ROM's own cannot be deleted.
+    let error = std::fs::remove_file(folder.join("course/A01_1_bgdat.bin")).unwrap_err();
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(std::fs::read(folder.join("course/A01_1_bgdat.bin")).unwrap(), level_files().1);
+
+    // A new one goes into the module, and out again with its folder.
+    std::fs::create_dir_all(folder.join("z_new/sub")).unwrap();
+    std::fs::write(folder.join("z_new/sub/new.bin"), [7]).unwrap();
+    assert!(eventually(|| std::fs::read(module.join("z_new/sub/new.bin")).is_ok_and(|bytes| bytes == [7])));
+    std::fs::remove_file(folder.join("z_new/sub/new.bin")).unwrap();
+    assert!(!module.join("z_new/sub/new.bin").exists());
+    assert!(!folder.join("z_new/sub/new.bin").exists());
+    std::fs::remove_dir(folder.join("z_new/sub")).unwrap();
+    std::fs::remove_dir(folder.join("z_new")).unwrap();
+    assert!(!folder.join("z_new").exists());
+
+    // An edited ROM file goes back to what the ROM has.
+    std::fs::write(folder.join("course/A01_1.bin"), [1]).unwrap();
+    assert!(eventually(|| module.join("course/A01_1.bin").exists()));
+    std::fs::remove_file(folder.join("course/A01_1.bin")).unwrap();
+    assert!(!module.join("course/A01_1.bin").exists());
+    assert_eq!(std::fs::read(folder.join("course/A01_1.bin")).unwrap(), level_files().0);
+
+    // A file somewhere else is the tool's own until the folder goes, and then is kept in lost.
+    std::fs::write(folder.join("notes.txt"), b"mine").unwrap();
+    assert!(files_under(&module).is_empty(), "{:?}", files_under(&module));
+    session.handle(Request::HideVirtualRom).unwrap();
+    let lost = files_under(&fixture.root.path().join("proj/.bigstar/lost"));
+    assert_eq!(lost.len(), 1);
+    assert!(lost[0].ends_with("/notes.txt"), "{lost:?}");
 }
 
 #[test]
@@ -2097,4 +2241,38 @@ fn ncpatcher_says_what_lies_below_and_what_the_folder_shows() {
     // The folder shows what the plan from `mine` down reads.
     expose(&mut session);
     assert_eq!(std::fs::read(project.join("virtual-rom/course/A01_1_bgdat.bin")).unwrap(), [9, 9]);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn new_files_move_about_the_mounted_folder() {
+    let Some((fixture, _session, folder)) = mounted("host-vrom-mount-rename") else { return };
+    let module = fixture.root.path().join("proj/modules/mine/nitrofs");
+
+    // Written as a partial file and renamed once complete, as file managers and browsers do.
+    std::fs::create_dir_all(folder.join("z_new")).unwrap();
+    std::fs::write(folder.join("z_new/notes.txt.part"), b"hi").unwrap();
+    assert!(eventually(|| module.join("z_new/notes.txt.part").exists()));
+    std::fs::rename(folder.join("z_new/notes.txt.part"), folder.join("z_new/notes.txt")).unwrap();
+    assert_eq!(std::fs::read(module.join("z_new/notes.txt")).unwrap(), b"hi");
+    assert!(!module.join("z_new/notes.txt.part").exists());
+    assert_eq!(std::fs::read(folder.join("z_new/notes.txt")).unwrap(), b"hi");
+
+    // A folder of new files moves with them.
+    std::fs::create_dir_all(folder.join("z_new/a")).unwrap();
+    std::fs::write(folder.join("z_new/a/one.bin"), [1]).unwrap();
+    assert!(eventually(|| module.join("z_new/a/one.bin").exists()));
+    std::fs::rename(folder.join("z_new/a"), folder.join("z_new/b")).unwrap();
+    assert_eq!(std::fs::read(module.join("z_new/b/one.bin")).unwrap(), [1]);
+    assert!(!module.join("z_new/a/one.bin").exists());
+
+    // Moved out of z_new/, a file is no longer the module's.
+    std::fs::rename(folder.join("z_new/notes.txt"), folder.join("notes.txt")).unwrap();
+    assert!(!module.join("z_new/notes.txt").exists());
+    assert_eq!(std::fs::read(folder.join("notes.txt")).unwrap(), b"hi");
+
+    // The ROM's own files stay where they are, and so does a folder that holds one.
+    let refused = std::fs::rename(folder.join("course/A01_1.bin"), folder.join("course/moved.bin")).unwrap_err();
+    assert_eq!(refused.kind(), std::io::ErrorKind::PermissionDenied);
+    assert_eq!(std::fs::rename(folder.join("course"), folder.join("moved")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
 }
