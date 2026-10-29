@@ -2104,6 +2104,12 @@ fn the_mounted_folder_reads_and_takes_edits_as_files_close() {
     session.handle(Request::WriteFile { path: "course/A01_1_bgdat.bin".into(), bytes: vec![5, 6] }).unwrap();
     assert_eq!(std::fs::read(folder.join("course/A01_1_bgdat.bin")).unwrap(), [5, 6]);
 
+    // The folder goes with the mount when the project closes, and comes back with it.
+    session.handle(Request::CloseProject).unwrap();
+    assert!(!folder.exists());
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    assert_eq!(std::fs::read(folder.join("course/A01_1.bin")).unwrap(), [1, 2, 3]);
+
     // Nothing was written to the disk but the module's files.
     session.handle(Request::HideVirtualRom).unwrap();
     assert!(!folder.exists());

@@ -212,12 +212,17 @@ pub(in crate::host) struct Mounted {
     id: u64,
     root: PathBuf,
     tree: Arc<Mutex<Tree>>,
-    _session: BackgroundSession,
+    /// Taken when it is dropped, which unmounts it.
+    session: Option<BackgroundSession>,
 }
 
+/// The folder goes with the mount, so that nothing of the ROM is left in the project; it is made again when the
+/// folder is next mounted.
 impl Drop for Mounted {
     fn drop(&mut self) {
         lock(&MOUNTED).retain(|root| *root != self.root);
+        drop(self.session.take());
+        let _ = std::fs::remove_dir(&self.root);
     }
 }
 
@@ -226,6 +231,7 @@ impl Drop for Mounted {
 pub fn unmount_all() {
     for root in std::mem::take(&mut *lock(&MOUNTED)) {
         unmount(&root);
+        let _ = std::fs::remove_dir(&root);
     }
 }
 
@@ -244,7 +250,7 @@ impl Mounted {
         config.n_threads = Some(4);
         let session = fuser::spawn_mount(filesystem, root, &config)?;
         lock(&MOUNTED).push(root.to_path_buf());
-        Ok(Self { id, root: root.to_path_buf(), tree, _session: session })
+        Ok(Self { id, root: root.to_path_buf(), tree, session: Some(session) })
     }
 
     pub(in crate::host) fn id(&self) -> u64 {
