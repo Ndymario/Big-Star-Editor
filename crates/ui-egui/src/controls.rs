@@ -763,7 +763,7 @@ pub fn numbered(value: i64, name: &str, hex: bool) -> String {
 /// A number picked by its name, from a drop-down of `choices` that each show as [`numbered`]. A value no choice
 /// names shows as not listed, and none, a selection that disagrees, as a dash. Finish it with [`NumberedChoice::show`].
 pub fn numbered_choice<'a, T, S>(id: impl std::hash::Hash + std::fmt::Debug, choices: &'a [(T, S)]) -> NumberedChoice<'a, T, S> {
-    NumberedChoice { id: egui::Id::new(id), choices, hex: false, width: None, height: None, filter: None }
+    NumberedChoice { id: egui::Id::new(id), choices, hex: false, width: None, height: None }
 }
 
 pub struct NumberedChoice<'a, T, S> {
@@ -771,8 +771,8 @@ pub struct NumberedChoice<'a, T, S> {
     choices: &'a [(T, S)],
     hex: bool,
     width: Option<f32>,
+    /// How tall the open list gets before it scrolls; egui's height when `None`.
     height: Option<f32>,
-    filter: Option<&'a str>,
 }
 
 impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
@@ -789,22 +789,13 @@ impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
         self
     }
 
-    /// How tall the open list gets before it scrolls.
-    pub fn height(mut self, height: f32) -> Self {
-        self.height = Some(height);
-        self
-    }
-
-    /// A box above the list that keeps only the choices whose number or name holds what is typed, for a list too long
-    /// to scroll through. `hint` fills the empty box.
-    pub fn filter(mut self, hint: &'a str) -> Self {
-        self.filter = Some(hint);
-        self
-    }
-
     /// Returns the choice picked, when it is not `current` already.
     pub fn show(self, ui: &mut Ui, current: Option<i64>) -> Option<T> {
-        let Self { id, choices, hex, width, height, filter } = self;
+        self.show_list(ui, current, None)
+    }
+
+    fn show_list(self, ui: &mut Ui, current: Option<i64>, filter: Option<&str>) -> Option<T> {
+        let Self { id, choices, hex, width, height } = self;
         let selected = match current {
             Some(value) => match choices.iter().find(|(v, _)| (*v).into() == value) {
                 Some((_, name)) => numbered(value, name.as_ref(), hex),
@@ -818,31 +809,72 @@ impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
             if let Some(width) = width {
                 combo = combo.width(width).truncate();
             }
-            if let Some(height) = height {
+            let tallest = height.unwrap_or(ui.spacing().combo_height);
+            if filter.is_some() {
+                // egui closes a drop-down on any click, its filter's box among them, so this one closes only on a
+                // click outside it or on a choice.
+                combo = combo.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                // egui scrolls all a drop-down holds; the list scrolls on its own below the box, which stays in sight.
+                combo = combo.height(f32::INFINITY);
+            } else if let Some(height) = height {
                 combo = combo.height(height);
             }
-            combo.show_ui(ui, |ui| {
-                let filter_id = id.with("filter");
-                let needle = match filter {
-                    Some(hint) => {
-                        let mut text: String = ui.data(|d| d.get_temp(filter_id)).unwrap_or_default();
-                        ui.add(TextField::new(&mut text).hint(hint));
-                        ui.data_mut(|d| d.insert_temp(filter_id, text.clone()));
-                        text.to_lowercase()
+            let (filter_id, open_id, size_id) = (id.with("filter"), id.with("open"), id.with("unfiltered-size"));
+            let was_open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
+            let open = combo
+                .show_ui(ui, |ui| {
+                    let needle = match filter {
+                        Some(hint) => {
+                            // Each opening starts on the whole list, its box ready to type into.
+                            let mut text: String = if was_open { ui.data(|d| d.get_temp(filter_id)).unwrap_or_default() } else { String::new() };
+                            let field = ui.add(TextField::new(&mut text).hint(hint));
+                            if !was_open {
+                                field.request_focus();
+                            }
+                            ui.data_mut(|d| d.insert_temp(filter_id, text.clone()));
+                            text.to_lowercase()
+                        }
+                        None => String::new(),
+                    };
+                    let mut entries = |ui: &mut Ui| {
+                        for (value, name) in choices {
+                            let value_i64 = (*value).into();
+                            let entry = numbered(value_i64, name.as_ref(), hex);
+                            if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
+                                continue;
+                            }
+                            let response = ui.choice(current == Some(value_i64), entry).on_hover_text(name.as_ref());
+                            // The list opens on the choice made, not at its top.
+                            if !was_open && current == Some(value_i64) {
+                                response.scroll_to_me(Some(egui::Align::Center));
+                            }
+                            if response.clicked() {
+                                if current != Some(value_i64) {
+                                    picked = Some(*value);
+                                }
+                                ui.close();
+                            }
+                        }
+                    };
+                    if filter.is_none() {
+                        entries(ui);
+                        return;
                     }
-                    None => String::new(),
-                };
-                for (value, name) in choices {
-                    let value_i64 = (*value).into();
-                    let entry = numbered(value_i64, name.as_ref(), hex);
-                    if !needle.is_empty() && !entry.to_lowercase().contains(&needle) {
-                        continue;
-                    }
-                    if ui.choice(current == Some(value_i64), entry).on_hover_text(name.as_ref()).clicked() && current != Some(value_i64) {
-                        picked = Some(*value);
-                    }
-                }
-            });
+                    egui::ScrollArea::vertical().id_salt(id.with("list")).max_height(tallest).show(ui, |ui| {
+                        entries(ui);
+                        // egui lays a popup out in the size it had the frame before, so a list the filter shortened
+                        // could not grow back as the text is erased. It keeps the whole list's size instead.
+                        if needle.is_empty() {
+                            let size = ui.min_rect().size();
+                            ui.data_mut(|d| d.insert_temp(size_id, size));
+                        } else if let Some(size) = ui.data(|d| d.get_temp::<Vec2>(size_id)) {
+                            ui.set_min_size(vec2(size.x, size.y.min(tallest)));
+                        }
+                    });
+                })
+                .inner
+                .is_some();
+            ui.data_mut(|d| d.insert_temp(open_id, open));
         };
         match width {
             Some(width) => {
@@ -851,6 +883,39 @@ impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
             None => list(ui),
         }
         picked
+    }
+}
+
+/// How tall a [`FilteredChoice`]'s list gets before it scrolls: a long list is what has it filter.
+const FILTERED_LIST_HEIGHT: f32 = 640.0;
+
+/// A [`numbered_choice`] with a box above its list that keeps only the choices whose number or name holds what is
+/// typed, for a list too long to scroll through. `hint` fills the empty box. Finish it with [`FilteredChoice::show`].
+pub fn filtered_choice<'a, T, S>(id: impl std::hash::Hash + std::fmt::Debug, choices: &'a [(T, S)], hint: &'a str) -> FilteredChoice<'a, T, S> {
+    FilteredChoice { choice: NumberedChoice { height: Some(FILTERED_LIST_HEIGHT), ..numbered_choice(id, choices) }, hint }
+}
+
+pub struct FilteredChoice<'a, T, S> {
+    choice: NumberedChoice<'a, T, S>,
+    hint: &'a str,
+}
+
+impl<'a, T: Copy + Into<i64>, S: AsRef<str>> FilteredChoice<'a, T, S> {
+    /// Shows the numbers in hexadecimal.
+    pub fn hex(mut self, hex: bool) -> Self {
+        self.choice = self.choice.hex(hex);
+        self
+    }
+
+    /// How wide the closed drop-down is, as [`NumberedChoice::width`].
+    pub fn width(mut self, width: f32) -> Self {
+        self.choice = self.choice.width(width);
+        self
+    }
+
+    /// Returns the choice picked, when it is not `current` already.
+    pub fn show(self, ui: &mut Ui, current: Option<i64>) -> Option<T> {
+        self.choice.show_list(ui, current, Some(self.hint))
     }
 }
 
@@ -1158,6 +1223,59 @@ pub fn notice(ui: &mut Ui, icon: Icon, heading: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A long list opens with the choice made in sight, not at its top.
+    #[test]
+    fn a_list_opens_on_the_choice_made() {
+        use egui_kittest::kittest::Queryable as _;
+        let choices: Vec<(u16, String)> = (0..300).map(|t| (t, format!("Actor {t}"))).collect();
+        let mut harness = egui_kittest::Harness::builder().with_size(vec2(400.0, 900.0)).build_ui(|ui| {
+            filtered_choice("long", &choices, "Filter actors…").show(ui, Some(250));
+        });
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+        harness.run();
+        let field = harness.get_by_role(egui::accesskit::Role::TextInput).rect();
+        let popup = harness.ctx.memory(|m| m.layer_id_at(field.center()).and_then(|layer| m.area_rect(layer.id))).expect("popup");
+        assert!(popup.contains_rect(harness.get_by_label("250 – Actor 250").rect()), "the choice made is in the open list");
+    }
+
+    /// egui closes a drop-down on any click; a filtered one must stay open while its box is clicked and typed into.
+    #[test]
+    fn a_filtered_list_stays_open_while_its_box_is_used() {
+        use egui_kittest::kittest::Queryable as _;
+        let choices = [(0u16, "Goomba"), (1, "Koopa Troopa"), (2, "Boo")];
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, picked: &mut Option<u16>| {
+                if let Some(value) = filtered_choice("filtered", &choices, "Filter actors…").show(ui, Some(0)) {
+                    *picked = Some(value);
+                }
+            },
+            None,
+        );
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::TextInput).click();
+        harness.run();
+        harness.get_by_role(egui::accesskit::Role::TextInput).type_text("koopa");
+        harness.run();
+        assert!(harness.query_by_label("2 – Boo").is_none(), "the filter keeps only what holds what is typed");
+        // Erased, the whole list comes back, all of it inside the popup rather than cut off at the filtered size.
+        for _ in 0.."koopa".len() {
+            harness.key_press(egui::Key::Backspace);
+            harness.run();
+        }
+        let field = harness.get_by_role(egui::accesskit::Role::TextInput).rect();
+        let popup = harness.ctx.memory(|m| m.layer_id_at(field.center()).and_then(|layer| m.area_rect(layer.id))).expect("popup");
+        for label in ["0 – Goomba", "1 – Koopa Troopa", "2 – Boo"] {
+            assert!(popup.contains_rect(harness.get_by_label(label).rect()), "{label} fits the popup");
+        }
+        harness.get_by_role(egui::accesskit::Role::TextInput).type_text("koopa");
+        harness.run();
+        harness.get_by_label("1 – Koopa Troopa").click();
+        harness.run();
+        assert_eq!(*harness.state(), Some(1));
+        assert!(harness.query_by_label("1 – Koopa Troopa").is_none(), "picking a choice closes the list");
+    }
 
     #[test]
     fn a_field_never_takes_more_than_there_is() {

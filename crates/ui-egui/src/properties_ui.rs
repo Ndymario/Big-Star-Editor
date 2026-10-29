@@ -29,7 +29,11 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
         Editor::Choice { min, max, .. } if panel.raw => spin_box(ui, panel, index, row, *min, *max),
         // A share of the line, so the label and the note's icon keep theirs. A drop-down that took the whole line would
         // push them past the panel's edge, and the panel would widen to fit them every frame.
-        Editor::Choice { choices, .. } => controls::numbered_choice(("property-choice", index), choices)
+        Editor::Choice { choices, filter: Some(hint), .. } => controls::filtered_choice(("property-choice", index), choices, hint)
+            .hex(panel.hex)
+            .width((ui.available_width() * CHOICE_SHARE).max(80.0))
+            .show(ui, row.value),
+        Editor::Choice { choices, filter: None, .. } => controls::numbered_choice(("property-choice", index), choices)
             .hex(panel.hex)
             .width((ui.available_width() * CHOICE_SHARE).max(80.0))
             .show(ui, row.value),
@@ -116,10 +120,8 @@ fn row_ui(ui: &mut Ui, row: &Row, editor: impl FnOnce(&mut Ui) -> Option<i64>) -
 /// the type picked.
 fn sprite_type_editor(ui: &mut Ui, row: &Row, types: &[(u16, String)]) -> Option<i64> {
     // 300 actors are too many to address by number, so the list filters by what is typed.
-    controls::numbered_choice("sprite-picker", types)
+    controls::filtered_choice("sprite-picker", types, "Filter actors…")
         .width((ui.available_width() * CHOICE_SHARE).max(80.0))
-        .height(320.0)
-        .filter("Filter actors…")
         .show(ui, row.value)
         .map(i64::from)
 }

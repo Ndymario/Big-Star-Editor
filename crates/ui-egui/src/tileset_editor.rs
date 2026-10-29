@@ -863,7 +863,9 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
 /// picked.
 fn tileset_choice(ui: &mut Ui, id: &str, value: &mut u16) {
     let choices: Vec<(u16, &str)> = (0u16..).zip(TILESET_NAMES).collect();
-    if let Some(picked) = controls::numbered_choice(("tileset-choice", id), &choices).width(260.0).show(ui, Some(i64::from(*value))) {
+    if let Some(picked) =
+        controls::filtered_choice(("tileset-choice", id), &choices, "Filter tilesets…").width(260.0).show(ui, Some(i64::from(*value)))
+    {
         *value = picked;
     }
 }

@@ -96,6 +96,8 @@ pub enum Editor {
         choices: Vec<(i64, String)>,
         min: i64,
         max: i64,
+        /// The hint of a box above the list that filters it by what is typed, for a list too long to scroll through.
+        filter: Option<&'static str>,
     },
     /// On or off, whatever value turning it on writes.
     Boolean,
@@ -145,11 +147,16 @@ impl Row {
 
     /// Turns a number row into a drop-down of these, keeping its range for raw input.
     fn choose(&mut self, choices: Vec<(i64, String)>) {
+        self.choose_filtered(choices, None);
+    }
+
+    /// As [`Row::choose`], with a box above the list that filters it, `filter` its hint.
+    fn choose_filtered(&mut self, choices: Vec<(i64, String)>, filter: Option<&'static str>) {
         let (min, max) = match self.editor {
             Editor::Number { min, max } | Editor::Choice { min, max, .. } => (min, max),
             Editor::Boolean => (0, 1),
         };
-        self.editor = Editor::Choice { choices, min, max };
+        self.editor = Editor::Choice { choices, min, max, filter };
     }
 }
 
@@ -652,6 +659,15 @@ fn layer_choices(view: &LevelView, layer: BackgroundLayer) -> Option<Vec<(i64, S
     Some(choices)
 }
 
+/// The hint of the box that filters a tileset's list, `None`, or a background or foreground's.
+fn layer_filter(layer: Option<BackgroundLayer>) -> &'static str {
+    match layer {
+        None => "Filter tilesets…",
+        Some(BackgroundLayer::Background) => "Filter backgrounds…",
+        Some(BackgroundLayer::Foreground) => "Filter foregrounds…",
+    }
+}
+
 /// The record of a block a view names, and its place in the block: the first when none has the view's ID, as the
 /// game's lookups fall back.
 pub fn screen_for_view<'a>(course: &'a NsmbLevelCourse, block: ScreenBlock, v: &NsmbLevelView) -> Option<(usize, &'a NsmbLevelScreen)> {
@@ -819,7 +835,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         }
                         if let Some(choices) = choices {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(value));
-                            row.choose(choices.clone());
+                            row.choose_filtered(choices.clone(), Some(layer_filter(*layer)));
                         }
                         row.note = match (at, layer) {
                             (0, None) => "Its colours are the first tileset entry's palette, in the Layers tab.".to_owned(),
@@ -847,7 +863,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     }
                     if let Some(choices) = choices {
                         row.representable = choices.iter().any(|(id, _)| *id == i64::from(value));
-                        row.choose(choices.clone());
+                        row.choose_filtered(choices.clone(), Some(layer_filter(*layer)));
                     }
                     row.note = match layer {
                         None => "The level's tileset, and its colours.".to_owned(),
@@ -894,7 +910,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.note = format!("The {} image the views naming this entry show. 65535 shows none.", layer.name());
                         if let Some(choices) = layer_choices(view, layer) {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.screen_id));
-                            row.choose(choices);
+                            row.choose_filtered(choices, Some(layer_filter(Some(layer))));
                         }
                     }
                 }
@@ -907,7 +923,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     };
                     if block == ScreenBlock::Tileset {
                         row.representable = is_tileset_choice(record.palette_id);
-                        row.choose(tileset_choices());
+                        row.choose_filtered(tileset_choices(), Some(layer_filter(None)));
                     }
                 }
                 for (label, value, note) in [
@@ -1193,7 +1209,7 @@ fn declared_row(field: &SpriteFieldDefinition, value: i32) -> Row {
     } else if !field.choices.is_empty() {
         let choices: Vec<(i64, String)> = field.choices.iter().map(|c| (i64::from(c.value), c.label.clone())).collect();
         let named = choices.iter().any(|(v, _)| *v == value);
-        (Editor::Choice { choices, min, max }, named)
+        (Editor::Choice { choices, min, max, filter: None }, named)
     } else {
         (Editor::Number { min, max }, true)
     };
@@ -1723,15 +1739,13 @@ pub fn delete_node_edit(snapshot: &LevelSnapshot, tab: Tab, rows: &Rows) -> Opti
     Some(path_update(kind, index, path))
 }
 
-/// The sprite picker: every type the ROM's actor table maps to a named actor, by name.
+/// The sprite picker: every type the ROM's actor table maps to a named actor, by number.
 pub fn sprite_types(view: &LevelView) -> Vec<(u16, String)> {
     let catalog = &view.art.actors.catalog;
-    let mut entries: Vec<(u16, String)> = (0..catalog.sprite_object_ids.len())
+    (0..catalog.sprite_object_ids.len())
         .filter_map(|t| u16::try_from(t).ok())
         .filter_map(|t| view.art.actors.actor(t, None).filter(|a| !a.definition.name.is_empty()).map(|a| (t, a.definition.name.clone())))
-        .collect();
-    entries.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
-    entries
+        .collect()
 }
 
 #[cfg(test)]
@@ -1952,7 +1966,7 @@ mod tests {
         assert_eq!((rows.rows[0].label.as_str(), rows.rows[0].note.as_str()), ("Object ID", "Spawned by Chain Chomp/Log."));
         assert!(rows.rows[5].note.starts_with("8 is used by ones thrown out of the Monty Tank."));
         assert_eq!(rows.actor.as_ref().map(|a| (a.definition.name.as_str(), a.definition.category.as_str())), Some(("Synthetic actor", "Enemies")));
-        let Editor::Choice { choices: named, min, max } = &rows.rows[5].editor else { panic!("{:?}", rows.rows[5].editor) };
+        let Editor::Choice { choices: named, min, max, .. } = &rows.rows[5].editor else { panic!("{:?}", rows.rows[5].editor) };
         assert_eq!(named, &[(1, "Slow".to_owned()), (2, "Fast".to_owned())]);
         // Raw input types into the three bits, named or not.
         assert_eq!((*min, *max), (0, 7));
@@ -2004,9 +2018,9 @@ mod tests {
     }
 
     #[test]
-    fn the_sprite_picker_lists_types_by_name() {
+    fn the_sprite_picker_lists_types_by_number() {
         let view = sprite_view(0, Vec::new());
-        assert_eq!(sprite_types(&view), [(9, "Another actor".to_owned()), (7, "Synthetic actor".to_owned())]);
+        assert_eq!(sprite_types(&view), [(7, "Synthetic actor".to_owned()), (9, "Another actor".to_owned())]);
         let retyped = written(&view, 0, 9);
         assert_eq!(retyped.sprites[0].value.id, 9);
         // An id no actor claims still reads and edits as a number, and names no actor.
