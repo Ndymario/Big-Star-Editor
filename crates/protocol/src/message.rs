@@ -391,6 +391,14 @@ pub enum LevelEdit {
         screens: Vec<NsmbLevelScreen>,
         name: String,
     },
+    /// Replaces one view and the level's camera settings as one undo step: a view's camera values, with the settings
+    /// they need made, shared or removed.
+    SetViewCameras {
+        index: usize,
+        view: NsmbLevelView,
+        cameras: Vec<NsmbLevelCamera>,
+        name: String,
+    },
     /// Replaces the level's camera settings, which its views name by id.
     SetCameras {
         cameras: Vec<NsmbLevelCamera>,

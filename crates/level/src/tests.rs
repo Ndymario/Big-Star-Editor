@@ -784,4 +784,13 @@ fn the_header_and_every_screen_record_are_edited_saved_and_undone() {
     assert_eq!((&level.course().views, &level.course().tilesets), (&views, &tilesets));
     assert!(level.set_view_screens(1, NsmbLevelView::default(), ScreenBlock::Tileset, rotator, "x").is_err(), "no second view");
     assert_eq!(&level.course().tilesets, &tilesets, "a refused view edit changes nothing");
+    // A view and the camera settings it names change together too.
+    let cameras = level.course().cameras.clone();
+    let own = vec![NsmbLevelCamera { id: 3, top_offset: -8, ..Default::default() }];
+    level.set_view_cameras(0, NsmbLevelView { camera_settings_id: 3, ..Default::default() }, own.clone(), "Edit view camera").unwrap();
+    assert_eq!((level.course().views[0].camera_settings_id, &level.course().cameras), (3, &own));
+    level.undo().unwrap();
+    assert_eq!((&level.course().views, &level.course().cameras), (&views, &cameras));
+    assert!(level.set_view_cameras(1, NsmbLevelView::default(), own, "x").is_err(), "no second view");
+    assert_eq!(&level.course().cameras, &cameras, "a refused view edit changes nothing");
 }

@@ -599,6 +599,9 @@ impl Shared {
             LevelEdit::SetViewScreens { index, view, block, screens, name } => {
                 level.set_view_screens(index, view, block, screens, &name).map(|()| EditOutcome::None)
             }
+            LevelEdit::SetViewCameras { index, view, cameras, name } => {
+                level.set_view_cameras(index, view, cameras, &name).map(|()| EditOutcome::None)
+            }
             LevelEdit::SetCameras { cameras, name } => level.set_cameras(cameras, &name).map(|()| EditOutcome::None),
             LevelEdit::SetGlue { glue, name } => level.set_glue(glue, &name).map(|()| EditOutcome::None),
             LevelEdit::ReplaceSerialized { course, bgdat, name } => {

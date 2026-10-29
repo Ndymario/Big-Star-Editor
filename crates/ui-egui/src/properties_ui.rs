@@ -141,11 +141,18 @@ pub fn show(
     busy: bool,
 ) -> Option<LevelEdit> {
     view.sync_panel();
+    // Outside the advanced mode views hold their camera values themselves, so there is no Cameras tab.
+    if view.panel.tab == Tab::Cameras && !view.panel.advanced {
+        view.panel_tab(Tab::Course);
+    }
     let reveal = std::mem::take(&mut view.panel.reveal);
     let mut edit = None;
     let mut bank_edit = None;
     ui.horizontal_wrapped(|ui| {
         for (tab, name) in TABS {
+            if tab == Tab::Cameras && !view.panel.advanced {
+                continue;
+            }
             if ui.choice(view.panel.tab == tab, name).clicked() && view.panel.tab != tab {
                 view.panel_tab(tab);
             }
@@ -224,7 +231,7 @@ pub fn show(
             controls::checkbox(ui, &mut view.panel.raw, "Raw input").on_hover_text("Every drop-down as the number it writes.");
             if controls::checkbox(ui, &mut view.panel.advanced, "Advanced mode")
                 .on_hover_text(
-                    "Fields the game ignores or that are best left alone: the raw course settings, all three of the header's graphics sets, of which the game loads the first, a view's three layer entries rather than whether it rotates, and a layer entry's ID, screen, palette and unused fields, with a tileset's rotation and scroll speeds and the Layers tab's Add and Delete.",
+                    "Fields the game ignores or that are best left alone: the raw course settings, all three of the header's graphics sets, of which the game loads the first, a view's three layer entries rather than whether it rotates and the camera settings it names rather than its camera values, with the Cameras tab, and a layer entry's ID, screen, palette and unused fields, with a tileset's rotation and scroll speeds and the Layers tab's Add and Delete.",
                 )
                 .changed()
             {

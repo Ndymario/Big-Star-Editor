@@ -55,7 +55,7 @@ pub struct PanelState {
     pub hex: bool,
     /// The panel shows fields the game ignores or that are best left alone: the Course tab its raw settings and all three
     /// of the header's graphics sets, rather than the first with its palettes; a view its three layer entries, rather than whether it
-    /// rotates; and the Layers tab its Add and Delete, and a layer entry its ID, screen, palette and unused fields, with
+    /// rotates, and its camera values rather than the settings it names, with the Cameras tab; and the Layers tab its Add and Delete, and a layer entry its ID, screen, palette and unused fields, with
     /// a tileset's rotation and scroll speeds.
     pub advanced: bool,
     /// Every drop-down a spin box of the number it writes, for values it does not name.
@@ -674,6 +674,45 @@ fn camera_for_view<'a>(course: &'a NsmbLevelCourse, v: &NsmbLevelView) -> Option
     course.cameras.iter().position(|camera| std::ptr::eq(camera, found)).map(|at| (at, found))
 }
 
+/// The rows of one camera settings entry, but its ID: in the Cameras tab, and inline in the Views tab outside the
+/// advanced mode, which leaves out the field nobody has traced.
+fn camera_rows(rows: &mut Vec<Row>, camera: &NsmbLevelCamera, advanced: bool) {
+    let lines = "The game moves the camera up or down only as far as keeps the player between two lines down the screen.";
+    for (label, value, min, max, note) in [
+        ("Top offset", i64::from(camera.top_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The upper is 64 pixels down plus this.")),
+        ("Bottom offset", i64::from(camera.bottom_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The lower is 128 pixels down plus this.")),
+        (
+            "Top offset (special)",
+            i64::from(camera.top_offset_special),
+            i64::from(i32::MIN),
+            i64::from(i32::MAX),
+            "The upper line in the game's second camera mode. Which of the player's moves switch to it has not been traced.".to_owned(),
+        ),
+        ("Bottom offset (special)", i64::from(camera.bottom_offset_special), i64::from(i32::MIN), i64::from(i32::MAX), "The lower line in that second mode.".to_owned()),
+        ("Scroll height", i64::from(camera.scroll_height), 0, 65535, "15 is none. Anything else has the game note a camera height this many tiles above where it rests on the view's floor; what reads it has not been traced.".to_owned()),
+        ("Unknown 0x14", i64::from(camera.unknown), 0, i64::from(u32::MAX), String::new()),
+    ] {
+        if !advanced && label == "Unknown 0x14" {
+            continue;
+        }
+        rows.push(Row { note, ..Row::number(label, Some(value), min, max, Span::Full) });
+    }
+}
+
+/// Writes the camera field a row of [`camera_rows`] shows. `None` for any other label.
+fn set_camera_field(camera: &mut NsmbLevelCamera, label: &str, value: i64) -> Option<()> {
+    match label {
+        "Top offset" => camera.top_offset = narrow(value, camera.top_offset),
+        "Bottom offset" => camera.bottom_offset = narrow(value, camera.bottom_offset),
+        "Top offset (special)" => camera.top_offset_special = narrow(value, camera.top_offset_special),
+        "Bottom offset (special)" => camera.bottom_offset_special = narrow(value, camera.bottom_offset_special),
+        "Scroll height" => camera.scroll_height = narrow(value, camera.scroll_height),
+        "Unknown 0x14" => camera.unknown = narrow(value, camera.unknown),
+        _ => return None,
+    }
+    Some(())
+}
+
 fn camera_note(course: &NsmbLevelCourse, v: &NsmbLevelView) -> String {
     let lead = "The camera settings this view uses, which are edited in the Cameras tab.";
     match camera_for_view(course, v) {
@@ -991,26 +1030,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 if let Some(row) = rows.last_mut() {
                     row.note = format!("Views name camera settings by the low byte of this ID; one naming an ID none has gets the first. {used}");
                 }
-                let lines = "The game moves the camera up or down only as far as keeps the player between two lines down the screen.";
-                for (label, value, min, max, note) in [
-                    ("Top offset", i64::from(camera.top_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The upper is 64 pixels down plus this.")),
-                    ("Bottom offset", i64::from(camera.bottom_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The lower is 128 pixels down plus this.")),
-                    (
-                        "Top offset (special)",
-                        i64::from(camera.top_offset_special),
-                        i64::from(i32::MIN),
-                        i64::from(i32::MAX),
-                        "The upper line in the game's second camera mode. Which of the player's moves switch to it has not been traced.".to_owned(),
-                    ),
-                    ("Bottom offset (special)", i64::from(camera.bottom_offset_special), i64::from(i32::MIN), i64::from(i32::MAX), "The lower line in that second mode.".to_owned()),
-                    ("Scroll height", i64::from(camera.scroll_height), 0, 65535, "15 is none. Anything else has the game note a camera height this many tiles above where it rests on the view's floor; what reads it has not been traced.".to_owned()),
-                    ("Unknown", i64::from(camera.unknown), 0, i64::from(u32::MAX), String::new()),
-                ] {
-                    full(rows, label, Some(value), min, max);
-                    if let Some(row) = rows.last_mut() {
-                        row.note = note;
-                    }
-                }
+                camera_rows(rows, camera, true);
             }
         }
         Tab::Banks => {
@@ -1190,6 +1210,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     if !panel.advanced && matches!(label, "Background" | "Foreground") {
                         continue;
                     }
+                    // And it holds its camera values itself, below, rather than naming settings.
+                    if !panel.advanced && label == "Camera settings" {
+                        continue;
+                    }
                     if !panel.advanced && label == "Tileset" {
                         rows.push(Row {
                             editor: Editor::Boolean,
@@ -1211,6 +1235,16 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         "Tileset" => row.note = layer_note(view, ScreenBlock::Tileset, v),
                         "Foreground" => row.note = layer_note(view, ScreenBlock::Foreground, v),
                         _ => {}
+                    }
+                }
+                if !panel.advanced {
+                    let first = rows.len();
+                    camera_rows(rows, &camera_for_view(course, v).map(|(_, camera)| camera.clone()).unwrap_or_default(), false);
+                    if let Some(row) = rows.get_mut(first) {
+                        row.heading = "Camera".to_owned();
+                        row.note.push_str(
+                            " Views with the same camera values share one camera settings entry, which is made and removed as they change.",
+                        );
                     }
                 }
             }
@@ -1448,15 +1482,9 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
         Tab::Cameras => {
             let mut cameras = course.cameras.clone();
             let camera = cameras.get_mut(*rows.indices.first()?)?;
-            match changed {
-                0 => camera.id = narrow(value, camera.id),
-                1 => camera.top_offset = narrow(value, camera.top_offset),
-                2 => camera.bottom_offset = narrow(value, camera.bottom_offset),
-                3 => camera.top_offset_special = narrow(value, camera.top_offset_special),
-                4 => camera.bottom_offset_special = narrow(value, camera.bottom_offset_special),
-                5 => camera.scroll_height = narrow(value, camera.scroll_height),
-                6 => camera.unknown = narrow(value, camera.unknown),
-                _ => return None,
+            match rows.rows.get(changed)?.label.as_str() {
+                "ID" => camera.id = narrow(value, camera.id),
+                label => set_camera_field(camera, label, value)?,
             }
             Some(LevelEdit::SetCameras { cameras, name: "Edit camera settings".to_owned() })
         }
@@ -1540,27 +1568,24 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             }
             let index = *rows.indices.first()?;
             let mut v: NsmbLevelView = course.views.get(index)?.clone();
-            if rows.rows.get(changed)?.label == "Rotates" {
-                return rotates_edit(course, index, value != 0);
-            }
-            // Outside the advanced mode the three layer rows are one, so the rows after it sit two up.
-            let changed = if !panel.advanced && changed > 7 { changed + 2 } else { changed };
-            match changed {
-                0 => v.x = narrow(value, v.x),
-                1 => v.y = narrow(value, v.y),
-                2 => v.width = narrow(value, v.width),
-                3 => v.height = narrow(value, v.height),
-                row => {
-                    let byte = match row {
-                        4 => &mut v.id,
-                        5 => &mut v.camera_settings_id,
-                        6 => &mut v.bgm_id,
-                        7 => &mut v.background_id,
-                        8 => &mut v.tileset_id,
-                        9 => &mut v.foreground_id,
-                        10 => &mut v.light_type,
-                        11 => &mut v.progress_path_id,
-                        _ => return None,
+            // By label, as the advanced mode shows different rows.
+            match rows.rows.get(changed)?.label.as_str() {
+                "Rotates" => return rotates_edit(course, index, value != 0),
+                "X" => v.x = narrow(value, v.x),
+                "Y" => v.y = narrow(value, v.y),
+                "W" => v.width = narrow(value, v.width),
+                "H" => v.height = narrow(value, v.height),
+                label => {
+                    let byte = match label {
+                        "ID" => &mut v.id,
+                        "Camera settings" => &mut v.camera_settings_id,
+                        "BGM" => &mut v.bgm_id,
+                        "Background" => &mut v.background_id,
+                        "Tileset" => &mut v.tileset_id,
+                        "Foreground" => &mut v.foreground_id,
+                        "Light" => &mut v.light_type,
+                        "Progress path" => &mut v.progress_path_id,
+                        _ => return view_camera_edit(course, index, label, value),
                     };
                     *byte = narrow(value, *byte);
                 }
@@ -1739,6 +1764,42 @@ fn rotates_edit(course: &NsmbLevelCourse, index: usize, rotates: bool) -> Option
         screens.retain(|record| !rotator(record));
     }
     Some(LevelEdit::SetViewScreens { index, view: v, block: ScreenBlock::Tileset, screens, name })
+}
+
+/// A camera value of the Views tab outside the advanced mode. The view names settings holding its values: ones already
+/// there, its own edited in place when no other view uses them, or new ones under the first ID free, and settings no
+/// view uses any more go.
+fn view_camera_edit(course: &NsmbLevelCourse, index: usize, label: &str, value: i64) -> Option<LevelEdit> {
+    let mut v = course.views.get(index)?.clone();
+    let current = camera_for_view(course, &v);
+    let mut camera = current.map(|(_, camera)| camera.clone()).unwrap_or_default();
+    set_camera_field(&mut camera, label, value)?;
+    if current.is_some_and(|(_, old)| *old == camera) {
+        return None;
+    }
+    let mut cameras = course.cameras.clone();
+    // Others falling back to the first settings use them too, so those stay.
+    let alone = current.map(|(at, _)| at).filter(|&at| {
+        !course.views.iter().enumerate().any(|(i, other)| i != index && camera_for_view(course, other).is_some_and(|(found, _)| found == at))
+    });
+    let named = |found: &NsmbLevelCamera| bigstar_level::camera_block(&cameras, found.id as u8) == Some(found);
+    if let Some(found) = cameras.iter().find(|found| NsmbLevelCamera { id: found.id, ..camera.clone() } == **found && named(found)) {
+        v.camera_settings_id = found.id as u8;
+        if let Some(at) = alone {
+            cameras.remove(at);
+        }
+    } else if let Some(at) = alone {
+        v.camera_settings_id = camera.id as u8;
+        *cameras.get_mut(at)? = camera;
+    } else {
+        if cameras.len() >= 255 {
+            return None;
+        }
+        camera.id = u16::from(first_unused(cameras.iter().map(|found| (found.id & 0xff) as u8), 0));
+        v.camera_settings_id = camera.id as u8;
+        cameras.push(camera);
+    }
+    Some(LevelEdit::SetViewCameras { index, view: v, cameras, name: "Edit view camera".to_owned() })
 }
 
 /// The Add buttons of the Layers tab: a copy of the block's first record, or an empty one, with the first ID
@@ -1983,9 +2044,10 @@ mod tests {
         level.course.cameras = vec![NsmbLevelCamera { id: 2, top_offset: -8, bottom_offset: 16, ..Default::default() }];
         let mut view = LevelView::new(level);
         view.panel.tab = Tab::Entity(Kind::View);
+        view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
         let row = |label: &str| shown.rows.iter().position(|row| row.label == label).unwrap();
-        // A view only names its camera settings; it no longer shows or writes them.
+        // In the advanced mode a view only names its camera settings; it does not show or write them.
         assert!(shown.rows.iter().all(|row| !row.label.starts_with("Camera ") || row.label == "Camera settings"));
         assert!(shown.rows[row("Camera settings")].note.contains("Cameras tab"));
         // The music is picked by name, and a number nobody named is still there to pick.
@@ -2088,6 +2150,48 @@ mod tests {
     }
 
     #[test]
+    fn outside_the_advanced_mode_views_hold_camera_values_that_make_and_share_settings() {
+        let mut level = snapshot();
+        let first = NsmbLevelCamera { id: 2, top_offset: -8, scroll_height: 15, unknown: 7, ..Default::default() };
+        level.course.cameras = vec![first.clone()];
+        // View 2 names settings none have, so it falls back to the first as view 0 names them.
+        level.course.views = vec![
+            NsmbLevelView { camera_settings_id: 2, ..Default::default() },
+            NsmbLevelView { id: 1, camera_settings_id: 2, ..Default::default() },
+            NsmbLevelView { id: 2, camera_settings_id: 9, ..Default::default() },
+        ];
+        let mut view = LevelView::new(level);
+        view.panel_tab(Tab::Entity(Kind::View));
+        let shown = rows(&view, &view.panel, None);
+        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
+        assert!(!labels.contains(&"Camera settings") && !labels.contains(&"Unknown 0x14"), "{labels:?}");
+        let row = |label: &str| shown.rows.iter().position(|row| row.label == label).unwrap();
+        assert_eq!((shown.rows[row("Top offset")].value, shown.rows[row("Top offset")].heading.as_str()), (Some(-8), "Camera"));
+        // Settings others use stay, and a new set gets its own under the first ID free, its untraced field kept.
+        let Some(LevelEdit::SetViewCameras { index, view: v, cameras, .. }) = apply(&view, &view.panel, &shown, row("Bottom offset"), 16) else {
+            panic!()
+        };
+        let made = NsmbLevelCamera { id: 0, bottom_offset: 16, ..first.clone() };
+        assert_eq!((index, v.camera_settings_id, &cameras), (0, 0, &vec![first.clone(), made.clone()]));
+        let mut course = view.snapshot.course.clone();
+        (course.views[0], course.cameras) = (v, cameras);
+        // Another view coming to the same values names those settings.
+        view.snapshot.course = course.clone();
+        view.panel_item(1);
+        let shown = rows(&view, &view.panel, None);
+        let Some(LevelEdit::SetViewCameras { view: v, cameras, .. }) = apply(&view, &view.panel, &shown, row("Bottom offset"), 16) else { panic!() };
+        assert_eq!((v.camera_settings_id, cameras.len()), (0, 2), "the first stays for view 2, which falls back to it");
+        // A view alone on its settings edits them in place, and going back to values another holds drops them.
+        view.panel_item(0);
+        let shown = rows(&view, &view.panel, None);
+        let Some(LevelEdit::SetViewCameras { view: v, cameras, .. }) = apply(&view, &view.panel, &shown, row("Scroll height"), 3) else { panic!() };
+        assert_eq!((v.camera_settings_id, &cameras), (0, &vec![first.clone(), NsmbLevelCamera { scroll_height: 3, ..made.clone() }]));
+        let Some(LevelEdit::SetViewCameras { view: v, cameras, .. }) = apply(&view, &view.panel, &shown, row("Bottom offset"), 0) else { panic!() };
+        assert_eq!((v.camera_settings_id, &cameras), (2, &vec![first.clone()]));
+        assert_eq!(apply(&view, &view.panel, &shown, row("Bottom offset"), 16), None, "no change");
+    }
+
+    #[test]
     fn a_views_rotates_adds_and_removes_the_rotating_tileset_entry() {
         let mut level = snapshot();
         let first = NsmbLevelScreen {
@@ -2105,12 +2209,12 @@ mod tests {
         // Without the advanced mode the three layer rows are one checkbox, and the rows after it still reach their fields.
         let shown = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(&labels[4..], ["ID", "Camera settings", "BGM", "Rotates", "Light", "Progress path"]);
-        assert_eq!(shown.rows[7].value, Some(0));
-        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 8, 3) else { panic!() };
+        assert_eq!(&labels[4..9], ["ID", "BGM", "Rotates", "Light", "Progress path"]);
+        assert_eq!(shown.rows[6].value, Some(0));
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 7, 3) else { panic!() };
         assert_eq!(updates.views[0].value.light_type, 3);
         // The first view to turn adds entry 1 as H12_1 holds it: a copy of the first with 0xFF00 for its screen.
-        let Some(LevelEdit::SetViewScreens { index, view: v, block, screens, .. }) = apply(&view, &view.panel, &shown, 7, 1) else { panic!() };
+        let Some(LevelEdit::SetViewScreens { index, view: v, block, screens, .. }) = apply(&view, &view.panel, &shown, 6, 1) else { panic!() };
         assert_eq!((index, v.tileset_id, block), (0, 1, ScreenBlock::Tileset));
         assert_eq!(screens, [first.clone(), NsmbLevelScreen { id: 1, screen_id: ROTATING_TILESET, ..first.clone() }]);
         view.snapshot.course.tilesets = screens;
@@ -2118,25 +2222,25 @@ mod tests {
         // A second one names the same entry.
         view.panel_item(1);
         let shown = rows(&view, &view.panel, None);
-        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 7, 1) else { panic!() };
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 6, 1) else { panic!() };
         view.snapshot.course.views[1] = updates.views[0].value.clone();
         // The entry stays while another view turns, and goes with the last.
         let shown = rows(&view, &view.panel, None);
-        assert_eq!(shown.rows[7].value, Some(1));
-        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 7, 0) else { panic!() };
+        assert_eq!(shown.rows[6].value, Some(1));
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 6, 0) else { panic!() };
         assert_eq!(updates.views[0].value.tileset_id, 0);
         view.snapshot.course.views[1] = updates.views[0].value.clone();
         view.panel_item(0);
         let shown = rows(&view, &view.panel, None);
-        let Some(LevelEdit::SetViewScreens { view: v, screens, .. }) = apply(&view, &view.panel, &shown, 7, 0) else { panic!() };
+        let Some(LevelEdit::SetViewScreens { view: v, screens, .. }) = apply(&view, &view.panel, &shown, 6, 0) else { panic!() };
         assert_eq!((v.tileset_id, screens), (0, vec![first.clone()]));
         view.snapshot.course.views[0] = v;
         // An entry 1 that does not turn, as J08_1's, is warned of and left alone.
         view.snapshot.course.tilesets = vec![first.clone(), NsmbLevelScreen { id: 1, ..first }];
         view.snapshot.course.views[1].tileset_id = 1;
         let shown = rows(&view, &view.panel, None);
-        assert!(shown.rows[7].warning.contains("views 1 use"), "{}", shown.rows[7].warning);
-        assert_eq!(apply(&view, &view.panel, &shown, 7, 1), None);
+        assert!(shown.rows[6].warning.contains("views 1 use"), "{}", shown.rows[6].warning);
+        assert_eq!(apply(&view, &view.panel, &shown, 6, 1), None);
     }
 
     #[test]

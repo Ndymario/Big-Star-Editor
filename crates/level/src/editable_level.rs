@@ -440,6 +440,18 @@ impl EditableLevel {
         self.run(Box::new(command))
     }
 
+    /// Replaces one view and the camera settings as one undo step: a view given its own camera values.
+    pub fn set_view_cameras(&mut self, index: usize, view: NsmbLevelView, cameras: Vec<NsmbLevelCamera>, name: &str) -> Result<()> {
+        if cameras.len() > 255 {
+            return Err(invalid("a level holds at most 255 camera settings"));
+        }
+        let commands: Vec<Cmd> = vec![
+            Box::new(Replace::new(&mut self.state, views, index, view, name)?),
+            Box::new(Value::new(&mut self.state, |s| &mut s.course.cameras, cameras, name)),
+        ];
+        self.run(Box::new(Composite::new(commands, name)))
+    }
+
     /// Replaces the level's header: its start entrances, settings, timer, graphics and sound group.
     pub fn set_header(&mut self, header: NsmbLevelHeader, name: &str) -> Result<()> {
         let command = Value::new(&mut self.state, |s| &mut s.course.header, header, name);
