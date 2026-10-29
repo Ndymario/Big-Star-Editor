@@ -1,5 +1,5 @@
 use bigstar_core::Error;
-use bigstar_formats::{GlueBlock, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelHeader, NsmbLevelObject, NsmbLevelScreen, RgbaImage};
+use bigstar_formats::{GlueBlock, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelHeader, NsmbLevelObject, NsmbLevelScreen, NsmbLevelView, RgbaImage};
 use bigstar_level::{
     LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind, ScreenBlock,
 };
@@ -378,6 +378,15 @@ pub enum LevelEdit {
     /// first record's palette and screen.
     SetLayer {
         header: NsmbLevelHeader,
+        block: ScreenBlock,
+        screens: Vec<NsmbLevelScreen>,
+        name: String,
+    },
+    /// Replaces one view and one block of the level's screen records as one undo step: a view made to turn, with the
+    /// rotating tileset entry it names added or removed.
+    SetViewScreens {
+        index: usize,
+        view: NsmbLevelView,
         block: ScreenBlock,
         screens: Vec<NsmbLevelScreen>,
         name: String,

@@ -53,9 +53,10 @@ pub struct PanelState {
     /// Two or more items of the tab's kind, when the canvas selected several.
     pub multi: Vec<usize>,
     pub hex: bool,
-    /// The panel shows fields the game ignores or that are best left alone: the Course tab all three of the header's
-    /// graphics sets, rather than the first with its palettes, and a layer entry its screen, palette and unused fields,
-    /// with a tileset's raw rotation and scroll speeds.
+    /// The panel shows fields the game ignores or that are best left alone: the Course tab its raw settings and all three
+    /// of the header's graphics sets, rather than the first with its palettes; a view its three layer entries, rather than whether it
+    /// rotates; and the Layers tab its Add and Delete, and a layer entry its ID, screen, palette and unused fields, with
+    /// a tileset's rotation and scroll speeds.
     pub advanced: bool,
     /// Every drop-down a spin box of the number it writes, for values it does not name.
     pub raw: bool,
@@ -784,10 +785,12 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ..Row::number(label, Some(i64::from(h.settings & bit != 0)), 0, 1, Span::Full)
                 });
             }
-            full(rows, "Settings (raw)", Some(i64::from(h.settings)), 0, 65535);
-            if let Some(row) = rows.last_mut() {
-                row.editor = Editor::Hex { bytes: 2 };
-                row.note = "Every settings bit, the named ones above among them.".to_owned();
+            if panel.advanced {
+                full(rows, "Settings (raw)", Some(i64::from(h.settings)), 0, 65535);
+                if let Some(row) = rows.last_mut() {
+                    row.editor = Editor::Hex { bytes: 2 };
+                    row.note = "Every settings bit, the named ones above among them.".to_owned();
+                }
             }
             full(rows, "Sound group", Some(i64::from(h.sound_group)), 0, 65535);
             full(rows, "Events", Some(i64::from(h.events)), 0, 65535);
@@ -879,11 +882,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     .map(|v| v.id.to_string())
                     .collect();
                 let used = if users.is_empty() { "No view uses it.".to_owned() } else { format!("Used by views {}.", users.join(", ")) };
-                full(rows, "ID", Some(i64::from(record.id)), 0, 65535);
-                if let Some(row) = rows.last_mut() {
-                    row.note = format!("Views name a {} entry by this ID; one naming an ID no entry has gets the first. {used}", block.name());
+                // Outside the advanced mode the entries keep their IDs, rotation, screen and palette: the Course tab sets
+                // the screen and palette, with the graphics they match, and a view's Rotates the rotating tileset entry.
+                if panel.advanced {
+                    full(rows, "ID", Some(i64::from(record.id)), 0, 65535);
+                    if let Some(row) = rows.last_mut() {
+                        row.note = format!("Views name a {} entry by this ID; one naming an ID no entry has gets the first. {used}", block.name());
+                    }
                 }
-                if block == ScreenBlock::Tileset {
+                if panel.advanced && block == ScreenBlock::Tileset {
                     rows.push(Row {
                         editor: Editor::Boolean,
                         representable: matches!(record.screen_id, 0 | ROTATING_TILESET),
@@ -894,11 +901,9 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     // The same field as a number, for what the checkbox cannot say: two of Nintendo's levels hold their
                     // tileset's number here, as a background record holds its screen's, though the game loads no
                     // tileset from it.
-                    if panel.advanced {
-                        full(rows, "Rotates (raw)", Some(i64::from(record.screen_id)), 0, 65535);
-                        if let Some(row) = rows.last_mut() {
-                            row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
-                        }
+                    full(rows, "Rotates (raw)", Some(i64::from(record.screen_id)), 0, 65535);
+                    if let Some(row) = rows.last_mut() {
+                        row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
                     }
                 } else if panel.advanced {
                     let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
@@ -911,7 +916,6 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         }
                     }
                 }
-                // Outside the advanced mode the Course tab sets the screen and palette, with the graphics they match.
                 if panel.advanced {
                     full(rows, "Palette", Some(i64::from(record.palette_id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
@@ -1179,6 +1183,22 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Light", v.light_type),
                     ("Progress path", v.progress_path_id),
                 ] {
+                    // Outside the advanced mode a view's three layer entries are one checkbox, which adds and removes
+                    // the rotating tileset entry for it.
+                    if !panel.advanced && matches!(label, "Background" | "Foreground") {
+                        continue;
+                    }
+                    if !panel.advanced && label == "Tileset" {
+                        rows.push(Row {
+                            editor: Editor::Boolean,
+                            note: "The view turns with the stage, as the rotating rooms of World 8 Final Castle do. Checking it adds the \
+                                   rotating tileset entry 1 the view names, and unchecking it on the last view to turn removes it."
+                                .to_owned(),
+                            warning: rotator_conflict(course),
+                            ..Row::number("Rotates", Some(i64::from(view_rotates(course, v))), 0, 1, Span::Full)
+                        });
+                        continue;
+                    }
                     full(rows, label, Some(i64::from(value)), 0, 255);
                     let Some(row) = rows.last_mut() else { continue };
                     match label {
@@ -1343,6 +1363,8 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
     match panel.tab {
         Tab::Course => {
             let mut h = course.header.clone();
+            // Outside the advanced mode the raw settings are hidden, so the rows after them sit one up.
+            let changed = if !panel.advanced && changed >= 7 { changed + 1 } else { changed };
             // Without the advanced mode, picking a layer's graphics sets its first record's palette, and screen, to the
             // same number.
             if !panel.advanced
@@ -1516,6 +1538,11 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             }
             let index = *rows.indices.first()?;
             let mut v: NsmbLevelView = course.views.get(index)?.clone();
+            if rows.rows.get(changed)?.label == "Rotates" {
+                return rotates_edit(course, index, value != 0);
+            }
+            // Outside the advanced mode the three layer rows are one, so the rows after it sit two up.
+            let changed = if !panel.advanced && changed > 7 { changed + 2 } else { changed };
             match changed {
                 0 => v.x = narrow(value, v.x),
                 1 => v.y = narrow(value, v.y),
@@ -1652,6 +1679,64 @@ pub fn add_edit(snapshot: &LevelSnapshot, tab: Tab) -> Option<LevelEdit> {
         }
     };
     Some(LevelEdit::Add { items, name: name.to_owned() })
+}
+
+/// The tileset entry a view names to turn, as H12_1's: a copy of the first with 0xFF00 for its screen.
+const ROTATOR_ID: u16 = 1;
+
+fn view_rotates(course: &NsmbLevelCourse, v: &NsmbLevelView) -> bool {
+    screen_for_view(course, ScreenBlock::Tileset, v).is_some_and(|(_, record)| record.screen_id == ROTATING_TILESET)
+}
+
+/// Why the Rotates checkbox cannot add the rotating entry: the level holds tileset entry 1 as an ordinary one, as J08_1
+/// does. Empty when it can.
+fn rotator_conflict(course: &NsmbLevelCourse) -> String {
+    if !course.tilesets.iter().any(|record| record.id == ROTATOR_ID && record.screen_id != ROTATING_TILESET) {
+        return String::new();
+    }
+    let users: Vec<String> = course.views.iter().filter(|v| u16::from(v.tileset_id) == ROTATOR_ID).map(|v| v.id.to_string()).collect();
+    let used = if users.is_empty() { String::new() } else { format!(", which views {} use,", users.join(", ")) };
+    format!("Tileset entry 1{used} does not rotate, so this cannot add the rotating one there. The advanced mode edits the entries themselves.")
+}
+
+/// The Rotates checkbox of the Views tab: the view names the rotating tileset entry, which is added for the first view to
+/// turn and removed with the last, or names entry 0 again.
+fn rotates_edit(course: &NsmbLevelCourse, index: usize, rotates: bool) -> Option<LevelEdit> {
+    let mut v = course.views.get(index)?.clone();
+    if rotates == view_rotates(course, &v) {
+        return None;
+    }
+    let mut screens = course.tilesets.clone();
+    let name = if rotates { "Rotate view" } else { "Stop view rotating" }.to_owned();
+    let rotator = |record: &NsmbLevelScreen| record.id == ROTATOR_ID && record.screen_id == ROTATING_TILESET;
+    let view_only = |v, name| {
+        Some(LevelEdit::Update { updates: LevelEntityUpdates { views: vec![IndexedLevelValue { index, value: v }], ..Default::default() }, name })
+    };
+    if rotates {
+        if !rotator_conflict(course).is_empty() {
+            return None;
+        }
+        v.tileset_id = ROTATOR_ID as u8;
+        if screens.iter().any(rotator) {
+            return view_only(v, name);
+        }
+        let first = screens.first().cloned().unwrap_or(NsmbLevelScreen {
+            unused_06: u16::MAX,
+            unused_08: u16::MAX,
+            scroll_x: u16::MAX,
+            scroll_y: u16::MAX,
+            ..Default::default()
+        });
+        screens.push(NsmbLevelScreen { id: ROTATOR_ID, screen_id: ROTATING_TILESET, ..first });
+    } else {
+        v.tileset_id = 0;
+        let others = course.views.iter().enumerate().any(|(at, other)| at != index && u16::from(other.tileset_id) == ROTATOR_ID);
+        if others || !screens.iter().any(rotator) {
+            return view_only(v, name);
+        }
+        screens.retain(|record| !rotator(record));
+    }
+    Some(LevelEdit::SetViewScreens { index, view: v, block: ScreenBlock::Tileset, screens, name })
 }
 
 /// The Add buttons of the Layers tab: a copy of the block's first record, or an empty one, with the first ID
@@ -1940,11 +2025,11 @@ mod tests {
         assert_eq!(record_lines(&view, Tab::Layers), ["Background 0 · screen 41", "Tileset 0", "Tileset 1 · rotates", "Foreground 0 · no screen"]);
         // The second tileset record: the rotator, which view 0 names and view 1 falls back past.
         view.panel_item(2);
-        // Without the advanced mode a tileset entry hides its raw rotation, scroll speeds and unused fields.
+        // Without the advanced mode a tileset entry hides its ID, rotation, palette, scroll speeds and unused fields.
         let shown = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(labels, ["ID", "Rotates", "Vertical offset"]);
-        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 2, 5) else { panic!() };
+        assert_eq!(labels, ["Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 0, 5) else { panic!() };
         assert_eq!(screens[1].vertical_offset, 5);
         view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
@@ -1970,13 +2055,13 @@ mod tests {
         assert!(shown.rows[2].note.starts_with("The colours of the whole level's background"));
         let Some(LevelEdit::SetScreens { block, screens, .. }) = apply(&view, &view.panel, &shown, 1, 7) else { panic!() };
         assert_eq!((block, screens[0].screen_id), (ScreenBlock::Background, 7));
-        // Without the advanced mode it hides the screen and palette, which the Course tab sets, and the fields
+        // Without the advanced mode it hides its ID, the screen and palette, which the Course tab sets, and the fields
         // nothing reads.
         view.panel.advanced = false;
         let shown = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
-        assert_eq!(labels, ["ID", "Scroll speed X", "Scroll speed Y", "Vertical offset"]);
-        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 1, 2) else { panic!() };
+        assert_eq!(labels, ["Scroll speed X", "Scroll speed Y", "Vertical offset"]);
+        let Some(LevelEdit::SetScreens { screens, .. }) = apply(&view, &view.panel, &shown, 0, 2) else { panic!() };
         assert_eq!(screens[0].scroll_x, 2);
         let Some(LevelEdit::SetScreens { block, screens, .. }) = add_screen_edit(&view.snapshot.course, ScreenBlock::Tileset) else { panic!() };
         assert_eq!((block, screens.len(), screens[2].id), (ScreenBlock::Tileset, 3, 2));
@@ -1990,9 +2075,62 @@ mod tests {
         // A view's tileset says which record it gets, and that the record turns.
         view.panel_tab(Tab::Entity(Kind::View));
         view.panel_item(0);
+        view.panel.advanced = true;
         let shown = rows(&view, &view.panel, None);
         let tileset = shown.rows.iter().find(|row| row.label == "Tileset").unwrap();
         assert!(tileset.note.contains("It turns with the stage."), "{}", tileset.note);
+    }
+
+    #[test]
+    fn a_views_rotates_adds_and_removes_the_rotating_tileset_entry() {
+        let mut level = snapshot();
+        let first = NsmbLevelScreen {
+            palette_id: 41,
+            unused_06: u16::MAX,
+            unused_08: u16::MAX,
+            scroll_x: u16::MAX,
+            scroll_y: u16::MAX,
+            ..Default::default()
+        };
+        level.course.tilesets = vec![first.clone()];
+        level.course.views = vec![NsmbLevelView::default(), NsmbLevelView { id: 1, ..Default::default() }];
+        let mut view = LevelView::new(level);
+        view.panel_tab(Tab::Entity(Kind::View));
+        // Without the advanced mode the three layer rows are one checkbox, and the rows after it still reach their fields.
+        let shown = rows(&view, &view.panel, None);
+        let labels: Vec<&str> = shown.rows.iter().map(|row| row.label.as_str()).collect();
+        assert_eq!(&labels[4..], ["ID", "Camera settings", "BGM", "Rotates", "Light", "Progress path"]);
+        assert_eq!(shown.rows[7].value, Some(0));
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 8, 3) else { panic!() };
+        assert_eq!(updates.views[0].value.light_type, 3);
+        // The first view to turn adds entry 1 as H12_1 holds it: a copy of the first with 0xFF00 for its screen.
+        let Some(LevelEdit::SetViewScreens { index, view: v, block, screens, .. }) = apply(&view, &view.panel, &shown, 7, 1) else { panic!() };
+        assert_eq!((index, v.tileset_id, block), (0, 1, ScreenBlock::Tileset));
+        assert_eq!(screens, [first.clone(), NsmbLevelScreen { id: 1, screen_id: ROTATING_TILESET, ..first.clone() }]);
+        view.snapshot.course.tilesets = screens;
+        view.snapshot.course.views[0] = v;
+        // A second one names the same entry.
+        view.panel_item(1);
+        let shown = rows(&view, &view.panel, None);
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 7, 1) else { panic!() };
+        view.snapshot.course.views[1] = updates.views[0].value.clone();
+        // The entry stays while another view turns, and goes with the last.
+        let shown = rows(&view, &view.panel, None);
+        assert_eq!(shown.rows[7].value, Some(1));
+        let Some(LevelEdit::Update { updates, .. }) = apply(&view, &view.panel, &shown, 7, 0) else { panic!() };
+        assert_eq!(updates.views[0].value.tileset_id, 0);
+        view.snapshot.course.views[1] = updates.views[0].value.clone();
+        view.panel_item(0);
+        let shown = rows(&view, &view.panel, None);
+        let Some(LevelEdit::SetViewScreens { view: v, screens, .. }) = apply(&view, &view.panel, &shown, 7, 0) else { panic!() };
+        assert_eq!((v.tileset_id, screens), (0, vec![first.clone()]));
+        view.snapshot.course.views[0] = v;
+        // An entry 1 that does not turn, as J08_1's, is warned of and left alone.
+        view.snapshot.course.tilesets = vec![first.clone(), NsmbLevelScreen { id: 1, ..first }];
+        view.snapshot.course.views[1].tileset_id = 1;
+        let shown = rows(&view, &view.panel, None);
+        assert!(shown.rows[7].warning.contains("views 1 use"), "{}", shown.rows[7].warning);
+        assert_eq!(apply(&view, &view.panel, &shown, 7, 1), None);
     }
 
     #[test]
@@ -2141,6 +2279,7 @@ mod tests {
         view.sync_panel();
         assert_eq!(view.panel.tab, Tab::Course);
         // The course tab edits the header: its flags are checkboxes of their bits, and the rest are its fields.
+        view.panel.advanced = true;
         let shown_rows = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown_rows.rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(
@@ -2166,37 +2305,44 @@ mod tests {
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 2, 400) else { panic!() };
         assert_eq!(header.timer, 400);
         // Without the advanced mode the panel shows the set the game loads, one picker for each layer, and the tileset
-        // is picked by name, with its number.
+        // is picked by name, with its number. The raw settings are hidden, and the rows after them still reach their
+        // fields.
+        view.panel.advanced = false;
+        let shown_rows = rows(&view, &view.panel, None);
+        assert!(!shown_rows.rows.iter().any(|row| row.label == "Settings (raw)"));
+        assert_eq!(shown_rows.rows[7].label, "Sound group");
+        let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 7, 3) else { panic!() };
+        assert_eq!(header.sound_group, 3);
         view.snapshot.course.header.tileset_theme[0] = 9;
         view.snapshot.course.tilesets = vec![NsmbLevelScreen { palette_id: 9, ..Default::default() }];
         let shown_rows = rows(&view, &view.panel, None);
-        let labels: Vec<&str> = shown_rows.rows[12..].iter().map(|row| row.label.as_str()).collect();
+        let labels: Vec<&str> = shown_rows.rows[11..].iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Tileset", "BG graphics", "FG graphics"]);
-        assert_eq!(shown_rows.rows[12].heading, "Graphics");
-        let tileset = &shown_rows.rows[12];
+        assert_eq!(shown_rows.rows[11].heading, "Graphics");
+        let tileset = &shown_rows.rows[11];
         let Editor::Choice { choices, .. } = &tileset.editor else { panic!("{:?}", tileset.editor) };
         assert_eq!((tileset.label.as_str(), choices.len(), &choices[1]), ("Tileset", 76, &(1, "Castle".to_owned())));
         assert!(!choices.iter().any(|&(id, _)| id == 65535), "only the advanced mode sets the tileset to none");
         assert_eq!(tileset.warning, "", "the palette follows the graphics");
         // Picking one sets the first record's palette with it, and a background's screen too, as one edit.
-        let Some(LevelEdit::SetLayer { header, block, screens, .. }) = apply(&view, &view.panel, &shown_rows, 12, 23) else { panic!() };
+        let Some(LevelEdit::SetLayer { header, block, screens, .. }) = apply(&view, &view.panel, &shown_rows, 11, 23) else { panic!() };
         assert_eq!((header.tileset_theme, block, screens[0].palette_id, screens[0].screen_id), ([23, 0, 0], ScreenBlock::Tileset, 23, 0));
         view.snapshot.course.backgrounds =
             vec![NsmbLevelScreen { screen_id: 2, palette_id: 2, ..Default::default() }, NsmbLevelScreen { id: 1, ..Default::default() }];
         view.snapshot.course.header.background_theme[0] = 2;
         let shown_rows = rows(&view, &view.panel, None);
-        let Some(LevelEdit::SetLayer { header, block, screens, .. }) = apply(&view, &view.panel, &shown_rows, 13, 5) else { panic!() };
+        let Some(LevelEdit::SetLayer { header, block, screens, .. }) = apply(&view, &view.panel, &shown_rows, 12, 5) else { panic!() };
         assert_eq!((header.background_theme[0], block), (5, ScreenBlock::Background));
         assert_eq!((screens[0].palette_id, screens[0].screen_id, &screens[1]), (5, 5, &NsmbLevelScreen { id: 1, ..Default::default() }));
         // A record that does not follow its graphics is warned of, as B03_2's background palette is none.
         view.snapshot.course.backgrounds[0].palette_id = u16::MAX;
         let shown_rows = rows(&view, &view.panel, None);
-        assert!(shown_rows.rows[13].warning.contains("palette none, not 2"), "{}", shown_rows.rows[13].warning);
+        assert!(shown_rows.rows[12].warning.contains("palette none, not 2"), "{}", shown_rows.rows[12].warning);
         // A layer with no record has nothing to follow it, so picking writes only the header.
         view.snapshot.course.foregrounds.clear();
         let shown_rows = rows(&view, &view.panel, None);
-        assert!(shown_rows.rows[14].warning.contains("no foreground entry"));
-        let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 14, 5) else { panic!() };
+        assert!(shown_rows.rows[13].warning.contains("no foreground entry"));
+        let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 13, 5) else { panic!() };
         assert_eq!(header.foreground_theme[0], 5);
         // The advanced mode shows all three of the header's sets: a tileset, a background and a foreground together
         // for each, each picked by name.

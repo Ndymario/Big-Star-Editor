@@ -224,7 +224,7 @@ pub fn show(
             controls::checkbox(ui, &mut view.panel.raw, "Raw input").on_hover_text("Every drop-down as the number it writes.");
             if controls::checkbox(ui, &mut view.panel.advanced, "Advanced mode")
                 .on_hover_text(
-                    "Fields the game ignores or that are best left alone: all three of the header's graphics sets, of which the game loads the first, and a layer entry's screen, palette and unused fields, with a tileset's raw rotation and scroll speeds.",
+                    "Fields the game ignores or that are best left alone: the raw course settings, all three of the header's graphics sets, of which the game loads the first, a view's three layer entries rather than whether it rotates, and a layer entry's ID, screen, palette and unused fields, with a tileset's rotation and scroll speeds and the Layers tab's Add and Delete.",
                 )
                 .changed()
             {
@@ -377,7 +377,13 @@ fn record_list(ui: &mut Ui, view: &mut LevelView, tab: Tab, shown: &Rows, busy: 
                     },
                 );
             });
+        // Outside the advanced mode the level keeps the layer entries it has, but for the rotating tileset entry a view's
+        // Rotates adds and removes.
+        let fixed = tab == Tab::Layers && !view.panel.advanced;
         ui.add_enabled_ui(!busy, |ui| {
+            if fixed {
+                return;
+            }
             let course = &view.snapshot.course;
             if tab == Tab::Layers {
                 // The game reads three blocks of these, so each has its own way in.

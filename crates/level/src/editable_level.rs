@@ -463,6 +463,21 @@ impl EditableLevel {
         self.run(Box::new(Composite::new(commands, name)))
     }
 
+    /// Replaces one view and one block of screen records as one undo step: a view and the record it names.
+    pub fn set_view_screens(
+        &mut self,
+        index: usize,
+        view: NsmbLevelView,
+        block: ScreenBlock,
+        screens: Vec<NsmbLevelScreen>,
+        name: &str,
+    ) -> Result<()> {
+        let field = screens_field(block, &screens)?;
+        let commands: Vec<Cmd> =
+            vec![Box::new(Replace::new(&mut self.state, views, index, view, name)?), Box::new(Value::new(&mut self.state, field, screens, name))];
+        self.run(Box::new(Composite::new(commands, name)))
+    }
+
     pub fn set_object_bank(&mut self, slot: usize, value: u8) -> Result<()> {
         let mut banks = self.state.course.object_banks;
         let target = banks.get_mut(slot).ok_or_else(|| Error::new(ErrorCode::OutOfBounds, "object-bank slot is outside the table"))?;

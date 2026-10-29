@@ -774,4 +774,14 @@ fn the_header_and_every_screen_record_are_edited_saved_and_undone() {
     assert_eq!((&level.course().header, &level.course().backgrounds), (&NsmbLevelHeader::default(), &before));
     assert!(level.set_layer(header, ScreenBlock::Foreground, vec![NsmbLevelScreen::default(); 256], "x").is_err());
     assert_eq!(level.course().header, NsmbLevelHeader::default(), "a refused layer edit changes nothing");
+    // A view and the tileset entry it names change together, and come back together.
+    level.add_view(NsmbLevelView::default()).unwrap();
+    let (views, tilesets) = (level.course().views.clone(), level.course().tilesets.clone());
+    let rotator = vec![NsmbLevelScreen { id: 1, screen_id: 0xff00, ..Default::default() }];
+    level.set_view_screens(0, NsmbLevelView { tileset_id: 1, ..Default::default() }, ScreenBlock::Tileset, rotator.clone(), "Rotate view").unwrap();
+    assert_eq!((level.course().views[0].tileset_id, &level.course().tilesets), (1, &rotator));
+    level.undo().unwrap();
+    assert_eq!((&level.course().views, &level.course().tilesets), (&views, &tilesets));
+    assert!(level.set_view_screens(1, NsmbLevelView::default(), ScreenBlock::Tileset, rotator, "x").is_err(), "no second view");
+    assert_eq!(&level.course().tilesets, &tilesets, "a refused view edit changes nothing");
 }
