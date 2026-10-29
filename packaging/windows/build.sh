@@ -1,6 +1,7 @@
 #!/bin/sh
-# Builds the desktop app for Windows and its installer: a setup exe carrying
-# the app and the data it reads (the actor, background and tile catalogs).
+# Builds the desktop app for Windows and its packages: a setup exe and a
+# portable zip, each carrying the app and the data it reads (the actor,
+# background and tile catalogs).
 # NCPatcher is not in it: it is a tool of its own that the app finds on the
 # PATH. CI runs it on every packaging run (see .github/workflows/package.yml).
 #
@@ -11,7 +12,7 @@
 # installed from https://nsis.sourceforge.io/ (or `choco install nsis`).
 # Everything is written under work-dir, by default build-windows/ in the
 # source tree: dist/ is the folder the installer installs, and the Setup exe
-# lands beside it.
+# and the Portable zip land beside it.
 set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
@@ -63,3 +64,17 @@ MSYS2_ARG_CONV_EXCL='*' "$makensis" \
     "$(cygpath -w "$root/packaging/windows/bigstar.nsi")"
 
 echo "Created $out"
+
+# The portable package: the same files in a zip, under one folder named for
+# the version so extracting it does not scatter them. .NET's ZipFile rather
+# than Compress-Archive, which in Windows PowerShell 5.1 writes backslashes
+# into entry names that other unzippers take for part of the file name.
+portable=$work/BigStarEditor-$version
+zip=$work/BigStarEditor-$version-Portable.zip
+rm -rf "$portable" "$zip"
+cp -r "$dist" "$portable"
+powershell -NoProfile -Command "Add-Type -AssemblyName System.IO.Compression.FileSystem;
+    [IO.Compression.ZipFile]::CreateFromDirectory('$(cygpath -w "$portable")', '$(cygpath -w "$zip")', 'Optimal', \$true)"
+rm -rf "$portable"
+
+echo "Created $zip"

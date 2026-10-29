@@ -1,7 +1,7 @@
 # Packaging the desktop app
 
-Three packages, each carrying the app and the `data/` catalogs it reads (actors,
-backgrounds, tiles). NCPatcher is not in either: it is a tool of its own, and
+Four packages, each carrying the app and the `data/` catalogs it reads (actors,
+backgrounds, tiles). NCPatcher is not in any: it is a tool of its own, and
 the editor runs the `ncpatcher` it finds on the `PATH` (or the one set in
 Preferences).
 
@@ -9,6 +9,7 @@ Preferences).
 |---------|--------|---------|----------------|
 | `BigStarEditor-<version>-<arch>.AppImage` (x86_64, aarch64) | `appimage/build.sh`, or `appimage/docker-build.sh` | Linux of that architecture, glibc 2.35 or newer | Ubuntu 22.04 |
 | `BigStarEditor-<version>-Setup.exe` | `windows/build.sh` and `windows/bigstar.nsi` | 64-bit Windows 10 and 11 | `windows-latest` |
+| `BigStarEditor-<version>-Portable.zip` | `windows/build.sh` | 64-bit Windows 10 and 11 | `windows-latest` |
 | `BigStarEditor-<version>-macOS.dmg` (universal: Apple silicon and Intel) | `macos/build.sh` | macOS 11 or newer | `macos-latest` |
 
 All take the version from `[workspace.package]` in `Cargo.toml`. The graphics
@@ -19,13 +20,13 @@ writes only into a work directory (`build-appimage/`, `build-windows/`,
 
 The AUR package ([`aur/`](aur/README.md)) builds from source instead of carrying a binary.
 
-`.github/workflows/package.yml` builds all three, from the Actions page or on a tag:
+`.github/workflows/package.yml` builds them all, from the Actions page or on a tag:
 
 ```sh
 git tag v1.2.3 && git push --tags   # must match the version in Cargo.toml
 ```
 
-The workflow then creates the GitHub release with the three files attached.
+The workflow then creates the GitHub release with the packages attached.
 
 The editor finds `data/` beside the executable (Windows), at
 `../share/bigstar/data` from it (AppImage) or at `../Resources/data` from it
@@ -51,6 +52,12 @@ directory lives in a volume per architecture, so repeated builds are incremental
 Installs to `Program Files\Big Star Editor` for all users, adds Start menu and
 desktop shortcuts and an Add/Remove Programs entry. Uninstalling removes the
 program only; settings in `%APPDATA%\bigstar` and your projects stay.
+
+### The Windows portable zip
+
+The same files as the installer, in a `BigStarEditor-<version>` folder: extract
+it anywhere and run `bigstar.exe`. Nothing is installed or registered, but
+settings are still kept in `%APPDATA%\bigstar`, not beside the program.
 
 ### The macOS app
 
