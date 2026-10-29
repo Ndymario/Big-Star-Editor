@@ -43,6 +43,12 @@ pub trait Services {
         None
     }
 
+    /// Whether the system is in dark mode, where it says so here rather than through egui, which on Linux cannot
+    /// tell. Asked every frame, so it has to be cheap.
+    fn dark_mode(&self) -> Option<bool> {
+        None
+    }
+
     /// Asks the person for a folder, or `None` when they cancel or there is no dialog.
     fn pick_folder(&self) -> Option<String> {
         None
@@ -122,6 +128,7 @@ pub struct MemoryServices {
     values: std::sync::Arc<std::sync::Mutex<std::collections::BTreeMap<String, String>>>,
     pub shelf: std::sync::Arc<std::sync::Mutex<FileShelf>>,
     accent: Option<[u8; 3]>,
+    dark: Option<bool>,
 }
 
 impl MemoryServices {
@@ -130,9 +137,14 @@ impl MemoryServices {
         Self { accent: Some(accent), ..Self::default() }
     }
 
+    /// Services on a system in dark mode, or in light.
+    pub fn with_dark_mode(dark: bool) -> Self {
+        Self { dark: Some(dark), ..Self::default() }
+    }
+
     /// Services sharing this one's stored values, as a later run of the program would find them.
     pub fn sharing_values(&self) -> Self {
-        Self { values: self.values.clone(), shelf: std::sync::Arc::default(), accent: self.accent }
+        Self { values: self.values.clone(), shelf: std::sync::Arc::default(), accent: self.accent, dark: self.dark }
     }
 }
 
@@ -149,6 +161,10 @@ impl Services for MemoryServices {
 
     fn accent_color(&self) -> Option<[u8; 3]> {
         self.accent
+    }
+
+    fn dark_mode(&self) -> Option<bool> {
+        self.dark
     }
 
     fn save_file(&self, _title: &str, suggested: &str, _extension: &str, bytes: &[u8]) -> Result<bool, String> {

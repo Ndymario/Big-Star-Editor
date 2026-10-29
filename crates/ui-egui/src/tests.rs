@@ -2266,6 +2266,12 @@ fn following_the_system_each_mode_keeps_the_theme_chosen_for_it() {
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
     // A system that does not say its mode is taken to be dark.
     assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(true, None));
+
+    // One that says it is light, as the desktop portal does on Linux, where winit cannot tell, is drawn light.
+    let light = MemoryServices::with_dark_mode(false);
+    crate::Services::store(&light, crate::THEME_KEY, &chosen.stored());
+    let (harness, _) = preferences_open(light);
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(false, None));
 }
 
 #[test]

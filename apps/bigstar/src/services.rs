@@ -59,6 +59,10 @@ impl Services for NativeServices {
         self.accent.color()
     }
 
+    fn dark_mode(&self) -> Option<bool> {
+        self.accent.dark()
+    }
+
     fn connect_embedded(&self, root: &str, waker: Waker) -> Result<Box<dyn Connection>, String> {
         let host = Host::for_desktop(std::path::Path::new(root)).map_err(|e| e.message)?;
         let info = HostInfo { host_version: env!("CARGO_PKG_VERSION").to_owned(), workspace_name: host.workspace_name(), has_workspace: true };

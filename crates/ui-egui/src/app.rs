@@ -106,6 +106,8 @@ pub struct BigStarApp {
     theme: Theme,
     /// The system's accent colour, as of this frame.
     accent: Option<Color32>,
+    /// The system's light or dark mode, as of this frame, where it says.
+    system: Option<egui::Theme>,
     /// The palette the style was last set from; `None` before the first frame.
     styled: Option<Tokens>,
     /// The Preferences window's choices while it is open.
@@ -185,6 +187,7 @@ impl BigStarApp {
             language,
             theme,
             accent: None,
+            system: None,
             styled: None,
             preferences: None,
             about: false,
@@ -267,9 +270,14 @@ impl BigStarApp {
             ctx.set_fonts(crate::theme::fonts());
         }
         self.accent = self.services.accent_color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
+        self.system = self.services.dark_mode().map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }).or_else(|| ctx.system_theme());
+        // A mode the system changes on a schedule shows without waiting for the pointer to move.
+        if self.theme.mode == Mode::System {
+            ctx.request_repaint_after(std::time::Duration::from_secs(5));
+        }
         let tokens = match &self.preferences {
             Some(preferences) => preferences.theme.tokens(preferences.showing_dark, self.accent),
-            None => self.theme.tokens(self.theme.is_dark(ctx.system_theme()), self.accent),
+            None => self.theme.tokens(self.theme.is_dark(self.system), self.accent),
         };
         if self.styled.as_ref() != Some(&tokens) {
             crate::theme::apply(ctx, &tokens);
@@ -645,6 +653,7 @@ impl BigStarApp {
         let builds = &mut self.builds;
         let language = self.language;
         let theme = self.theme;
+        let system = self.system;
         let preferences = &mut self.preferences;
         let about = &mut self.about;
         egui::Panel::top("top").show(ui, |ui| {
@@ -704,7 +713,7 @@ impl BigStarApp {
                         *preferences = Some(Preferences {
                             language,
                             theme,
-                            showing_dark: theme.is_dark(ctx.system_theme()),
+                            showing_dark: theme.is_dark(system),
                             autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
                             backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
                         });
@@ -1211,7 +1220,7 @@ impl BigStarApp {
         let mut open = true;
         let mut answer = None;
         let accent = self.accent;
-        let system = ctx.system_theme();
+        let system = self.system;
         dialogs::window("Preferences").open(&mut open).resizable(false).show(ctx, |ui| {
             egui::Grid::new("preferences").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(preferences.language.tr("Language"));
