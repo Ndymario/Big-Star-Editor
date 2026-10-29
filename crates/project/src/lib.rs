@@ -32,7 +32,10 @@ pub use graphics_resources::{
     background_tile_animator, find_object_bank_overlays, load_background_frames, load_background_graphics, load_level_tilesets,
     nsmb_graphics_profile, resolve_level_graphics,
 };
-pub use level_catalog::{LevelCatalogArea, LevelCatalogEntry, nsmb_level_catalog};
+pub use level_catalog::{
+    AreaLocation, LevelCatalog, LevelCatalogArea, LevelCatalogGroup, LevelCatalogLevel, PROJECT_LEVEL_LIST, builtin_level_catalog,
+    parse_level_catalog,
+};
 pub use lua_actors::{
     ActorImageDecoder, ActorResource, ActorResourceKind, ActorResourceResolver, LuaActorCatalog, LuaActorDefinition, LuaActorDrawCommand,
     LuaActorDrawKind, LuaActorLayer, LuaActorProgram, LuaActorRender, LuaActorRenderInput, StageObjectIdentity, StageObjectNameResolver,

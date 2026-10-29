@@ -1,0 +1,563 @@
+# The level list: groups of levels, and each level's areas by their ROM path without `.bin`. The course file is
+# `<path>.bin` and its background `<path>_bgdat.bin`; inside an archive, the path goes on past the `.narc`.
+# `${world}` reads as the word for "World" in the editor's language.
+levels:
+  - group:
+      name: "${world} 1"
+      levels:
+        - level:
+            name: "1-1"
+            areas:
+              - course/A01_1
+              - course/A01_2
+              - course/A01_3
+        - level:
+            name: "1-2"
+            areas:
+              - course/A02_1
+              - course/A02_2
+              - course/A02_3
+        - level:
+            name: "1-3"
+            areas:
+              - course/A03_1
+        - level:
+            name: "W1 Tower"
+            areas:
+              - course/A07_1
+              - course/A07_2
+              - course/A07_3
+        - level:
+            name: "1-4"
+            areas:
+              - course/A04_1
+              - course/A04_2
+              - course/A04_3
+        - level:
+            name: "1-5"
+            areas:
+              - course/A05_1
+              - course/A05_2
+        - level:
+            name: "W1 Castle"
+            areas:
+              - course/A08_1
+              - course/A08_2
+              - course/A08_3
+        - level:
+            name: "1-A"
+            areas:
+              - course/A06_1
+              - course/A06_2
+        - level:
+            name: "Cannon (W1 to W5)"
+            areas:
+              - course/A09_1
+
+  - group:
+      name: "${world} 2"
+      levels:
+        - level:
+            name: "2-1"
+            areas:
+              - course/B01_1
+              - course/B01_2
+              - course/B01_3
+        - level:
+            name: "2-2"
+            areas:
+              - course/B02_1
+              - course/B02_2
+        - level:
+            name: "2-3"
+            areas:
+              - course/B03_1
+              - course/B03_2
+        - level:
+            name: "2-4"
+            areas:
+              - course/B04_1
+              - course/B04_2
+        - level:
+            name: "W2 Tower"
+            areas:
+              - course/B08_1
+              - course/B08_2
+              - course/B08_3
+        - level:
+            name: "2-5"
+            areas:
+              - course/B05_1
+              - course/B05_2
+        - level:
+            name: "2-6"
+            areas:
+              - course/B06_1
+              - course/B06_2
+        - level:
+            name: "W2 Castle"
+            areas:
+              - course/B09_1
+              - course/B09_2
+              - course/B09_3
+        - level:
+            name: "2-A"
+            areas:
+              - course/B07_1
+              - course/B07_2
+              - course/B07_3
+        - level:
+            name: "Cannon (W2 to W5)"
+            areas:
+              - course/B10_1
+
+  - group:
+      name: "${world} 3"
+      levels:
+        - level:
+            name: "3-1"
+            areas:
+              - course/C01_1
+              - course/C01_2
+        - level:
+            name: "3-2"
+            areas:
+              - course/C02_1
+              - course/C02_2
+        - level:
+            name: "W3 Tower"
+            areas:
+              - course/C08_1
+              - course/C08_2
+        - level:
+            name: "3-3"
+            areas:
+              - course/C03_1
+              - course/C03_2
+              - course/C03_3
+        - level:
+            name: "W3 Ghost House"
+            areas:
+              - course/C07_1
+              - course/C07_2
+              - course/C07_3
+        - level:
+            name: "W3 Castle"
+            areas:
+              - course/C09_1
+              - course/C09_2
+        - level:
+            name: "3-A"
+            areas:
+              - course/C04_1
+              - course/C04_2
+              - course/C04_3
+        - level:
+            name: "3-B"
+            areas:
+              - course/C05_1
+              - course/C05_2
+        - level:
+            name: "3-C"
+            areas:
+              - course/C06_1
+              - course/C06_2
+        - level:
+            name: "Cannon (W3 to W6)"
+            areas:
+              - course/C10_1
+
+  - group:
+      name: "${world} 4 (secret)"
+      levels:
+        - level:
+            name: "4-1"
+            areas:
+              - course/D01_1
+        - level:
+            name: "4-2"
+            areas:
+              - course/D02_1
+              - course/D02_2
+        - level:
+            name: "4-3"
+            areas:
+              - course/D03_1
+              - course/D03_2
+        - level:
+            name: "W4 Tower"
+            areas:
+              - course/D09_1
+              - course/D09_2
+        - level:
+            name: "4-4"
+            areas:
+              - course/D04_1
+              - course/D04_2
+        - level:
+            name: "W4 Ghost House"
+            areas:
+              - course/D08_1
+              - course/D08_2
+              - course/D08_3
+        - level:
+            name: "4-5"
+            areas:
+              - course/D05_1
+              - course/D05_2
+              - course/D05_3
+        - level:
+            name: "4-6"
+            areas:
+              - course/D06_1
+              - course/D06_2
+        - level:
+            name: "W4 Castle"
+            areas:
+              - course/D10_1
+              - course/D10_2
+        - level:
+            name: "4-A"
+            areas:
+              - course/D07_1
+              - course/D07_2
+        - level:
+            name: "Cannon (W4 to W7)"
+            areas:
+              - course/D11_1
+
+  - group:
+      name: "${world} 5"
+      levels:
+        - level:
+            name: "5-1"
+            areas:
+              - course/E01_1
+        - level:
+            name: "5-2"
+            areas:
+              - course/E02_1
+              - course/E02_2
+        - level:
+            name: "W5 Tower"
+            areas:
+              - course/E09_1
+              - course/E09_2
+        - level:
+            name: "5-3"
+            areas:
+              - course/E03_1
+              - course/E03_2
+        - level:
+            name: "W5 Ghost House"
+            areas:
+              - course/E08_1
+              - course/E08_2
+              - course/E08_3
+        - level:
+            name: "5-4"
+            areas:
+              - course/E04_1
+        - level:
+            name: "W5 Castle"
+            areas:
+              - course/E10_1
+              - course/E10_2
+        - level:
+            name: "5-A"
+            areas:
+              - course/E05_1
+              - course/E05_2
+        - level:
+            name: "5-B"
+            areas:
+              - course/E06_1
+        - level:
+            name: "5-C"
+            areas:
+              - course/E07_1
+              - course/E07_2
+        - level:
+            name: "Cannon (W5 to W8)"
+            areas:
+              - course/E11_1
+
+  - group:
+      name: "${world} 6"
+      levels:
+        - level:
+            name: "6-1"
+            areas:
+              - course/F01_1
+              - course/F01_2
+        - level:
+            name: "6-2"
+            areas:
+              - course/F02_1
+              - course/F02_2
+        - level:
+            name: "W6 Tower 1"
+            areas:
+              - course/F09_1
+              - course/F09_2
+        - level:
+            name: "6-3"
+            areas:
+              - course/F03_1
+              - course/F03_2
+        - level:
+            name: "6-4"
+            areas:
+              - course/F04_1
+        - level:
+            name: "W6 Tower 2"
+            areas:
+              - course/F10_1
+              - course/F10_2
+        - level:
+            name: "6-5"
+            areas:
+              - course/F05_1
+              - course/F05_2
+        - level:
+            name: "6-6"
+            areas:
+              - course/F06_1
+              - course/F06_2
+              - course/F06_3
+        - level:
+            name: "W6 Castle"
+            areas:
+              - course/F11_1
+              - course/F11_2
+        - level:
+            name: "6-A"
+            areas:
+              - course/F07_1
+              - course/F07_2
+        - level:
+            name: "6-B"
+            areas:
+              - course/F08_1
+        - level:
+            name: "Unused Cannon (W6 to W8)"
+            areas:
+              - course/F12_1
+
+  - group:
+      name: "${world} 7 (secret)"
+      levels:
+        - level:
+            name: "7-1"
+            areas:
+              - course/G01_1
+        - level:
+            name: "W7 Ghost House"
+            areas:
+              - course/G09_1
+              - course/G09_2
+              - course/G09_3
+        - level:
+            name: "7-2"
+            areas:
+              - course/G02_1
+              - course/G02_2
+        - level:
+            name: "7-3"
+            areas:
+              - course/G03_1
+              - course/G03_2
+        - level:
+            name: "W7 Tower"
+            areas:
+              - course/G10_1
+              - course/G10_2
+        - level:
+            name: "7-4"
+            areas:
+              - course/G04_1
+        - level:
+            name: "7-5"
+            areas:
+              - course/G05_1
+              - course/G05_2
+              - course/G05_3
+        - level:
+            name: "7-6"
+            areas:
+              - course/G06_1
+              - course/G06_2
+              - course/G06_3
+        - level:
+            name: "7-7"
+            areas:
+              - course/G07_1
+        - level:
+            name: "7-A"
+            areas:
+              - course/G08_1
+              - course/G08_2
+        - level:
+            name: "W7 Castle"
+            areas:
+              - course/G11_1
+              - course/G11_2
+
+  - group:
+      name: "${world} 8"
+      levels:
+        - level:
+            name: "8-1"
+            areas:
+              - course/H01_1
+              - course/H01_2
+        - level:
+            name: "8-2"
+            areas:
+              - course/H02_1
+              - course/H02_2
+              - course/H02_3
+        - level:
+            name: "W8 Tower 1"
+            areas:
+              - course/H09_1
+              - course/H09_2
+        - level:
+            name: "8-3"
+            areas:
+              - course/H03_1
+              - course/H03_2
+        - level:
+            name: "8-4"
+            areas:
+              - course/H04_1
+              - course/H04_2
+        - level:
+            name: "W8 Castle"
+            areas:
+              - course/H11_1
+              - course/H11_2
+        - level:
+            name: "8-5"
+            areas:
+              - course/H05_1
+              - course/H05_2
+        - level:
+            name: "8-6"
+            areas:
+              - course/H06_1
+              - course/H06_2
+        - level:
+            name: "8-7"
+            areas:
+              - course/H07_1
+        - level:
+            name: "8-8"
+            areas:
+              - course/H08_1
+              - course/H08_2
+        - level:
+            name: "W8 Tower 2"
+            areas:
+              - course/H10_1
+              - course/H10_2
+        - level:
+            name: "W8 Final Castle"
+            areas:
+              - course/H12_1
+              - course/H12_2
+              - course/H12_3
+
+  - group:
+      name: "Toad Houses"
+      levels:
+        - level:
+            name: "1-Up Bonus Game"
+            areas:
+              - course/I01_1
+        - level:
+            name: "Item Bonus Game"
+            areas:
+              - course/I02_1
+        - level:
+            name: "Mega Mushroom Bonus Game"
+            areas:
+              - course/I03_1
+        - level:
+            name: "Bottom Screen Background Chooser"
+            areas:
+              - course/I04_1
+
+  - group:
+      name: "Mario vs. Luigi"
+      groups:
+        - group:
+            name: "Multicard"
+            levels:
+              - level:
+                  name: "SMB 1-1"
+                  areas:
+                    - course/J01_1
+              - level:
+                  name: "Underground"
+                  areas:
+                    - course/J02_1
+              - level:
+                  name: "Ice World"
+                  areas:
+                    - course/J03_1
+              - level:
+                  name: "Pipe World"
+                  areas:
+                    - course/J04_1
+              - level:
+                  name: "Castle"
+                  areas:
+                    - course/J05_1
+        - group:
+            name: "Download Play"
+            levels:
+              - level:
+                  name: "SMB 1-1"
+                  areas:
+                    - ARCHIVE/Dat_Field.narc/Dat/Field/J01_1
+              - level:
+                  name: "Underground"
+                  areas:
+                    - ARCHIVE/Dat_Basement.narc/Dat/Basement/J02_1
+              - level:
+                  name: "Ice World"
+                  areas:
+                    - ARCHIVE/Dat_Ice.narc/Dat/Ice/J03_1
+              - level:
+                  name: "Pipe World"
+                  areas:
+                    - ARCHIVE/Dat_Pipe.narc/Dat/Pipe/J04_1
+              - level:
+                  name: "Castle"
+                  areas:
+                    - ARCHIVE/Dat_Fort.narc/Dat/Fort/J05_1
+
+  - group:
+      name: "Unused Levels"
+      levels:
+        - level:
+            name: "Grassland"
+            areas:
+              - course/J06_1
+        - level:
+            name: "Castle"
+            areas:
+              - course/J07_1
+        - level:
+            name: "Twin-Side Grassland"
+            areas:
+              - course/J08_1
+        - level:
+            name: "Desert"
+            areas:
+              - course/J09_1
+        - level:
+            name: "E3 Desert"
+            areas:
+              - course/J10_1

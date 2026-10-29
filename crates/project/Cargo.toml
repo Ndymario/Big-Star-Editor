@@ -21,6 +21,7 @@ bigstar-level.workspace = true
 bigstar-patching.workspace = true
 mlua.workspace = true
 serde.workspace = true
+serde_norway.workspace = true
 
 [dev-dependencies]
 # The patch-apply test's fake NCPatcher writes a ROM with the synthetic builder.

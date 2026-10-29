@@ -629,7 +629,7 @@ impl Workspace {
         };
         let key = memory_key(host, &project);
         if self.restored_for.as_deref() != Some(project.as_str()) {
-            if session.worlds.is_empty() {
+            if session.level_list.root.areas().is_empty() {
                 return;
             }
             self.restored_for = Some(project);
@@ -1001,8 +1001,9 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
 
 fn preview(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, shown: Option<LevelId>) {
     let summary = |session: &Session| {
-        let areas: usize = session.worlds.iter().flat_map(|w| &w.levels).map(|l| l.areas.len()).sum();
-        let available: usize = session.worlds.iter().flat_map(|w| &w.levels).flat_map(|l| &l.areas).filter(|a| a.available).count();
+        let areas = session.level_list.root.areas();
+        let available = areas.iter().filter(|a| a.available).count();
+        let areas = areas.len();
         if session.project.is_none() {
             "Open a project to list and preview levels.".to_owned()
         } else if areas == 0 {

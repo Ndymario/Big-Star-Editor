@@ -7,7 +7,7 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelWorld,
+    ActorCatalog, DirectoryListing, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelListing, LevelSnapshot,
     LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request, RequestId,
     Response, ResponseResult, TextureData, TextureId, TilesetResources,
 };
@@ -163,13 +163,16 @@ pub struct Browser {
 
 const LOG_LIMIT: usize = 500;
 
+/// The level list a project keeps in its root, which the host reads in place of its own.
+const PROJECT_LEVEL_LIST: &str = "levels.yaml";
+
 pub struct Session {
     conn: Box<dyn Connection>,
     pub state: ConnectionState,
     pending: HashMap<RequestId, Pending>,
     pub projects: Vec<ProjectSummary>,
     pub project: Option<ProjectInfo>,
-    pub worlds: Vec<LevelWorld>,
+    pub level_list: LevelListing,
     /// Every level open on the host for this frontend, documents and preview alike.
     pub levels: BTreeMap<LevelId, LevelView>,
     /// The canvas switches a level arriving starts with: the ones every other canvas has.
@@ -245,7 +248,7 @@ impl Session {
             pending: HashMap::new(),
             projects: Vec::new(),
             project: None,
-            worlds: Vec::new(),
+            level_list: LevelListing::default(),
             levels: BTreeMap::new(),
             canvas_options: CanvasOptions::default(),
             active: None,
@@ -766,7 +769,7 @@ impl Session {
                 self.browser = None;
                 self.settings = Some(settings);
             }
-            (Pending::ListLevels, Response::Levels(worlds)) => self.worlds = worlds,
+            (Pending::ListLevels, Response::Levels(list)) => self.level_list = list,
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
             (pending @ (Pending::Edit(_) | Pending::History(_) | Pending::Save(_)), Response::Edited { snapshot, outcome }) => {
                 let level = snapshot.level;
@@ -964,7 +967,7 @@ impl Session {
     fn forget_project(&mut self) {
         self.undownloaded = false;
         self.downloading = None;
-        self.worlds.clear();
+        self.level_list = LevelListing::default();
         self.levels.clear();
         self.active = None;
         self.level_bytes = None;
@@ -1090,7 +1093,17 @@ impl Session {
                 }
             }
             // A module tree or the ROM changed on disk: the dock's statuses may have.
-            Event::FilesChanged { .. } => self.refresh_filesystem(),
+            Event::FilesChanged { paths } => {
+                // The project's own level list is read again when it changes.
+                let list = self.project.as_ref().map(|project| match project.path.as_str() {
+                    "" => PROJECT_LEVEL_LIST.to_owned(),
+                    path => format!("{path}/{PROJECT_LEVEL_LIST}"),
+                });
+                if list.is_some_and(|list| paths.contains(&list)) {
+                    self.request(Request::ListLevels, Pending::ListLevels);
+                }
+                self.refresh_filesystem();
+            }
             // Everything served before is stale. What is on screen stays there until its replacement arrives.
             Event::GraphicsChanged { generation } if generation > self.graphics_generation => {
                 self.graphics_generation = generation;

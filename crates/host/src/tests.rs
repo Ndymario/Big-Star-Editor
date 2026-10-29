@@ -58,9 +58,13 @@ impl Fixture {
     fn with_project(label: &str) -> (Self, HostSession) {
         let fixture = Self::new(label);
         let (course, bgdat) = level_files();
-        let narc = make_narc(&[("J01_1.bin", &course), ("J01_1_bgdat.bin", &bgdat)]);
+        let narc = make_narc(&[("Dat/Field/J01_1.bin", &course), ("Dat/Field/J01_1_bgdat.bin", &bgdat)]);
         let rom = make_rom(
-            &[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat), RomFile::new("dat/Dat_Field.narc", &narc)],
+            &[
+                RomFile::new("course/A01_1.bin", &course),
+                RomFile::new("course/A01_1_bgdat.bin", &bgdat),
+                RomFile::new("ARCHIVE/Dat_Field.narc", &narc),
+            ],
             &[0; 32],
         );
         write_bytes(&fixture.root.path().join("roms/game.nds"), &rom);
@@ -186,8 +190,8 @@ fn ncpatcher_projects_are_listed_and_opened() {
     let Response::Settings(settings) = session.handle(Request::ProjectSettings).unwrap() else { panic!() };
     assert!(settings.clean_rom_problem.unwrap().contains("no clean ROM"));
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    assert!(worlds.iter().flat_map(|w| &w.levels).flat_map(|l| &l.areas).all(|a| !a.available));
-    assert_eq!(session.handle(Request::OpenLevel { area: "A01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
+    assert!(worlds.root.areas().iter().all(|a| !a.available));
+    assert_eq!(session.handle(Request::OpenLevel { area: "course/A01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
 }
 
 #[test]
@@ -283,7 +287,7 @@ fn the_clean_rom_ncpatcher_yaml_names_is_taken() {
 fn level_requests_need_an_open_project() {
     let fixture = Fixture::new("host-noproject");
     let mut session = fixture.session();
-    for request in [Request::ListLevels, Request::OpenLevel { area: "A01_1".into() }, Request::SaveLevel { level: 1 }] {
+    for request in [Request::ListLevels, Request::OpenLevel { area: "course/A01_1".into() }, Request::SaveLevel { level: 1 }] {
         assert_eq!(session.handle(request).unwrap_err().code, ErrorCode::InvalidArgument);
     }
 }
@@ -292,24 +296,89 @@ fn level_requests_need_an_open_project() {
 fn the_level_list_marks_the_areas_the_rom_holds() {
     let (_fixture, mut session) = Fixture::with_project("host-levels");
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    assert_eq!(worlds[0].name, "World 1");
-    assert_eq!(worlds[0].levels[0].display_name, "1-1");
-    let available: Vec<(&str, &str)> = worlds
-        .iter()
-        .flat_map(|w| w.levels.iter().map(move |l| (w.name.as_str(), l)))
-        .flat_map(|(world, l)| l.areas.iter().filter(|a| a.available).map(move |a| (world, a.token.as_str())))
-        .collect();
+    assert_eq!(worlds.root.groups[0].name, "${world} 1");
+    assert_eq!(worlds.root.groups[0].levels[0].display_name, "1-1");
+    assert_eq!(worlds.problem, None);
+    let available: Vec<&str> = worlds.root.areas().into_iter().filter(|a| a.available).map(|a| a.token.as_str()).collect();
     // The Field area is held by the archive, while the multicard `J01_1` is a plain file the ROM lacks.
-    assert_eq!(available, [("World 1", "A01_1"), ("Mario vs. Luigi > Download Play", "J01_1@Dat_Field")]);
+    assert_eq!(available, ["course/A01_1", "ARCHIVE/Dat_Field.narc/Dat/Field/J01_1"]);
+    let versus = worlds.root.groups.iter().find(|group| group.name == "Mario vs. Luigi").unwrap();
+    assert!(versus.groups[1].levels[0].areas[0].available, "under Download Play");
+    // Only the European ROM has a third W6 Castle area.
+    assert!(worlds.root.areas().iter().all(|a| a.token != "course/F11_3"));
+}
+
+#[test]
+fn the_european_rom_lists_its_extra_area() {
+    let fixture = Fixture::new("host-levels-a2dp");
+    let (course, bgdat) = level_files();
+    let mut rom = make_rom(&[RomFile::new("course/F11_3.bin", &course), RomFile::new("course/F11_3_bgdat.bin", &bgdat)], &[0; 32]);
+    rom[0x00C..0x010].copy_from_slice(b"A2DP");
+    make_project(fixture.root.path(), "proj", &rom);
+    let mut session = fixture.session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let available: Vec<&str> = worlds.root.areas().into_iter().filter(|a| a.available).map(|a| a.token.as_str()).collect();
+    assert_eq!(available, ["course/F11_3"]);
+    assert_eq!(open_level(&mut session, "course/F11_3").title, "W6 Castle Area 3");
+}
+
+/// A project's `levels.yaml` takes the place of the editor's list: what it names is where it puts it, a module's own
+/// level included, and only what no list names is a custom level. One that will not read leaves the editor's in force.
+#[cfg(unix)]
+#[test]
+fn a_projects_level_list_replaces_the_editors() {
+    let sources = [
+        ("z_new/mine/Bonus.bin", 400, "modules/mine/nitrofs/z_new/mine/Bonus.bin"),
+        ("z_new/mine/Bonus_bgdat.bin", 401, "modules/mine/nitrofs/z_new/mine/Bonus_bgdat.bin"),
+        ("z_new/mine/Other.bin", 402, "modules/mine/nitrofs/z_new/mine/Other.bin"),
+        ("z_new/mine/Other_bgdat.bin", 403, "modules/mine/nitrofs/z_new/mine/Other_bgdat.bin"),
+    ];
+    let (fixture, mut session) = with_plan("host-project-levels", &sources);
+    let (course, bgdat) = level_files();
+    let tree = fixture.root.path().join("proj/modules/mine/nitrofs");
+    for name in ["Bonus", "Other"] {
+        write_bytes(&tree.join(format!("z_new/mine/{name}.bin")), &course);
+        write_bytes(&tree.join(format!("z_new/mine/{name}_bgdat.bin")), &bgdat);
+    }
+    let list = fixture.root.path().join("proj/levels.yaml");
+    write_bytes(
+        &list,
+        b"levels:\n  - group:\n      name: \"${world} 9\"\n      levels:\n        - level:\n            name: \"9-1\"\n            areas: [course/A01_1, z_new/mine/Bonus]\n",
+    );
+    // Writing the file is a change of files, which the watcher reports in its own time; reopening reads it now.
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    assert_eq!(worlds.problem, None);
+    let names: Vec<&str> = worlds.root.groups.iter().map(|group| group.name.as_str()).collect();
+    assert_eq!(names, ["${world} 9", "Custom Levels"]);
+    let tokens: Vec<(&str, bool)> = worlds.root.areas().into_iter().map(|a| (a.token.as_str(), a.available)).collect();
+    assert_eq!(tokens, [("course/A01_1", true), ("z_new/mine/Bonus", true), ("z_new/mine/Other", true)]);
+    assert_eq!(open_level(&mut session, "z_new/mine/Bonus").title, "9-1 Area 2");
+
+    write_bytes(&list, b"levels:\n  - level: { name: x }\n");
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    assert!(worlds.problem.as_deref().is_some_and(|problem| problem.starts_with("levels.yaml was not used")), "{:?}", worlds.problem);
+    assert_eq!(worlds.root.groups[0].name, "${world} 1");
+}
+
+#[test]
+fn areas_named_the_old_way_still_open() {
+    let (_fixture, mut session) = Fixture::with_project("host-legacy-tokens");
+    assert_eq!(open_level(&mut session, "A01_1").area, "course/A01_1");
+    assert_eq!(open_level(&mut session, "J01_1@Dat_Field").area, "ARCHIVE/Dat_Field.narc/Dat/Field/J01_1");
 }
 
 #[test]
 fn edits_undo_redo_and_save() {
     let (fixture, mut session) = with_module("host-edit");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     assert_eq!((opened.revision, opened.dirty, opened.title.as_str()), (1, false, "1-1 Area 1"));
     assert_eq!(opened.objects.len(), 2);
-    assert_eq!(open_level(&mut session, "A01_1").level, opened.level, "reopening rejoins the session");
+    assert_eq!(open_level(&mut session, "course/A01_1").level, opened.level, "reopening rejoins the session");
 
     let moved = move_first_object(&mut session, &opened, 40);
     assert_eq!((moved.revision, moved.dirty, moved.can_undo, moved.objects[0].x), (2, true, true, 40));
@@ -334,11 +403,11 @@ fn edits_undo_redo_and_save() {
 #[test]
 fn a_level_is_not_saved_without_a_module_to_save_into() {
     let (_fixture, mut session) = Fixture::with_project("host-edit-no-module");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &opened, 40);
     let error = session.handle(Request::SaveLevel { level: moved.level }).unwrap_err();
     assert_eq!(error.message, "choose an active module in the Filesystem dock before saving");
-    assert!(open_level(&mut session, "A01_1").dirty, "the edit is still there to save");
+    assert!(open_level(&mut session, "course/A01_1").dirty, "the edit is still there to save");
 }
 
 /// A level saved into the module reads back, in a fresh host, through the plan NCPatcher makes of it.
@@ -350,13 +419,13 @@ fn a_saved_level_reads_back_through_the_build_plan() {
         ("course/A01_1_bgdat.bin", 1, "modules/mine/nitrofs/course/A01_1_bgdat.bin"),
     ];
     let (fixture, mut session) = with_plan("host-edit-plan", &sources);
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &opened, 40);
     session.handle(Request::SaveLevel { level: moved.level }).unwrap();
     let options = crate::HostOptions { ncpatcher: fixture.root.path().join("ncpatcher.sh"), ..crate::HostOptions::default() };
     let mut other = Host::with_options(fixture.root.path(), options).unwrap().session();
     other.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let reopened = open_level(&mut other, "A01_1");
+    let reopened = open_level(&mut other, "course/A01_1");
     assert_eq!((reopened.objects[0].x, reopened.dirty, reopened.revision), (40, false, 1));
 }
 
@@ -378,10 +447,11 @@ fn a_modules_own_levels_are_listed_under_it() {
     write_bytes(&tree.join("z_new/mine/Bonus.bin"), &course);
     write_bytes(&tree.join("z_new/mine/Bonus_bgdat.bin"), &bgdat);
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    let custom: Vec<_> = worlds.iter().filter(|world| world.name.starts_with("Custom Levels")).collect();
-    assert_eq!(custom.len(), 1, "{custom:?}");
-    assert_eq!(custom[0].name, "Custom Levels > mine");
-    let [level] = custom[0].levels.as_slice() else { panic!("{custom:?}") };
+    let custom = worlds.root.groups.iter().find(|group| group.name == "Custom Levels").unwrap();
+    assert!(custom.levels.is_empty(), "{custom:?}");
+    let [mine] = custom.groups.as_slice() else { panic!("{custom:?}") };
+    assert_eq!(mine.name, "mine");
+    let [level] = mine.levels.as_slice() else { panic!("{custom:?}") };
     assert_eq!((level.display_name.as_str(), level.areas[0].token.as_str()), ("Bonus", "z_new/mine/Bonus"));
     assert_eq!(level.areas[0].bgdat_path, "z_new/mine/Bonus_bgdat.bin");
     let opened = open_level(&mut session, "z_new/mine/Bonus");
@@ -392,7 +462,7 @@ fn a_modules_own_levels_are_listed_under_it() {
 #[test]
 fn stale_and_unknown_edits_are_refused() {
     let (_fixture, mut session) = Fixture::with_project("host-stale");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     move_first_object(&mut session, &opened, 8);
 
     let stale = Request::EditLevel {
@@ -410,14 +480,14 @@ fn stale_and_unknown_edits_are_refused() {
         LevelEntityUpdates { objects: vec![IndexedLevelValue { index: 50, value: NsmbLevelObject::default() }], ..LevelEntityUpdates::default() };
     let request = Request::EditLevel { level: opened.level, base_revision: 2, edit: LevelEdit::Update { updates: bad, name: "x".into() } };
     assert_eq!(session.handle(request).unwrap_err().code, ErrorCode::OutOfBounds);
-    let again = open_level(&mut session, "A01_1");
+    let again = open_level(&mut session, "course/A01_1");
     assert_eq!((again.revision, again.objects.len()), (2, 2));
 }
 
 #[test]
 fn add_and_remove_report_what_changed() {
     let (_fixture, mut session) = Fixture::with_project("host-add");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let items = LevelEntityInsertions { objects: vec![object(7, 4, 4)], ..LevelEntityInsertions::default() };
     let request = Request::EditLevel { level: opened.level, base_revision: 1, edit: LevelEdit::Add { items, name: "Add object".into() } };
     let (added, outcome) = edited(session.handle(request).unwrap());
@@ -434,7 +504,7 @@ fn add_and_remove_report_what_changed() {
 #[test]
 fn level_data_is_in_the_snapshot_and_edited_as_one_step() {
     let (_fixture, mut session) = Fixture::with_project("host-glue");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     assert_eq!((opened.glue.clone(), opened.stage_object_id_base, opened.registration_hashes.clone()), (Default::default(), 326, vec![]));
     let glue = bigstar_formats::GlueBlock { flags: vec![0x1234_5678], values: vec![] };
     let request =
@@ -482,7 +552,7 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
     assert_eq!(resources.tilesets.len(), 3);
     // Slot 0 is jyotyu, shared by every level; the level's own is in slot 1.
@@ -511,7 +581,7 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
 #[test]
 fn a_level_round_trips_through_its_bytes_as_one_step() {
     let (_fixture, mut session) = Fixture::with_project("host-bytes");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let Response::LevelBytes(bytes) = session.handle(Request::LevelBytes { level: opened.level }).unwrap() else { panic!() };
     assert!(bytes.course_file_id.is_some() && bytes.bgdat_file_id.is_some(), "plain ROM files have ids");
     // One object fewer: the BGDat is ten bytes an object, then the terminator.
@@ -530,15 +600,15 @@ fn finders_search_every_level_including_unsaved_edits() {
     let (_fixture, mut session) = Fixture::with_project("host-find");
     let Response::Found(found) = session.handle(Request::FindEntities { sprites: false, id: 2 }).unwrap() else { panic!() };
     let areas: Vec<&str> = found.iter().map(|f| f.area.as_str()).collect();
-    assert!(areas.contains(&"A01_1") && areas.contains(&"J01_1@Dat_Field"), "{areas:?}");
+    assert!(areas.contains(&"course/A01_1") && areas.contains(&"ARCHIVE/Dat_Field.narc/Dat/Field/J01_1"), "{areas:?}");
     // An open session counts as it stands.
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let remove = LevelEntitySelection { objects: (0..opened.objects.len()).collect(), ..LevelEntitySelection::default() };
     session
         .handle(Request::EditLevel { level: opened.level, base_revision: 1, edit: LevelEdit::Remove { selection: remove, name: "x".into() } })
         .unwrap();
     let Response::Found(found) = session.handle(Request::FindEntities { sprites: false, id: 2 }).unwrap() else { panic!() };
-    assert!(found.iter().all(|f| f.area != "A01_1"));
+    assert!(found.iter().all(|f| f.area != "course/A01_1"));
     let Response::Found(none) = session.handle(Request::FindEntities { sprites: true, id: 9999 }).unwrap() else { panic!() };
     assert!(none.is_empty());
 }
@@ -546,7 +616,7 @@ fn finders_search_every_level_including_unsaved_edits() {
 #[test]
 fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
     let (fixture, mut session) = with_module("host-recovery");
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     move_first_object(&mut session, &opened, 9);
     session.shared().write_recovery_snapshots();
     let autosaves = fixture.root.path().join("proj/.big-star-autosave");
@@ -560,17 +630,17 @@ fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
     let mut next = fixture.session();
     next.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::Recovery(offered) = next.handle(Request::Recovery).unwrap() else { panic!() };
-    assert_eq!(offered, [bigstar_protocol::RecoverableLevel { area: "A01_1".into(), title: "1-1 Area 1".into() }]);
+    assert_eq!(offered, [bigstar_protocol::RecoverableLevel { area: "course/A01_1".into(), title: "1-1 Area 1".into() }]);
     let Response::Recovered(areas) = next.handle(Request::Recover { accept: true }).unwrap() else { panic!() };
-    assert_eq!(areas, ["A01_1"]);
-    let recovered = open_level(&mut next, "A01_1");
+    assert_eq!(areas, ["course/A01_1"]);
+    let recovered = open_level(&mut next, "course/A01_1");
     assert_eq!((recovered.objects[0].x, recovered.dirty, recovered.undo_names[0].as_str()), (9, true, "Recover autosave"));
 
     // Saved, there is nothing left to recover; declined, the autosaves go.
     next.handle(Request::SaveLevel { level: recovered.level }).unwrap();
     next.shared().write_recovery_snapshots();
     assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 0);
-    std::fs::write(autosaves.join(super::host::recovery_name_for_tests("A01_1")), b"stale").unwrap();
+    std::fs::write(autosaves.join(super::host::recovery_name_for_tests("course/A01_1")), b"stale").unwrap();
     let Response::Recovered(none) = next.handle(Request::Recover { accept: false }).unwrap() else { panic!() };
     assert!(none.is_empty());
     assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 0);
@@ -607,24 +677,26 @@ fn the_filesystem_lists_the_rom_with_ids_icons_and_archive_members_on_demand() {
     let find = |path: &str| listing.entries.iter().find(|e| e.path == path).cloned().unwrap_or_else(|| panic!("{path}"));
     let course = find("course/A01_1.bin");
     assert_eq!((course.status, course.icon, course.id.is_some(), course.from_module), (FileStatus::Vanilla, FileIcon::Level, true, false));
-    assert_eq!(find("dat/Dat_Field.narc").icon, FileIcon::Archive);
+    assert_eq!(find("ARCHIVE/Dat_Field.narc").icon, FileIcon::Archive);
     assert!(!listing.pending);
 
-    let Response::Files(members) = session.handle(Request::ListArchive { path: "dat/Dat_Field.narc".into() }).unwrap() else { panic!() };
+    let Response::Files(members) = session.handle(Request::ListArchive { path: "ARCHIVE/Dat_Field.narc".into() }).unwrap() else { panic!() };
     assert_eq!(
         members.iter().map(|m| (m.path.as_str(), m.member_id)).collect::<Vec<_>>(),
-        [("dat/Dat_Field.narc!J01_1.bin", Some(0)), ("dat/Dat_Field.narc!J01_1_bgdat.bin", Some(1))]
+        [("ARCHIVE/Dat_Field.narc!Dat/Field/J01_1.bin", Some(0)), ("ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin", Some(1))]
     );
-    let Response::FileBytes { bytes, .. } = session.handle(Request::ReadFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into() }).unwrap() else {
+    let Response::FileBytes { bytes, .. } =
+        session.handle(Request::ReadFile { path: "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin".into() }).unwrap()
+    else {
         panic!()
     };
     assert_eq!(bytes, level_files().1);
 
     // The level list names the files the way the dock does.
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    let areas: Vec<_> = worlds.iter().flat_map(|w| &w.levels).flat_map(|l| &l.areas).filter(|a| a.available).collect();
+    let areas: Vec<_> = worlds.root.areas().into_iter().filter(|a| a.available).collect();
     assert!(areas.iter().any(|a| a.course_path == "course/A01_1.bin" && a.bgdat_path == "course/A01_1_bgdat.bin"));
-    assert!(areas.iter().any(|a| a.course_path == "dat/Dat_Field.narc!J01_1.bin"));
+    assert!(areas.iter().any(|a| a.course_path == "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1.bin"));
 }
 
 #[test]
@@ -683,7 +755,7 @@ fn a_removed_module_file_goes_to_the_projects_trash() {
     // one the ROM's own file cannot be removed).
     let error = session.handle(Request::RemoveFile { path: "course/A01_1.bin".into() }).unwrap_err();
     assert_eq!(error.message, "only a file a module supplies can be removed");
-    let error = session.handle(Request::RemoveFile { path: "dat/Dat_Field.narc!J01_1.bin".into() }).unwrap_err();
+    let error = session.handle(Request::RemoveFile { path: "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1.bin".into() }).unwrap_err();
     assert!(error.message.contains("there is no file") || error.message.contains("archive"), "{}", error.message);
     assert!(!project.join(super::host::TRASH_DIR).exists());
 }
@@ -738,12 +810,12 @@ fn the_banner_is_read_from_the_rom_until_the_configured_file_exists() {
 #[test]
 fn download_play_areas_are_read_from_their_archive() {
     let (fixture, mut session) = with_module("host-narc");
-    let opened = open_level(&mut session, "J01_1@Dat_Field");
+    let opened = open_level(&mut session, "ARCHIVE/Dat_Field.narc/Dat/Field/J01_1");
     assert_eq!(opened.objects.len(), 2);
     let moved = move_first_object(&mut session, &opened, 12);
     session.handle(Request::SaveLevel { level: moved.level }).unwrap();
     // A member is saved beside its archive, for the next build to sweep back into the container.
-    assert!(fixture.root.path().join("proj/modules/mine/nitrofs/dat/Dat_Field_narc/J01_1.bin").is_file());
+    assert!(fixture.root.path().join("proj/modules/mine/nitrofs/ARCHIVE/Dat_Field_narc/Dat/Field/J01_1.bin").is_file());
     assert_eq!(session.handle(Request::OpenLevel { area: "J01_1".into() }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(session.handle(Request::OpenLevel { area: "nope".into() }).unwrap_err().code, ErrorCode::NotFound);
 }
@@ -752,13 +824,13 @@ fn download_play_areas_are_read_from_their_archive() {
 fn a_project_with_unsaved_levels_stays_open() {
     let (fixture, mut session) = Fixture::with_project("host-dirty");
     make_project(fixture.root.path(), "elsewhere", &std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap());
-    let opened = open_level(&mut session, "A01_1");
+    let opened = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &opened, 3);
     assert_eq!(session.handle(Request::CloseProject).unwrap_err().code, ErrorCode::InvalidArgument);
     assert_eq!(session.handle(Request::OpenProject { path: "elsewhere".into() }).unwrap_err().code, ErrorCode::InvalidArgument);
     // Opening the open project joins it, as another frontend does: the unsaved edit is still there.
     assert!(matches!(session.handle(Request::OpenProject { path: "proj".into() }).unwrap(), Response::Project(_)));
-    assert!(open_level(&mut session, "A01_1").dirty);
+    assert!(open_level(&mut session, "course/A01_1").dirty);
     session.handle(Request::CloseLevel { level: moved.level }).unwrap();
     assert_eq!(session.handle(Request::CloseLevel { level: moved.level }).unwrap_err().code, ErrorCode::NotFound);
     assert_eq!(session.handle(Request::CloseProject).unwrap(), Response::Done);
@@ -770,7 +842,7 @@ fn every_connection_hears_about_changes() {
     let (_fixture, mut first) = Fixture::with_project("host-events");
     let mut second = Host { shared: first_shared(&first) }.session();
     first.drain_events();
-    let opened = open_level(&mut first, "A01_1");
+    let opened = open_level(&mut first, "course/A01_1");
     let moved = move_first_object(&mut first, &opened, 5);
 
     let heard = second.drain_events();
@@ -920,7 +992,7 @@ return {
     #[test]
     fn level_graphics_report_what_could_not_be_resolved() {
         let (_fixture, mut session) = Fixture::with_project("host-level-graphics");
-        let snapshot = open_level(&mut session, "A01_1");
+        let snapshot = open_level(&mut session, "course/A01_1");
         assert_eq!(snapshot.sprite_hashes.len(), snapshot.course.sprites.len());
         let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else {
             panic!("not graphics")
@@ -939,7 +1011,7 @@ return {
         assert_eq!(settings.generated_path, "build/generated");
         assert!(settings.patcher_error.is_some(), "this project has no ncpatcher.yaml for NCPatcher to read");
 
-        let snapshot = open_level(&mut session, "A01_1");
+        let snapshot = open_level(&mut session, "course/A01_1");
         session.drain_events();
         let Response::Settings(switched) = session.handle(Request::SetActiveVariant { variant: "fr".into() }).unwrap() else {
             panic!("not settings")
@@ -1052,7 +1124,7 @@ cp "$rom" "$out"
     let options = crate::HostOptions { ncpatcher: script, ..crate::HostOptions::default() };
     let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &snapshot, 7);
     assert!(moved.dirty);
     session.drain_events();
@@ -1077,7 +1149,7 @@ cp "$rom" "$out"
     assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
     // The edit went into the module before the build; this stand-in does not build it in, NCPatcher does.
     assert!(project.join("modules/mine/nitrofs/course/A01_1.bin").is_file());
-    assert!(!open_level(&mut session, "A01_1").dirty);
+    assert!(!open_level(&mut session, "course/A01_1").dirty);
 }
 
 /// A project with module `mine` whose NCPatcher (a script) answers `config dump`, `modules dump` and `files plan`
@@ -1128,7 +1200,7 @@ fn preferences_persist_and_saves_keep_that_many_backups() {
     assert_eq!((settings.autosave_minutes, settings.backups_kept), (60, 2), "clamped");
 
     // Each save after the first backs up what it overwrites; only the newest two backups of the kind stay.
-    let mut snapshot = open_level(&mut session, "A01_1");
+    let mut snapshot = open_level(&mut session, "course/A01_1");
     for x in 1..=4 {
         snapshot = move_first_object(&mut session, &snapshot, x);
         let Response::Edited { snapshot: saved, .. } = session.handle(Request::SaveLevel { level: snapshot.level }).unwrap() else { panic!() };
@@ -1166,7 +1238,7 @@ fn real_backgrounds_and_foregrounds_draw() {
             |texture: &bigstar_protocol::TextureData| texture.rgba.chunks(4).filter(|pixel| pixel[3] != 0).count() * 100 / (texture.rgba.len() / 4);
         (graphics, textures.iter().map(opaque).collect::<Vec<_>>())
     };
-    let (graphics, opaque) = drawn(&mut session, "A01_1");
+    let (graphics, opaque) = drawn(&mut session, "course/A01_1");
     assert!(graphics.background.error.is_none() && graphics.foreground.error.is_none(), "{graphics:?}");
     // The shared tileset's question blocks say what they hold, so the canvas can show it.
     let held: std::collections::HashSet<u8> = graphics.tilesets[0]
@@ -1184,7 +1256,7 @@ fn real_backgrounds_and_foregrounds_draw() {
     assert_eq!(opaque[0], 100, "the sky fills the background");
     assert!((10..100).contains(&opaque[1]), "the hills stand over a see-through foreground: {}%", opaque[1]);
     // 1-1's bonus room names no foreground: nothing is drawn for it, and nothing is wrong.
-    let (graphics, _) = drawn(&mut session, "A01_3");
+    let (graphics, _) = drawn(&mut session, "course/A01_3");
     assert!(graphics.background.texture.is_some());
     assert_eq!((graphics.foreground.texture.as_ref(), graphics.foreground.error.as_ref()), (None, None));
 }
@@ -1200,7 +1272,7 @@ fn real_backgrounds_are_named_and_animated() {
     let mut session = fixture.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.into_iter().flat_map(|world| world.levels).flat_map(|level| level.areas).collect();
+    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.root.areas().into_iter().cloned().collect();
     let (mut animated, mut seen) = (std::collections::BTreeMap::new(), 0);
     for area in areas.iter().filter(|area| area.available) {
         let Ok(Response::Level(snapshot)) = session.handle(Request::OpenLevel { area: area.token.clone() }) else { continue };
@@ -1247,9 +1319,9 @@ fn real_backgrounds_are_named_and_animated() {
 /// A ROM holding 1-1 and the Field download-play area.
 fn small_rom() -> Vec<u8> {
     let (course, bgdat) = level_files();
-    let narc = make_narc(&[("J01_1.bin", &course), ("J01_1_bgdat.bin", &bgdat)]);
+    let narc = make_narc(&[("Dat/Field/J01_1.bin", &course), ("Dat/Field/J01_1_bgdat.bin", &bgdat)]);
     make_rom(
-        &[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat), RomFile::new("dat/Dat_Field.narc", &narc)],
+        &[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat), RomFile::new("ARCHIVE/Dat_Field.narc", &narc)],
         &[0; 32],
     )
 }
@@ -1297,7 +1369,7 @@ fn rom_member(rom: Vec<u8>, inside: &str) -> Vec<u8> {
 #[test]
 fn a_rom_edited_directly_saves_levels_into_itself() {
     let (fixture, mut session, original) = with_rom("host-rom-level");
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &snapshot, 42);
     // Nothing touches the file until a save.
     assert_eq!(std::fs::read(fixture.root.path().join("roms/game.nds")).unwrap(), original);
@@ -1324,21 +1396,21 @@ fn a_rom_edited_directly_saves_levels_into_itself() {
     // Reopened from disk, the level is what was saved.
     let mut fresh = fixture.rom_session();
     fresh.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
-    assert_eq!(open_level(&mut fresh, "A01_1").objects[0].x, 9);
+    assert_eq!(open_level(&mut fresh, "course/A01_1").objects[0].x, 9);
 }
 
 #[test]
 fn a_rom_edited_directly_replaces_files_and_members_but_adds_none() {
     let (fixture, mut session, _) = with_rom("host-rom-files");
-    session.handle(Request::WriteFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
-    assert_eq!(rom_file(&fixture, "roms/game.nds", "dat/Dat_Field.narc!J01_1_bgdat.bin"), b"MEMBER");
+    session.handle(Request::WriteFile { path: "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
+    assert_eq!(rom_file(&fixture, "roms/game.nds", "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin"), b"MEMBER");
     // The edit is what the host reads back, and what the ROM's other member still is.
-    match session.handle(Request::ReadFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into() }).unwrap() {
+    match session.handle(Request::ReadFile { path: "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin".into() }).unwrap() {
         Response::FileBytes { bytes, .. } => assert_eq!(bytes, b"MEMBER"),
         other => panic!("unexpected {other:?}"),
     }
     let (course, _) = level_files();
-    assert_eq!(rom_file(&fixture, "roms/game.nds", "dat/Dat_Field.narc!J01_1.bin"), course);
+    assert_eq!(rom_file(&fixture, "roms/game.nds", "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1.bin"), course);
 
     let refused = session.handle(Request::WriteFile { path: "z_new/fresh.bin".into(), bytes: vec![1] }).unwrap_err();
     assert!(refused.message.contains("files can be replaced but not added"), "{}", refused.message);
@@ -1374,14 +1446,14 @@ fn a_rom_edited_directly_refuses_what_needs_an_ncpatcher_project() {
 #[test]
 fn a_rom_saved_as_another_takes_later_saves_with_it() {
     let (fixture, mut session, original) = with_rom("host-rom-save-as");
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &snapshot, 5);
     session.handle(Request::SaveLevel { level: moved.level }).unwrap();
     match session.handle(Request::SaveRomAs { path: fixture.full("roms/copy.nds") }).unwrap() {
         Response::Project(info) => assert_eq!((info.path, info.name.as_str()), (fixture.full("roms/copy.nds"), "copy.nds")),
         other => panic!("unexpected {other:?}"),
     }
-    let current = open_level(&mut session, "A01_1");
+    let current = open_level(&mut session, "course/A01_1");
     let again = move_first_object(&mut session, &current, 11);
     session.handle(Request::SaveLevel { level: again.level }).unwrap();
     let x = |path: &str| {
@@ -1473,11 +1545,11 @@ fn an_uploaded_rom_is_edited_in_memory_and_leaves_as_a_download() {
         }
         other => panic!("unexpected {other:?}"),
     }
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let moved = move_first_object(&mut session, &snapshot, 33);
     let (saved, _) = edited(session.handle(Request::SaveLevel { level: moved.level }).unwrap());
     assert!(!saved.dirty);
-    session.handle(Request::WriteFile { path: "dat/Dat_Field.narc!J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
+    session.handle(Request::WriteFile { path: "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin".into(), bytes: b"MEMBER".to_vec() }).unwrap();
     assert!(matches!(session.handle(Request::Recovery).unwrap(), Response::Recovery(levels) if levels.is_empty()));
     session.shared().write_recovery_snapshots();
 
@@ -1486,7 +1558,7 @@ fn an_uploaded_rom_is_edited_in_memory_and_leaves_as_a_download() {
     let course = rom_member(downloaded.clone(), "course/A01_1.bin");
     let bgdat = rom_member(downloaded.clone(), "course/A01_1_bgdat.bin");
     assert_eq!(EditableLevel::load(&course, &bgdat, None).unwrap().objects()[0].x, 33);
-    assert_eq!(rom_member(downloaded, "dat/Dat_Field.narc!J01_1_bgdat.bin"), b"MEMBER");
+    assert_eq!(rom_member(downloaded, "ARCHIVE/Dat_Field.narc!Dat/Field/J01_1_bgdat.bin"), b"MEMBER");
     // Not a byte of it went to disk: no save, no backup, no autosave.
     assert_eq!(entries(fixture.root.path()), before);
     // A path is nothing to an uploaded ROM.
@@ -1510,14 +1582,14 @@ fn uploaded_roms_are_each_their_own_connections() {
     first.drain_events();
     second.drain_events();
 
-    let mine = open_level(&mut first, "A01_1");
-    let theirs = open_level(&mut second, "A01_1");
+    let mine = open_level(&mut first, "course/A01_1");
+    let theirs = open_level(&mut second, "course/A01_1");
     assert_eq!(mine.level, theirs.level, "each has its own numbering");
     let moved = move_first_object(&mut first, &mine, 70);
     first.handle(Request::SaveLevel { level: moved.level }).unwrap();
     assert!(first.drain_events().iter().any(|event| matches!(event, Event::LevelChanged { .. })));
     assert!(second.drain_events().is_empty(), "nothing of the first connection's reaches the second");
-    assert_eq!(open_level(&mut second, "A01_1").objects[0].x, theirs.objects[0].x);
+    assert_eq!(open_level(&mut second, "course/A01_1").objects[0].x, theirs.objects[0].x);
     assert_eq!(download(&mut second).0, "b.nds");
 }
 
@@ -1583,6 +1655,25 @@ fn uploads_are_bounded() {
     assert!(member.handle(Request::ListProjects).unwrap_err().message.contains("no workspace"));
 }
 
+/// A real ROM, named by `BIGSTAR_NSMB_ROM`: every area the editor's list for it names is there, with nothing left over
+/// as a custom level. Skipped without one.
+#[test]
+fn a_real_rom_holds_every_area_its_list_names() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-rom-list");
+    std::fs::create_dir_all(fixture.root.path().join("roms")).unwrap();
+    std::fs::copy(&rom, fixture.root.path().join("roms/game.nds")).unwrap();
+    let mut session = fixture.rom_session();
+    session.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
+    let Response::Levels(list) = session.handle(Request::ListLevels).unwrap() else { panic!() };
+    let missing: Vec<&str> = list.root.areas().into_iter().filter(|area| !area.available).map(|area| area.token.as_str()).collect();
+    assert!(missing.is_empty(), "{missing:?}");
+    assert!(list.root.groups.iter().all(|group| group.name != "Custom Levels"), "{:?}", list.root.groups.last());
+    for area in ["ARCHIVE/Dat_Ice.narc/Dat/Ice/J03_1", "course/H12_3"] {
+        assert!(!open_level(&mut session, area).objects.is_empty(), "{area}");
+    }
+}
+
 /// A real ROM, named by `BIGSTAR_NSMB_ROM`, edited directly: its levels draw from the ROM in memory with the shipped
 /// scripts -- tilesets, backgrounds and actors alike -- and a saved edit is in the file when it is opened again.
 /// Skipped without one.
@@ -1596,7 +1687,7 @@ fn a_real_rom_edited_directly_draws_and_saves() {
     let mut session = fixture.rom_session();
     session.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
 
-    let snapshot = open_level(&mut session, "A01_1");
+    let snapshot = open_level(&mut session, "course/A01_1");
     let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else { panic!() };
     assert!(graphics.error.is_none(), "{:?}", graphics.error);
     assert!(graphics.tilesets.iter().any(|tileset| tileset.error.is_none() && !tileset.objects.is_empty()));
@@ -1624,9 +1715,9 @@ fn a_real_rom_edited_directly_draws_and_saves() {
     assert_ne!(saved, original);
     let mut fresh = fixture.rom_session();
     fresh.handle(Request::OpenRom { path: fixture.full("roms/game.nds") }).unwrap();
-    assert_eq!(open_level(&mut fresh, "A01_1").objects[0].x, snapshot.objects[0].x + 3);
+    assert_eq!(open_level(&mut fresh, "course/A01_1").objects[0].x, snapshot.objects[0].x + 3);
     // The other levels are untouched.
-    assert_eq!(open_level(&mut fresh, "A01_2").objects, open_level(&mut session, "A01_2").objects);
+    assert_eq!(open_level(&mut fresh, "course/A01_2").objects, open_level(&mut session, "course/A01_2").objects);
 }
 
 /// A real ROM, named by `BIGSTAR_NSMB_ROM`, uploaded and downloaded in pieces of the size frontends send: untouched, it
@@ -1638,7 +1729,7 @@ fn a_real_rom_uploads_and_downloads_in_pieces() {
     assert!(rom.len() > bigstar_protocol::ROM_CHUNK_BYTES, "the ROM fits one piece, so this proves nothing");
     let mut session = Host::for_uploads(crate::HostOptions::default()).guest_session();
     assert!(matches!(upload(&mut session, "real.nds", &rom, bigstar_protocol::ROM_CHUNK_BYTES).unwrap(), Response::Project(_)));
-    assert!(!open_level(&mut session, "A01_1").objects.is_empty());
+    assert!(!open_level(&mut session, "course/A01_1").objects.is_empty());
     assert!(download(&mut session).1 == rom);
 }
 
@@ -1655,7 +1746,7 @@ fn real_levels_load_the_banks_their_sprites_need() {
     assert_eq!(catalog.sprite_banks.len(), 326);
     assert!(catalog.sprite_banks.iter().any(|&[_, bank]| bank != 0), "some sprites need a bank");
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.into_iter().flat_map(|world| world.levels).flat_map(|level| level.areas).collect();
+    let areas: Vec<bigstar_protocol::AreaSummary> = worlds.root.areas().into_iter().cloned().collect();
     let (mut sprites, mut missing) = (0, Vec::new());
     for area in areas.iter().filter(|area| area.available) {
         let Ok(Response::Level(snapshot)) = session.handle(Request::OpenLevel { area: area.token.clone() }) else { continue };

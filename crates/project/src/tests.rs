@@ -195,18 +195,60 @@ fn the_project_reads_its_build_or_else_the_clean_rom() {
 
 #[test]
 fn level_catalog_lists_worlds_and_download_play_levels() {
-    let catalog = nsmb_level_catalog();
-    assert!(!catalog.is_empty());
-    assert_eq!(catalog[0].world, "World 1");
-    assert_eq!(catalog[0].display_name, "1-1");
-    assert_eq!(catalog[0].areas.len(), 3);
-    assert_eq!(catalog[0].areas[0].display_name, "Area 1");
-    assert_eq!(catalog[0].areas[0].course_token, "A01_1");
-    let ice = catalog.iter().flat_map(|entry| &entry.areas).find(|area| area.source_token == "J03_1@Dat_Ice").unwrap();
-    assert_eq!(ice.course_token, "J03_1");
-    assert_eq!(ice.narc_name.as_deref(), Some("Dat_Ice"));
+    let catalog = builtin_level_catalog(Some("A2DE"));
+    let world = &catalog.root.groups[0];
+    assert_eq!(world.name, "${world} 1");
+    assert_eq!(world.levels[0].display_name, "1-1");
+    assert_eq!(world.levels[0].areas.len(), 3);
+    assert_eq!(world.levels[0].areas[0].display_name, "Area 1");
+    assert_eq!(world.levels[0].areas[0].location, AreaLocation::File("course/A01_1".into()));
+    let (_, ice) = catalog.find("ARCHIVE/Dat_Ice.narc/Dat/Ice/J03_1").unwrap();
+    assert_eq!(ice.location, AreaLocation::Member { archive: "ARCHIVE/Dat_Ice.narc".into(), member: "Dat/Ice/J03_1".into() });
+    let versus = catalog.root.groups.iter().find(|group| group.name == "Mario vs. Luigi").unwrap();
+    assert_eq!(versus.groups.iter().map(|group| group.name.as_str()).collect::<Vec<_>>(), ["Multicard", "Download Play"]);
     // A one-area level shows the level's own name.
-    assert_eq!(catalog.iter().find(|entry| entry.display_name == "1-3").unwrap().areas[0].display_name, "1-3");
+    assert_eq!(catalog.find("course/A03_1").unwrap().1.display_name, "1-3");
+    // Only the European ROM has a third W6 Castle area.
+    assert!(catalog.find("course/F11_3").is_none());
+    let (castle, _) = builtin_level_catalog(Some("A2DP")).find("course/F11_3").unwrap();
+    assert_eq!((castle.display_name.as_str(), castle.areas.len()), ("W6 Castle", 3));
+    assert_eq!(builtin_level_catalog(Some("A2DP")).areas().len(), catalog.areas().len() + 1);
+    assert!(std::ptr::eq(builtin_level_catalog(None), catalog));
+}
+
+#[test]
+fn a_level_list_reads_groups_within_groups_and_refuses_what_it_cannot_place() {
+    let catalog = parse_level_catalog(
+        r#"
+levels:
+  - level:
+      name: "Loose"
+      areas: [z_new/coop/Loose]
+  - group:
+      name: "Outer"
+      groups:
+        - group:
+            name: "Inner"
+            levels:
+              - level: { name: "Deep", areas: [course/A01_1, course/A01_2] }
+"#,
+    )
+    .unwrap();
+    assert_eq!(catalog.root.levels[0].areas[0].display_name, "Loose");
+    assert_eq!(catalog.root.groups[0].groups[0].levels[0].areas[1].display_name, "Area 2");
+    assert_eq!(catalog.areas().len(), 3);
+
+    for bad in [
+        "levels:\n  - level: { name: x, areas: [] }",
+        "levels:\n  - level: { name: x, areas: [../escape] }",
+        "levels:\n  - level: { name: x, areas: [ARCHIVE/Dat_Ice.narc] }",
+        "levels:\n  - group: { name: '', levels: [] }",
+        "levels:\n  - group: { name: x, colour: red }",
+        "levels:\n  - { group: { name: x }, level: { name: y, areas: [course/A] } }",
+        "levels: [",
+    ] {
+        assert_eq!(parse_level_catalog(bad).unwrap_err().code, bigstar_core::ErrorCode::ParseError, "{bad}");
+    }
 }
 
 #[test]

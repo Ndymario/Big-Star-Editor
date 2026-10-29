@@ -57,7 +57,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
     if let Some(button) = harness.query_all_by_label(&name).next() {
         button.click();
     }
-    until(&mut harness, &|app| app.session().is_some_and(|s| !s.worlds.is_empty()));
+    until(&mut harness, &|app| app.session().is_some_and(|s| !s.level_list.root.groups.is_empty()));
     shot(&mut harness, dir, "remote-levels.png")?;
     if let Some(session) = harness.state_mut().session_mut() {
         session.open_level(&std::env::var("BIGSTAR_SHOT_AREA").unwrap_or_else(|_| "A01_1".to_owned()));

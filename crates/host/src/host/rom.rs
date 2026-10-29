@@ -166,6 +166,7 @@ impl Shared {
             patcher: None,
             banner: BannerTarget::Unconfigured,
             filesystem: None,
+            level_list: None,
             graphics: None,
             own_writes: std::collections::HashSet::new(),
             _watcher: None,

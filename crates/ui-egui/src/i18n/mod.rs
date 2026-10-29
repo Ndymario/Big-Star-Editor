@@ -24,6 +24,7 @@ pub const KEYS: &[&str] = &[
     "Copy",
     "Paste",
     "Language",
+    "World",
 ];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

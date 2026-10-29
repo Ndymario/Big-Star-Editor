@@ -42,7 +42,7 @@ fn a_connected_host_lists_its_projects_then_the_levels_of_the_opened_one() {
     session.open_project("demo");
     settle(&mut session);
     assert_eq!(session.project.as_ref().map(|p| p.name.as_str()), Some("Demo"));
-    assert_eq!(session.worlds.len(), 1);
+    assert_eq!(session.level_list.root.groups.len(), 1);
     assert!(session.level().is_none());
 }
 
@@ -2497,7 +2497,7 @@ fn the_menu_bar_opens_its_menus_under_the_pointer() {
 fn side_panels_shrink_as_far_as_they_are_dragged_whatever_tab_is_in_front() {
     let mut harness = level_with(LevelEntityInsertions::default());
     // Names longer than the panel is dragged to, in a world opened to show its levels and their areas.
-    let world = &mut harness.state_mut().session_mut().unwrap().worlds[0];
+    let world = &mut harness.state_mut().session_mut().unwrap().level_list.root.groups[0];
     world.name = "Mario vs. Luigi Multicard Courses".to_owned();
     world.levels[0].display_name = "A level with a long name".to_owned();
     world.levels[0].areas[0].display_name = "An area with a long name".to_owned();

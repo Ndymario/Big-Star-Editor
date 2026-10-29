@@ -17,4 +17,5 @@ pub(super) const STRINGS: &[(&str, &str)] = &[
     ("Copy", "Copier"),
     ("Paste", "Coller"),
     ("Language", "Langue"),
+    ("World", "Monde"),
 ];

@@ -18,8 +18,8 @@ use bigstar_level::{
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, DrawCommand,
     DrawKind, EditOutcome, Event, FileEntry, FileIcon, FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit,
-    LevelGraphics, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode, ProjectSummary,
-    RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
+    LevelGraphics, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode,
+    ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
@@ -891,13 +891,15 @@ impl DemoConnection {
                     bgdat_path: if available { format!("course/{token}_bgdat.bin") } else { String::new() },
                 };
                 let level = |name: &str, areas| LevelSummary { display_name: name.to_owned(), areas };
-                Ok(Response::Levels(vec![LevelWorld {
-                    name: "World 1".to_owned(),
+                let world = LevelGroup {
+                    name: "${world} 1".to_owned(),
+                    groups: Vec::new(),
                     levels: vec![
                         level("1-1", vec![area(AREA, "Area 1", true), area("A01_2", "Area 2", true)]),
                         level("1-2", vec![area("A02_1", "Area 1", false)]),
                     ],
-                }]))
+                };
+                Ok(Response::Levels(LevelListing { root: LevelGroup { groups: vec![world], ..LevelGroup::default() }, problem: None }))
             }
             Request::OpenLevel { area } => {
                 let index = self.levels.iter().position(|entry| entry.area == area);

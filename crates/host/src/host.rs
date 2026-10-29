@@ -11,14 +11,14 @@ use bigstar_level::{
 };
 use bigstar_patching::{FileManifest, ModuleGraph, ModuleInfo, NCPatcherClient};
 use bigstar_project::{
-    DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, LevelCatalogArea, LevelCatalogEntry, RomReader, build_filesystem_view,
-    find_object_bank_overlays, is_ncpatcher_project, load_module_data_catalog, module_file_target, nsmb_level_catalog, project_name, project_rom,
-    prune_patch_backups,
+    DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, LevelCatalog, LevelCatalogArea, LevelCatalogGroup, LevelCatalogLevel,
+    PROJECT_LEVEL_LIST, RomReader, build_filesystem_view, builtin_level_catalog, find_object_bank_overlays, is_ncpatcher_project,
+    load_module_data_catalog, module_file_target, parse_level_catalog, project_name, project_rom, prune_patch_backups,
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
-    LevelBytes, LevelEdit, LevelId, LevelSnapshot, LevelSummary, LevelWorld, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectSettings,
-    ProjectSummary, RecoverableLevel, Request, Response, Service, TextureId,
+    LevelBytes, LevelEdit, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData, ProjectInfo,
+    ProjectSettings, ProjectSummary, RecoverableLevel, Request, Response, Service, TextureId,
 };
 
 use crate::graphics::ProjectGraphics;
@@ -113,6 +113,8 @@ struct OpenProject {
     patcher: Option<(ModuleGraph, Option<FileManifest>)>,
     /// The Filesystem dock's rows, built from the patcher's answer; dropped when files change.
     filesystem: Option<FilesystemView>,
+    /// The level list in force, and why the project's own was passed over when it was; dropped when files change.
+    level_list: Option<(Arc<LevelCatalog>, Option<String>)>,
     graphics: Option<ProjectGraphics>,
     /// Level files the host itself wrote, which the watcher is not to treat as someone else's change.
     own_writes: std::collections::HashSet<PathBuf>,
@@ -437,6 +439,7 @@ impl Shared {
             patcher: None,
             banner: BannerTarget::Unreported,
             filesystem: None,
+            level_list: None,
             graphics: None,
             own_writes: std::collections::HashSet::new(),
             _watcher: None,
@@ -475,29 +478,11 @@ impl Shared {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
         self.ensure_patcher(open);
-        let mut worlds: Vec<LevelWorld> = Vec::new();
-        for entry in nsmb_level_catalog() {
-            let areas = entry
-                .areas
-                .iter()
-                .map(|area| (area, open.rom.as_mut().and_then(|rom| locate(rom, &open.index, area))))
-                .map(|(area, files)| AreaSummary {
-                    token: area.source_token.clone(),
-                    display_name: area.display_name.clone(),
-                    available: files.is_some(),
-                    course_path: files.as_ref().and_then(|f| address(&f.course).ok()).unwrap_or_default(),
-                    bgdat_path: files.as_ref().and_then(|f| address(&f.bgdat).ok()).unwrap_or_default(),
-                })
-                .collect();
-            let level = LevelSummary { display_name: entry.display_name.clone(), areas };
-            match worlds.last_mut() {
-                Some(world) if world.name == entry.world => world.levels.push(level),
-                _ => worlds.push(LevelWorld { name: entry.world.clone(), levels: vec![level] }),
-            }
-        }
+        let (catalog, problem) = level_list(open);
+        let mut root = list_group(&catalog.root, &mut |area| locate_area(open, area));
         // A module's own levels, under the module that adds them; each is one area, named by its file.
+        let mut custom_group = LevelGroup { name: "Custom Levels".to_owned(), ..LevelGroup::default() };
         for custom in custom_levels_of(open) {
-            let world = if custom.module.is_empty() { "Custom Levels".to_owned() } else { format!("Custom Levels > {}", custom.module) };
             let area = AreaSummary {
                 token: custom.token.clone(),
                 display_name: custom.name.clone(),
@@ -506,28 +491,41 @@ impl Shared {
                 bgdat_path: address(&custom.files.bgdat).unwrap_or_default(),
             };
             let level = LevelSummary { display_name: custom.name, areas: vec![area] };
-            match worlds.last_mut() {
-                Some(last) if last.name == world => last.levels.push(level),
-                _ => worlds.push(LevelWorld { name: world, levels: vec![level] }),
+            if custom.module.is_empty() {
+                custom_group.levels.push(level);
+                continue;
+            }
+            match custom_group.groups.last_mut() {
+                Some(last) if last.name == custom.module => last.levels.push(level),
+                _ => custom_group.groups.push(LevelGroup { name: custom.module, groups: Vec::new(), levels: vec![level] }),
             }
         }
-        Ok(Response::Levels(worlds))
+        if !custom_group.groups.is_empty() || !custom_group.levels.is_empty() {
+            root.groups.push(custom_group);
+        }
+        Ok(Response::Levels(LevelListing { root, problem }))
     }
 
     fn open_level(&self, area_token: &str) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
+        self.ensure_patcher(open);
+        let catalog = level_list(open).0;
+        // Areas were once named by file and archive, `A01_1` and `J01_1@Dat_Field`; what remembers them still opens.
+        let area_token = match legacy_area_token(area_token) {
+            Some(path) if catalog.find(area_token).is_none() && find_custom(open, area_token).is_none() => path,
+            _ => area_token.to_owned(),
+        };
+        let area_token = area_token.as_str();
         if let Some((id, session)) = open.levels.iter().find(|(_, session)| session.area == area_token) {
             return Ok(Response::Level(Box::new(snapshot(*id, session))));
         }
-        let (title, files) = match find_area(area_token) {
-            Some((entry, area)) => {
-                let rom = open.rom.as_mut().ok_or_else(|| not_found("the project has no ROM"))?;
-                let files = locate(rom, &open.index, area).ok_or_else(|| not_found(format!("the ROM does not hold {area_token}")))?;
-                (area_title(entry, area), files)
+        let (title, files) = match catalog.find(area_token) {
+            Some((level, area)) => {
+                let files = locate_area(open, area).ok_or_else(|| not_found(format!("the project does not hold {area_token}")))?;
+                (area_title(level, area), files)
             }
             None => {
-                self.ensure_patcher(open);
                 let custom = find_custom(open, area_token).ok_or_else(|| not_found(format!("there is no level area {area_token}")))?;
                 (custom.title(), custom.files)
             }
@@ -807,11 +805,10 @@ impl Shared {
         let mut graphics = open.graphics.take();
         // Every area by token and title, with its files when it has them.
         let mut areas: Vec<(String, String, Option<LevelFiles>)> = Vec::new();
-        for entry in nsmb_level_catalog() {
-            for area in &entry.areas {
-                let files = open.rom.as_mut().and_then(|rom| locate(rom, &open.index, area));
-                areas.push((area.source_token.clone(), area_title(entry, area), files));
-            }
+        self.ensure_patcher(open);
+        let catalog = level_list(open).0;
+        for (level, area) in catalog.areas() {
+            areas.push((area.path.clone(), area_title(level, area), locate_area(open, area)));
         }
         areas.extend(custom_levels_of(open).into_iter().map(|custom| (custom.token.clone(), custom.title(), Some(custom.files))));
         let mut found = Vec::new();
@@ -892,8 +889,8 @@ impl Shared {
             if open.levels.values().any(|session| session.area == area) {
                 continue;
             }
-            let title = match find_area(&area) {
-                Some((entry, found)) => area_title(entry, found),
+            let title = match level_list(open).0.find(&area) {
+                Some((level, found)) => area_title(level, found),
                 None => find_custom(open, &area).map_or_else(|| area.clone(), |custom| custom.title()),
             };
             levels.push(RecoverableLevel { area, title });
@@ -1350,6 +1347,7 @@ impl Shared {
             open.graphics = None;
             open.filesystem = None;
             open.patcher = None;
+            open.level_list = None;
         }
         drop(state);
         let mut relative: Vec<String> =
@@ -1469,21 +1467,85 @@ fn recovery_files(root: &Path) -> Vec<(String, PathBuf)> {
     files
 }
 
-fn find_area(token: &str) -> Option<(&'static LevelCatalogEntry, &'static LevelCatalogArea)> {
-    nsmb_level_catalog().iter().find_map(|entry| entry.areas.iter().find(|area| area.source_token == token).map(|area| (entry, area)))
+/// The level list in force: the project's own `levels.yaml` when it has one that reads, else the one the editor ships
+/// for its ROM. Why the project's was passed over comes with it.
+fn level_list(open: &mut OpenProject) -> (Arc<LevelCatalog>, Option<String>) {
+    if let Some(list) = &open.level_list {
+        return list.clone();
+    }
+    let builtin = || Arc::new(builtin_level_catalog(open.rom.as_ref().map(|rom| rom.header().game_code.as_str())).clone());
+    let file = open.directory.join(PROJECT_LEVEL_LIST);
+    let list = if open.backing.is_rom() || !file.is_file() {
+        (builtin(), None)
+    } else {
+        let read = read_file(&file)
+            .and_then(|bytes| String::from_utf8(bytes).map_err(|_| Error::new(ErrorCode::ParseError, "it is not UTF-8")))
+            .and_then(|text| parse_level_catalog(&text));
+        match read {
+            Ok(catalog) => (Arc::new(catalog), None),
+            Err(error) => (builtin(), Some(format!("{PROJECT_LEVEL_LIST} was not used: {}", error.message))),
+        }
+    };
+    open.level_list = Some(list.clone());
+    list
 }
 
-fn custom_levels_of(open: &OpenProject) -> Vec<CustomLevel> {
-    custom_levels(&open.index, open.patcher.as_ref().and_then(|(_, plan)| plan.as_ref()))
+/// Where a listed area's files are in the project as it stands.
+fn locate_area(open: &mut OpenProject, area: &LevelCatalogArea) -> Option<LevelFiles> {
+    locate(open.rom.as_mut(), &open.index, open.patcher.as_ref().and_then(|(_, plan)| plan.as_ref()), area)
 }
 
-fn find_custom(open: &OpenProject, token: &str) -> Option<CustomLevel> {
+/// A group of the list as the frontend shows it, each area marked with whether its files are there.
+fn list_group(group: &LevelCatalogGroup, locate: &mut dyn FnMut(&LevelCatalogArea) -> Option<LevelFiles>) -> LevelGroup {
+    let groups = group.groups.iter().map(|child| list_group(child, locate)).collect();
+    let levels = group
+        .levels
+        .iter()
+        .map(|level| LevelSummary {
+            display_name: level.display_name.clone(),
+            areas: level
+                .areas
+                .iter()
+                .map(|area| {
+                    let files = locate(area);
+                    AreaSummary {
+                        token: area.path.clone(),
+                        display_name: area.display_name.clone(),
+                        available: files.is_some(),
+                        course_path: files.as_ref().and_then(|f| address(&f.course).ok()).unwrap_or_default(),
+                        bgdat_path: files.as_ref().and_then(|f| address(&f.bgdat).ok()).unwrap_or_default(),
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    LevelGroup { name: group.name.clone(), groups, levels }
+}
+
+/// The path an area token from before the list was read from `levels.yaml` names now: `A01_1` is `course/A01_1`, and
+/// `J01_1@Dat_Field` the level inside `ARCHIVE/Dat_Field.narc`. None for a token that is a path already.
+fn legacy_area_token(token: &str) -> Option<String> {
+    if token.is_empty() || token.contains('/') {
+        return None;
+    }
+    Some(match token.split_once('@') {
+        Some((course, archive)) => format!("ARCHIVE/{archive}.narc/Dat/{}/{course}", archive.strip_prefix("Dat_").unwrap_or(archive)),
+        None => format!("course/{token}"),
+    })
+}
+
+fn custom_levels_of(open: &mut OpenProject) -> Vec<CustomLevel> {
+    let catalog = level_list(open).0;
+    custom_levels(&open.index, open.patcher.as_ref().and_then(|(_, plan)| plan.as_ref()), &catalog)
+}
+
+fn find_custom(open: &mut OpenProject, token: &str) -> Option<CustomLevel> {
     custom_levels_of(open).into_iter().find(|custom| custom.token == token)
 }
 
 /// "1-1", or "1-1 Area 2" for a level of several areas.
-fn area_title(entry: &LevelCatalogEntry, area: &LevelCatalogArea) -> String {
-    if entry.areas.len() == 1 { entry.display_name.clone() } else { format!("{} {}", entry.display_name, area.display_name) }
+fn area_title(level: &LevelCatalogLevel, area: &LevelCatalogArea) -> String {
+    if level.areas.len() == 1 { level.display_name.clone() } else { format!("{} {}", level.display_name, area.display_name) }
 }
 
 fn session_mut(state: &mut State, id: LevelId) -> Result<&mut LevelSession> {
@@ -1534,6 +1596,7 @@ fn select_rom(open: &mut OpenProject) -> Result<bool> {
     open.rom_file = rom_file;
     open.levels.clear();
     open.filesystem = None;
+    open.level_list = None;
     open.graphics = None;
     Ok(true)
 }

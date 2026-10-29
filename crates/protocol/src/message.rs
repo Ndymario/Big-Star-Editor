@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 pub type RequestId = u64;
 
@@ -381,7 +381,7 @@ pub enum Response {
     Projects(Vec<ProjectSummary>),
     Directory(DirectoryListing),
     Project(ProjectInfo),
-    Levels(Vec<LevelWorld>),
+    Levels(LevelListing),
     Level(Box<LevelSnapshot>),
     Edited {
         snapshot: Box<LevelSnapshot>,
@@ -667,10 +667,30 @@ pub struct LevelSummary {
     pub areas: Vec<AreaSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LevelWorld {
+/// A group of the level list: a world, or anything else the list gathers, holding groups of its own before its levels.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelGroup {
+    /// May hold `${world}`, which the frontend reads as the word for "World" in its language.
     pub name: String,
+    pub groups: Vec<LevelGroup>,
     pub levels: Vec<LevelSummary>,
+}
+
+impl LevelGroup {
+    /// Every area of the group and the groups in it, in the order the list shows them.
+    pub fn areas(&self) -> Vec<&AreaSummary> {
+        let mut areas: Vec<&AreaSummary> = self.groups.iter().flat_map(LevelGroup::areas).collect();
+        areas.extend(self.levels.iter().flat_map(|level| &level.areas));
+        areas
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LevelListing {
+    /// The unnamed group the list's top level makes.
+    pub root: LevelGroup,
+    /// Why the project's own `levels.yaml` was not used, when it was not; the editor's own list stands in for it.
+    pub problem: Option<String>,
 }
 
 /// A level as the frontend draws it, with everything it needs to offer undo.
