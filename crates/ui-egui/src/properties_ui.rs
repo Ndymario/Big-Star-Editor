@@ -24,47 +24,13 @@ const NODE_INDENT: f32 = 16.0;
 
 /// A field's editor. Returns the value to write when the person finished turning it.
 fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Option<i64> {
-    let hex = panel.hex;
     match &row.editor {
-        Editor::Number { min, max } => {
-            // One below the range stands for "the selection disagrees", shown as a dash.
-            let unset = min - 1;
-            let shown = panel.dragging.filter(|(i, _)| *i == index).map(|(_, v)| v).or(row.value).unwrap_or(unset);
-            let mut value = shown;
-            // A spin box, laid out from the right: its arrows, then the number they step, close enough to read as one.
-            let spacing = ui.spacing().clone();
-            ui.spacing_mut().item_spacing.x = 2.0;
-            ui.spacing_mut().interact_size.x = NUMBER_WIDTH;
-            let step = controls::steppers(ui);
-            // The gap a widget leaves is set as it is placed: only the arrows keep the number close, and the number
-            // stands off from the label before it as far as anything else does.
-            ui.spacing_mut().item_spacing.x = spacing.item_spacing.x;
-            let response = ui.add(
-                controls::number(&mut value)
-                    .range(unset..=*max)
-                    .speed(0.25)
-                    .update_while_editing(false)
-                    .custom_formatter(move |n, _| if n as i64 == unset { "—".to_owned() } else { format_value(n as i64, hex) })
-                    .custom_parser(move |text| parse_value(text, hex).map(|v| v as f64)),
-            );
-            *ui.spacing_mut() = spacing;
-            if step != 0 {
-                // An arrow steps from the value the selection agrees on; where it disagrees there is nothing to step from.
-                return row.value.map(|v| (v + step).clamp(*min, *max)).filter(|v| Some(*v) != row.value);
-            }
-            if response.dragged() && value != shown {
-                panel.dragging = Some((index, value));
-            }
-            if response.drag_stopped() {
-                let dragged = panel.dragging.take().filter(|(i, _)| *i == index).map(|(_, v)| v);
-                return dragged.filter(|v| *v >= *min && Some(*v) != row.value);
-            }
-            (response.changed() && !response.dragged() && value >= *min && Some(value) != row.value).then_some(value)
-        }
+        Editor::Number { min, max } => spin_box(ui, panel, index, row, *min, *max),
+        Editor::Choice { min, max, .. } if panel.raw => spin_box(ui, panel, index, row, *min, *max),
         // A share of the line, so the label and the note's icon keep theirs. A drop-down that took the whole line would
         // push them past the panel's edge, and the panel would widen to fit them every frame.
-        Editor::Choice(choices) => controls::numbered_choice(("property-choice", index), choices)
-            .hex(hex)
+        Editor::Choice { choices, .. } => controls::numbered_choice(("property-choice", index), choices)
+            .hex(panel.hex)
             .width((ui.available_width() * CHOICE_SHARE).max(80.0))
             .show(ui, row.value),
         Editor::Boolean => {
@@ -76,6 +42,44 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             response.clicked().then(|| if row.value == Some(1) { 0 } else { 1 })
         }
     }
+}
+
+/// A number's editor: a box to type or drag, and arrows that step it.
+fn spin_box(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row, min: i64, max: i64) -> Option<i64> {
+    let hex = panel.hex;
+    // One below the range stands for "the selection disagrees", shown as a dash.
+    let unset = min - 1;
+    let shown = panel.dragging.filter(|(i, _)| *i == index).map(|(_, v)| v).or(row.value).unwrap_or(unset);
+    let mut value = shown;
+    // A spin box, laid out from the right: its arrows, then the number they step, close enough to read as one.
+    let spacing = ui.spacing().clone();
+    ui.spacing_mut().item_spacing.x = 2.0;
+    ui.spacing_mut().interact_size.x = NUMBER_WIDTH;
+    let step = controls::steppers(ui);
+    // The gap a widget leaves is set as it is placed: only the arrows keep the number close, and the number
+    // stands off from the label before it as far as anything else does.
+    ui.spacing_mut().item_spacing.x = spacing.item_spacing.x;
+    let response = ui.add(
+        controls::number(&mut value)
+            .range(unset..=max)
+            .speed(0.25)
+            .update_while_editing(false)
+            .custom_formatter(move |n, _| if n as i64 == unset { "—".to_owned() } else { format_value(n as i64, hex) })
+            .custom_parser(move |text| parse_value(text, hex).map(|v| v as f64)),
+    );
+    *ui.spacing_mut() = spacing;
+    if step != 0 {
+        // An arrow steps from the value the selection agrees on; where it disagrees there is nothing to step from.
+        return row.value.map(|v| (v + step).clamp(min, max)).filter(|v| Some(*v) != row.value);
+    }
+    if response.dragged() && value != shown {
+        panel.dragging = Some((index, value));
+    }
+    if response.drag_stopped() {
+        let dragged = panel.dragging.take().filter(|(i, _)| *i == index).map(|(_, v)| v);
+        return dragged.filter(|v| *v >= min && Some(*v) != row.value);
+    }
+    (response.changed() && !response.dragged() && value >= min && Some(value) != row.value).then_some(value)
 }
 
 /// One row: its label on the left (a checkbox is its own), its editor against the right edge, and its note between
@@ -199,7 +203,7 @@ pub fn show(
                         }
                         None => {
                             // A sprite's first row is its type, picked by name wherever the actors are known.
-                            let value = if tab == Tab::Entity(Kind::Sprite) && index == 0 && !types.is_empty() {
+                            let value = if tab == Tab::Entity(Kind::Sprite) && index == 0 && !types.is_empty() && !view.panel.raw {
                                 row_ui(ui, row, |ui| sprite_type_editor(ui, row, &types))
                             } else {
                                 let panel = &mut view.panel;
@@ -214,6 +218,7 @@ pub fn show(
                 }
             });
             controls::checkbox(ui, &mut view.panel.hex, "Display as hex");
+            controls::checkbox(ui, &mut view.panel.raw, "Raw input").on_hover_text("Every drop-down as the number it writes.");
             if tab == Tab::Course
                 && controls::checkbox(ui, &mut view.panel.advanced, "Advanced view")
                     .on_hover_text("All three of the header's graphics sets, of which the game loads the first.")

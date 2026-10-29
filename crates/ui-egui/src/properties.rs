@@ -55,6 +55,8 @@ pub struct PanelState {
     pub hex: bool,
     /// The Course tab shows all three of the header's graphics sets, rather than the first with its palettes.
     pub advanced: bool,
+    /// Every drop-down a spin box of the number it writes, for values it does not name.
+    pub raw: bool,
     /// A field being dragged: shown at this value and written when the drag ends.
     pub dragging: Option<(usize, i64)>,
     /// The raw settings box as typed, while it does not hold a whole value.
@@ -73,6 +75,7 @@ impl Default for PanelState {
             multi: Vec::new(),
             hex: false,
             advanced: false,
+            raw: false,
             dragging: None,
             settings_text: None,
             show_actor_info: false,
@@ -87,8 +90,13 @@ pub enum Editor {
         min: i64,
         max: i64,
     },
-    /// The values an actor names. They are sparse, so each entry carries the number it stands for.
-    Choice(Vec<(i64, String)>),
+    /// The values an actor names. They are sparse, so each entry carries the number it stands for. The range is the
+    /// field's, which raw input types into.
+    Choice {
+        choices: Vec<(i64, String)>,
+        min: i64,
+        max: i64,
+    },
     /// On or off, whatever value turning it on writes.
     Boolean,
 }
@@ -133,6 +141,15 @@ impl Row {
             warning: String::new(),
             representable: true,
         }
+    }
+
+    /// Turns a number row into a drop-down of these, keeping its range for raw input.
+    fn choose(&mut self, choices: Vec<(i64, String)>) {
+        let (min, max) = match self.editor {
+            Editor::Number { min, max } | Editor::Choice { min, max, .. } => (min, max),
+            Editor::Boolean => (0, 1),
+        };
+        self.editor = Editor::Choice { choices, min, max };
     }
 }
 
@@ -774,7 +791,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             full(rows, "Sprite priority", Some(i64::from(h.sprite_priority)), 0, 65535);
             full(rows, "Mega Mushroom drops", Some(i64::from(h.mega_drop_chance)), 0, 65535);
             if let Some(row) = rows.last_mut() {
-                row.editor = Editor::Choice(MEGA_DROP_CHANCES.iter().zip(0i64..).map(|(name, value)| (value, (*name).to_owned())).collect());
+                row.choose(MEGA_DROP_CHANCES.iter().zip(0i64..).map(|(name, value)| (value, (*name).to_owned())).collect());
                 row.representable = usize::from(h.mega_drop_chance) < MEGA_DROP_CHANCES.len();
             }
             // The header's three of each layer, a tileset, a background and a foreground together for each of the
@@ -802,7 +819,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         }
                         if let Some(choices) = choices {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(value));
-                            row.editor = Editor::Choice(choices.clone());
+                            row.choose(choices.clone());
                         }
                         row.note = match (at, layer) {
                             (0, None) => "Its colours are the first tileset entry's palette, in the Layers tab.".to_owned(),
@@ -830,7 +847,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     }
                     if let Some(choices) = choices {
                         row.representable = choices.iter().any(|(id, _)| *id == i64::from(value));
-                        row.editor = Editor::Choice(choices.clone());
+                        row.choose(choices.clone());
                     }
                     row.note = match layer {
                         None => "The level's tileset, and its colours.".to_owned(),
@@ -877,7 +894,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.note = format!("The {} image the views naming this entry show. 65535 shows none.", layer.name());
                         if let Some(choices) = layer_choices(view, layer) {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.screen_id));
-                            row.editor = Editor::Choice(choices);
+                            row.choose(choices);
                         }
                     }
                 }
@@ -890,7 +907,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     };
                     if block == ScreenBlock::Tileset {
                         row.representable = is_tileset_choice(record.palette_id);
-                        row.editor = Editor::Choice(tileset_choices());
+                        row.choose(tileset_choices());
                     }
                 }
                 for (label, value, note) in [
@@ -955,7 +972,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 full(rows, &format!("Slot {slot}"), Some(i64::from(bank)), 0, 10);
                 let Some(row) = rows.last_mut() else { continue };
                 row.representable = bank <= 10;
-                row.editor = Editor::Choice(bank_choices(view, slot, overlays));
+                row.choose(bank_choices(view, slot, overlays));
                 // The sprites placed here that this slot's bank leaves out of the game.
                 let left_out = (0..course.sprites.len()).filter(|&i| view.missing_bank(i).is_some_and(|(s, _)| usize::from(s) == slot)).count();
                 if left_out != 0 {
@@ -1094,7 +1111,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             }
             if let Some(row) = rows.get_mut(ENTRANCE_TYPE_ROW) {
                 let named = row.value.is_none_or(|v| usize::try_from(v).is_ok_and(|v| v < ENTRANCE_TYPES.len()));
-                row.editor = Editor::Choice((0i64..).zip(ENTRANCE_TYPES).map(|(value, name)| (value, name.to_owned())).collect());
+                row.choose((0i64..).zip(ENTRANCE_TYPES).map(|(value, name)| (value, name.to_owned())).collect());
                 row.representable = named;
                 row.note = "How the player arrives, and for doors and pipes how they leave. The game's tables stop at Vine: Nintendo's levels use the connected mini pipes after it, but the game reads past its tables for them.".to_owned();
             }
@@ -1123,7 +1140,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     full(rows, label, Some(i64::from(value)), 0, 255);
                     let Some(row) = rows.last_mut() else { continue };
                     match label {
-                        "BGM" => row.editor = Editor::Choice(music_choices()),
+                        "BGM" => row.choose(music_choices()),
                         "Camera settings" => row.note = camera_note(course, v),
                         // A view names a record of each layer, and the record says which screen scrolls there and how.
                         "Background" => row.note = layer_note(view, ScreenBlock::Background, v),
@@ -1170,14 +1187,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
 /// the rest are typed; no actor declares both.
 fn declared_row(field: &SpriteFieldDefinition, value: i32) -> Row {
     let value = i64::from(value);
+    let (min, max) = (i64::from(sprite_field_min(field)), i64::from(sprite_field_max(field)));
     let (editor, representable) = if field.checkbox_value != 0 {
         (Editor::Boolean, value == 0 || value == 1)
     } else if !field.choices.is_empty() {
         let choices: Vec<(i64, String)> = field.choices.iter().map(|c| (i64::from(c.value), c.label.clone())).collect();
         let named = choices.iter().any(|(v, _)| *v == value);
-        (Editor::Choice(choices), named)
+        (Editor::Choice { choices, min, max }, named)
     } else {
-        (Editor::Number { min: i64::from(sprite_field_min(field)), max: i64::from(sprite_field_max(field)) }, true)
+        (Editor::Number { min, max }, true)
     };
     let mut note = field.notes.clone();
     if !representable {
@@ -1846,7 +1864,7 @@ mod tests {
         assert!(shown.rows.iter().all(|row| !row.label.starts_with("Camera ") || row.label == "Camera settings"));
         assert!(shown.rows[row("Camera settings")].note.contains("Cameras tab"));
         // The music is picked by name, and a number nobody named is still there to pick.
-        let Editor::Choice(music) = &shown.rows[row("BGM")].editor else { panic!() };
+        let Editor::Choice { choices: music, .. } = &shown.rows[row("BGM")].editor else { panic!() };
         assert_eq!((music.len(), &music[16], &music[200]), (256, &(16, "Ghost House".to_owned()), &(200, "unnamed".to_owned())));
         // A view naming settings that do not exist reads the first, as the game does.
         view.panel.item = 1;
@@ -1934,7 +1952,10 @@ mod tests {
         assert_eq!((rows.rows[0].label.as_str(), rows.rows[0].note.as_str()), ("Object ID", "Spawned by Chain Chomp/Log."));
         assert!(rows.rows[5].note.starts_with("8 is used by ones thrown out of the Monty Tank."));
         assert_eq!(rows.actor.as_ref().map(|a| (a.definition.name.as_str(), a.definition.category.as_str())), Some(("Synthetic actor", "Enemies")));
-        assert_eq!(rows.rows[5].editor, Editor::Choice(vec![(1, "Slow".to_owned()), (2, "Fast".to_owned())]));
+        let Editor::Choice { choices: named, min, max } = &rows.rows[5].editor else { panic!("{:?}", rows.rows[5].editor) };
+        assert_eq!(named, &[(1, "Slow".to_owned()), (2, "Fast".to_owned())]);
+        // Raw input types into the three bits, named or not.
+        assert_eq!((*min, *max), (0, 7));
         // The settings are zero and this actor does not name zero, so the row says so rather than snapping elsewhere.
         assert_eq!((rows.rows[5].value, rows.rows[5].representable), (Some(0), false));
         assert!(rows.rows[5].note.contains("does not name the value 0"));
@@ -2004,7 +2025,7 @@ mod tests {
         let rows = shown(&view);
         assert!(matches!(
             (&rows.rows[5].editor, &rows.rows[6].editor, &rows.rows[7].editor),
-            (Editor::Boolean, Editor::Choice(_), Editor::Number { .. })
+            (Editor::Boolean, Editor::Choice { .. }, Editor::Number { .. })
         ));
         // X and Y are still rows 1 and 2, which is what a canvas drag moves.
         view.gesture = Some(Gesture::Move { delta: egui::Vec2::new(16.0, 32.0), submitted: false });
@@ -2100,7 +2121,7 @@ mod tests {
         assert_eq!(labels, ["Tileset", "BG graphics", "FG graphics"]);
         assert_eq!(shown_rows.rows[12].heading, "Graphics");
         let tileset = &shown_rows.rows[12];
-        let Editor::Choice(choices) = &tileset.editor else { panic!("{:?}", tileset.editor) };
+        let Editor::Choice { choices, .. } = &tileset.editor else { panic!("{:?}", tileset.editor) };
         assert_eq!((tileset.label.as_str(), choices.len(), &choices[2]), ("Tileset", 77, &(1, "Castle".to_owned())));
         assert_eq!(choices[0], (65535, "None".to_owned()));
         assert_eq!(tileset.warning, "", "the palette follows the graphics");
@@ -2134,7 +2155,7 @@ mod tests {
         let headings: Vec<&str> = shown_rows.rows.iter().map(|row| row.heading.as_str()).filter(|h| !h.is_empty()).collect();
         assert_eq!(headings, ["Graphics set 1", "Graphics set 2", "Graphics set 3"]);
         assert_eq!(shown_rows.rows[15].heading, "Graphics set 2");
-        assert!(matches!(shown_rows.rows[18].editor, Editor::Choice(_)));
+        assert!(matches!(shown_rows.rows[18].editor, Editor::Choice { .. }));
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 15, 4) else { panic!() };
         assert_eq!(header.tileset_theme[1], 4);
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 16, 7) else { panic!() };
@@ -2142,7 +2163,7 @@ mod tests {
         let Some(LevelEdit::SetHeader { header, .. }) = apply(&view, &view.panel, &shown_rows, 20, 5) else { panic!() };
         assert_eq!(header.foreground_theme[2], 5);
         view.panel.advanced = false;
-        let Editor::Choice(drops) = &shown_rows.rows[11].editor else { panic!() };
+        let Editor::Choice { choices: drops, .. } = &shown_rows.rows[11].editor else { panic!() };
         assert_eq!(drops[2], (2, "None".to_owned()));
         view.panel_tab(Tab::Banks);
         view.snapshot.course.object_banks[0] = 3;
@@ -2153,7 +2174,7 @@ mod tests {
         let shown_rows = rows(&view, &view.panel, Some(&overlays));
         let labels: Vec<&str> = shown_rows.rows.iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels[9..], ["Slot 9", "Slot 12", "Slot 15"]);
-        let Editor::Choice(choices) = &shown_rows.rows[0].editor else { panic!() };
+        let Editor::Choice { choices, .. } = &shown_rows.rows[0].editor else { panic!() };
         assert_eq!((shown_rows.rows[0].value, &choices[3].1), (Some(3), &"Enemy Castle (overlay 77)".to_owned()));
         assert_eq!(apply(&view, &view.panel, &shown(&view), 0, 4), Some(LevelEdit::SetObjectBank { slot: 0, value: 4 }));
         assert_eq!(apply(&view, &view.panel, &shown(&view), 11, 5), Some(LevelEdit::SetObjectBank { slot: 15, value: 5 }));
@@ -2192,7 +2213,7 @@ mod tests {
         view.selection = vec![Item::new(Kind::Entrance, 0)];
         view.sync_panel();
         let rows = shown(&view);
-        let Editor::Choice(types) = &rows.rows[ENTRANCE_TYPE_ROW].editor else { panic!() };
+        let Editor::Choice { choices: types, .. } = &rows.rows[ENTRANCE_TYPE_ROW].editor else { panic!() };
         assert_eq!((types.len(), types[4].1.as_str(), rows.rows[ENTRANCE_TYPE_ROW].value), (26, "Pipe down", Some(4)));
         let flags: Vec<(&str, Option<i64>)> =
             rows.rows[ENTRANCE_FLAG_ROW..ENTRANCE_FLAG_ROW + 8].iter().map(|r| (r.label.as_str(), r.value)).collect();
