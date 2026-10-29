@@ -15,7 +15,7 @@ use crate::level_view::CanvasOptions;
 use crate::picker::{self, PickerState};
 use crate::services::{ROM_EXTENSIONS, Services, is_rom_name, rom_extension};
 use crate::session::Session;
-use crate::theme::{Theme, Tokens};
+use crate::theme::{Mode, Theme, Tokens};
 use crate::tools::{self, Tools};
 use crate::workspace::Workspace;
 use crate::zoom_canvas::Grids;
@@ -149,6 +149,8 @@ pub const GRIDS_KEY: &str = "graphics_grids";
 pub(crate) struct Preferences {
     pub(crate) language: Language,
     pub(crate) theme: Theme,
+    /// Whether the themes shown, and previewed, are the dark mode's or the light's.
+    pub(crate) showing_dark: bool,
     pub(crate) autosave_minutes: u32,
     pub(crate) backups_kept: u32,
 }
@@ -249,7 +251,7 @@ impl BigStarApp {
 
     /// Chooses the dark or the light mode of the theme, as Preferences would.
     pub fn set_dark(&mut self, dark: bool) {
-        self.set_theme(Theme { dark, ..self.theme });
+        self.set_theme(Theme { mode: if dark { Mode::Dark } else { Mode::Light }, ..self.theme });
     }
 
     /// Chooses the theme, as Preferences would.
@@ -258,15 +260,17 @@ impl BigStarApp {
         self.services.store(THEME_KEY, &theme.stored());
     }
 
-    /// The fonts once, and the style whenever the palette changes: a theme chosen in Preferences shows while the window
-    /// is open, before it is saved.
+    /// The fonts once, and the style whenever the palette changes: as the system's mode changes, when the theme follows
+    /// it, and with a theme chosen in Preferences while the window is open, before it is saved.
     fn style(&mut self, ctx: &egui::Context) {
         if self.styled.is_none() {
             ctx.set_fonts(crate::theme::fonts());
         }
         self.accent = self.services.accent_color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
-        let theme = self.preferences.as_ref().map_or(self.theme, |preferences| preferences.theme);
-        let tokens = theme.tokens(self.accent);
+        let tokens = match &self.preferences {
+            Some(preferences) => preferences.theme.tokens(preferences.showing_dark, self.accent),
+            None => self.theme.tokens(self.theme.is_dark(ctx.system_theme()), self.accent),
+        };
         if self.styled.as_ref() != Some(&tokens) {
             crate::theme::apply(ctx, &tokens);
             self.styled = Some(tokens);
@@ -700,6 +704,7 @@ impl BigStarApp {
                         *preferences = Some(Preferences {
                             language,
                             theme,
+                            showing_dark: theme.is_dark(ctx.system_theme()),
                             autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
                             backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
                         });
@@ -1206,6 +1211,7 @@ impl BigStarApp {
         let mut open = true;
         let mut answer = None;
         let accent = self.accent;
+        let system = ctx.system_theme();
         dialogs::window("Preferences").open(&mut open).resizable(false).show(ctx, |ui| {
             egui::Grid::new("preferences").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label(preferences.language.tr("Language"));
@@ -1232,15 +1238,29 @@ impl BigStarApp {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new("Theme").strong());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.choice_value(&mut preferences.theme.dark, false, "Light");
-                    ui.choice_value(&mut preferences.theme.dark, true, "Dark");
+                    for mode in Mode::ALL.into_iter().rev() {
+                        if ui.choice_value(&mut preferences.theme.mode, mode, mode.name()).changed() {
+                            preferences.showing_dark = preferences.theme.is_dark(system);
+                        }
+                    }
                 });
             });
+            // Following the system, which may turn dark on a schedule, each mode has its own theme to choose.
+            if preferences.theme.mode == Mode::System {
+                ui.horizontal(|ui| {
+                    ui.weak("Theme used in");
+                    ui.choice_value(&mut preferences.showing_dark, false, "Light mode");
+                    ui.choice_value(&mut preferences.showing_dark, true, "Dark mode");
+                });
+            }
+            let dark = preferences.showing_dark;
             egui::Grid::new("preference-themes").num_columns(3).spacing([8.0, 8.0]).show(ui, |ui| {
                 for (index, family) in crate::theme::FAMILIES.iter().enumerate() {
-                    let palette = Theme { family: family.id, ..preferences.theme }.tokens(accent);
-                    if controls::theme_card(ui, family.name, &palette, preferences.theme.family == family.id).clicked() {
-                        preferences.theme.family = family.id;
+                    let mut candidate = preferences.theme;
+                    candidate.set_family(dark, family.id);
+                    let palette = candidate.tokens(dark, accent);
+                    if controls::theme_card(ui, family.name, &palette, preferences.theme.family(dark).id == family.id).clicked() {
+                        preferences.theme.set_family(dark, family.id);
                     }
                     if index % 3 == 2 {
                         ui.end_row();

@@ -283,6 +283,14 @@ fn main() -> Result<(), String> {
         harness.run();
     }
     shot(&mut harness, &dir, "preferences-lavender-light.png")?;
+    // Following the system, with a theme of its own for each mode.
+    for label in ["System", "Light mode", "Sunset"] {
+        if let Some(node) = harness.query_by_label(label) {
+            node.click();
+        }
+        harness.run();
+    }
+    shot(&mut harness, &dir, "preferences-system.png")?;
     if let Some(node) = harness.query_by_label("Cancel") {
         node.click();
     }

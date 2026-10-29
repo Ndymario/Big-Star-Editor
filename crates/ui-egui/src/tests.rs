@@ -2216,10 +2216,10 @@ fn a_floating_window_opens_in_the_middle_of_the_screen() {
 
 #[test]
 fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
-    use crate::theme::{Theme, Tokens};
+    use crate::theme::{Mode, Theme, Tokens};
     let (mut harness, stored) = preferences_open(MemoryServices::default());
-    let default = Theme::default().tokens(None);
-    let ocean = Theme { family: "ocean", ..Theme::default() }.tokens(None);
+    let default = Theme::default().tokens(true, None);
+    let ocean = Theme { dark: "ocean", ..Theme::default() }.tokens(true, None);
     assert_eq!(*Tokens::get(&harness.ctx), default);
     harness.get_by_label("Ocean").click();
     harness.run();
@@ -2238,9 +2238,34 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     harness.run();
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
-    let chosen = Theme { family: "ocean", dark: false, ..Theme::default() };
-    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(None));
+    // The light mode has a theme of its own, so Ocean stays the dark mode's.
+    let chosen = Theme { mode: Mode::Light, dark: "ocean", ..Theme::default() };
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(false, None));
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
+}
+
+#[test]
+fn following_the_system_each_mode_keeps_the_theme_chosen_for_it() {
+    use crate::theme::{Mode, Theme, Tokens};
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    harness.get_by_label("System").click();
+    harness.run();
+    harness.get_by_label("Light mode").click();
+    harness.run();
+    harness.get_by_label("Sunset").click();
+    harness.run();
+    // What is being chosen shows, whatever mode the system is in.
+    assert_eq!(*Tokens::get(&harness.ctx), Theme { light: "sunset", ..Theme::default() }.tokens(false, None));
+    harness.get_by_label("Dark mode").click();
+    harness.run();
+    harness.get_by_label("Midnight").click();
+    harness.run();
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    let chosen = Theme { mode: Mode::System, light: "sunset", dark: "midnight", ..Theme::default() };
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
+    // A system that does not say its mode is taken to be dark.
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(true, None));
 }
 
 #[test]
@@ -2260,7 +2285,7 @@ fn the_systems_accent_colour_can_stand_in_for_the_themes() {
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     assert_ne!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
-    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY).as_deref(), Some("default dark own-accent"));
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY).as_deref(), Some("dark light:default dark:default own-accent"));
 }
 
 #[test]

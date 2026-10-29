@@ -422,35 +422,73 @@ fn readable(color: Color32, on: Color32) -> Color32 {
     (0..=10).map(|step| crate::motion::mix(color, away, step as f32 / 10.0)).find(|&mixed| contrast(mixed, on) >= 4.5).unwrap_or(away)
 }
 
+/// Whether the interface is light, dark, or as the system is, which may change on a schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    Light,
+    Dark,
+    System,
+}
+
+impl Mode {
+    pub const ALL: [Self; 3] = [Self::Light, Self::Dark, Self::System];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::System => "System",
+        }
+    }
+
+    fn word(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::System => "system",
+        }
+    }
+}
+
 /// Which theme the interface is drawn in: what Preferences chooses and a run remembers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Theme {
-    /// A [`Family`]'s id.
-    pub family: &'static str,
-    pub dark: bool,
+    pub mode: Mode,
+    /// The [`Family`] ids drawn in the light mode and in the dark, which may differ.
+    pub light: &'static str,
+    pub dark: &'static str,
     /// The system's accent colour in place of the family's, where the system has one.
     pub system_accent: bool,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self { family: default_family().id, dark: true, system_accent: true }
+        Self { mode: Mode::Dark, light: default_family().id, dark: default_family().id, system_accent: true }
     }
 }
 
+fn family_id(id: &str) -> Option<&'static str> {
+    FAMILIES.iter().find(|family| family.id == id).map(|family| family.id)
+}
+
 impl Theme {
-    /// A choice as [`Theme::stored`] wrote it; what it does not say, or says wrongly, is the default.
+    /// A choice as [`Theme::stored`] wrote it; what it does not say, or says wrongly, is the default. A family named on
+    /// its own, as an earlier version stored it, is both modes'.
     pub fn parse(text: &str) -> Self {
         let mut theme = Self::default();
         for word in text.split_whitespace() {
             match word {
-                "dark" => theme.dark = true,
-                "light" => theme.dark = false,
                 "system-accent" => theme.system_accent = true,
                 "own-accent" => theme.system_accent = false,
-                id => {
-                    if let Some(family) = FAMILIES.iter().find(|family| family.id == id) {
-                        theme.family = family.id;
+                word => {
+                    if let Some(mode) = Mode::ALL.into_iter().find(|mode| mode.word() == word) {
+                        theme.mode = mode;
+                    } else if let Some(id) = word.strip_prefix("light:").and_then(family_id) {
+                        theme.light = id;
+                    } else if let Some(id) = word.strip_prefix("dark:").and_then(family_id) {
+                        theme.dark = id;
+                    } else if let Some(id) = family_id(word) {
+                        (theme.light, theme.dark) = (id, id);
                     }
                 }
             }
@@ -459,17 +497,33 @@ impl Theme {
     }
 
     pub fn stored(&self) -> String {
-        let mode = if self.dark { "dark" } else { "light" };
-        format!("{} {mode} {}", self.family, if self.system_accent { "system-accent" } else { "own-accent" })
+        let accent = if self.system_accent { "system-accent" } else { "own-accent" };
+        format!("{} light:{} dark:{} {accent}", self.mode.word(), self.light, self.dark)
     }
 
-    pub fn family(&self) -> &'static Family {
-        FAMILIES.iter().find(|family| family.id == self.family).unwrap_or_else(default_family)
+    /// Whether the interface is dark, given the system's mode where it says it; a system that does not is dark.
+    pub fn is_dark(&self, system: Option<egui::Theme>) -> bool {
+        match self.mode {
+            Mode::Light => false,
+            Mode::Dark => true,
+            Mode::System => system != Some(egui::Theme::Light),
+        }
     }
 
-    /// The palette this choice comes to; `accent` is the system's accent colour, if it has one.
-    pub fn tokens(&self, accent: Option<Color32>) -> Tokens {
-        let tokens = self.family().variant(self.dark).clone();
+    /// The family drawn in the dark or the light mode.
+    pub fn family(&self, dark: bool) -> &'static Family {
+        let id = if dark { self.dark } else { self.light };
+        FAMILIES.iter().find(|family| family.id == id).unwrap_or_else(default_family)
+    }
+
+    /// Chooses the family drawn in the dark or the light mode.
+    pub fn set_family(&mut self, dark: bool, id: &'static str) {
+        *(if dark { &mut self.dark } else { &mut self.light }) = id;
+    }
+
+    /// The palette of the dark or the light mode; `accent` is the system's accent colour, if it has one.
+    pub fn tokens(&self, dark: bool, accent: Option<Color32>) -> Tokens {
+        let tokens = self.family(dark).variant(dark).clone();
         match accent.filter(|_| self.system_accent) {
             Some(accent) => tokens.with_accent(accent),
             None => tokens,
@@ -613,27 +667,39 @@ mod tests {
     fn applying_a_palette_makes_it_the_one_in_effect() {
         let ctx = egui::Context::default();
         assert!(Tokens::get(&ctx).dark);
-        let light = Theme { dark: false, ..Theme::default() }.tokens(None);
+        let light = Theme::default().tokens(false, None);
         apply(&ctx, &light);
         assert_eq!(*Tokens::get(&ctx), light);
         assert_eq!(ctx.global_style().visuals.panel_fill, light.base);
-        let ocean = Theme { family: "ocean", ..Theme::default() }.tokens(None);
+        let ocean = Theme { dark: "ocean", ..Theme::default() }.tokens(true, None);
         apply(&ctx, &ocean);
         assert_eq!(ctx.global_style().visuals.panel_fill, ocean.base);
-        assert_ne!(ocean.base, Theme::default().tokens(None).base);
+        assert_ne!(ocean.base, Theme::default().tokens(true, None).base);
     }
 
     #[test]
     fn a_choice_is_stored_and_read_back() {
-        for family in &FAMILIES {
-            for (dark, system_accent) in [(true, false), (false, true)] {
-                let theme = Theme { family: family.id, dark, system_accent };
+        for (light, dark) in FAMILIES.iter().zip(FAMILIES.iter().rev()) {
+            for (mode, system_accent) in [(Mode::Dark, false), (Mode::Light, true), (Mode::System, false)] {
+                let theme = Theme { mode, light: light.id, dark: dark.id, system_accent };
                 assert_eq!(Theme::parse(&theme.stored()), theme);
             }
         }
         // What an earlier version stored, and what nothing stored.
-        assert_eq!(Theme::parse("light"), Theme { dark: false, ..Theme::default() });
+        assert_eq!(Theme::parse("light"), Theme { mode: Mode::Light, ..Theme::default() });
+        assert_eq!(Theme::parse("ocean dark own-accent"), Theme { light: "ocean", dark: "ocean", system_accent: false, ..Theme::default() });
         assert_eq!(Theme::parse("no-such-theme"), Theme::default());
+    }
+
+    #[test]
+    fn the_system_mode_follows_the_system_and_each_mode_has_its_own_family() {
+        let theme = Theme { mode: Mode::System, light: "sunset", dark: "midnight", ..Theme::default() };
+        assert!(!theme.is_dark(Some(egui::Theme::Light)));
+        assert!(theme.is_dark(Some(egui::Theme::Dark)));
+        assert!(theme.is_dark(None));
+        assert_eq!(theme.family(false).id, "sunset");
+        assert_eq!(theme.family(true).id, "midnight");
+        assert!(!Theme { mode: Mode::Light, ..theme }.is_dark(Some(egui::Theme::Dark)));
     }
 
     #[test]
@@ -651,13 +717,13 @@ mod tests {
     fn the_system_accent_is_used_only_when_chosen_and_stays_readable() {
         let navy = Color32::from_rgb(10, 20, 90);
         let plain = Theme { system_accent: false, ..Theme::default() };
-        assert_eq!(plain.tokens(Some(navy)), plain.tokens(None));
+        assert_eq!(plain.tokens(true, Some(navy)), plain.tokens(true, None));
         let chosen = Theme::default();
         // A system without an accent colour leaves the theme's own.
-        assert_eq!(chosen.tokens(None), plain.tokens(None));
+        assert_eq!(chosen.tokens(true, None), plain.tokens(true, None));
         for dark in [true, false] {
             for accent in [navy, Color32::from_rgb(255, 235, 60)] {
-                let tokens = Theme { dark, ..chosen }.tokens(Some(accent));
+                let tokens = chosen.tokens(dark, Some(accent));
                 assert_eq!(tokens.primary, accent);
                 assert!(contrast(tokens.primary_text, tokens.base) >= 4.5);
                 assert!(contrast(tokens.inverted, tokens.primary) >= 4.5);
