@@ -929,13 +929,16 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.choose_filtered(choices, Some(layer_filter(layer)));
                     }
                 }
-                // Read by nothing; in A01_1 and J08_1 these hold the header's second graphics set, so they likely
+                // Read by nothing. Across the game's 578 entries, 0x06 mostly repeats the layer's number in the header's
+                // second graphics set (94 of the 108 entries that set it) and 0x08 is always 65535, so both likely
                 // survive from an older layout of the level format.
-                const MIGRATED: &str =
-                    "Unused, likely left over from a migration of the level format: in A01_1 and J08_1 it holds graphics set 2's values.";
+                const UNUSED_06: &str = "Unused, likely left over from a migration of the level format: it mostly holds this layer's graphics \
+                                         set 2 number, in the first entry (as in A01_1) or, in J08_1 only, the second.";
+                const UNUSED_08: &str =
+                    "Unused, likely left over from a migration of the level format, next to 0x06's graphics set 2: 65535 in every level.";
                 for (label, value, note) in [
-                    ("Unused 0x06", record.unused_06, MIGRATED),
-                    ("Unused 0x08", record.unused_08, MIGRATED),
+                    ("Unused 0x06", record.unused_06, UNUSED_06),
+                    ("Unused 0x08", record.unused_08, UNUSED_08),
                     ("Scroll speed X", record.scroll_x, ""),
                     (
                         "Scroll speed Y",
@@ -947,7 +950,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Unused 0x12", record.unused_12, ""),
                 ] {
                     full(rows, label, Some(i64::from(value)), 0, 65535);
-                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || note == MIGRATED) {
+                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || [UNUSED_06, UNUSED_08].contains(&note)) {
                         row.note = note.to_owned();
                     }
                 }
