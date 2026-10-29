@@ -47,8 +47,8 @@ committed as `SKIP` after that.
 ## Trying it before a tag exists
 
 ```sh
-mkdir -p build-aur/Big-Star-Editor-0.1.0
-git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C build-aur/Big-Star-Editor-0.1.0
-tar -czf build-aur/big-star-editor-0.1.0.tar.gz -C build-aur Big-Star-Editor-0.1.0 && rm -rf build-aur/Big-Star-Editor-0.1.0
+mkdir -p build-aur/Big-Star-Editor-0.1.1
+git ls-files -co --exclude-standard -z | tar --null -T - -cf - | tar -xf - -C build-aur/Big-Star-Editor-0.1.1
+tar -czf build-aur/big-star-editor-0.1.1.tar.gz -C build-aur Big-Star-Editor-0.1.1 && rm -rf build-aur/Big-Star-Editor-0.1.1
 cp packaging/aur/PKGBUILD build-aur/ && cd build-aur && makepkg -s --skipchecksums
 ```

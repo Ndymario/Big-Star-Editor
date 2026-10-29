@@ -458,7 +458,7 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bigstar"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-client",
  "bigstar-core",
@@ -484,7 +484,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-client"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-protocol",
@@ -494,7 +494,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -503,7 +503,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-formats"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-nds",
@@ -513,7 +513,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-host"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-formats",
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-host-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "axum",
  "bigstar-client",
@@ -555,7 +555,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-level"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-formats",
@@ -565,7 +565,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-nds"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "serde",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-patching"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "ctrlc",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-project"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-formats",
@@ -600,7 +600,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-core",
  "bigstar-formats",
@@ -612,7 +612,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-ui-egui"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-client",
  "bigstar-core",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "bigstar-web"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bigstar-ui-egui",
  "eframe",
@@ -5115,7 +5115,7 @@ checksum = "e450f9b2ed1dff33c94c12589a87338689467b9c4f5d8a5710bd09a847d2c8a7"
 
 [[package]]
 name = "xtask"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "serde_json",
 ]

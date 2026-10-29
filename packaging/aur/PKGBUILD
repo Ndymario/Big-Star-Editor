@@ -5,7 +5,7 @@
 #  - run `updpkgsums` to fill sha256sums
 #  - regenerate .SRCINFO: makepkg --printsrcinfo > .SRCINFO
 pkgname=big-star-editor
-pkgver=0.1.0
+pkgver=0.1.1
 pkgrel=1
 pkgdesc="Level editor for New Super Mario Bros. DS projects built with NCPatcher"
 arch=('x86_64' 'aarch64')
