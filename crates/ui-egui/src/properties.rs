@@ -929,9 +929,13 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.choose_filtered(choices, Some(layer_filter(layer)));
                     }
                 }
+                // Read by nothing; in A01_1 and J08_1 these hold the header's second graphics set, so they likely
+                // survive from an older layout of the level format.
+                const MIGRATED: &str =
+                    "Unused, likely left over from a migration of the level format: in A01_1 and J08_1 it holds graphics set 2's values.";
                 for (label, value, note) in [
-                    ("Parallax X", record.parallax_x, ""),
-                    ("Parallax Y", record.parallax_y, ""),
+                    ("Unused 0x06", record.unused_06, MIGRATED),
+                    ("Unused 0x08", record.unused_08, MIGRATED),
                     ("Scroll speed X", record.scroll_x, ""),
                     (
                         "Scroll speed Y",
@@ -943,7 +947,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     ("Unused 0x12", record.unused_12, ""),
                 ] {
                     full(rows, label, Some(i64::from(value)), 0, 65535);
-                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset) {
+                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || note == MIGRATED) {
                         row.note = note.to_owned();
                     }
                 }
@@ -1389,8 +1393,8 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
                 0 => &mut record.id,
                 1 => &mut record.screen_id,
                 2 => &mut record.palette_id,
-                3 => &mut record.parallax_x,
-                4 => &mut record.parallax_y,
+                3 => &mut record.unused_06,
+                4 => &mut record.unused_08,
                 5 => &mut record.scroll_x,
                 6 => &mut record.scroll_y,
                 7 => &mut record.vertical_offset,

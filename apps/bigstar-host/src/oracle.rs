@@ -186,7 +186,7 @@ fn report_level(out: &mut dyn Write, files: &RefCell<EffectiveFilesystem>, cours
             let _ = writeln!(
                 out,
                 "  {name} {} {} {} {} {} {} {} {} {} {}",
-                s.id, s.screen_id, s.palette_id, s.parallax_x, s.parallax_y, s.scroll_x, s.scroll_y, s.vertical_offset, s.unused_10, s.unused_12
+                s.id, s.screen_id, s.palette_id, s.unused_06, s.unused_08, s.scroll_x, s.scroll_y, s.vertical_offset, s.unused_10, s.unused_12
             );
         }
     }
