@@ -330,26 +330,31 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     level_tileset.palette_offset = 2;
     level_tileset.tile_page_offset = 1;
     let id = references.tileset_id;
-    let addresses = [
-        table(files, profile.tileset_graphics, id),
-        // The game takes the tileset's colours from the tileset block, which nearly always names the same tileset.
-        table(files, profile.tileset_palette, references.tileset_palette_id),
-        table(files, profile.tileset_map16, id),
-        table(files, profile.tileset_objects, id),
-        table(files, profile.tileset_index, id),
-    ];
-    let behaviors = table(files, profile.tileset_behaviors, id);
-    let [graphics, palette, map16, objects, index] = addresses;
-    fill(files, &mut level_tileset.graphics, graphics)?;
-    fill(files, &mut level_tileset.palette, palette)?;
-    fill(files, &mut level_tileset.map16, map16)?;
-    fill(files, &mut level_tileset.objects, objects)?;
-    fill(files, &mut level_tileset.object_index, index)?;
-    // A behaviour table the overlay cannot resolve is skipped rather than failing the level, as the C++ does.
-    if let Ok(behaviors) = behaviors
-        && !behaviors.is_empty()
-    {
-        fill(files, &mut level_tileset.behaviors, Ok(behaviors))?;
+    // A level with no tileset names it 0xFFFF, and the game loads none of its files (`loadCharacterGraphics`,
+    // `LoadTileBehaviors`); truncated, the number would index an unrelated file. The slot stays empty and the
+    // backgrounds still load. See `docs/no-tileset.md`.
+    if id != u16::MAX {
+        let addresses = [
+            table(files, profile.tileset_graphics, id),
+            // The game takes the tileset's colours from the tileset block, which nearly always names the same tileset.
+            table(files, profile.tileset_palette, references.tileset_palette_id),
+            table(files, profile.tileset_map16, id),
+            table(files, profile.tileset_objects, id),
+            table(files, profile.tileset_index, id),
+        ];
+        let behaviors = table(files, profile.tileset_behaviors, id);
+        let [graphics, palette, map16, objects, index] = addresses;
+        fill(files, &mut level_tileset.graphics, graphics)?;
+        fill(files, &mut level_tileset.palette, palette)?;
+        fill(files, &mut level_tileset.map16, map16)?;
+        fill(files, &mut level_tileset.objects, objects)?;
+        fill(files, &mut level_tileset.object_index, index)?;
+        // A behaviour table the overlay cannot resolve is skipped rather than failing the level, as the C++ does.
+        if let Ok(behaviors) = behaviors
+            && !behaviors.is_empty()
+        {
+            fill(files, &mut level_tileset.behaviors, Ok(behaviors))?;
+        }
     }
 
     nohara.tile_offset = 640;
@@ -471,6 +476,10 @@ pub fn load_level_tilesets(files: &[TilesetResourceFiles; 3], tileset_id: u16, o
     let mut result = LevelTilesets::default();
     let mut parsed: [Option<EditableTileset>; 3] = Default::default();
     for ((file, slot), error) in files.iter().zip(&mut parsed).zip(&mut result.errors) {
+        // A slot with no files is a level without that tileset, which is not an error.
+        if file.graphics.data.is_empty() && file.map16.data.is_empty() {
+            continue;
+        }
         match parse_resource_tileset(file) {
             Ok(tileset) => *slot = Some(tileset),
             Err(e) => *error = e.message,
