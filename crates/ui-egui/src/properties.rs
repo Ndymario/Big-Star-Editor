@@ -324,11 +324,6 @@ pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
 /// Why the level's tileset should not be none, though every load of its files skips it. See `docs/no-tileset.md`.
 const NO_TILESET: &str = "The game animates the tileset every frame by this number without checking for none, so it calls whatever lies far past its table, which can crash.";
 
-/// Whether a tileset ID is one of `tileset_choices`.
-fn is_tileset_choice(id: u16) -> bool {
-    id == u16::MAX || usize::from(id) < TILESET_NAMES.len()
-}
-
 /// What each object bank of a slot holds, as NSMB Editor names them: `BANK_NAMES[slot][bank - 1]`, empty where the
 /// bank holds nothing. The game loads banks into slots 0 to 9 and 15.
 const BANK_NAMES: [(usize, [&str; 10]); 11] = [
@@ -919,9 +914,19 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     } else {
                         format!("Unused: the game loads the {}'s colours from the first entry only.", block.name())
                     };
-                    if block == ScreenBlock::Tileset {
-                        row.representable = is_tileset_choice(record.palette_id);
-                        row.choose_filtered(tileset_choices(), Some(layer_filter(None)));
+                    // The game's tables hold a background's palette at its graphics' number, so the names are the same.
+                    let layer = match block {
+                        ScreenBlock::Tileset => None,
+                        ScreenBlock::Background => Some(BackgroundLayer::Background),
+                        ScreenBlock::Foreground => Some(BackgroundLayer::Foreground),
+                    };
+                    let choices = match layer {
+                        None => Some(tileset_choices()),
+                        Some(layer) => layer_choices(view, layer),
+                    };
+                    if let Some(choices) = choices {
+                        row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.palette_id));
+                        row.choose_filtered(choices, Some(layer_filter(layer)));
                     }
                 }
                 for (label, value, note) in [
