@@ -24,6 +24,11 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 impl NativeServices {
+    /// Has `ctx` redrawn when the system's accent colour or mode changes.
+    pub fn wake(&self, ctx: egui::Context) {
+        self.accent.wake_with(move || ctx.request_repaint());
+    }
+
     pub fn load() -> Self {
         let file = settings_path();
         let values =

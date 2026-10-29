@@ -45,8 +45,7 @@ fn main() -> eframe::Result {
             if let Some(window) = cc.winit_window() {
                 toplevel_icon::set(window, &icon());
             }
-            #[cfg(not(target_os = "linux"))]
-            let _ = cc;
+            services.wake(cc.egui_ctx.clone());
             Ok(Box::new(Shell(BigStarApp::new(Box::new(services)))))
         }),
     );

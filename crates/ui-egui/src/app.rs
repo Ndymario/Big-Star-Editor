@@ -282,10 +282,6 @@ impl BigStarApp {
         }
         self.accent = self.services.accent_color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
         self.system = self.services.dark_mode().map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }).or_else(|| ctx.system_theme());
-        // A mode the system changes on a schedule shows without waiting for the pointer to move.
-        if self.theme.mode == Mode::System {
-            ctx.request_repaint_after(std::time::Duration::from_secs(5));
-        }
         let tokens = match &self.preferences {
             Some(preferences) => preferences.theme.tokens(preferences.showing_dark, self.accent),
             None => self.theme.tokens(self.theme.is_dark(self.system), self.accent),

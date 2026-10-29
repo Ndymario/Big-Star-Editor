@@ -1,12 +1,11 @@
 //! The accent colour the person chose for their system, and on Linux whether it is in dark mode, which winit does not
 //! say there. Each system is asked its own way, and off the interface's thread: a desktop that does not answer must not
-//! hold up a frame.
+//! hold up a frame. On Linux the desktop portal says when either changes; elsewhere the colour is asked for again.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How long an answer stands before the system is asked again; the colour and the mode can change while the editor
-/// runs, the mode on a schedule.
+/// How long an answer stands before the system is asked again, where it does not say when the colour changes.
 const FRESH: Duration = Duration::from_secs(5);
 
 #[derive(Default)]
@@ -14,18 +13,32 @@ struct State {
     color: Option<[u8; 3]>,
     dark: Option<bool>,
     asked: Option<Instant>,
+    /// The system says when either changes, so there is no asking again.
+    told: bool,
+    /// Brings the window round to a change it was told of.
+    #[cfg_attr(not(all(unix, not(target_os = "macos"))), allow(dead_code))]
+    wake: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
-/// The system's accent colour and mode as last heard, asked for again in the background as they grow stale.
+/// The system's accent colour and mode as last heard, kept up to date in the background.
 #[derive(Clone, Default)]
 pub struct Accent(Arc<Mutex<State>>);
 
 impl Accent {
-    /// Starts asking straight away, so the answer is there by the first frame.
+    /// Starts asking straight away, so the answer is there by the first frame, and listens for changes where the system
+    /// says them.
     pub fn watch() -> Self {
         let accent = Self::default();
         accent.color();
+        accent.listen();
         accent
+    }
+
+    /// Has `wake` called when the colour or the mode changes, so the window redraws without waiting for input.
+    pub fn wake_with(&self, wake: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut state) = self.0.lock() {
+            state.wake = Some(Arc::new(wake));
+        }
     }
 
     pub fn color(&self) -> Option<[u8; 3]> {
@@ -39,7 +52,7 @@ impl Accent {
 
     fn heard<T>(&self, read: impl FnOnce(&State) -> Option<T>) -> Option<T> {
         let Ok(mut state) = self.0.lock() else { return None };
-        if state.asked.is_none_or(|asked| asked.elapsed() >= FRESH) {
+        if !state.told && state.asked.is_none_or(|asked| asked.elapsed() >= FRESH) {
             state.asked = Some(Instant::now());
             let shared = self.0.clone();
             let asking = std::thread::Builder::new().name("accent".to_owned()).spawn(move || {
@@ -57,35 +70,97 @@ impl Accent {
         }
         read(&state)
     }
+
+    /// Listens for the portal's `SettingChanged`, which comes the moment the person, or a schedule, changes the colour
+    /// or the mode. A desktop without the portal is asked every [`FRESH`] instead.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn listen(&self) {
+        let shared = self.0.clone();
+        let listening = std::thread::Builder::new().name("appearance".to_owned()).spawn(move || {
+            if let Err(error) = listen(&shared) {
+                log::info!("the desktop portal does not say when the appearance changes: {error}");
+            }
+            if let Ok(mut state) = shared.lock() {
+                state.told = false;
+            }
+        });
+        if let Err(error) = listening {
+            log::warn!("could not listen for appearance changes: {error}");
+        }
+    }
+
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    fn listen(&self) {}
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const PORTAL: &str = "org.freedesktop.portal.Desktop";
+#[cfg(all(unix, not(target_os = "macos")))]
+const PORTAL_PATH: &str = "/org/freedesktop/portal/desktop";
+#[cfg(all(unix, not(target_os = "macos")))]
+const SETTINGS: &str = "org.freedesktop.portal.Settings";
+#[cfg(all(unix, not(target_os = "macos")))]
+const APPEARANCE: &str = "org.freedesktop.appearance";
+
+/// Subscribes, then reads what is set now, so no change falls between the two; then takes each change as it comes.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn listen(shared: &Mutex<State>) -> zbus::Result<()> {
+    let connection = zbus::blocking::Connection::session()?;
+    let proxy = zbus::blocking::Proxy::new(&connection, PORTAL, PORTAL_PATH, SETTINGS)?;
+    let changes = proxy.receive_signal("SettingChanged")?;
+    let (color, dark) = (system(), dark_mode());
+    if let Ok(mut state) = shared.lock() {
+        (state.color, state.dark, state.told) = (color, dark, true);
+    }
+    for message in changes {
+        let Ok((namespace, key, value)) = message.body().deserialize::<(String, String, zbus::zvariant::OwnedValue)>() else {
+            continue;
+        };
+        if namespace != APPEARANCE {
+            continue;
+        }
+        let Ok(mut state) = shared.lock() else { break };
+        match key.as_str() {
+            "accent-color" => state.color = accent_from(value),
+            "color-scheme" => state.dark = dark_from(value),
+            _ => continue,
+        }
+        if let Some(wake) = &state.wake {
+            wake();
+        }
+    }
+    Err(zbus::Error::Failure("the portal's signals stopped".to_owned()))
 }
 
 /// One of the desktop portal's `org.freedesktop.appearance` settings.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn appearance(key: &str) -> Option<zbus::zvariant::OwnedValue> {
     let connection = zbus::blocking::Connection::session().ok()?;
-    let reply = connection
-        .call_method(
-            Some("org.freedesktop.portal.Desktop"),
-            "/org/freedesktop/portal/desktop",
-            Some("org.freedesktop.portal.Settings"),
-            "ReadOne",
-            &("org.freedesktop.appearance", key),
-        )
-        .ok()?;
+    let reply = connection.call_method(Some(PORTAL), PORTAL_PATH, Some(SETTINGS), "ReadOne", &(APPEARANCE, key)).ok()?;
     reply.body().deserialize().ok()
 }
 
 /// The desktop portal's `accent-color` setting, which GNOME, KDE and the others that have one all answer.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn system() -> Option<[u8; 3]> {
-    let (red, green, blue) = <(f64, f64, f64)>::try_from(appearance("accent-color")?).ok()?;
+    accent_from(appearance("accent-color")?)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn accent_from(value: zbus::zvariant::OwnedValue) -> Option<[u8; 3]> {
+    let (red, green, blue) = <(f64, f64, f64)>::try_from(value).ok()?;
     from_fractions([red, green, blue])
 }
 
 /// The desktop portal's `color-scheme` setting.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn dark_mode() -> Option<bool> {
-    from_color_scheme(u32::try_from(appearance("color-scheme")?).ok()?)
+    dark_from(appearance("color-scheme")?)
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn dark_from(value: zbus::zvariant::OwnedValue) -> Option<bool> {
+    from_color_scheme(u32::try_from(value).ok()?)
 }
 
 /// Windows and macOS tell winit their mode, which egui hands on.
