@@ -651,15 +651,14 @@ fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -
 /// A tileset record's screen when the views naming it turn with the stage (`setupBgParallax`).
 pub const ROTATING_TILESET: u16 = 0xff00;
 
-/// A background or foreground's numbers by the names the project's scripts give them, with none at 65535.
+/// A background or foreground's numbers by the names the project's scripts give them, after none at 65535.
 fn layer_choices(view: &LevelView, layer: BackgroundLayer) -> Option<Vec<(i64, String)>> {
     let named = view.art.graphics.as_ref().map(|graphics| graphics.backgrounds.layer(layer)).unwrap_or_default();
     if named.is_empty() {
         return None;
     }
-    let mut choices: Vec<(i64, String)> = named.iter().map(|definition| (i64::from(definition.id), definition.name.clone())).collect();
-    choices.push((i64::from(u16::MAX), "None".to_owned()));
-    Some(choices)
+    let none = std::iter::once((i64::from(u16::MAX), "None".to_owned()));
+    Some(none.chain(named.iter().map(|definition| (i64::from(definition.id), definition.name.clone()))).collect())
 }
 
 /// The hint of the box that filters a tileset's list, `None`, or a background or foreground's.
