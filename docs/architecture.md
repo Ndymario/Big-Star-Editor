@@ -54,12 +54,12 @@ and frontends ask again while keeping what is on screen until the replacement ar
 ## Saving
 
 Level saves go to the project's edit targets, are parsed again before they are written, back up what they overwrite
-into `.big-star-backups/levels-…`, and write both files or neither. File and tileset edits go into the module that
+into `.bigstar/backups/levels-…`, and write both files or neither. File and tileset edits go into the module that
 supplies the file, or the active one; new NitroFS files must be under `z_new/`; a member of an archive is written
 beside it for the next build to sweep back in. An NCPatcher project never writes into the ROM. Backups are kept per kind,
 as many as the project's preference says, and swept when a project opens and whenever one is added.
 
-Unsaved levels are written to `.big-star-autosave` as often as the project's preference says (every minute by
+Unsaved levels are written to `.bigstar/autosave` as often as the project's preference says (every minute by
 default). The next session offers them back.
 
 ## Editing a ROM directly
@@ -85,7 +85,7 @@ packs member edits back into their archive (in the LZ wrapper it came in) and `N
 original the way NCPatcher's in-place commit does -- back into their own extent when they fit, appended after the used
 ROM when they do not. Writing from the original every time keeps a ROM saved a hundred times the size of one saved
 once. A ROM on this machine is written into its file on every save; the first write of a session backs up the file it
-overwrites into `.big-star-backups/rom-…` beside it, and autosaves go to `.big-star-autosave/<rom name>/`. An uploaded
+overwrites into `.bigstar/backups/rom-…` beside it, and autosaves go to `.bigstar/autosave/<rom name>/`. An uploaded
 ROM is written only for a download, and has no backups or autosaves.
 
 This is not a return of the ROM builder M16 removed. An NCPatcher project still never repacks anything: NCPatcher builds
@@ -136,5 +136,9 @@ moving files around.
 
 A project is an NCPatcher project directory, found by its `ncpatcher.yaml`; Big Star writes no manifest of its own.
 The host keeps its per-project choices (variant, module, the clean ROM, autosave interval, backups kept) in
-`.big-star-workspace.json` in the project directory. The clean ROM is the one path that differs between machines, so
+`.bigstar/workspace.json` in the project directory. The clean ROM is the one path that differs between machines, so
 it lives there rather than in `ncpatcher.yaml`, and reaches NCPatcher as `--rom`. See `docs/project-format.md`.
+
+Everything the editor writes for itself -- settings, backups, autosaves, build staging, trash, the virtual ROM's record
+and what it lost -- lives under the one `.bigstar/` folder, in the project or beside a ROM edited directly. The loose
+`.big-star-*` files and folders earlier versions wrote are moved into it when the project or ROM opens.

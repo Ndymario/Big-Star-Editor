@@ -10,7 +10,7 @@ A Big Star project is an NCPatcher project directory: one with an
 `ncpatcher.yaml` (or `.yml`), and `modules/`. Big Star writes no project file of
 its own. `ncpatcher.yaml` need name no input ROM -- where the clean ROM lies
 differs from machine to machine -- so the editor keeps it in the project's
-`.big-star-workspace.json` and passes it as `--rom` on every command that reads
+`.bigstar/workspace.json` and passes it as `--rom` on every command that reads
 the configuration. NCPatcher accepts a `rom:` section without `file` or `dir`
 when `--rom` is given. A project with no clean ROM in its settings whose
 configuration names one (`rom.file`, as `config dump` reports it) takes that.

@@ -438,6 +438,7 @@ impl Shared {
         if state.open.as_ref().is_some_and(|open| open.levels.values().any(|session| session.level.dirty())) {
             return Err(invalid("save or close the open levels before opening another project"));
         }
+        adopt_retired_state(&directory);
         let mut settings = load_settings(&directory);
         if settings.generated_path.is_empty() {
             settings.generated_path = DEFAULT_GENERATED_DIR.to_owned();
@@ -1220,7 +1221,7 @@ impl Shared {
         Ok(Response::FileTargets(holding))
     }
 
-    /// Moves a module's copy of a file into `.big-star-trash`, kept for the person to restore by hand.
+    /// Moves a module's copy of a file into `.bigstar/trash`, kept for the person to restore by hand.
     fn remove_file(&self, path: &str) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
@@ -1433,9 +1434,9 @@ impl Shared {
         let written = std::mem::take(&mut open.own_writes);
         let own = |path: &Path| {
             written.contains(path)
-                || path.strip_prefix(&open.directory).is_ok_and(|relative| {
-                    relative.components().next().is_some_and(|first| first.as_os_str().to_string_lossy().starts_with(".big-star"))
-                })
+                || path
+                    .strip_prefix(&open.directory)
+                    .is_ok_and(|relative| relative.components().next().is_some_and(|first| first.as_os_str() == bigstar_project::STATE_DIR))
         };
         let external: Vec<PathBuf> = paths.iter().filter(|path| !own(path)).cloned().collect();
         let stale = inserted || !external.is_empty();
@@ -1486,7 +1487,7 @@ fn open_backups_kept(settings: &bigstar_protocol::ProjectSettings) -> usize {
 /// How often the autosave thread looks at the clock; the interval itself is the project's preference.
 const AUTOSAVE_TICK: std::time::Duration = std::time::Duration::from_secs(5);
 
-/// A new backup directory under `.big-star-backups`: what made it, then when (UTC, to the millisecond, so two saves in
+/// A new backup directory under `.bigstar/backups`: what made it, then when (UTC, to the millisecond, so two saves in
 /// one second are two backups), then which process, since two hosts on one project are not unheard of.
 fn new_backup_directory(project: &Path, kind: &str) -> PathBuf {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
@@ -1520,11 +1521,37 @@ fn back_up(project: &Path, kind: &str, targets: &[(PathBuf, Vec<u8>)]) -> Result
     Ok(())
 }
 
+/// The editor's files, each under `.bigstar`, by what an earlier version named them in the project directory.
+const RETIRED_STATE_NAMES: [(&str, &str); 7] = [
+    (".big-star-workspace.json", crate::settings::SETTINGS_FILE_NAME),
+    (".big-star-virtual-rom.json", virtual_rom::RECORD_FILE),
+    (".big-star-backups", ".bigstar/backups"),
+    (".big-star-staging", ".bigstar/staging"),
+    (".big-star-autosave", AUTOSAVE_DIR),
+    (".big-star-trash", TRASH_DIR),
+    (".big-star-lost", virtual_rom::LOST_DIR),
+];
+
+/// Moves what an earlier version left loose in `directory` into `.bigstar`. One already there is the newer and stays;
+/// a move that fails leaves the old one where it was, to be tried again on the next open.
+pub(crate) fn adopt_retired_state(directory: &Path) {
+    for (old, new) in RETIRED_STATE_NAMES {
+        let (old, new) = (directory.join(old), directory.join(new));
+        if std::fs::symlink_metadata(&old).is_err() || std::fs::symlink_metadata(&new).is_ok() {
+            continue;
+        }
+        if let Some(parent) = new.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::rename(&old, &new);
+    }
+}
+
 /// Where removed module files go, relative to the project.
-pub(crate) const TRASH_DIR: &str = ".big-star-trash";
+pub(crate) const TRASH_DIR: &str = ".bigstar/trash";
 
 /// Where autosaves live, relative to the project.
-pub(crate) const AUTOSAVE_DIR: &str = ".big-star-autosave";
+pub(crate) const AUTOSAVE_DIR: &str = ".bigstar/autosave";
 
 /// Where an open project's autosaves go: under the project, or for a ROM edited directly, a folder of that ROM's own
 /// beside it, so two ROMs in one directory do not offer each other's levels back. An uploaded ROM has nowhere: the host

@@ -69,7 +69,7 @@ fn an_edit_in_one_frontend_appears_in_another() {
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", &course), RomFile::new("course/A01_1_bgdat.bin", &bgdat)], &[0; 32]);
     write_bytes(&root.path().join("proj/rom.nds"), &rom);
     write_bytes(&root.path().join("proj/ncpatcher.yaml"), b"version: 2\n");
-    write_bytes(&root.path().join("proj/.big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
+    write_bytes(&root.path().join("proj/.bigstar/workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
     let host = Host::new(root.path()).unwrap();
 
     let (mut one, mut two) = (frontend(&host), frontend(&host));

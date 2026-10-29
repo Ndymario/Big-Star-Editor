@@ -6,7 +6,7 @@ use bigstar_core::{Error, ErrorCode, Result, write_text_file_atomically};
 use bigstar_protocol::ProjectSettings;
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SETTINGS_FILE_NAME: &str = ".big-star-workspace.json";
+pub(crate) const SETTINGS_FILE_NAME: &str = ".bigstar/workspace.json";
 
 /// What is written: the choices, not what NCPatcher reported, which is asked again each time.
 #[derive(Debug, Default, Serialize, Deserialize)]

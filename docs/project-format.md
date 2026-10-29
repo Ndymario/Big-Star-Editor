@@ -17,7 +17,7 @@ rom:
   backup: backup
 ```
 
-The editor keeps the path in the project's `.big-star-workspace.json`, beside the other per-project choices (variant,
+The editor keeps the path in the project's `.bigstar/workspace.json`, beside the other per-project choices (variant,
 module, autosave interval, backups kept), relative to the project when the ROM is inside it and as it is otherwise:
 
 ```json
@@ -28,7 +28,7 @@ module, autosave interval, backups kept), relative to the project when the ROM i
 ```
 
 A project whose settings name no clean ROM, but whose `ncpatcher.yaml` does name one with `rom.file` that is there,
-takes that one: it is written to `.big-star-workspace.json` as if it had been chosen.
+takes that one: it is written to `.bigstar/workspace.json` as if it had been chosen.
 
 A project that opens without a usable clean ROM -- none set, the file gone, or a ROM that is not New Super Mario Bros.
 -- still opens, says why in the project settings, and the frontend asks for one (`SetCleanRom`). **Build > Clean

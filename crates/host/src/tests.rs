@@ -42,7 +42,7 @@ fn make_project(root: &std::path::Path, name: &str, rom: &[u8]) {
     let project = root.join(name);
     write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
     write_bytes(&project.join("rom.nds"), rom);
-    write_bytes(&project.join(".big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
+    write_bytes(&project.join(".bigstar/workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
 }
 
 struct Fixture {
@@ -195,6 +195,29 @@ fn ncpatcher_projects_are_listed_and_opened() {
 }
 
 #[test]
+fn opening_moves_what_an_earlier_version_left_loose_into_bigstar() {
+    let fixture = Fixture::new("host-retired-state");
+    let rom = make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]);
+    let project = fixture.root.path().join("proj");
+    write_bytes(&project.join("ncpatcher.yaml"), b"version: 2\n");
+    write_bytes(&project.join("rom.nds"), &rom);
+    write_bytes(&project.join(".big-star-workspace.json"), br#"{"clean_rom": "rom.nds"}"#);
+    write_bytes(&project.join(".big-star-trash/1/a.bin"), b"a");
+    // One already under `.bigstar` is the newer and is kept.
+    write_bytes(&project.join(".big-star-lost/old.txt"), b"old");
+    write_bytes(&project.join(".bigstar/lost/new.txt"), b"new");
+    let mut session = fixture.session();
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert!(info.rom_path.is_some());
+    assert!(project.join(".bigstar/workspace.json").is_file());
+    assert!(!project.join(".big-star-workspace.json").exists());
+    assert!(project.join(".bigstar/trash/1/a.bin").is_file());
+    assert!(!project.join(".big-star-trash").exists());
+    assert!(project.join(".big-star-lost/old.txt").is_file());
+    assert!(!project.join(".bigstar/lost/old.txt").exists());
+}
+
+#[test]
 fn the_clean_rom_is_asked_for_and_remembered() {
     let fixture = Fixture::new("host-clean-rom");
     let rom = make_rom(&[RomFile::new("course/A01_1.bin", b"x")], &[0; 32]);
@@ -202,7 +225,7 @@ fn the_clean_rom_is_asked_for_and_remembered() {
     write_bytes(&fixture.root.path().join("roms/junk.nds"), b"not a ROM");
     write_bytes(&fixture.root.path().join("proj/ncpatcher.yaml"), b"version: 2\n");
     // Named, but not there: opening says so rather than refusing the project.
-    write_bytes(&fixture.root.path().join("proj/.big-star-workspace.json"), br#"{"clean_rom": "gone.nds"}"#);
+    write_bytes(&fixture.root.path().join("proj/.bigstar/workspace.json"), br#"{"clean_rom": "gone.nds"}"#);
     let mut session = fixture.session();
     let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
     assert_eq!(info.rom_path, None);
@@ -704,7 +727,7 @@ fn unsaved_levels_are_autosaved_and_offered_to_the_next_session() {
     let opened = open_level(&mut session, "course/A01_1");
     move_first_object(&mut session, &opened, 9);
     session.shared().write_recovery_snapshots();
-    let autosaves = fixture.root.path().join("proj/.big-star-autosave");
+    let autosaves = fixture.root.path().join("proj/.bigstar/autosave");
     assert_eq!(std::fs::read_dir(&autosaves).unwrap().count(), 1);
     // This session's own autosave is not offered back to it.
     let Response::Recovery(offered) = session.handle(Request::Recovery).unwrap() else { panic!() };
@@ -1321,10 +1344,8 @@ fn preferences_persist_and_saves_keep_that_many_backups() {
         let Response::Edited { snapshot: saved, .. } = session.handle(Request::SaveLevel { level: snapshot.level }).unwrap() else { panic!() };
         snapshot = *saved;
     }
-    let backups: Vec<String> = std::fs::read_dir(project.join(".big-star-backups"))
-        .unwrap()
-        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
+    let backups: Vec<String> =
+        std::fs::read_dir(project.join(".bigstar/backups")).unwrap().map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned()).collect();
     assert_eq!(backups.len(), 2, "{backups:?}");
     assert!(backups.iter().all(|name| name.starts_with("levels-")));
 
@@ -1496,7 +1517,7 @@ fn a_rom_edited_directly_saves_levels_into_itself() {
     let bgdat = rom_file(&fixture, "roms/game.nds", "course/A01_1_bgdat.bin");
     assert_eq!(EditableLevel::load(&course, &bgdat, None).unwrap().objects()[0].x, 42);
     // The first save kept the ROM it overwrote, untouched.
-    let backups: Vec<_> = std::fs::read_dir(fixture.root.path().join("roms/.big-star-backups")).unwrap().flatten().collect();
+    let backups: Vec<_> = std::fs::read_dir(fixture.root.path().join("roms/.bigstar/backups")).unwrap().flatten().collect();
     assert_eq!(backups.len(), 1);
     assert_eq!(std::fs::read(backups[0].path().join("game.nds")).unwrap(), original);
 
@@ -1507,7 +1528,7 @@ fn a_rom_edited_directly_saves_levels_into_itself() {
     let third = move_first_object(&mut session, &saved, 9);
     session.handle(Request::SaveLevel { level: third.level }).unwrap();
     assert_eq!(std::fs::metadata(fixture.root.path().join("roms/game.nds")).unwrap().len(), size);
-    assert_eq!(std::fs::read_dir(fixture.root.path().join("roms/.big-star-backups")).unwrap().count(), 1);
+    assert_eq!(std::fs::read_dir(fixture.root.path().join("roms/.bigstar/backups")).unwrap().count(), 1);
 
     // Reopened from disk, the level is what was saved.
     let mut fresh = fixture.rom_session();
@@ -1929,8 +1950,8 @@ fn the_rom_is_exposed_as_a_folder_with_archives_unpacked() {
     let Response::Filesystem(hidden) = session.handle(Request::HideVirtualRom).unwrap() else { panic!() };
     assert_eq!(hidden.virtual_rom, None);
     assert!(!folder.exists());
-    assert!(!fixture.root.path().join("proj/.big-star-virtual-rom.json").exists());
-    assert!(!fixture.root.path().join("proj/.big-star-lost").exists());
+    assert!(!fixture.root.path().join("proj/.bigstar/virtual-rom.json").exists());
+    assert!(!fixture.root.path().join("proj/.bigstar/lost").exists());
     session.handle(Request::CloseProject).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     assert_eq!(listing(&mut session).virtual_rom, None);
@@ -1951,8 +1972,8 @@ fn stopping_inserts_pending_edits_and_keeps_strays_in_lost() {
 
     assert!(!folder.exists());
     assert_eq!(std::fs::read(module.join("course/A01_1.bin")).unwrap(), [1, 2, 3]);
-    assert_eq!(files_under(&project.join(".big-star-lost")).iter().filter(|path| path.ends_with("/notes.txt")).count(), 1);
-    assert_eq!(files_under(&project.join(".big-star-lost")).len(), 1);
+    assert_eq!(files_under(&project.join(".bigstar/lost")).iter().filter(|path| path.ends_with("/notes.txt")).count(), 1);
+    assert_eq!(files_under(&project.join(".bigstar/lost")).len(), 1);
 }
 
 #[test]

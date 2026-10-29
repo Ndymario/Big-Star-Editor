@@ -99,7 +99,7 @@ pub(super) fn drop_override(open: &OpenProject, module: &ModuleInfo, address: &s
     Ok(Some(target))
 }
 
-/// Moves a module file into `.big-star-trash`, under the time and its ROM path, kept for the person to restore by hand.
+/// Moves a module file into `.bigstar/trash`, under the time and its ROM path, kept for the person to restore by hand.
 pub(super) fn move_to_trash(project: &Path, address: &str, source: &Path) -> Result<()> {
     let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
     let trash = project.join(TRASH_DIR).join(stamp.to_string()).join(address.replace('!', "/"));

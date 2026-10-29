@@ -46,8 +46,8 @@ pub use lua_tiles::{LuaTileLayer, load_lua_tile_layers};
 pub use module_data::{DEFAULT_GENERATED_DIR, load_module_data_catalog};
 pub use ncpatcher_project::{is_ncpatcher_project, project_name, project_rom};
 pub use patch_apply::{
-    DEFAULT_BACKUPS_KEPT, PatchApplyOutcome, PatchApplyRequest, PatchApplyResult, apply_patch_transactionally, patch_backup_root, patch_staging_dir,
-    prune_patch_backups,
+    DEFAULT_BACKUPS_KEPT, PatchApplyOutcome, PatchApplyRequest, PatchApplyResult, STATE_DIR, apply_patch_transactionally, patch_backup_root,
+    patch_staging_dir, prune_patch_backups,
 };
 pub use paths::lexically_normal;
 pub use rom_edit::write_edited_rom;

@@ -655,7 +655,7 @@ impl FilesDock {
                 });
             }
             Prompt::Remove { path } => {
-                ui.label(format!("Move this module file to the project's trash (.big-star-trash)?\n\n{path}"));
+                ui.label(format!("Move this module file to the project's trash (.bigstar/trash)?\n\n{path}"));
                 dialogs::actions(ui, |ui| {
                     if Button::new("Remove").danger().show(ui).clicked() {
                         session.remove_file(path);

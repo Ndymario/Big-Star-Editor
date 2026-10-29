@@ -68,12 +68,15 @@ pub struct PatchApplyResult {
 /// How many backups of each kind a sweep leaves behind.
 pub const DEFAULT_BACKUPS_KEPT: usize = 10;
 
+/// The one directory the editor keeps its own files in: in a project, or beside a ROM edited directly.
+pub const STATE_DIR: &str = ".bigstar";
+
 pub fn patch_staging_dir(project_dir: &Path) -> PathBuf {
-    project_dir.join(".big-star-staging")
+    project_dir.join(STATE_DIR).join("staging")
 }
 
 pub fn patch_backup_root(project_dir: &Path) -> PathBuf {
-    project_dir.join(".big-star-backups")
+    project_dir.join(STATE_DIR).join("backups")
 }
 
 /// Removing a staging directory is best effort: failing to clean up is not a reason to refuse a build that otherwise

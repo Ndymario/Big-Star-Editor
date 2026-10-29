@@ -9,7 +9,7 @@
 //!
 //! What was last written is recorded, by ROM address, with a hash of the bytes. That is how the host tells its own
 //! writes from somebody else's when the watcher reports them, how a path in the folder is traced back to its address,
-//! and, kept in `.big-star-virtual-rom.json`, how an edit made while the editor was closed is found when it reopens.
+//! and, kept in `.bigstar/virtual-rom.json`, how an edit made while the editor was closed is found when it reopens.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,11 +23,11 @@ use super::*;
 
 /// The mirror's folder, relative to the project.
 pub(crate) const VIRTUAL_ROM_DIR: &str = "virtual-rom";
-/// What the mirror last wrote, relative to the project. Its `.big-star` prefix keeps the watcher from treating it as an
+/// What the mirror last wrote, relative to the project. Being under `.bigstar` keeps the watcher from treating it as an
 /// edit.
-const RECORD_FILE: &str = ".big-star-virtual-rom.json";
+pub(crate) const RECORD_FILE: &str = ".bigstar/virtual-rom.json";
 /// Where files left in the folder that were never inserted go when it is removed, relative to the project.
-pub(crate) const LOST_DIR: &str = ".big-star-lost";
+pub(crate) const LOST_DIR: &str = ".bigstar/lost";
 
 /// One file of the folder: where it is under the folder (`/`-separated), and the SHA-256 of what was last written
 /// there or taken from there.
@@ -253,7 +253,7 @@ impl Shared {
 
     /// Stops the mirror and removes its folder. Edits the watcher has not reported yet are inserted first; a file that
     /// still is not what the record says -- one that could not be inserted, or one nobody should have put there --
-    /// goes to `.big-star-lost` rather than with the folder.
+    /// goes to `.bigstar/lost` rather than with the folder.
     pub(super) fn hide_virtual_rom(&self) -> Result<Response> {
         let mut inserted = false;
         {
@@ -281,7 +281,7 @@ impl Shared {
     }
 
     /// Deletes the folder and its record, moving each file that is not what `written` says was last written or taken
-    /// from there into `.big-star-lost`, under the time and where it was in the folder.
+    /// from there into `.bigstar/lost`, under the time and where it was in the folder.
     fn remove_virtual_rom(&self, project: &Path, written: &BTreeMap<String, Recorded>) {
         let root = project.join(VIRTUAL_ROM_DIR);
         let known: BTreeMap<&str, &str> = written.values().map(|recorded| (recorded.path.as_str(), recorded.hash.as_str())).collect();

@@ -105,7 +105,7 @@ fn open_choose_the_clean_rom_drag_and_save_through_the_embedded_host() {
     until(&mut harness, "the clean ROM question", |app| app.session().is_some_and(|s| s.browser.is_some()));
     harness.get_by_label("Choose ROM…").click();
     until(&mut harness, "the clean ROM's levels", |app| app.session().is_some_and(|s| s.browser.is_none() && !s.level_list.root.groups.is_empty()));
-    assert!(workspace.path().join("game/.big-star-workspace.json").is_file());
+    assert!(workspace.path().join("game/.bigstar/workspace.json").is_file());
     // A module to save into, as a build of the project would have recorded it; the host's watcher notices it.
     let project = workspace.path().join("game");
     let modules = format!(
