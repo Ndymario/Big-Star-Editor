@@ -1236,7 +1236,7 @@ cp "$rom" "$out"
     assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(_))));
     assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
     // The edit went into the module before the build; this stand-in does not build it in, NCPatcher does.
-    assert!(project.join("modules/mine/nitrofs/course/A01_1.bin").is_file());
+    assert_eq!(files_under(&project.join("modules/mine/nitrofs")), ["course/A01_1_bgdat.bin"]);
     assert!(!open_level(&mut session, "course/A01_1").dirty);
 }
 
