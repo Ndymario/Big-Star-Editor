@@ -1278,6 +1278,7 @@ fn real_backgrounds_are_named_and_animated() {
         let Ok(Response::Level(snapshot)) = session.handle(Request::OpenLevel { area: area.token.clone() }) else { continue };
         let Response::LevelGraphics(graphics) = session.handle(Request::LevelGraphics { level: snapshot.level }).unwrap() else { panic!() };
         seen += 1;
+        assert!(graphics.error.is_none(), "{}: {:?}", area.course_path, graphics.error);
         assert_eq!(graphics.backgrounds.definitions.len(), 152);
         let references = snapshot.tileset_references;
         for (layer, image, screen) in [

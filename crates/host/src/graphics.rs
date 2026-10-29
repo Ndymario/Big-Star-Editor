@@ -371,7 +371,9 @@ impl ProjectGraphics {
     }
 
     pub fn level_graphics(&mut self, level: LevelId, generation: u64, references: LevelTilesetReferences) -> LevelGraphics {
-        let mut result = LevelGraphics { level, generation, ..LevelGraphics::default() };
+        // The scripts' catalog is the same for every level, so a level whose files will not resolve still names its
+        // backgrounds and fails on its own error alone.
+        let mut result = LevelGraphics { level, generation, backgrounds: self.backgrounds().clone(), ..LevelGraphics::default() };
         let resources = match resolve_level_graphics(&mut self.files, references) {
             Ok(resources) => resources,
             Err(error) => {
@@ -394,7 +396,6 @@ impl ProjectGraphics {
         }
         result.background = self.layer_graphics(BackgroundLayer::Background, &resources.background, references);
         result.foreground = self.layer_graphics(BackgroundLayer::Foreground, &resources.foreground, references);
-        result.backgrounds = self.backgrounds().clone();
         result
     }
 
