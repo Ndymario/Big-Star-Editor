@@ -534,6 +534,8 @@ fn visuals(t: &Tokens) -> Visuals {
     v.override_text_color = Some(t.foreground);
     v.warn_fg_color = t.warning;
     v.error_fg_color = t.danger;
+    // Anything that can be pressed says so under the pointer, as a link does.
+    v.interact_cursor = Some(egui::CursorIcon::PointingHand);
 
     v.widgets.noninteractive.bg_fill = t.surface;
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, t.border);
