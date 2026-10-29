@@ -51,7 +51,7 @@ pub enum PatchApplyOutcome {
     BuildFailed,
     /// The build succeeded but its output could not be validated. Nothing was touched.
     OutputRejected,
-    /// The built ROM is in place and is what the editor now reads.
+    /// The built ROM is in place.
     Applied,
 }
 

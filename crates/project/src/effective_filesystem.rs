@@ -1,8 +1,8 @@
 //! What the editor sees when it reads a ROM address. Port of `libs/nsmb-project/src/effective_filesystem.cpp`.
 //!
-//! The ROM holds what the last build produced, and a build has not necessarily run since the last edit. So a read
-//! asks the plan first: when a module supplies this destination and that source is on disk, the source is what the
-//! editor renders. Archive addresses resolve the same way and per member, so a module supplying one member of an
+//! The ROM is the clean one, never a build: a build has not necessarily run since the last edit. So a read asks the
+//! plan first: when a module supplies this destination and that source is on disk, the source is what the editor
+//! renders; otherwise the clean ROM's copy is. Archive addresses resolve the same way and per member, so a module supplying one member of an
 //! archive does not stop the others coming from the ROM.
 
 use std::collections::BTreeMap;
@@ -151,7 +151,7 @@ impl EffectiveFilesystem {
             return read_file(&path);
         }
         let Some(rom) = self.rom.as_mut() else {
-            return Err(Error::new(ErrorCode::NotFound, format!("no built ROM is open, and nothing on disk supplies {address}")));
+            return Err(Error::new(ErrorCode::NotFound, format!("no clean ROM is open, and nothing on disk supplies {address}")));
         };
         let split = split_rom_address(address);
         if split.inside_archive() { rom.read_member(&split.container, &split.member) } else { rom.read(&split.container) }

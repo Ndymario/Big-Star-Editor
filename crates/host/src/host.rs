@@ -13,7 +13,7 @@ use bigstar_patching::{FileManifest, ModuleGraph, ModuleInfo, NCPatcherClient};
 use bigstar_project::{
     DEFAULT_GENERATED_DIR, FilesystemView, FilesystemViewRequest, LevelCatalog, LevelCatalogArea, LevelCatalogGroup, LevelCatalogLevel,
     PROJECT_LEVEL_LIST, RomReader, build_filesystem_view, builtin_level_catalog, find_object_bank_overlays, is_ncpatcher_project,
-    load_module_data_catalog, module_file_target, parse_level_catalog, project_name, project_rom, prune_patch_backups,
+    load_module_data_catalog, module_file_target, parse_level_catalog, project_name, prune_patch_backups,
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
@@ -1029,8 +1029,11 @@ impl Shared {
                 .then(|| read_file(&manifest_file).ok())
                 .flatten()
                 .and_then(|bytes| String::from_utf8(bytes).ok().and_then(|text| bigstar_patching::parse_file_manifest(&text).ok()));
+            // Whether a module's file is built in or still pending is a question about the build, so this one view reads
+            // it; before a first build, or for a ROM edited directly, the ROM the project reads is all there is.
+            let mut built = open.built_rom.as_deref().filter(|file| file.is_file()).and_then(|file| RomReader::open(file).ok());
             let view = build_filesystem_view(FilesystemViewRequest {
-                rom: open.rom.as_mut(),
+                rom: if built.is_some() { built.as_mut() } else { open.rom.as_mut() },
                 project_dir: open.directory.clone(),
                 modules,
                 plan,
@@ -1289,7 +1292,7 @@ impl Shared {
         }
         let target = self.banner_target(open)?;
         let bytes =
-            if target.is_file() { read_file(&target)? } else { open.rom.as_mut().ok_or_else(|| not_found("no built ROM is open"))?.read_banner()? };
+            if target.is_file() { read_file(&target)? } else { open.rom.as_mut().ok_or_else(|| not_found("no clean ROM is open"))?.read_banner()? };
         let shown = target.strip_prefix(&open.directory).unwrap_or(&target).to_string_lossy().replace('\\', "/");
         Ok(Response::Banner { bytes, target: shown })
     }
@@ -1692,11 +1695,10 @@ fn snapshot_and_event(id: LevelId, session: &LevelSession) -> (LevelSnapshot, Ev
     (snapshot(id, session), Event::LevelChanged { level: id, revision: session.revision, dirty: session.level.dirty() })
 }
 
-/// Reads the project's ROM: the active variant's build, or before there is one the clean ROM. A different ROM closes the
-/// levels open on the old one, so callers refuse unsaved edits first.
+/// Reads the project's clean ROM, never a build: a build is not necessarily current, and what the modules supply is
+/// read from them. A different ROM closes the levels open on the old one, so callers refuse unsaved edits first.
 fn select_rom(open: &mut OpenProject) -> Result<bool> {
-    let clean_rom = clean_rom_file(&open.directory, &open.settings).filter(|_| open.settings.clean_rom_problem.is_none());
-    let rom_file = project_rom(open.built_rom.as_deref(), clean_rom.as_deref());
+    let rom_file = clean_rom_file(&open.directory, &open.settings).filter(|file| open.settings.clean_rom_problem.is_none() && file.is_file());
     if rom_file == open.rom_file && open.rom.is_some() == rom_file.is_some() {
         return Ok(false);
     }

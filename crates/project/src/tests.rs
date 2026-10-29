@@ -179,21 +179,6 @@ fn a_project_is_a_directory_ncpatcher_configures() {
 }
 
 #[test]
-fn the_project_reads_its_build_or_else_the_clean_rom() {
-    let dir = TempDir::new("project-rom");
-    let clean = dir.path().join("clean.nds");
-    let built = dir.path().join("build/rom.nds");
-    assert_eq!(project_rom(Some(&built), None), None);
-    assert_eq!(project_rom(Some(&built), Some(&clean)), None, "neither is there to read");
-    write_bytes(&clean, b"x");
-    assert_eq!(project_rom(Some(&built), Some(&clean)), Some(clean.clone()), "before a first build, the clean ROM");
-    std::fs::create_dir_all(dir.path().join("build")).unwrap();
-    write_bytes(&built, b"x");
-    assert_eq!(project_rom(Some(&built), Some(&clean)), Some(built.clone()));
-    assert_eq!(project_rom(None, Some(&clean)), Some(clean));
-}
-
-#[test]
 fn level_catalog_lists_worlds_and_download_play_levels() {
     let catalog = builtin_level_catalog(Some("A2DE"));
     let world = &catalog.root.groups[0];

@@ -1070,7 +1070,7 @@ impl Session {
                         Notice { error: true, text }
                     });
                 }
-                // The project reads the built ROM now: which areas it holds, and its files, may have changed.
+                // The build may have rewritten what the modules supply: which areas the project holds, and its files, may have changed.
                 if outcome.applied {
                     self.request(Request::ListLevels, Pending::ListLevels);
                     self.refresh_filesystem();

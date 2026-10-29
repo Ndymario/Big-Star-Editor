@@ -44,7 +44,7 @@ pub use lua_actors::{
 pub use lua_backgrounds::{LuaBackgroundCatalog, LuaBackgroundLayer, load_lua_background_layers};
 pub use lua_tiles::{LuaTileLayer, load_lua_tile_layers};
 pub use module_data::{DEFAULT_GENERATED_DIR, load_module_data_catalog};
-pub use ncpatcher_project::{is_ncpatcher_project, project_name, project_rom};
+pub use ncpatcher_project::{is_ncpatcher_project, project_name};
 pub use patch_apply::{
     DEFAULT_BACKUPS_KEPT, PatchApplyOutcome, PatchApplyRequest, PatchApplyResult, STATE_DIR, apply_patch_transactionally, patch_backup_root,
     patch_staging_dir, prune_patch_backups,

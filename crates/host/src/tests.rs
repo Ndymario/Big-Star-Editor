@@ -1228,16 +1228,62 @@ cp "$rom" "$out"
     assert!(build.iter().any(|e| matches!(e, bigstar_protocol::BuildEvent::Log(line) if line == "linking")));
     let Some(bigstar_protocol::BuildEvent::Finished(outcome)) = build.last() else { panic!("{build:?}") };
     assert!(outcome.ok && outcome.applied, "{outcome:?}");
-    // The edit was saved first, the built ROM is where ncpatcher.yaml sends it and is the project's now, and every
-    // level session closed to read it.
+    // The edit was saved first, the built ROM is where ncpatcher.yaml sends it, the project still reads its clean ROM,
+    // and every level session closed to read what the build may have changed.
     assert!(project.join("build/rom.nds").is_file());
     let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
-    assert_eq!(info.rom_path.as_deref(), Some("build/rom.nds"));
+    assert_eq!(info.rom_path.as_deref(), Some("rom.nds"));
     assert!(events.iter().any(|event| matches!(event, Event::SettingsChanged(_))));
     assert!(session.handle(Request::CloseLevel { level: snapshot.level }).is_err());
     // The edit went into the module before the build; this stand-in does not build it in, NCPatcher does.
     assert_eq!(files_under(&project.join("modules/mine/nitrofs")), ["course/A01_1_bgdat.bin"]);
     assert!(!open_level(&mut session, "course/A01_1").dirty);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_module_file_deleted_since_the_last_build_reads_as_the_clean_rom_has_it() {
+    use std::os::unix::fs::PermissionsExt;
+    let (fixture, _) = with_module("host-clean-under-build");
+    let project = fixture.root.path().join("proj");
+    // The last build put the module's 1-1, whose first object sits at 5, into `build/rom.nds`; the module's copy has
+    // been deleted since, though the plan NCPatcher answers with still names it.
+    let mut built = EditableLevel::load(&level_files().0, &level_files().1, None).unwrap();
+    built
+        .update_entities(
+            LevelEntityUpdates { objects: vec![IndexedLevelValue { index: 0, value: object(1, 5, 0) }], ..LevelEntityUpdates::default() },
+            "Move",
+        )
+        .unwrap();
+    let rom = make_rom(
+        &[
+            RomFile::new("course/A01_1.bin", &built.serialize_course().unwrap()),
+            RomFile::new("course/A01_1_bgdat.bin", &built.serialize_bgdat().unwrap()),
+        ],
+        &[0; 32],
+    );
+    write_bytes(&project.join("build/rom.nds"), &rom);
+    let modules = std::fs::read_to_string(project.join("build/generated/modules.json")).unwrap();
+    let plan = r#"{"schema":"ncpatcher.files/1","planned":true,"count":1,"files":[{"id":0,"path":"course/A01_1.bin","size":3,
+        "action":"modified","source":"modules/mine/nitrofs/course/A01_1.bin","module":"mine","component":"Vanilla"}]}"#;
+    let config =
+        format!(r#"{{"schema":"ncpatcher.config/1","version":2,"rom-output":"{}","variants":{{}}}}"#, project.join("build/rom.nds").display());
+    let answers = fixture.root.path().join("answers");
+    for (name, text) in [("config", config.as_str()), ("modules", modules.as_str()), ("plan", plan)] {
+        write_bytes(&answers.join(format!("{name}.json")), text.as_bytes());
+    }
+    let script = fixture.root.path().join("ncpatcher.sh");
+    let text = format!(
+        "#!/bin/sh\nfor a in \"$@\"; do case \"$a\" in config|modules|plan) exec cat '{}'/\"$a.json\";; esac; done\nexit 3\n",
+        answers.display()
+    );
+    write_bytes(&script, text.as_bytes());
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let options = crate::HostOptions { ncpatcher: script, mount_virtual_rom: false, ..crate::HostOptions::default() };
+    let mut session = Host::with_options(fixture.root.path(), options).unwrap().session();
+    let Response::Project(info) = session.handle(Request::OpenProject { path: "proj".into() }).unwrap() else { panic!() };
+    assert_eq!(info.rom_path.as_deref(), Some("rom.nds"), "the clean ROM, not the build");
+    assert_eq!(open_level(&mut session, "course/A01_1").objects[0].x, 0);
 }
 
 /// A project with module `mine` whose NCPatcher (a script) answers `config dump`, `modules dump` and `files plan`

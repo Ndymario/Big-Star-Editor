@@ -272,7 +272,7 @@ fn table_file_id(overlay: &[u8], table: usize, id: u8, base: u16) -> Result<u16>
 /// then asks `files` what that address holds -- which is how a module's pending edit reaches the canvas without a
 /// rebuild.
 pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: LevelTilesetReferences) -> Result<LevelGraphicsResources> {
-    let rom = files.rom_mut().ok_or_else(|| Error::new(ErrorCode::InvalidArgument, "the project has no built ROM to read graphics from"))?;
+    let rom = files.rom_mut().ok_or_else(|| Error::new(ErrorCode::InvalidArgument, "the project has no clean ROM to read graphics from"))?;
     let profile = nsmb_graphics_profile(&rom.header().game_code)
         .ok_or_else(|| Error::new(ErrorCode::Unsupported, "ROM game code does not have a graphics resource profile"))?;
     let overlay = rom.read_overlay(0)?;

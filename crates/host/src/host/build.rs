@@ -175,7 +175,7 @@ impl Shared {
                     outcome.errors += 1;
                 }
                 if outcome.applied {
-                    self.rom_rebuilt(directory, &result.built_rom);
+                    self.rom_rebuilt(directory);
                 }
                 outcome
             }
@@ -201,35 +201,20 @@ impl Shared {
         self.emit(Event::Build(BuildEvent::Finished(outcome)));
     }
 
-    /// The build replaced the ROM, so every level session holds bytes from a ROM that no longer exists: they close,
-    /// the project reads the built ROM, and the frontends hear `SettingsChanged` and open their levels again.
-    fn rom_rebuilt(&self, directory: &Path, built_rom: &Path) {
+    /// The project still reads the clean ROM, never the build, but the build's hooks may have rewritten the sources the
+    /// plan names: every level session closes, what was read through the plan is read again, and the frontends hear
+    /// `SettingsChanged` and open their levels again.
+    fn rom_rebuilt(&self, directory: &Path) {
         let mut state = lock(&self.state);
         let Some(open) = state.open.as_mut().filter(|open| open.directory == directory) else { return };
-        let reader = match RomReader::open(built_rom) {
-            Ok(reader) => reader,
-            Err(error) => {
-                drop(state);
-                self.log(LogLevel::Error, format!("NCPatcher completed, but the built ROM could not be read: {}", error.message));
-                return;
-            }
-        };
-        // Before the first build of this variant the project was reading the clean ROM.
-        open.index = RomIndex::new(&reader);
-        open.rom = Some(reader);
-        open.rom_file = Some(built_rom.to_path_buf());
         open.levels.clear();
         open.patcher = None;
         open.layers = Default::default();
         open.filesystem = None;
         open.graphics = None;
         open.banner = BannerTarget::Unreported;
-        let announce = self.project_changed(open, true);
         let settings = open.settings.clone();
         drop(state);
-        if let Some(event) = announce {
-            self.emit(event);
-        }
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.emit(Event::GraphicsChanged { generation });
         self.emit(Event::SettingsChanged(settings));
@@ -248,7 +233,11 @@ impl Shared {
         let (directory, rom) = {
             let state = lock(&self.state);
             let open = state.open.as_ref().ok_or_else(no_project)?;
-            let rom = open.rom_file.clone().ok_or_else(|| invalid("This project has no ROM to extract yet: choose its clean ROM, or build it."))?;
+            let rom = open
+                .built_rom
+                .clone()
+                .filter(|file| file.is_file())
+                .ok_or_else(|| invalid("This project has no built ROM to extract yet: build it first."))?;
             (open.directory.clone(), rom)
         };
         let output = self.workspace()?.resolve(target)?;
