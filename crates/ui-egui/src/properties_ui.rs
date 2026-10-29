@@ -4,12 +4,12 @@ use bigstar_level::ModuleDataCatalog;
 use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
 use egui::{RichText, Ui};
 
-use crate::controls::{self, Button, Choice as _, TextField, Width};
+use crate::controls::{self, Button, Choice as _};
 use crate::level_view::{Item, Kind, LevelView};
 use crate::properties::{
     Editor, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings,
-    common_settings, delete_edit, delete_node_edit, delete_record_edit, format_settings, format_value, item_count, line_label, list_lines,
-    parse_settings, parse_value, record_lines, rows, sprite_types,
+    common_settings, delete_edit, delete_node_edit, delete_record_edit, format_value, item_count, line_label, list_lines, parse_value, record_lines,
+    rows, sprite_types,
 };
 use crate::{dialogs, icons, level_data};
 use bigstar_level::ScreenBlock;
@@ -45,6 +45,7 @@ fn editor(ui: &mut Ui, panel: &mut PanelState, index: usize, row: &Row) -> Optio
             let response = controls::checkbox_undecided(ui, &mut on, undecided, &row.label);
             response.clicked().then(|| if row.value == Some(1) { 0 } else { 1 })
         }
+        Editor::Hex { bytes } => controls::hex_bytes(("property-hex", index), *bytes).show(ui, row.value.map(|v| v as u64)).1.map(|v| v as i64),
     }
 }
 
@@ -244,19 +245,11 @@ pub fn show(
         // The raw value is the sprite; the declared fields are only a reading of it.
         if tab == Tab::Entity(Kind::Sprite) && count != 0 {
             controls::section(ui, "Raw Fields", |ui| {
-                let current = common_settings(view, &shown).map(format_settings).unwrap_or_default();
-                let mut text = view.panel.settings_text.clone().unwrap_or_else(|| current.clone());
-                let response = ui
-                    .add_enabled(!busy, TextField::new(&mut text).code().width(Width::Px(140.0)).hint("—"))
-                    .on_hover_text("The settings word from its high byte down.");
-                if response.changed() {
-                    // A half-typed value is not a value: the box keeps it until it is whole.
-                    if let Some(settings) = parse_settings(&text).filter(|_| text.trim() != current) {
-                        edit = apply_settings(view, &shown, settings);
-                    }
-                    view.panel.settings_text = Some(text);
-                } else if !response.has_focus() {
-                    view.panel.settings_text = None;
+                let current = common_settings(view, &shown).map(u64::from);
+                let (response, typed) = ui.add_enabled_ui(!busy, |ui| controls::hex_bytes("sprite-settings", 4).show(ui, current)).inner;
+                response.on_hover_text("The settings word from its high byte down. The two event bytes are not settings, and each has its own row.");
+                if let Some(settings) = typed {
+                    edit = apply_settings(view, &shown, settings as u32);
                 }
             });
         }

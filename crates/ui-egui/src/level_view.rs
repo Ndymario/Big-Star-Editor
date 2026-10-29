@@ -1427,7 +1427,6 @@ impl LevelView {
             }
             self.place_like_selection();
             self.panel.dragging = None;
-            self.panel.settings_text = None;
         }
         if self.placement.kind != self.panel_kind {
             self.panel_kind = self.placement.kind;
@@ -1460,7 +1459,6 @@ impl LevelView {
     fn select_from_panel(&mut self) {
         self.panel.multi.clear();
         self.panel.dragging = None;
-        self.panel.settings_text = None;
         let count = item_count(&self.snapshot, self.panel.tab);
         self.selection = match self.panel.tab {
             Tab::Entity(kind) if count > 0 => {

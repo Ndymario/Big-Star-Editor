@@ -631,6 +631,52 @@ pub fn number<N: egui::emath::Numeric>(value: &mut N) -> egui::DragValue<'_> {
     egui::DragValue::new(value)
 }
 
+/// A value of `bytes` bytes from its high byte down: `12 34 56 78`.
+pub fn format_hex_bytes(value: u64, bytes: usize) -> String {
+    value.to_be_bytes().iter().skip(8 - bytes.min(8)).map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+}
+
+/// Two hex digits a byte, spaces anywhere; anything else is not a value yet.
+pub fn parse_hex_bytes(text: &str, bytes: usize) -> Option<u64> {
+    let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    if digits.len() != 2 * bytes {
+        return None;
+    }
+    u64::from_str_radix(&digits, 16).ok()
+}
+
+/// A value typed as its bytes in hex, as [`format_hex_bytes`] shows them. Finish it with [`HexBytes::show`].
+pub fn hex_bytes(id: impl std::hash::Hash + std::fmt::Debug, bytes: usize) -> HexBytes {
+    HexBytes { id: egui::Id::new(id), bytes }
+}
+
+pub struct HexBytes {
+    id: egui::Id,
+    bytes: usize,
+}
+
+impl HexBytes {
+    /// `current` is `None` for a selection that disagrees, shown as a dash. Returns the field's response and the value
+    /// typed, once it is whole and not `current`.
+    pub fn show(self, ui: &mut Ui, current: Option<u64>) -> (Response, Option<u64>) {
+        let Self { id, bytes } = self;
+        let current = current.map(|value| format_hex_bytes(value, bytes)).unwrap_or_default();
+        // A half-typed value is not a value: the box keeps it until it is whole, and drops it when it loses focus.
+        let draft = id.with("draft");
+        let mut text: String = ui.data(|d| d.get_temp(draft)).unwrap_or_else(|| current.clone());
+        let width = 12.0 + 32.0 * bytes as f32;
+        let response = TextField::new(&mut text).code().width(Width::Px(width)).hint("—").id_salt(id).show(ui);
+        let mut typed = None;
+        if response.changed() {
+            typed = parse_hex_bytes(&text, bytes).filter(|_| text.trim() != current);
+            ui.data_mut(|d| d.insert_temp(draft, text));
+        } else if !response.has_focus() {
+            ui.data_mut(|d| d.remove::<String>(draft));
+        }
+        (response, typed)
+    }
+}
+
 /// How wide the arrows of a spin box are.
 const STEPPER_WIDTH: f32 = 14.0;
 

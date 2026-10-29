@@ -59,8 +59,6 @@ pub struct PanelState {
     pub raw: bool,
     /// A field being dragged: shown at this value and written when the drag ends.
     pub dragging: Option<(usize, i64)>,
-    /// The raw settings box as typed, while it does not hold a whole value.
-    pub settings_text: Option<String>,
     pub show_actor_info: bool,
     /// The selection changed somewhere other than the list, which has yet to scroll to it.
     pub reveal: bool,
@@ -77,7 +75,6 @@ impl Default for PanelState {
             advanced: false,
             raw: false,
             dragging: None,
-            settings_text: None,
             show_actor_info: false,
             reveal: false,
         }
@@ -101,6 +98,10 @@ pub enum Editor {
     },
     /// On or off, whatever value turning it on writes.
     Boolean,
+    /// A value of this many bytes, typed as their hex digits.
+    Hex {
+        bytes: usize,
+    },
 }
 
 /// Whether a row shares its line with the field beside it. Only true peers pair up: X with Y, Width with Height.
@@ -155,6 +156,7 @@ impl Row {
         let (min, max) = match self.editor {
             Editor::Number { min, max } | Editor::Choice { min, max, .. } => (min, max),
             Editor::Boolean => (0, 1),
+            Editor::Hex { bytes } => (0, (1i64 << (8 * bytes)) - 1),
         };
         self.editor = Editor::Choice { choices, min, max, filter };
     }
@@ -175,21 +177,6 @@ pub fn parse_value(text: &str, hex: bool) -> Option<i64> {
     let digits = digits.strip_prefix("0x").or_else(|| digits.strip_prefix("0X")).unwrap_or(digits);
     let value = i64::from_str_radix(digits, 16).ok()?;
     Some(if negative { -value } else { value })
-}
-
-/// The settings word from its high byte down: `12 34 56 78`. The two event bytes are not settings, and each has its own
-/// row.
-pub fn format_settings(settings: u32) -> String {
-    settings.to_be_bytes().iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
-}
-
-/// Eight hex digits, spaces anywhere; anything else is not a value yet.
-pub fn parse_settings(text: &str) -> Option<u32> {
-    let digits: String = text.chars().filter(|c| !c.is_whitespace()).collect();
-    if digits.len() != 8 {
-        return None;
-    }
-    u32::from_str_radix(&digits, 16).ok()
 }
 
 /// A sprite's settings and event bytes as the one 48-bit value its fields are read out of.
@@ -802,6 +789,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             }
             full(rows, "Settings (raw)", Some(i64::from(h.settings)), 0, 65535);
             if let Some(row) = rows.last_mut() {
+                row.editor = Editor::Hex { bytes: 2 };
                 row.note = "Every settings bit, the named ones above among them.".to_owned();
             }
             full(rows, "Sound group", Some(i64::from(h.sound_group)), 0, 65535);
@@ -1767,6 +1755,7 @@ mod tests {
     use bigstar_protocol::{ActorCatalog, ActorInfo, LevelEdit};
 
     use super::*;
+    use crate::controls::{format_hex_bytes, parse_hex_bytes};
     use crate::level_view::tests_support::snapshot;
     use crate::level_view::{ActorIndex, Gesture, Handle, Item};
 
@@ -1823,8 +1812,8 @@ mod tests {
         assert_eq!((format_value(31, true), format_value(-31, true), format_value(31, false)), ("0x1F".into(), "-0x1F".into(), "31".into()));
         assert_eq!((parse_value("0x1f", true), parse_value("1F", true), parse_value("-0X1f", true)), (Some(31), Some(31), Some(-31)));
         assert_eq!(parse_value("1f", false), None);
-        assert_eq!(format_settings(0x1234_5678), "12 34 56 78");
-        assert_eq!((parse_settings("22 33 44 55"), parse_settings("22 33 44")), (Some(0x2233_4455), None));
+        assert_eq!((format_hex_bytes(0x1234_5678, 4), format_hex_bytes(0x21, 2)), ("12 34 56 78".into(), "00 21".into()));
+        assert_eq!((parse_hex_bytes("22 33 44 55", 4), parse_hex_bytes("22 33 44", 4)), (Some(0x2233_4455), None));
     }
 
     #[test]
@@ -1858,7 +1847,7 @@ mod tests {
         let mut view = sprite_view(0x1234_5678, vec![field("speed", "Speed", 4, 3)]);
         view.snapshot.course.sprites[0].events = [0xab, 0xcd];
         let rows = shown(&view);
-        assert_eq!(common_settings(&view, &rows).map(format_settings).as_deref(), Some("12 34 56 78"));
+        assert_eq!(common_settings(&view, &rows), Some(0x1234_5678));
         // A field edit lands in the raw value, and only in the bits it owns.
         assert_eq!(written(&view, 5, 2).sprites[0].value.settings, 0x1234_5628);
         // Changing the type keeps the settings; the sprite is now read by an actor that declares nothing.
