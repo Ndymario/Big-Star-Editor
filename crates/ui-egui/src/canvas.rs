@@ -291,7 +291,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         }
         controls::toggle(ui, &mut options.show_grid, "Grid");
         controls::toggle(ui, &mut options.show_minimap, "Minimap");
-        ui.menu_button(options.ds_screens.short(), |ui| {
+        controls::menu_button(ui, options.ds_screens.short(), |ui| {
             for choice in DsScreens::ALL {
                 if Button::menu(choice.name()).selected(options.ds_screens == choice).show(ui).clicked() {
                     options.ds_screens = choice;
@@ -304,7 +304,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
             "The DS screen (256×192), with its backgrounds scrolled as the game scrolls them: under the cursor, at each selected entrance, or both",
         );
         // Named in short on the toolbar, which has no room to spare, and in full in the menu.
-        ui.menu_button(options.backgrounds.short(), |ui| {
+        controls::menu_button(ui, options.backgrounds.short(), |ui| {
             for choice in Backgrounds::ALL {
                 if Button::menu(choice.name()).selected(options.backgrounds == choice).show(ui).clicked() {
                     options.backgrounds = choice;

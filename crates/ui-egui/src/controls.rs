@@ -184,6 +184,8 @@ impl egui::Widget for Button<'_> {
             .min_size(size)
             .wrap_mode(egui::TextWrapMode::Extend)
             .frame_when_inactive(true);
+        // What has a fill of its own takes the palette's control colours; the rest sits on the panel, in the panel's text.
+        let framed = matches!(self.kind, Kind::Plain) && !self.selected && !self.quiet;
         // The fill changes over a moment under the pointer. Where the pointer was is known from the frame before, kept
         // under the place this button takes in its `Ui`.
         let key = ui.next_auto_id().with("button-hover");
@@ -212,22 +214,20 @@ impl egui::Widget for Button<'_> {
             }
             // A pressed button keeps the look egui gives it.
             Kind::Plain if state != Pointer::Down => {
-                let widgets = &ui.visuals().widgets;
-                let (rest, hovered) = (widgets.inactive.weak_bg_fill, widgets.hovered.weak_bg_fill);
-                button = button.fill(motion::mix(rest, hovered, hover));
+                button = button.fill(motion::mix(t.control, t.control_hover, hover));
             }
             Kind::Plain => {}
         }
         // Not in a child `Ui`: a row that wraps can move only what is placed in it directly to its next line.
-        let response = if self.small {
-            let style = ui.style().clone();
+        let style = ui.style().clone();
+        if self.small {
             compact(ui);
-            let response = ui.add_enabled(self.enabled, button);
-            ui.set_style(style);
-            response
-        } else {
-            ui.add_enabled(self.enabled, button)
-        };
+        }
+        if framed {
+            control_style(ui);
+        }
+        let response = ui.add_enabled(self.enabled, button);
+        ui.set_style(style);
         let state = if response.is_pointer_button_down_on() {
             Pointer::Down
         } else if response.hovered() {
@@ -241,6 +241,32 @@ impl egui::Widget for Button<'_> {
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
         }
         response
+    }
+}
+
+/// Makes what is added to `ui` from here on draw in the palette's control colours, its text among them.
+fn control_style(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let visuals = ui.visuals_mut();
+    visuals.override_text_color = Some(t.control_text);
+    let widgets = &mut visuals.widgets;
+    widgets.inactive.weak_bg_fill = t.control;
+    widgets.hovered.weak_bg_fill = t.control_hover;
+    widgets.open.weak_bg_fill = t.control_hover;
+    for state in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active, &mut widgets.open] {
+        state.fg_stroke.color = t.control_text;
+    }
+}
+
+/// Makes what is added to `ui` from here on draw as a field does, in the control colours. egui draws the cursor and
+/// selected text in colours of its own, which a field set apart from the panel may not show.
+fn field_style(ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    control_style(ui);
+    if t.field != t.well {
+        let visuals = ui.visuals_mut();
+        visuals.text_cursor.stroke.color = t.control_text;
+        visuals.selection.stroke.color = t.control_text;
     }
 }
 
@@ -598,7 +624,10 @@ impl egui::Widget for TextField<'_> {
         if let Some(id) = self.id {
             edit = edit.id_salt(id);
         }
-        let response = ui.add(edit);
+        let style = ui.style().clone();
+        field_style(ui);
+        let response = ui.add(edit.background_color(Tokens::get(ui.ctx()).field));
+        ui.set_style(style);
         if let Some(name) = self.name {
             let enabled = response.enabled();
             response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, enabled, name));
@@ -788,8 +817,50 @@ pub fn warning_hint(ui: &mut Ui, text: &str) -> Response {
 }
 
 /// A drop-down whose choices the caller draws with [`Choice`]: finish it with `.selected_text(..).show_ui(ui, |ui| ..)`.
-pub fn drop_down(id: impl egui::AsIdSalt) -> egui::ComboBox {
-    egui::ComboBox::from_id_salt(id)
+pub fn drop_down(id: impl egui::AsIdSalt) -> DropDown {
+    DropDown(egui::ComboBox::from_id_salt(id))
+}
+
+/// egui's drop-down, its box in the palette's control colours. The list it opens is a window of its own, in the panel's.
+pub struct DropDown(egui::ComboBox);
+
+impl DropDown {
+    pub fn selected_text(self, text: impl Into<WidgetText>) -> Self {
+        Self(self.0.selected_text(text))
+    }
+
+    pub fn width(self, width: f32) -> Self {
+        Self(self.0.width(width))
+    }
+
+    pub fn height(self, height: f32) -> Self {
+        Self(self.0.height(height))
+    }
+
+    pub fn truncate(self) -> Self {
+        Self(self.0.truncate())
+    }
+
+    pub fn close_behavior(self, behavior: egui::PopupCloseBehavior) -> Self {
+        Self(self.0.close_behavior(behavior))
+    }
+
+    pub fn show_ui<R>(self, ui: &mut Ui, body: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+        let style = ui.style().clone();
+        control_style(ui);
+        let shown = self.0.show_ui(ui, body);
+        ui.set_style(style);
+        shown
+    }
+}
+
+/// A button that opens a menu, in the palette's control colours as a drop-down's box is.
+pub fn menu_button<R>(ui: &mut Ui, text: impl Into<WidgetText>, body: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    let style = ui.style().clone();
+    control_style(ui);
+    let shown = ui.menu_button(text, body);
+    ui.set_style(style);
+    shown
 }
 
 /// One reading of a value, so a choice entry and the box beside it never disagree about the base.
@@ -1285,6 +1356,45 @@ mod tests {
         assert!(popup.contains_rect(harness.get_by_label("250 – Actor 250").rect()), "the choice made is in the open list");
     }
 
+    /// Overcast's controls are dark on a light panel, so their white text must not reach what is beside them.
+    #[test]
+    fn the_control_colours_stay_on_the_control() {
+        let palette = crate::theme::Theme { light: "overcast", ..Default::default() }.tokens(false, None);
+        let _harness = egui_kittest::Harness::new_ui(|ui| {
+            crate::theme::apply(ui.ctx(), &palette);
+            let before = ui.style().clone();
+            Button::new("Plain").show(ui);
+            drop_down("box").selected_text("Choice").show_ui(ui, |_| ());
+            menu_button(ui, "Menu", |_| ());
+            ui.add(TextField::new(&mut String::new()));
+            assert_eq!(ui.style(), &before);
+            field_style(ui);
+            assert_eq!(ui.visuals().text_cursor.stroke.color, palette.control_text);
+            assert_eq!(ui.visuals().selection.stroke.color, palette.control_text);
+            ui.set_style(before.clone());
+            control_style(ui);
+            assert_eq!(ui.visuals().override_text_color, Some(palette.control_text));
+            assert_eq!(ui.visuals().widgets.inactive.weak_bg_fill, palette.control);
+        });
+    }
+
+    /// The list a drop-down opens is on the panel's colours, so it keeps the panel's text.
+    #[test]
+    fn an_open_list_is_not_in_the_control_colours() {
+        use egui_kittest::kittest::Queryable as _;
+        let palette = crate::theme::Theme { light: "overcast", ..Default::default() }.tokens(false, None);
+        let mut harness = egui_kittest::Harness::new_ui_state(
+            |ui, text: &mut Option<Option<Color32>>| {
+                crate::theme::apply(ui.ctx(), &palette);
+                drop_down("box").selected_text("Choice").show_ui(ui, |ui| *text = Some(ui.visuals().override_text_color));
+            },
+            None,
+        );
+        harness.get_by_role(egui::accesskit::Role::ComboBox).click();
+        harness.run();
+        assert_eq!(*harness.state(), Some(Some(palette.foreground)));
+    }
+
     /// egui closes a drop-down on any click; a filtered one must stay open while its box is clicked and typed into.
     #[test]
     fn a_filtered_list_stays_open_while_its_box_is_used() {
@@ -1338,7 +1448,8 @@ mod tests {
     /// colours drift apart.
     #[test]
     fn screens_use_these_controls_not_eguis() {
-        const BANNED: [&str; 20] = [
+        const BANNED: [&str; 21] = [
+            "ui.menu_button(",
             ".selectable_label(",
             ".selectable_value(",
             ".toggle_value(",

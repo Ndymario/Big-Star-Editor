@@ -392,7 +392,7 @@ impl FilesDock {
                     }
                 }
             }
-            ui.menu_button("Columns", |ui| {
+            controls::menu_button(ui, "Columns", |ui| {
                 for (column, name) in COLUMNS {
                     let mut shown = self.columns.contains(&column);
                     if controls::checkbox(ui, &mut shown, name).changed() {

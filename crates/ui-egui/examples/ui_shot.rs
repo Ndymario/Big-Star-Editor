@@ -6,7 +6,7 @@
 //! Writes `connect.png`, `projects.png`, `levels.png` and `level.png` (the demo level, a sprite selected) into the directory.
 
 use bigstar_ui_egui::demo::DemoConnection;
-use bigstar_ui_egui::{BigStarApp, Item, Kind, MemoryServices};
+use bigstar_ui_egui::{BigStarApp, Item, Kind, MemoryServices, Services};
 use egui::Vec2;
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -187,7 +187,12 @@ fn main() -> Result<(), String> {
     let mut connect = build(BigStarApp::new(Box::new(MemoryServices::default())));
     shot(&mut connect, &dir, "connect.png")?;
 
-    let app = BigStarApp::with_connection(Box::new(MemoryServices::with_accent([111, 86, 168])), Box::new(DemoConnection::new()));
+    let services = MemoryServices::with_accent([111, 86, 168]);
+    // `BIGSTAR_SHOT_THEME` is a theme as Preferences stores it, to see every page in it.
+    if let Ok(theme) = std::env::var("BIGSTAR_SHOT_THEME") {
+        services.store(bigstar_ui_egui::THEME_KEY, &theme);
+    }
+    let app = BigStarApp::with_connection(Box::new(services), Box::new(DemoConnection::new()));
     let mut harness = build(app);
     shot(&mut harness, &dir, "projects.png")?;
     harness.get_by_label("Demo").click();

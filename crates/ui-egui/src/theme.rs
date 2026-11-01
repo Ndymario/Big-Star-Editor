@@ -14,10 +14,16 @@ pub struct Tokens {
     /// Card, panel and field background.
     pub surface: Color32,
     pub surface_raised: Color32,
-    /// What is typed into or drawn on: a field, the level canvas.
+    /// What is drawn on: the level canvas.
     pub well: Color32,
     /// Dialog and menu background.
     pub overlay: Color32,
+    /// A button or drop-down, and the text on it; a palette may set them apart from the panel it sits on.
+    pub control: Color32,
+    pub control_hover: Color32,
+    pub control_text: Color32,
+    /// What is typed into, in the text of a control.
+    pub field: Color32,
     pub foreground: Color32,
     /// Supporting text.
     pub muted: Color32,
@@ -60,7 +66,7 @@ impl Family {
 }
 
 /// The themes, the default one first.
-pub static FAMILIES: [Family; 6] = [
+pub static FAMILIES: [Family; 7] = [
     Family {
         id: "default",
         name: "Default",
@@ -71,6 +77,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(245, 247, 250),
             overlay: rgb(255, 255, 255),
+            control: rgb(245, 247, 250),
+            control_hover: rgb(226, 232, 240),
+            control_text: rgb(20, 20, 20),
+            field: rgb(245, 247, 250),
             foreground: rgb(20, 20, 20),
             muted: rgb(100, 116, 139),
             subtle: rgb(148, 163, 184),
@@ -96,6 +106,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(46, 46, 46),
             well: rgb(15, 15, 15),
             overlay: rgb(38, 38, 38),
+            control: rgb(38, 38, 38),
+            control_hover: rgb(64, 64, 64),
+            control_text: rgb(245, 245, 245),
+            field: rgb(15, 15, 15),
             foreground: rgb(245, 245, 245),
             muted: rgb(163, 163, 163),
             subtle: rgb(115, 115, 115),
@@ -124,6 +138,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(224, 242, 254),
             overlay: rgb(255, 255, 255),
+            control: rgb(224, 242, 254),
+            control_hover: rgb(186, 230, 253),
+            control_text: rgb(12, 74, 110),
+            field: rgb(224, 242, 254),
             foreground: rgb(12, 74, 110),
             muted: rgb(38, 125, 164),
             subtle: rgb(125, 211, 252),
@@ -148,6 +166,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(24, 62, 84),
             well: rgb(8, 21, 29),
             overlay: rgb(17, 47, 65),
+            control: rgb(17, 47, 65),
+            control_hover: rgb(24, 62, 84),
+            control_text: rgb(224, 242, 254),
+            field: rgb(8, 21, 29),
             foreground: rgb(224, 242, 254),
             muted: rgb(125, 211, 252),
             subtle: rgb(56, 189, 248),
@@ -176,6 +198,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(220, 252, 231),
             overlay: rgb(255, 255, 255),
+            control: rgb(220, 252, 231),
+            control_hover: rgb(187, 247, 208),
+            control_text: rgb(20, 83, 45),
+            field: rgb(220, 252, 231),
             foreground: rgb(20, 83, 45),
             muted: rgb(46, 139, 81),
             subtle: rgb(134, 239, 172),
@@ -200,6 +226,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(27, 60, 35),
             well: rgb(6, 17, 10),
             overlay: rgb(18, 42, 24),
+            control: rgb(18, 42, 24),
+            control_hover: rgb(27, 60, 35),
+            control_text: rgb(220, 252, 231),
+            field: rgb(6, 17, 10),
             foreground: rgb(220, 252, 231),
             muted: rgb(134, 239, 172),
             subtle: rgb(74, 222, 128),
@@ -228,6 +258,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(254, 243, 199),
             overlay: rgb(255, 255, 255),
+            control: rgb(254, 243, 199),
+            control_hover: rgb(253, 230, 138),
+            control_text: rgb(120, 53, 15),
+            field: rgb(254, 243, 199),
             foreground: rgb(120, 53, 15),
             muted: rgb(175, 102, 42),
             subtle: rgb(253, 186, 116),
@@ -252,6 +286,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(64, 32, 18),
             well: rgb(18, 9, 5),
             overlay: rgb(45, 22, 12),
+            control: rgb(45, 22, 12),
+            control_hover: rgb(64, 32, 18),
+            control_text: rgb(254, 243, 199),
+            field: rgb(18, 9, 5),
             foreground: rgb(254, 243, 199),
             muted: rgb(253, 186, 116),
             subtle: rgb(251, 146, 60),
@@ -280,6 +318,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(226, 232, 240),
             overlay: rgb(255, 255, 255),
+            control: rgb(226, 232, 240),
+            control_hover: rgb(203, 213, 225),
+            control_text: rgb(15, 23, 42),
+            field: rgb(226, 232, 240),
             foreground: rgb(15, 23, 42),
             muted: rgb(71, 85, 105),
             subtle: rgb(100, 116, 139),
@@ -304,6 +346,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(51, 65, 85),
             well: rgb(10, 15, 27),
             overlay: rgb(30, 41, 59),
+            control: rgb(30, 41, 59),
+            control_hover: rgb(51, 65, 85),
+            control_text: rgb(241, 245, 249),
+            field: rgb(10, 15, 27),
             foreground: rgb(241, 245, 249),
             muted: rgb(148, 163, 184),
             subtle: rgb(100, 116, 139),
@@ -332,6 +378,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(255, 255, 255),
             well: rgb(243, 232, 255),
             overlay: rgb(255, 255, 255),
+            control: rgb(243, 232, 255),
+            control_hover: rgb(221, 214, 254),
+            control_text: rgb(59, 7, 100),
+            field: rgb(243, 232, 255),
             foreground: rgb(59, 7, 100),
             muted: rgb(129, 107, 194),
             subtle: rgb(196, 181, 253),
@@ -356,6 +406,10 @@ pub static FAMILIES: [Family; 6] = [
             surface_raised: rgb(40, 24, 74),
             well: rgb(12, 6, 23),
             overlay: rgb(28, 16, 54),
+            control: rgb(28, 16, 54),
+            control_hover: rgb(40, 24, 74),
+            control_text: rgb(243, 232, 255),
+            field: rgb(12, 6, 23),
             foreground: rgb(243, 232, 255),
             muted: rgb(216, 180, 254),
             subtle: rgb(192, 132, 252),
@@ -372,6 +426,67 @@ pub static FAMILIES: [Family; 6] = [
             warning_subtle: rgb(113, 63, 18),
             danger: rgb(248, 113, 113),
             danger_subtle: rgb(127, 29, 29),
+        },
+    },
+    // Neither mode at its extreme: for those who find a white window too bright and a black one too dark.
+    Family {
+        id: "overcast",
+        name: "Overcast",
+        light: Tokens {
+            dark: false,
+            base: rgb(179, 179, 179),
+            surface: rgb(166, 166, 166),
+            surface_raised: rgb(196, 196, 196),
+            well: rgb(156, 156, 156),
+            overlay: rgb(190, 190, 190),
+            control: rgb(59, 59, 59),
+            control_hover: rgb(78, 78, 78),
+            control_text: rgb(240, 240, 240),
+            field: rgb(36, 36, 36),
+            foreground: rgb(16, 16, 16),
+            muted: rgb(70, 70, 70),
+            subtle: rgb(96, 96, 96),
+            inverted: rgb(255, 255, 255),
+            primary: rgb(70, 112, 180),
+            primary_hover: rgb(56, 94, 158),
+            primary_subtle: rgb(150, 167, 190),
+            primary_text: rgb(24, 66, 132),
+            border: rgb(148, 148, 148),
+            border_strong: rgb(124, 124, 124),
+            ring: rgb(24, 66, 132),
+            success: rgb(0, 78, 32),
+            warning: rgb(98, 58, 0),
+            warning_subtle: rgb(205, 188, 130),
+            danger: rgb(135, 10, 10),
+            danger_subtle: rgb(210, 165, 160),
+        },
+        dark: Tokens {
+            dark: true,
+            base: rgb(62, 62, 62),
+            surface: rgb(74, 74, 74),
+            surface_raised: rgb(86, 86, 86),
+            well: rgb(48, 48, 48),
+            overlay: rgb(74, 74, 74),
+            control: rgb(74, 74, 74),
+            control_hover: rgb(92, 92, 92),
+            control_text: rgb(238, 238, 238),
+            field: rgb(48, 48, 48),
+            foreground: rgb(238, 238, 238),
+            muted: rgb(182, 182, 182),
+            subtle: rgb(142, 142, 142),
+            inverted: rgb(20, 20, 20),
+            primary: rgb(110, 165, 235),
+            primary_hover: rgb(85, 140, 215),
+            primary_subtle: rgb(66, 86, 114),
+            primary_text: rgb(140, 188, 245),
+            border: rgb(92, 92, 92),
+            border_strong: rgb(112, 112, 112),
+            ring: rgb(140, 188, 245),
+            success: rgb(134, 239, 172),
+            warning: rgb(253, 224, 71),
+            warning_subtle: rgb(105, 75, 25),
+            danger: rgb(252, 165, 165),
+            danger_subtle: rgb(122, 45, 45),
         },
     },
 ];
@@ -397,6 +512,10 @@ impl Tokens {
             surface_raised: mix(self.surface_raised, to.surface_raised),
             well: mix(self.well, to.well),
             overlay: mix(self.overlay, to.overlay),
+            control: mix(self.control, to.control),
+            control_hover: mix(self.control_hover, to.control_hover),
+            control_text: mix(self.control_text, to.control_text),
+            field: mix(self.field, to.field),
             foreground: mix(self.foreground, to.foreground),
             muted: mix(self.muted, to.muted),
             subtle: mix(self.subtle, to.subtle),
@@ -422,7 +541,7 @@ impl Tokens {
         self.primary = accent;
         self.ring = accent;
         self.primary_hover = crate::motion::mix(accent, Color32::BLACK, 0.18);
-        self.primary_subtle = if self.dark { crate::motion::mix(self.base, accent, 0.22) } else { crate::motion::mix(accent, white, 0.82) };
+        self.primary_subtle = crate::motion::mix(self.base, accent, if self.dark { 0.22 } else { 0.18 });
         // A system's accent is chosen for filling a button, not for text on this palette's background.
         self.primary_text = readable(accent, self.base);
         self.inverted = if contrast(white, accent) >= contrast(Color32::BLACK, accent) { white } else { rgb(20, 20, 20) };
@@ -447,7 +566,7 @@ fn contrast(a: Color32, b: Color32) -> f32 {
 
 /// `color`, moved away from `on` as far as it takes to be read as text on it.
 fn readable(color: Color32, on: Color32) -> Color32 {
-    let away = if luminance(on) < 0.5 { Color32::WHITE } else { Color32::BLACK };
+    let away = if contrast(Color32::WHITE, on) >= contrast(Color32::BLACK, on) { Color32::WHITE } else { Color32::BLACK };
     (0..=10).map(|step| crate::motion::mix(color, away, step as f32 / 10.0)).find(|&mixed| contrast(mixed, on) >= 4.5).unwrap_or(away)
 }
 
@@ -749,7 +868,34 @@ mod tests {
             for tokens in [&family.light, &family.dark] {
                 assert!(contrast(tokens.foreground, tokens.base) >= 7.0, "{} foreground", family.id);
                 assert!(contrast(tokens.muted, tokens.base) >= 3.9, "{} muted", family.id);
+                assert!(contrast(tokens.control_text, tokens.control) >= 4.5, "{} control", family.id);
+                assert!(contrast(tokens.control_text, tokens.control_hover) >= 4.5, "{} control under the pointer", family.id);
+                assert!(contrast(tokens.control_text, tokens.field) >= 4.5, "{} field", family.id);
             }
+        }
+    }
+
+    #[test]
+    fn overcast_is_between_a_light_and_a_dark_window_and_readable_in_both() {
+        let overcast = Theme { light: "overcast", dark: "overcast", system_accent: false, ..Theme::default() };
+        let default = Theme { system_accent: false, ..Theme::default() };
+        assert!(luminance(overcast.tokens(false, None).base) < luminance(default.tokens(false, None).base) * 0.5);
+        assert!(luminance(overcast.tokens(true, None).base) > luminance(default.tokens(true, None).base) * 3.0);
+        for dark in [false, true] {
+            let t = overcast.tokens(dark, None);
+            for background in [t.base, t.surface, t.surface_raised, t.well, t.overlay, t.primary_subtle, t.warning_subtle, t.danger_subtle] {
+                assert!(contrast(t.foreground, background) >= 4.5, "dark {dark}: foreground on {background:?}");
+            }
+            for text in [t.primary_text, t.success, t.warning, t.danger] {
+                assert!(contrast(text, t.base) >= 4.5, "dark {dark}: {text:?} on the base");
+            }
+            assert!(contrast(t.inverted, t.primary) >= 4.5, "dark {dark}: on the primary");
+            // A system's accent keeps its soft fill as dim as the window, not a bright pastel on grey.
+            let subtle = overcast.tokens(dark, Some(Color32::from_rgb(230, 60, 120))).primary_subtle;
+            assert!(contrast(subtle, t.base) < 1.5, "dark {dark}: {subtle:?}");
+            // On a mid grey, black is the way to go for text, though the grey is under half as bright as white.
+            let accented = overcast.tokens(dark, Some(Color32::from_rgb(111, 86, 168)));
+            assert!(contrast(accented.primary_text, accented.base) >= 4.5, "dark {dark}: {:?}", accented.primary_text);
         }
     }
 
