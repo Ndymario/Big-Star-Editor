@@ -2,7 +2,7 @@
 
 use egui::{Align, Layout, Ui};
 
-use crate::{controls, theme::Tokens};
+use crate::{controls, i18n::tr, theme::Tokens};
 
 /// A dialog titled `title`, `width` points wide, over everything else until it is answered. Returns what `body`
 /// returned, and whether the person backed out of it with Escape or a click outside.
@@ -111,7 +111,7 @@ impl<'open> Window<'open> {
                 controls::title(ui, &title);
                 if open.is_some() {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        closed = controls::icon_button(ui, crate::icons::CLOSE, "Close").clicked();
+                        closed = controls::icon_button(ui, crate::icons::CLOSE, tr!("common.close")).clicked();
                     });
                 }
             });

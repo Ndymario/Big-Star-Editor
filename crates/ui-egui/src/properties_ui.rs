@@ -5,9 +5,10 @@ use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
 use egui::{RichText, Ui};
 
 use crate::controls::{self, Button, Choice as _};
+use crate::i18n::{self, tr, tr_n};
 use crate::level_view::{Item, Kind, LevelView};
 use crate::properties::{
-    Editor, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings,
+    Editor, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings, block_name,
     common_settings, delete_edit, delete_node_edit, delete_record_edit, format_value, item_count, line_label, list_lines, parse_value, record_lines,
     rows, sprite_types,
 };
@@ -121,10 +122,23 @@ fn row_ui(ui: &mut Ui, row: &Row, editor: impl FnOnce(&mut Ui) -> Option<i64>) -
 /// the type picked.
 fn sprite_type_editor(ui: &mut Ui, row: &Row, types: &[(u16, String)]) -> Option<i64> {
     // 300 actors are too many to address by number, so the list filters by what is typed.
-    controls::filtered_choice("sprite-picker", types, "Filter actors…")
+    controls::filtered_choice("sprite-picker", types, tr!("properties_ui.filter_actors"))
         .width((ui.available_width() * CHOICE_SHARE).max(80.0))
         .show(ui, row.value)
         .map(i64::from)
+}
+
+/// What the list of a kind's items is titled.
+fn kind_title(kind: Kind) -> &'static str {
+    match kind {
+        Kind::Object => tr!("properties_ui.kind.objects"),
+        Kind::Sprite => tr!("properties_ui.kind.sprites"),
+        Kind::Entrance => tr!("properties_ui.kind.entrances"),
+        Kind::View => tr!("properties_ui.kind.views"),
+        Kind::Zone => tr!("properties_ui.kind.zones"),
+        Kind::Path => tr!("properties_ui.kind.paths"),
+        Kind::ProgressPath => tr!("properties_ui.kind.progress_paths"),
+    }
 }
 
 fn pairs_up(row: &Row) -> bool {
@@ -153,7 +167,7 @@ pub fn show(
             if tab == Tab::Cameras && !view.panel.advanced {
                 continue;
             }
-            if ui.choice(view.panel.tab == tab, name).clicked() && view.panel.tab != tab {
+            if ui.choice(view.panel.tab == tab, i18n::text(name)).clicked() && view.panel.tab != tab {
                 view.panel_tab(tab);
             }
         }
@@ -179,9 +193,9 @@ pub fn show(
             Tab::Course => {}
         }
 
-        controls::section(ui, "Properties", |ui| {
+        controls::section(ui, tr!("properties_ui.properties"), |ui| {
             if shown.rows.is_empty() {
-                ui.weak(if count == 0 { "Nothing of this kind in the level." } else { "Nothing to edit here." });
+                ui.weak(if count == 0 { tr!("properties_ui.nothing_of_kind") } else { tr!("properties_ui.nothing_to_edit") });
             }
             let mut written = None;
             let types = if tab == Tab::Entity(Kind::Sprite) { sprite_types(view) } else { Vec::new() };
@@ -227,12 +241,10 @@ pub fn show(
                     }
                 }
             });
-            controls::checkbox(ui, &mut view.panel.hex, "Display as hex");
-            controls::checkbox(ui, &mut view.panel.raw, "Raw input").on_hover_text("Every drop-down as the number it writes.");
-            if controls::checkbox(ui, &mut view.panel.advanced, "Advanced mode")
-                .on_hover_text(
-                    "Fields the game ignores or that are best left alone: the raw course settings, all three of the header's graphics sets, of which the game loads the first, a view's three layer entries rather than whether it rotates and the camera settings it names rather than its camera values, with the Cameras tab, and a layer entry's ID, screen, palette and unused fields, with a tileset's rotation and scroll speeds and the Layers tab's Add and Delete.",
-                )
+            controls::checkbox(ui, &mut view.panel.hex, tr!("properties_ui.display_as_hex"));
+            controls::checkbox(ui, &mut view.panel.raw, tr!("properties_ui.raw_input")).on_hover_text(tr!("properties_ui.raw_input_hover"));
+            if controls::checkbox(ui, &mut view.panel.advanced, tr!("properties_ui.advanced_mode"))
+                .on_hover_text(tr!("properties_ui.advanced_mode_hover"))
                 .changed()
             {
                 view.panel.dragging = None;
@@ -252,10 +264,10 @@ pub fn show(
 
         // The raw value is the sprite; the declared fields are only a reading of it.
         if tab == Tab::Entity(Kind::Sprite) && count != 0 {
-            controls::section(ui, "Raw Fields", |ui| {
+            controls::section(ui, tr!("properties_ui.raw_fields"), |ui| {
                 let current = common_settings(view, &shown).map(u64::from);
                 let (response, typed) = ui.add_enabled_ui(!busy, |ui| controls::hex_bytes("sprite-settings", 4).show(ui, current)).inner;
-                response.on_hover_text("The settings word from its high byte down. The two event bytes are not settings, and each has its own row.");
+                response.on_hover_text(tr!("properties_ui.raw_fields_hover"));
                 if let Some(settings) = typed {
                     edit = apply_settings(view, &shown, settings as u32);
                 }
@@ -277,7 +289,7 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
     let line_of = |wanted: Item| lines.iter().position(|line| *line == wanted);
     let target = view.selection.first().filter(|_| reveal).and_then(|first| line_of(*first).or_else(|| line_of(Item::new(first.kind, first.index))));
     let mut picked = None;
-    controls::section(ui, &format!("{}s", kind.name()), |ui| {
+    controls::section(ui, kind_title(kind), |ui| {
         let step = controls::HEIGHT_SM + ui.spacing().item_spacing.y;
         // The lines sit in a well of their own, as a list box does: its edges line up with the title above and the
         // buttons below, and the lines keep their padding inside it.
@@ -290,7 +302,7 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if lines.is_empty() {
-                    ui.weak("None in this level.");
+                    ui.weak(tr!("properties_ui.none_in_level"));
                     return;
                 }
                 egui::ScrollArea::vertical().id_salt("item-list").max_height(LIST_ROWS * step).auto_shrink([false, true]).show_rows(
@@ -320,22 +332,22 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
             // Each pair shares the line evenly, whatever the panel's width.
             let half = egui::vec2(((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(0.0), controls::HEIGHT);
             ui.horizontal_top(|ui| {
-                if ui.add_sized(half, Button::new("Add")).clicked() {
+                if ui.add_sized(half, Button::new(tr!("common.add"))).clicked() {
                     view.expect_placement();
                     edit = add_edit(&view.snapshot, tab);
                 }
-                if ui.add_sized(half, Button::new("Delete").enabled(!lines.is_empty())).clicked() {
+                if ui.add_sized(half, Button::new(tr!("common.delete")).enabled(!lines.is_empty())).clicked() {
                     edit = delete_edit(tab, shown);
                 }
             });
             if kind.path() && !shown.multi() && !lines.is_empty() {
                 ui.horizontal_top(|ui| {
                     let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
-                    if ui.add_sized(half, Button::new("Add Node")).clicked() {
+                    if ui.add_sized(half, Button::new(tr!("properties_ui.add_node"))).clicked() {
                         edit = add_node_edit(&view.snapshot, tab, shown);
                         view.panel_node(nodes);
                     }
-                    if ui.add_sized(half, Button::new("Delete Node").enabled(nodes != 0)).clicked() {
+                    if ui.add_sized(half, Button::new(tr!("properties_ui.delete_node")).enabled(nodes != 0)).clicked() {
                         edit = delete_node_edit(&view.snapshot, tab, shown);
                     }
                 });
@@ -355,7 +367,7 @@ fn record_list(ui: &mut Ui, view: &mut LevelView, tab: Tab, shown: &Rows, busy: 
     let current = shown.indices.first().copied();
     let mut edit = None;
     let mut picked = None;
-    let title = if tab == Tab::Cameras { "Camera settings" } else { "Entries" };
+    let title = if tab == Tab::Cameras { tr!("properties_ui.camera_settings") } else { tr!("properties_ui.entries") };
     controls::section(ui, title, |ui| {
         let step = controls::HEIGHT_SM + ui.spacing().item_spacing.y;
         let t = crate::theme::Tokens::get(ui.ctx());
@@ -367,7 +379,7 @@ fn record_list(ui: &mut Ui, view: &mut LevelView, tab: Tab, shown: &Rows, busy: 
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if lines.is_empty() {
-                    ui.weak("None in this level.");
+                    ui.weak(tr!("properties_ui.none_in_level"));
                     return;
                 }
                 egui::ScrollArea::vertical().id_salt("record-list").max_height(LIST_ROWS * step).auto_shrink([false, true]).show_rows(
@@ -396,18 +408,21 @@ fn record_list(ui: &mut Ui, view: &mut LevelView, tab: Tab, shown: &Rows, busy: 
                 // The game reads three blocks of these, so each has its own way in.
                 let third = egui::vec2(((ui.available_width() - 2.0 * ui.spacing().item_spacing.x) / 3.0).max(0.0), controls::HEIGHT);
                 ui.horizontal_top(|ui| {
-                    for (block, label) in
-                        [(ScreenBlock::Background, "Add BG"), (ScreenBlock::Tileset, "Add Tileset"), (ScreenBlock::Foreground, "Add FG")]
-                    {
-                        if ui.add_sized(third, Button::new(label)).on_hover_text(format!("Adds a {} entry", block.name())).clicked() {
+                    for (block, label) in [
+                        (ScreenBlock::Background, tr!("properties_ui.add_bg")),
+                        (ScreenBlock::Tileset, tr!("properties_ui.add_tileset")),
+                        (ScreenBlock::Foreground, tr!("properties_ui.add_fg")),
+                    ] {
+                        if ui.add_sized(third, Button::new(label)).on_hover_text(tr!("properties_ui.adds_entry", block = block_name(block))).clicked()
+                        {
                             edit = add_screen_edit(course, block);
                         }
                     }
                 });
-            } else if ui.add_sized(egui::vec2(ui.available_width(), controls::HEIGHT), Button::new("Add")).clicked() {
+            } else if ui.add_sized(egui::vec2(ui.available_width(), controls::HEIGHT), Button::new(tr!("common.add"))).clicked() {
                 edit = add_camera_edit(course);
             }
-            let delete = Button::new("Delete").enabled(!lines.is_empty());
+            let delete = Button::new(tr!("common.delete")).enabled(!lines.is_empty());
             if ui.add_sized(egui::vec2(ui.available_width(), controls::HEIGHT), delete).clicked() {
                 edit = delete_record_edit(course, tab, shown);
             }
@@ -427,18 +442,18 @@ fn sprite_header(ui: &mut Ui, view: &mut LevelView, shown: &Rows) {
             Some(actor) => {
                 ui.label(RichText::new(&actor.definition.name).strong());
                 let number = sprite_type.map_or("—".to_owned(), |t| t.to_string());
-                ui.weak(format!("{} · actor type {number}", actor.definition.category));
+                ui.weak(tr!("properties_ui.actor_type", category = actor.definition.category, number));
             }
             None => {
-                let name = sprite_type.map_or("No sprite selected".to_owned(), |t| format!("Actor {t}"));
+                let name = sprite_type.map_or_else(|| tr!("properties_ui.no_sprite_selected").to_owned(), |t| tr!("properties.actor", id = t));
                 ui.label(RichText::new(name).color(ui.visuals().weak_text_color()).strong());
-                ui.weak(if shown.multi() { "Several sprites selected" } else { "Not in the actor catalog" });
+                ui.weak(if shown.multi() { tr!("properties_ui.several_sprites") } else { tr!("properties_ui.not_in_catalog") });
             }
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add(Button::icon(icons::INFO).ghost().name("About this actor").enabled(shown.actor.is_some()))
-                .on_hover_text("What this actor is, and what each of its fields does")
+                .add(Button::icon(icons::INFO).ghost().name(tr!("properties_ui.about_actor")).enabled(shown.actor.is_some()))
+                .on_hover_text(tr!("properties_ui.about_actor_hover"))
                 .clicked()
             {
                 view.panel.show_actor_info = true;
@@ -457,20 +472,19 @@ fn missing_banks(ui: &mut Ui, view: &LevelView, shown: &Rows, busy: bool) -> Opt
     let mut edit = None;
     for (slot, bank) in needed {
         let loaded = view.snapshot.course.object_banks.get(usize::from(slot)).copied().unwrap_or(0);
-        let what = if shown.multi() { "A selected sprite" } else { "This sprite" };
-        let mut text = if loaded == 0 {
-            format!("{what} needs object bank {bank} in slot {slot}, which this level leaves empty, so the game leaves it out.")
-        } else {
-            format!("{what} needs object bank {bank} in slot {slot}, where this level loads bank {loaded}, so the game leaves it out.")
+        let mut text = match (shown.multi(), loaded == 0) {
+            (true, true) => tr!("properties_ui.missing_bank.selected_empty", bank, slot),
+            (true, false) => tr!("properties_ui.missing_bank.selected_loaded", bank, slot, loaded),
+            (false, true) => tr!("properties_ui.missing_bank.this_empty", bank, slot),
+            (false, false) => tr!("properties_ui.missing_bank.this_loaded", bank, slot, loaded),
         };
         let displaced = view.sprites_needing_other_bank(slot, bank);
         if displaced > 0 {
-            let sprites = if displaced == 1 { "sprite" } else { "sprites" };
-            text.push_str(&format!(" Loading it would leave out the {displaced} {sprites} that need bank {loaded} instead."));
+            text.push_str(&format!(" {}", tr_n!("properties_ui.missing_bank.displaced", displaced, loaded)));
         }
         controls::warning_text(ui, text);
-        let button = Button::new(format!("Load bank {bank} in slot {slot}")).enabled(!busy);
-        if ui.add(button).on_hover_text("Changes the level's object bank for this slot, as the Banks tab does").clicked() {
+        let button = Button::new(tr!("properties_ui.load_bank", bank, slot)).enabled(!busy);
+        if ui.add(button).on_hover_text(tr!("properties_ui.load_bank_hover")).clicked() {
             edit = Some(LevelEdit::SetObjectBank { slot: usize::from(slot), value: bank });
         }
         ui.add_space(4.0);
@@ -484,17 +498,17 @@ fn actor_info(ctx: &egui::Context, view: &mut LevelView, shown: &Rows) {
     let definition = &actor.definition;
     let mut open = true;
     dialogs::window(&definition.name).open(&mut open).default_size([520.0, 420.0]).show(ctx, |ui| {
-        ui.weak(format!("{} · object {}", definition.category, definition.object_id));
-        ui.label(if definition.notes.is_empty() { "This actor has no description." } else { &definition.notes });
+        ui.weak(tr!("properties_ui.actor_object", category = definition.category, object_id = definition.object_id));
+        ui.label(if definition.notes.is_empty() { tr!("properties_ui.no_description") } else { &definition.notes });
         if let Some(error) = &actor.init_error {
-            controls::warning_text(ui, format!("Its script could not start: {error}"));
+            controls::warning_text(ui, tr!("properties_ui.script_failed", error));
         }
         ui.separator();
         egui::ScrollArea::vertical().show(ui, |ui| {
             egui::Grid::new("actor-fields").num_columns(3).striped(true).show(ui, |ui| {
-                ui.weak("Field");
-                ui.weak("Bits");
-                ui.weak("What it does");
+                ui.weak(tr!("properties_ui.field"));
+                ui.weak(tr!("properties_ui.bits"));
+                ui.weak(tr!("properties_ui.what_it_does"));
                 ui.end_row();
                 for field in &definition.fields {
                     let bits = if field.bit_width == 1 {
@@ -515,7 +529,7 @@ fn actor_info(ctx: &egui::Context, view: &mut LevelView, shown: &Rows) {
                     if field.checkbox_value != 0 {
                         ui.label(format!("    {}", field.checkbox_value));
                         ui.label("");
-                        ui.label("On; anything else is off");
+                        ui.label(tr!("properties_ui.on_else_off"));
                         ui.end_row();
                     }
                 }

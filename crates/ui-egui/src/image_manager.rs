@@ -8,6 +8,7 @@ use bigstar_formats::{RgbaImage, expand_5_to_8, shrink_8_to_5};
 use egui::Ui;
 
 use crate::controls::{self, Button, Choice as _};
+use crate::i18n::{tr, tr_n};
 use crate::paint::Grid;
 use crate::services::Services;
 
@@ -40,15 +41,20 @@ pub type Palette = Vec<[u8; 3]>;
 
 /// A PNG's pixels.
 pub fn decode_png(bytes: &[u8]) -> Result<RgbaImage, String> {
-    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png).map_err(|_| "Could not read the PNG.".to_owned())?.to_rgba8();
+    let decoded = image::load_from_memory_with_format(bytes, image::ImageFormat::Png)
+        .map_err(|_| tr!("image_manager.could_not_read_png").to_owned())?
+        .to_rgba8();
     Ok(RgbaImage { width: decoded.width() as usize, height: decoded.height() as usize, pixels: decoded.into_raw() })
 }
 
 pub fn encode_png(value: &RgbaImage) -> Result<Vec<u8>, String> {
     let (width, height) = (u32::try_from(value.width).unwrap_or(0), u32::try_from(value.height).unwrap_or(0));
-    let buffer = image::RgbaImage::from_raw(width, height, value.pixels.clone()).ok_or_else(|| "Could not write the PNG.".to_owned())?;
+    let buffer =
+        image::RgbaImage::from_raw(width, height, value.pixels.clone()).ok_or_else(|| tr!("image_manager.could_not_write_png").to_owned())?;
     let mut bytes = Vec::new();
-    buffer.write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png).map_err(|_| "Could not write the PNG.".to_owned())?;
+    buffer
+        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+        .map_err(|_| tr!("image_manager.could_not_write_png").to_owned())?;
     Ok(bytes)
 }
 
@@ -82,10 +88,10 @@ const CLEAR: u8 = 128;
 /// The nearest colour of `palette` (past index 0, which is clear) for every pixel of `image`.
 pub fn index_with(image: &RgbaImage, palette: &[[u8; 3]], width: usize, height: usize) -> Result<Vec<u8>, String> {
     if (image.width, image.height) != (width, height) {
-        return Err(format!("The PNG is {}×{}; this bitmap is {width}×{height}.", image.width, image.height));
+        return Err(tr!("image_manager.png_size_mismatch", png_width = image.width, png_height = image.height, width, height));
     }
     if palette.len() < 2 {
-        return Err("The palette has no colours to match against.".to_owned());
+        return Err(tr!("image_manager.palette_has_no_colours").to_owned());
     }
     let mut cache: BTreeMap<[u8; 4], u8> = BTreeMap::new();
     let mut pixels = Vec::with_capacity(width * height);
@@ -153,21 +159,21 @@ pub fn import_all(image: &RgbaImage, sizes: &[(usize, usize)], palettes: usize, 
     let width: usize = sizes.iter().map(|s| s.0).sum();
     let strip = sizes.iter().map(|s| s.1).max().unwrap_or(0);
     if palettes == 0 || sizes.is_empty() {
-        return Err("There is nothing to import into.".to_owned());
+        return Err(tr!("image_manager.nothing_to_import_into").to_owned());
     }
     if (image.width, image.height) != (width, strip * palettes) {
-        return Err(format!(
-            "The PNG is {}×{}; {} bitmap{} with {palettes} palette{} export as {width}×{}.",
-            image.width,
-            image.height,
-            sizes.len(),
-            if sizes.len() == 1 { "" } else { "s" },
-            if palettes == 1 { "" } else { "s" },
-            strip * palettes
+        return Err(tr!(
+            "image_manager.png_size_mismatch_all",
+            png_width = image.width,
+            png_height = image.height,
+            bitmaps = tr_n!("image_manager.bitmap_count", sizes.len()),
+            palettes = tr_n!("image_manager.palette_count", palettes),
+            width,
+            height = strip * palettes
         ));
     }
     if !(2..=256).contains(&colours) {
-        return Err("A palette needs between 2 and 256 colours.".to_owned());
+        return Err(tr!("image_manager.palette_needs_colours").to_owned());
     }
     // Each place's colours across the strips, five bits a channel; `None` is clear.
     let place = |x: usize, y: usize| -> Option<Vec<u16>> {
@@ -310,20 +316,21 @@ pub fn show(ui: &mut Ui, id: &str, state: &mut ManagerState, lists: &Lists) -> (
     state.bitmap = state.bitmap.min(lists.bitmaps.len().saturating_sub(1));
     state.palette = state.palette.min(lists.palettes.len().saturating_sub(1));
     let mut detached = None;
-    let mut list = |ui: &mut Ui, title: &str, names: &[String], groups: &[Group], chosen: &mut usize| {
+    let mut list = |ui: &mut Ui, salt: &str, title: &str, names: &[String], groups: &[Group], chosen: &mut usize| {
         ui.strong(title);
         egui::Frame::group(ui.style()).inner_margin(2.0).show(ui, |ui| {
             ui.set_width(ui.available_width());
-            egui::ScrollArea::vertical().id_salt((id, title)).max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
+            egui::ScrollArea::vertical().id_salt((id, salt)).max_height(180.0).auto_shrink([false, true]).show(ui, |ui| {
                 if names.is_empty() {
-                    ui.weak("(none)");
+                    ui.weak(tr!("image_manager.none"));
                 }
                 for (i, name) in names.iter().enumerate() {
                     for (n, group) in groups.iter().enumerate().filter(|(_, g)| g.start == i) {
                         ui.horizontal(|ui| {
                             ui.add(egui::Label::new(egui::RichText::new(&group.name).strong()).truncate());
                             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if controls::icon_button(ui, crate::icons::CLOSE, &format!("Detach {}", group.name)).clicked() {
+                                if controls::icon_button(ui, crate::icons::CLOSE, &tr!("image_manager.detach", name = group.name.as_str())).clicked()
+                                {
                                     detached = Some(n);
                                 }
                             });
@@ -335,47 +342,46 @@ pub fn show(ui: &mut Ui, id: &str, state: &mut ManagerState, lists: &Lists) -> (
         });
     };
     let mut bitmap = state.bitmap;
-    list(ui, "Bitmaps", lists.bitmaps, &[], &mut bitmap);
+    list(ui, "Bitmaps", tr!("image_manager.bitmaps"), lists.bitmaps, &[], &mut bitmap);
     if bitmap != state.bitmap {
         state.bitmap = bitmap;
         if state.auto_palette && bitmap < lists.palettes.len() {
             state.palette = bitmap;
         }
     }
-    list(ui, "Palettes", lists.palettes, lists.groups, &mut state.palette);
-    controls::checkbox(ui, &mut state.auto_palette, "Auto palette select")
-        .on_hover_text("Choosing a bitmap chooses the palette in the same place in the list");
+    list(ui, "Palettes", tr!("image_manager.palettes"), lists.palettes, lists.groups, &mut state.palette);
+    controls::checkbox(ui, &mut state.auto_palette, tr!("image_manager.auto_palette_select"))
+        .on_hover_text(tr!("image_manager.auto_palette_select_hint"));
     ui.add_space(4.0);
 
     let mut action = detached.map(ManagerAction::Detach);
     let chosen = !lists.bitmaps.is_empty() && !lists.palettes.is_empty();
-    let all_label = if lists.shared { "all bitmaps" } else { "this bitmap" };
     let imports = chosen && lists.no_import.is_none();
     let buttons = [
-        (ManagerAction::ExportThis, "Export this bitmap…".to_owned(), chosen, "A PNG of the chosen bitmap in the chosen palette"),
+        (ManagerAction::ExportThis, tr!("image_manager.export_this_bitmap").to_owned(), chosen, tr!("image_manager.export_this_bitmap_hint")),
         (
             ManagerAction::ImportThis,
-            "Import this bitmap with existing palette…".to_owned(),
+            tr!("image_manager.import_this_bitmap_existing").to_owned(),
             imports,
-            "Reads a PNG the bitmap's size into the bitmap, each colour matched to the nearest in the chosen palette",
+            tr!("image_manager.import_this_bitmap_existing_hint"),
         ),
         (
             ManagerAction::ImportRecreate,
-            "Import this bitmap and recreate palette…".to_owned(),
+            tr!("image_manager.import_this_bitmap_recreate").to_owned(),
             imports,
-            "Reads a PNG the bitmap's size, making the chosen palette from its colours; colour 0 stays clear",
+            tr!("image_manager.import_this_bitmap_recreate_hint"),
         ),
         (
             ManagerAction::ExportAll,
-            format!("Export {all_label} with all palettes…"),
+            (if lists.shared { tr!("image_manager.export_all_bitmaps") } else { tr!("image_manager.export_this_bitmap_all") }).to_owned(),
             chosen,
-            "One PNG: the bitmaps side by side, repeated once for every palette, top to bottom",
+            tr!("image_manager.export_all_hint"),
         ),
         (
             ManagerAction::ImportAll,
-            format!("Import {all_label} with all palettes…"),
+            (if lists.shared { tr!("image_manager.import_all_bitmaps") } else { tr!("image_manager.import_this_bitmap_all") }).to_owned(),
             imports,
-            "Reads a PNG laid out as the export lays it out, remaking the bitmaps and every palette together",
+            tr!("image_manager.import_all_hint"),
         ),
     ];
     for (which, label, enabled, tip) in buttons {
@@ -420,8 +426,8 @@ pub fn run(
     services: &dyn Services,
     name: &str,
 ) -> Result<bool, String> {
-    let bitmap = |images: &dyn Images, index: usize| images.bitmap(index).ok_or_else(|| "No bitmap is chosen.".to_owned());
-    let palette = |images: &dyn Images, index: usize| images.palette(index).ok_or_else(|| "No palette is chosen.".to_owned());
+    let bitmap = |images: &dyn Images, index: usize| images.bitmap(index).ok_or_else(|| tr!("image_manager.no_bitmap_chosen").to_owned());
+    let palette = |images: &dyn Images, index: usize| images.palette(index).ok_or_else(|| tr!("image_manager.no_palette_chosen").to_owned());
     let open = |title: &str| match services.open_file(title, &["png"]) {
         Some(Ok((_, bytes))) => decode_png(&bytes).map(Some),
         Some(Err(error)) => Err(error),
@@ -430,18 +436,19 @@ pub fn run(
     let colours = images.colours();
     match action {
         ManagerAction::ExportThis => {
-            let image = images.draw(state.bitmap, state.palette).ok_or("No bitmap and palette are chosen.")?;
-            services.save_file("Export this bitmap", &format!("{name}.png"), "png", &encode_png(&image)?)?;
+            let image = images.draw(state.bitmap, state.palette).ok_or(tr!("image_manager.no_bitmap_and_palette_chosen"))?;
+            services.save_file(tr!("image_manager.export_this_bitmap_title"), &format!("{name}.png"), "png", &encode_png(&image)?)?;
             Ok(false)
         }
         ManagerAction::ExportAll => {
-            let drawn = bitmaps.iter().map(|&b| palettes.iter().map(|&p| images.draw(b, p).ok_or("A bitmap could not be drawn.")).collect());
+            let drawn =
+                bitmaps.iter().map(|&b| palettes.iter().map(|&p| images.draw(b, p).ok_or(tr!("image_manager.bitmap_could_not_be_drawn"))).collect());
             let image = stack(&drawn.collect::<Result<Vec<Vec<_>>, _>>()?);
-            services.save_file("Export with all palettes", &format!("{name} all palettes.png"), "png", &encode_png(&image)?)?;
+            services.save_file(tr!("image_manager.export_with_all_palettes"), &format!("{name} all palettes.png"), "png", &encode_png(&image)?)?;
             Ok(false)
         }
         ManagerAction::ImportThis => {
-            let Some(image) = open("Import this bitmap with existing palette")? else { return Ok(false) };
+            let Some(image) = open(tr!("image_manager.import_this_bitmap_existing_title"))? else { return Ok(false) };
             let target = bitmap(images, state.bitmap)?;
             let mut chosen = palette(images, state.palette)?;
             chosen.truncate(colours);
@@ -450,7 +457,7 @@ pub fn run(
             Ok(true)
         }
         ManagerAction::ImportRecreate => {
-            let Some(image) = open("Import this bitmap and recreate palette")? else { return Ok(false) };
+            let Some(image) = open(tr!("image_manager.import_this_bitmap_recreate_title"))? else { return Ok(false) };
             let target = bitmap(images, state.bitmap)?;
             let imported = import_all(&image, &[(target.width, target.height)], 1, colours)?;
             let (Some(pixels), Some(colours)) = (imported.bitmaps.into_iter().next(), imported.palettes.first()) else { return Ok(false) };
@@ -459,7 +466,7 @@ pub fn run(
             Ok(true)
         }
         ManagerAction::ImportAll => {
-            let Some(image) = open("Import with all palettes")? else { return Ok(false) };
+            let Some(image) = open(tr!("image_manager.import_with_all_palettes"))? else { return Ok(false) };
             let sizes: Vec<(usize, usize)> = bitmaps.iter().map(|&i| bitmap(images, i).map(|b| (b.width, b.height))).collect::<Result<_, _>>()?;
             let imported = import_all(&image, &sizes, palettes.len(), colours)?;
             for (&index, pixels) in bitmaps.iter().zip(imported.bitmaps) {

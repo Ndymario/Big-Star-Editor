@@ -5,6 +5,7 @@
 //! the Qt tables were.
 
 use crate::controls::{self, Button, Choice as _, Row, TextField, Width};
+use crate::i18n::{self, key, tr};
 use bigstar_formats::{
     Bnbl, BnblEntry, Bncd, BncdEntry, BncdSubentry, Bncl, BnclEntry, DsBanner, Enpg, RgbaImage, RomUserMetadata, RomUserMetadataEntry,
     RomUserMetadataSection, UiResourceKind, banner_title, bgr555_to_rgb, identify_ui_resource, pack_bgr555, parse_bnbl, parse_bncd, parse_bncl,
@@ -67,15 +68,49 @@ pub struct ResourceDoc {
     pub selected_item: Option<(usize, Option<usize>)>,
 }
 
-pub const BNBL_COLUMNS: [&str; 6] = ["X", "Y", "X align", "Y align", "Width", "Height"];
+/// The columns are keys, written as text where the table draws them.
+pub const BNBL_COLUMNS: [&str; 6] = [
+    key!("resource_editor.column.x"),
+    key!("resource_editor.column.y"),
+    key!("resource_editor.column.x_align"),
+    key!("resource_editor.column.y_align"),
+    key!("resource_editor.column.width"),
+    key!("resource_editor.column.height"),
+];
 const BNBL_LIMITS: [u64; 6] = [4095, 4095, 3, 3, 255, 255];
-pub const BNCL_COLUMNS: [&str; 5] = ["X", "Y", "X align", "Y align", "Graphic ID"];
+pub const BNCL_COLUMNS: [&str; 5] = [
+    key!("resource_editor.column.x"),
+    key!("resource_editor.column.y"),
+    key!("resource_editor.column.x_align"),
+    key!("resource_editor.column.y_align"),
+    key!("resource_editor.column.graphic_id"),
+];
 const BNCL_LIMITS: [u64; 5] = [4095, 4095, 3, 3, 255];
-pub const CELL_COLUMNS: [&str; 4] = ["Width", "Height", "First subentry", "Subentry count"];
+pub const CELL_COLUMNS: [&str; 4] = [
+    key!("resource_editor.column.width"),
+    key!("resource_editor.column.height"),
+    key!("resource_editor.column.first_subentry"),
+    key!("resource_editor.column.subentry_count"),
+];
 const CELL_LIMITS: [u64; 4] = [255, 255, 65535, 65535];
-pub const OAM_COLUMNS: [&str; 5] = ["OAM attr 0", "OAM attr 1", "Unknown", "Tile", "Tile count"];
+pub const OAM_COLUMNS: [&str; 5] = [
+    key!("resource_editor.column.oam_attr_0"),
+    key!("resource_editor.column.oam_attr_1"),
+    key!("resource_editor.column.unknown"),
+    key!("resource_editor.column.tile"),
+    key!("resource_editor.column.tile_count"),
+];
 const OAM_LIMITS: [u64; 5] = [65535, 65535, u32::MAX as u64, 65535, 65535];
-const LANGUAGES: [&str; 8] = ["Japanese", "English", "French", "German", "Italian", "Spanish", "Chinese", "Korean"];
+const LANGUAGES: [&str; 8] = [
+    key!("resource_editor.language.japanese"),
+    key!("resource_editor.language.english"),
+    key!("resource_editor.language.french"),
+    key!("resource_editor.language.german"),
+    key!("resource_editor.language.italian"),
+    key!("resource_editor.language.spanish"),
+    key!("resource_editor.language.chinese"),
+    key!("resource_editor.language.korean"),
+];
 
 /// A table cell as a number no bigger than `maximum`: decimal, `0x` hexadecimal or `0`-led octal, as Qt reads it.
 pub fn number(text: &str, maximum: u64) -> Result<u64, String> {
@@ -87,7 +122,7 @@ pub fn number(text: &str, maximum: u64) -> Result<u64, String> {
     } else {
         text.parse().ok()
     };
-    parsed.filter(|value| *value <= maximum).ok_or_else(|| "table contains an invalid numeric value".to_owned())
+    parsed.filter(|value| *value <= maximum).ok_or_else(|| tr!("resource_editor.table_contains_an_invalid_numeric_value").to_owned())
 }
 
 fn numbers<const N: usize>(row: &[String], limits: [u64; N]) -> Result<[u64; N], String> {
@@ -96,7 +131,7 @@ fn numbers<const N: usize>(row: &[String], limits: [u64; N]) -> Result<[u64; N],
         *slot = number(cell, limit)?;
     }
     if row.len() < N {
-        return Err("table contains an invalid numeric value".to_owned());
+        return Err(tr!("resource_editor.table_contains_an_invalid_numeric_value").to_owned());
     }
     Ok(values)
 }
@@ -283,7 +318,7 @@ impl ResourceDoc {
 
     /// The name the document goes by.
     pub fn title(&self) -> &'static str {
-        "UI Resource"
+        tr!("resource_editor.ui_resource")
     }
 
     /// The columns of the main table, for the pages that have one.
@@ -426,7 +461,7 @@ impl ResourceDoc {
             self.version += 1;
             self.dirty = true;
             let after = self.image_state();
-            self.history.record("Change colour", before, &after);
+            self.history.record(tr!("resource_editor.change_colour"), before, &after);
         }
     }
 
@@ -531,7 +566,12 @@ impl ResourceDoc {
                 for section in &self.sections {
                     let mut entries = Vec::new();
                     for (key, value) in &section.entries {
-                        let key = key.trim().parse::<i32>().ok().filter(|k| *k >= 0).ok_or("metadata key must be a non-negative integer")?;
+                        let key = key
+                            .trim()
+                            .parse::<i32>()
+                            .ok()
+                            .filter(|k| *k >= 0)
+                            .ok_or(tr!("resource_editor.metadata_key_must_be_a_non_negative_integer"))?;
                         entries.push(RomUserMetadataEntry { key, value: value.clone() });
                     }
                     sections.push(RomUserMetadataSection { name: section.name.clone(), entries });
@@ -556,7 +596,7 @@ impl ResourceDoc {
             Some(Page::Enpg(enpg)) => write_enpg(enpg),
             Some(Page::Banner(banner)) => write_ds_banner(banner),
             Some(Page::Metadata(metadata)) => write_rom_user_metadata(metadata),
-            None => return Err("nothing to write".to_owned()),
+            None => return Err(tr!("resource_editor.nothing_to_write").to_owned()),
         };
         written.map_err(|e| e.message)
     }
@@ -580,15 +620,24 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
     }
     match &doc.page {
         Some(Page::Bnbl(_)) => {
-            ui.label("JNBL touch rectangles. Alignment: 0=start, 1=center, 2=end, 3=reserved.");
+            ui.label(tr!("resource_editor.jnbl_touch_rectangles"));
             layout_page(ui, doc);
         }
         Some(Page::Bncl(_)) => {
-            ui.label("JNCL graphic placements. Alignment: 0=start, 1=center, 2=end, 3=reserved.");
+            ui.label(tr!("resource_editor.jncl_graphic_placements"));
             layout_page(ui, doc);
         }
         Some(Page::Bncd(_)) => {
-            controls::tabs(ui, "bncd", &mut view.tab, &[(BncdTab::Cells, "Cells"), (BncdTab::Oam, "OAM"), (BncdTab::Texture, "Texture")]);
+            controls::tabs(
+                ui,
+                "bncd",
+                &mut view.tab,
+                &[
+                    (BncdTab::Cells, tr!("resource_editor.tab.cells")),
+                    (BncdTab::Oam, tr!("resource_editor.tab.oam")),
+                    (BncdTab::Texture, tr!("resource_editor.tab.texture")),
+                ],
+            );
             match view.tab {
                 BncdTab::Cells => {
                     let mut rows = std::mem::take(&mut doc.rows);
@@ -610,16 +659,21 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
             }
         }
         Some(Page::Enpg(_)) => {
-            ui.label("ENPG 256x256 indexed image. Select a palette entry and click pixels to paint, or change the chosen colour below.");
+            ui.label(tr!("resource_editor.enpg_256x256_indexed_image"));
             image_page(ui, doc, view);
         }
         Some(Page::Banner(_)) => {
-            controls::tabs(ui, "banner", &mut view.banner_titles, &[(false, "Icon"), (true, "Titles")]);
+            controls::tabs(
+                ui,
+                "banner",
+                &mut view.banner_titles,
+                &[(false, tr!("resource_editor.tab.icon")), (true, tr!("resource_editor.tab.titles"))],
+            );
             if view.banner_titles {
                 egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                     egui::Grid::new("banner-titles").num_columns(2).show(ui, |ui| {
                         for (i, title) in doc.titles.iter_mut().enumerate() {
-                            ui.label(LANGUAGES.get(i).copied().unwrap_or_default());
+                            ui.label(i18n::text(LANGUAGES.get(i).copied().unwrap_or_default()));
                             if ui.add(TextField::multiline(title).rows(3).width(Width::Px(420.0))).changed() {
                                 doc.dirty = true;
                             }
@@ -632,9 +686,7 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
             }
         }
         Some(Page::Metadata(_)) => {
-            ui.label(
-                "Names and object notes for this ROM, kept in file 131. A section named with a number holds the notes for that tileset's objects.",
-            );
+            ui.label(tr!("resource_editor.names_and_object_notes"));
             metadata_page(ui, doc);
         }
         None => {}
@@ -643,7 +695,7 @@ pub fn show(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) -> bool
 }
 
 /// A table of text cells with a row header to select by; true when a cell changed.
-fn table(ui: &mut Ui, id: &str, columns: &[&str], rows: &mut [Vec<String>], selected: &mut Option<usize>) -> bool {
+fn table(ui: &mut Ui, id: &str, columns: &[&'static str], rows: &mut [Vec<String>], selected: &mut Option<usize>) -> bool {
     let mut changed = false;
     // The row of buttons the caller puts under the table keeps its room.
     let buttons = controls::HEIGHT + ui.spacing().item_spacing.y;
@@ -651,7 +703,7 @@ fn table(ui: &mut Ui, id: &str, columns: &[&str], rows: &mut [Vec<String>], sele
         egui::Grid::new(id).num_columns(columns.len() + 1).striped(true).show(ui, |ui| {
             ui.label("");
             for column in columns {
-                ui.strong(*column);
+                ui.strong(i18n::text(column));
             }
             ui.end_row();
             for (r, row) in rows.iter_mut().enumerate() {
@@ -683,10 +735,10 @@ fn layout_page(ui: &mut Ui, doc: &mut ResourceDoc) {
                 doc.rows = rows;
                 doc.selected_row = selected;
                 ui.horizontal(|ui| {
-                    if Button::new("Add").show(ui).clicked() {
+                    if Button::new(tr!("common.add")).show(ui).clicked() {
                         doc.add_row();
                     }
-                    if Button::new("Delete").enabled(doc.selected_row.is_some()).show(ui).clicked() {
+                    if Button::new(tr!("common.delete")).enabled(doc.selected_row.is_some()).show(ui).clicked() {
                         doc.delete_row();
                     }
                 });
@@ -717,7 +769,7 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
     let colours: Vec<[u8; 4]> = palette.iter().map(|&c| colour(c)).collect();
     let row = if colours.len() > 16 && doc.eight || matches!(doc.page, Some(Page::Enpg(_))) { 256 } else { 16 };
     controls::side_panel(ui, egui::Panel::right(egui::Id::new(("resource-palette", &doc.path))), 300.0).show(ui, |ui| {
-        ui.strong("Palette");
+        ui.strong(tr!("resource_editor.palette"));
         let edited = egui::ScrollArea::vertical().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, row, editable)).inner;
         if let Some((index, rgb)) = edited {
             doc.set_colour(index, rgb);
@@ -754,9 +806,9 @@ fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
     let buttons = controls::HEIGHT + ui.spacing().item_spacing.y;
     egui::ScrollArea::vertical().max_height((ui.available_height() - buttons).max(120.0)).auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("metadata-tree").num_columns(3).striped(true).show(ui, |ui| {
-            ui.strong("Section");
-            ui.strong("Key");
-            ui.strong("Value");
+            ui.strong(tr!("resource_editor.section"));
+            ui.strong(tr!("resource_editor.key"));
+            ui.strong(tr!("resource_editor.value"));
             ui.end_row();
             for (s, section) in doc.sections.iter_mut().enumerate() {
                 let response = ui.add(TextField::new(&mut section.name).width(Width::Px(140.0)));
@@ -764,7 +816,7 @@ fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
                 if response.gained_focus() || response.clicked() {
                     chosen = Some((s, None));
                 }
-                if Row::new("section").selected(doc.selected_item == Some((s, None))).fit().show(ui).clicked() {
+                if Row::new(tr!("resource_editor.row_section")).selected(doc.selected_item == Some((s, None))).fit().show(ui).clicked() {
                     chosen = Some((s, None));
                 }
                 ui.label("");
@@ -789,13 +841,13 @@ fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {
     }
     doc.dirty |= changed;
     ui.horizontal(|ui| {
-        if Button::new("Add section").show(ui).clicked() {
+        if Button::new(tr!("resource_editor.add_section")).show(ui).clicked() {
             doc.add_section();
         }
-        if Button::new("Add entry").enabled(doc.selected_item.is_some()).show(ui).clicked() {
+        if Button::new(tr!("resource_editor.add_entry")).enabled(doc.selected_item.is_some()).show(ui).clicked() {
             doc.add_entry();
         }
-        if Button::new("Delete").enabled(doc.selected_item.is_some()).show(ui).clicked() {
+        if Button::new(tr!("common.delete")).enabled(doc.selected_item.is_some()).show(ui).clicked() {
             doc.delete_item();
         }
     });

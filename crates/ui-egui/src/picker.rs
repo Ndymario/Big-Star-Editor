@@ -12,6 +12,7 @@ use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, 
 use crate::block_icons;
 use crate::canvas::{Art, Frame, paint_command};
 use crate::controls::{self, Choice as _, Row, Width};
+use crate::i18n::tr;
 use crate::level_view::{ActorKey, Kind, LevelView, TILE};
 
 /// Repeat-marked rows would tile forever, so a preview stops at a size that still fits a button.
@@ -72,19 +73,20 @@ pub fn object_entry(slot: u8, id: u16, layout: &ObjectLayout) -> ObjectEntry {
         (width, height) = (width * 2, height * 2);
     }
     let effect = level_object_effect(layout, slot);
-    let mut label = format!("Object {slot}:{id}");
-    let mut tooltip = format!("Object {id} of tileset slot {slot} - {width}x{height} tiles");
-    match effect {
+    let mut tooltip = tr!("picker.object_tooltip", id, slot, width, height);
+    let label = match effect {
         LevelObjectEffect::Erases => {
-            label.push_str(" - eraser");
-            tooltip.push_str("\nWrites the empty block, so it clears the cells it covers.");
+            tooltip.push('\n');
+            tooltip.push_str(tr!("picker.eraser_tooltip"));
+            tr!("picker.object_eraser", slot, id)
         }
         LevelObjectEffect::Inert => {
-            label.push_str(" - draws nothing");
-            tooltip.push_str("\nNames a block the game never writes, so it leaves the cells alone.");
+            tooltip.push('\n');
+            tooltip.push_str(tr!("picker.inert_tooltip"));
+            tr!("picker.object_inert", slot, id)
         }
-        LevelObjectEffect::Draws => {}
-    }
+        LevelObjectEffect::Draws => tr!("picker.object", slot, id),
+    };
     ObjectEntry { slot, id, label, tooltip, effect, preview: (width.clamp(1, PREVIEW_CELLS), height.clamp(1, PREVIEW_CELLS)) }
 }
 
@@ -95,14 +97,23 @@ pub struct SpriteEntry {
     pub has_renderer: bool,
 }
 
+/// The category no actor speaks for files under. It is the group's identity, so it stays the same in every language;
+/// [`category_name`] is what is shown.
+const OTHER_ACTORS: &str = "Other actors";
+
+/// A category as it is shown.
+fn category_name(category: &str) -> String {
+    if category == OTHER_ACTORS { tr!("picker.other_actors").to_owned() } else { category.to_owned() }
+}
+
 /// Every actor type the ROM's table lists, by category; one no actor speaks for is filed under "Other actors".
 pub fn sprite_entries(view: &LevelView) -> BTreeMap<String, Vec<SpriteEntry>> {
     let mut groups: BTreeMap<String, Vec<SpriteEntry>> = BTreeMap::new();
     let count = view.art.actors.catalog.sprite_object_ids.len().min(usize::from(u16::MAX));
     for sprite_type in (0..count).filter_map(|t| u16::try_from(t).ok()) {
         let actor = view.art.actors.actor(sprite_type, None);
-        let name = actor.map_or_else(|| format!("Actor {sprite_type}"), |a| a.definition.name.clone());
-        let category = actor.map(|a| a.definition.category.clone()).filter(|c| !c.is_empty()).unwrap_or_else(|| "Other actors".to_owned());
+        let name = actor.map_or_else(|| tr!("picker.actor_n", sprite_type), |a| a.definition.name.clone());
+        let category = actor.map(|a| a.definition.category.clone()).filter(|c| !c.is_empty()).unwrap_or_else(|| OTHER_ACTORS.to_owned());
         let has_renderer = actor.is_some_and(|a| a.has_renderer);
         groups.entry(category).or_default().push(SpriteEntry { sprite_type, label: format!("{name} ({sprite_type})"), has_renderer });
     }
@@ -113,7 +124,7 @@ pub fn sprite_entries(view: &LevelView) -> BTreeMap<String, Vec<SpriteEntry>> {
 pub fn custom_entries(modules: &ModuleDataCatalog) -> BTreeMap<String, BTreeMap<String, Vec<(u32, String)>>> {
     let mut tree: BTreeMap<String, BTreeMap<String, Vec<(u32, String)>>> = BTreeMap::new();
     for actor in &modules.stage_objects {
-        let label = format!("{}  [object {}]", actor.name, actor.object_id);
+        let label = tr!("picker.custom_actor", name = actor.name, id = actor.object_id);
         tree.entry(actor.module.clone()).or_default().entry(actor.component.clone()).or_default().push((actor.hash, label));
     }
     tree
@@ -130,12 +141,16 @@ fn matches(filter: &str, texts: &[&str]) -> bool {
 
 /// The picker. Choosing an entry changes what a right-click places, and with it which kind the properties show.
 pub fn show(ui: &mut Ui, view: &mut LevelView, state: &mut PickerState, modules: Option<&ModuleDataCatalog>, art: &mut Art<'_>) {
-    controls::search(ui, &mut state.search, "Filter palette…", Width::Fill);
+    controls::search(ui, &mut state.search, tr!("picker.filter_palette"), Width::Fill);
     controls::tabs(
         ui,
         "picker",
         &mut state.tab,
-        &[(PickerTab::Objects, "Objects"), (PickerTab::Sprites, "Sprites"), (PickerTab::Custom, "Custom actors")],
+        &[
+            (PickerTab::Objects, tr!("picker.tab.objects")),
+            (PickerTab::Sprites, tr!("picker.tab.sprites")),
+            (PickerTab::Custom, tr!("picker.tab.custom_actors")),
+        ],
     );
     ui.add_space(2.0);
     let filter = state.search.to_lowercase();
@@ -180,7 +195,7 @@ fn preview_button(ui: &mut Ui, label: &str, tooltip: &str, chosen: bool, paint: 
 fn objects(ui: &mut Ui, view: &mut LevelView, state: &mut PickerState, filter: &str, art: &mut Art<'_>) {
     let pages = object_entries(view);
     if pages.is_empty() {
-        ui.weak("Open a level to list its tileset objects.");
+        ui.weak(tr!("picker.open_a_level_objects"));
         return;
     }
     if !pages.iter().any(|(slot, _)| usize::from(*slot) == state.slot) {
@@ -188,12 +203,12 @@ fn objects(ui: &mut Ui, view: &mut LevelView, state: &mut PickerState, filter: &
     }
     ui.horizontal(|ui| {
         for (slot, _) in &pages {
-            ui.choice_value(&mut state.slot, usize::from(*slot), format!("Tileset {slot}"));
+            ui.choice_value(&mut state.slot, usize::from(*slot), tr!("picker.tileset_n", slot));
         }
     });
     let Some((slot, entries)) = pages.into_iter().find(|(slot, _)| usize::from(*slot) == state.slot) else { return };
     let tileset = view.art.graphics.as_ref().and_then(|g| g.tilesets.get(usize::from(slot))).cloned().unwrap_or_default();
-    let category = format!("Tileset {slot}");
+    let category = tr!("picker.tileset_n", slot);
     let shown: Vec<ObjectEntry> = entries.into_iter().filter(|e| matches(filter, &[&e.label, &category])).collect();
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         let placement = &view.placement;
@@ -285,16 +300,17 @@ fn actor_still(painter: &egui::Painter, icon: Rect, view: &LevelView, key: &Acto
 fn sprites(ui: &mut Ui, view: &mut LevelView, filter: &str, art: &mut Art<'_>) {
     let groups = sprite_entries(view);
     if groups.is_empty() {
-        ui.weak("Open a level to list its actors.");
+        ui.weak(tr!("picker.open_a_level_actors"));
         return;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         for (category, entries) in groups {
-            let shown: Vec<&SpriteEntry> = entries.iter().filter(|e| matches(filter, &[&e.label, &category])).collect();
+            let name = category_name(&category);
+            let shown: Vec<&SpriteEntry> = entries.iter().filter(|e| matches(filter, &[&e.label, &name])).collect();
             if shown.is_empty() {
                 continue;
             }
-            controls::group(ui, ("sprites", &category), format!("{category} ({})", shown.len()), !filter.is_empty(), |ui| {
+            controls::group(ui, ("sprites", &category), format!("{name} ({})", shown.len()), !filter.is_empty(), |ui| {
                 // Stills are asked for only once their category is open.
                 view.art.wanted.extend(shown.iter().filter(|e| e.has_renderer).map(|e| still(e.sprite_type, None)));
                 let placement = view.placement.clone();
@@ -314,7 +330,7 @@ fn sprites(ui: &mut Ui, view: &mut LevelView, filter: &str, art: &mut Art<'_>) {
 fn custom(ui: &mut Ui, view: &mut LevelView, modules: Option<&ModuleDataCatalog>, filter: &str, art: &mut Art<'_>) {
     let tree = modules.map(custom_entries).unwrap_or_default();
     if tree.is_empty() {
-        ui.weak("No actors are defined in this project's modules.");
+        ui.weak(tr!("picker.no_actors_defined"));
         return;
     }
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

@@ -13,6 +13,7 @@ use bigstar_level::{
 };
 use bigstar_protocol::{ActorInfo, LevelEdit, LevelSnapshot, ObjectBankOverlays};
 
+use crate::i18n::{self, key, tr, tr_n};
 use crate::level_view::{Gesture, Item, Kind, LevelView, TILE};
 
 /// The panel's side tabs, in the order they are shown.
@@ -27,18 +28,126 @@ pub enum Tab {
 }
 
 pub const TABS: [(Tab, &str); 11] = [
-    (Tab::Course, "Course"),
-    (Tab::Banks, "Banks"),
-    (Tab::Layers, "Layers"),
-    (Tab::Cameras, "Cameras"),
-    (Tab::Entity(Kind::Object), "Objects"),
-    (Tab::Entity(Kind::Sprite), "Sprites"),
-    (Tab::Entity(Kind::Entrance), "Entrances"),
-    (Tab::Entity(Kind::View), "Views"),
-    (Tab::Entity(Kind::Zone), "Zones"),
-    (Tab::Entity(Kind::Path), "Paths"),
-    (Tab::Entity(Kind::ProgressPath), "Progress"),
+    (Tab::Course, key!("properties.tab.course")),
+    (Tab::Banks, key!("properties.tab.banks")),
+    (Tab::Layers, key!("properties.tab.layers")),
+    (Tab::Cameras, key!("properties.tab.cameras")),
+    (Tab::Entity(Kind::Object), key!("properties.tab.objects")),
+    (Tab::Entity(Kind::Sprite), key!("properties.tab.sprites")),
+    (Tab::Entity(Kind::Entrance), key!("properties.tab.entrances")),
+    (Tab::Entity(Kind::View), key!("properties.tab.views")),
+    (Tab::Entity(Kind::Zone), key!("properties.tab.zones")),
+    (Tab::Entity(Kind::Path), key!("properties.tab.paths")),
+    (Tab::Entity(Kind::ProgressPath), key!("properties.tab.progress")),
 ];
+
+/// What a field is called in the panel. A row keeps the English name as its `id`, and edits go by that.
+fn field_label(id: &'static str) -> &'static str {
+    match id {
+        "ID" => tr!("properties.field.id"),
+        "X" => tr!("properties.field.x"),
+        "Y" => tr!("properties.field.y"),
+        "W" => tr!("properties.field.w"),
+        "H" => tr!("properties.field.h"),
+        "Position" => tr!("properties.field.position"),
+        "Size" => tr!("properties.field.size"),
+        "Position (tiles)" => tr!("properties.field.position_tiles"),
+        "Size (tiles)" => tr!("properties.field.size_tiles"),
+        "Camera offset" => tr!("properties.field.camera_offset"),
+        "Start entrance" => tr!("properties.field.start_entrance"),
+        "Midway entrance" => tr!("properties.field.midway_entrance"),
+        "Time limit" => tr!("properties.field.time_limit"),
+        "Start as Mini" => tr!("properties.field.start_as_mini"),
+        "Mini physics" => tr!("properties.field.mini_physics"),
+        "Pipe and cannon range" => tr!("properties.field.pipe_and_cannon_range"),
+        "Wrap around" => tr!("properties.field.wrap_around"),
+        "Settings (raw)" => tr!("properties.field.settings_raw"),
+        "Sound group" => tr!("properties.field.sound_group"),
+        "Events" => tr!("properties.field.events"),
+        "Sprite priority" => tr!("properties.field.sprite_priority"),
+        "Mega Mushroom drops" => tr!("properties.field.mega_mushroom_drops"),
+        "Tileset" => tr!("properties.field.tileset"),
+        "BG graphics" => tr!("properties.field.bg_graphics"),
+        "FG graphics" => tr!("properties.field.fg_graphics"),
+        "Rotates" => tr!("properties.field.rotates"),
+        "Rotates (raw)" => tr!("properties.field.rotates_raw"),
+        "Screen" => tr!("properties.field.screen"),
+        "Palette" => tr!("properties.field.palette"),
+        "Unused 0x06" => tr!("properties.field.unused_0x06"),
+        "Unused 0x08" => tr!("properties.field.unused_0x08"),
+        "Unused 0x10" => tr!("properties.field.unused_0x10"),
+        "Unused 0x12" => tr!("properties.field.unused_0x12"),
+        "Scroll speed X" => tr!("properties.field.scroll_speed_x"),
+        "Scroll speed Y" => tr!("properties.field.scroll_speed_y"),
+        "Vertical offset" => tr!("properties.field.vertical_offset"),
+        "Top offset" => tr!("properties.field.top_offset"),
+        "Bottom offset" => tr!("properties.field.bottom_offset"),
+        "Top offset (special)" => tr!("properties.field.top_offset_special"),
+        "Bottom offset (special)" => tr!("properties.field.bottom_offset_special"),
+        "Scroll height" => tr!("properties.field.scroll_height"),
+        "Unknown 0x14" => tr!("properties.field.unknown_0x14"),
+        "Object ID" => tr!("properties.field.object_id"),
+        "Tileset slot" => tr!("properties.field.tileset_slot"),
+        "Target event" => tr!("properties.field.target_event"),
+        "Trigger event" => tr!("properties.field.trigger_event"),
+        "Type" => tr!("properties.field.type"),
+        "Target area" => tr!("properties.field.target_area"),
+        "Target stage / pipe path" => tr!("properties.field.target_stage_pipe_path"),
+        "Target group" => tr!("properties.field.target_group"),
+        "Target entrance" => tr!("properties.field.target_entrance"),
+        "Camera zoom" => tr!("properties.field.camera_zoom"),
+        "View ID" => tr!("properties.field.view_id"),
+        "World-map node" => tr!("properties.field.world_map_node"),
+        "Unknown 0x10" => tr!("properties.field.unknown_0x10"),
+        "Unknown 0x11" => tr!("properties.field.unknown_0x11"),
+        "Unknown 0x20" => tr!("properties.field.unknown_0x20"),
+        "Bottom screen" => tr!("properties.field.bottom_screen"),
+        "Closed to player 2" => tr!("properties.field.closed_to_player_2"),
+        "Closed to player 1" => tr!("properties.field.closed_to_player_1"),
+        "Connected pipe" => tr!("properties.field.connected_pipe"),
+        "Wipe fade" => tr!("properties.field.wipe_fade"),
+        "Exact X" => tr!("properties.field.exact_x"),
+        "Exit only" => tr!("properties.field.exit_only"),
+        "Camera settings" => tr!("properties.field.camera_settings"),
+        "BGM" => tr!("properties.field.bgm"),
+        "Background" => tr!("properties.field.background"),
+        "Foreground" => tr!("properties.field.foreground"),
+        "Light" => tr!("properties.field.light"),
+        "Progress path" => tr!("properties.field.progress_path"),
+        "Path ID" => tr!("properties.field.path_id"),
+        "Speed (fx32 raw)" => tr!("properties.field.speed_fx32_raw"),
+        "Acceleration (fx32 raw)" => tr!("properties.field.acceleration_fx32_raw"),
+        "Delay" => tr!("properties.field.delay"),
+        "Flags" => tr!("properties.field.flags"),
+        other => other,
+    }
+}
+
+/// What a record block is called in a sentence.
+pub fn block_name(block: ScreenBlock) -> &'static str {
+    match block {
+        ScreenBlock::Background => tr!("properties.block.background"),
+        ScreenBlock::Tileset => tr!("properties.block.tileset"),
+        ScreenBlock::Foreground => tr!("properties.block.foreground"),
+    }
+}
+
+/// What a record block is called at the start of a line.
+fn block_title(block: ScreenBlock) -> &'static str {
+    match block {
+        ScreenBlock::Background => tr!("properties.block_title.background"),
+        ScreenBlock::Tileset => tr!("properties.block_title.tileset"),
+        ScreenBlock::Foreground => tr!("properties.block_title.foreground"),
+    }
+}
+
+/// What a background layer is called in a sentence.
+fn layer_name(layer: BackgroundLayer) -> &'static str {
+    match layer {
+        BackgroundLayer::Background => block_name(ScreenBlock::Background),
+        BackgroundLayer::Foreground => block_name(ScreenBlock::Foreground),
+    }
+}
 
 /// Object ID, X, Y and the two event bytes come before an actor's own fields.
 pub const SPRITE_FIELD_ROW: usize = 5;
@@ -116,6 +225,8 @@ pub enum Span {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Row {
+    /// The field's English name, which is how an edit knows which field the row is whatever the language shows.
+    pub id: &'static str,
     pub label: String,
     /// `None` when the row stands for more than one value across the selection.
     pub value: Option<i64>,
@@ -135,9 +246,10 @@ pub struct Row {
 }
 
 impl Row {
-    fn number(label: &str, value: Option<i64>, min: i64, max: i64, span: Span) -> Self {
+    fn number(id: &'static str, value: Option<i64>, min: i64, max: i64, span: Span) -> Self {
         Self {
-            label: label.to_owned(),
+            id,
+            label: field_label(id).to_owned(),
             value,
             editor: Editor::Number { min, max },
             span,
@@ -321,11 +433,11 @@ pub(crate) fn follow_tileset(references: &mut LevelTilesetReferences, before: Le
 /// skips.
 pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
     let named = (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned()));
-    std::iter::once((i64::from(u16::MAX), "None".to_owned())).chain(named).collect()
+    std::iter::once((i64::from(u16::MAX), tr!("properties.none").to_owned())).chain(named).collect()
 }
 
 /// Why the level's tileset should not be none, though every load of its files skips it. See `docs/no-tileset.md`.
-const NO_TILESET: &str = "The game animates the tileset every frame by this number without checking for none, so it calls whatever lies far past its table, which can crash.";
+const NO_TILESET: &str = key!("properties.warning.no_tileset");
 
 /// What each object bank of a slot holds, as NSMB Editor names them: `BANK_NAMES[slot][bank - 1]`, empty where the
 /// bank holds nothing. The game loads banks into slots 0 to 9 and 15.
@@ -371,7 +483,12 @@ fn bank_actors(view: &LevelView, slot: usize, bank: u8) -> Vec<String> {
         .zip(&view.art.actors.catalog.sprite_banks)
         .filter(|(_, needs)| usize::from(needs[0]) == slot && needs[1] == bank)
         .map(|(t, _)| {
-            view.art.actors.actor(t, None).map(|a| a.definition.name.clone()).filter(|n| !n.is_empty()).unwrap_or_else(|| format!("Actor {t}"))
+            view.art
+                .actors
+                .actor(t, None)
+                .map(|a| a.definition.name.clone())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(|| tr!("properties.actor", id = t))
         })
         .collect()
 }
@@ -379,22 +496,22 @@ fn bank_actors(view: &LevelView, slot: usize, bank: u8) -> Vec<String> {
 /// A slot's banks to pick from, each named for what it holds, with the overlay it loads and the actors in it.
 fn bank_choices(view: &LevelView, slot: usize, overlays: Option<&ObjectBankOverlays>) -> Vec<(i64, String)> {
     let names = BANK_NAMES.iter().find(|(s, _)| *s == slot).map(|(_, names)| names);
-    let mut choices = vec![(0, "None".to_owned())];
+    let mut choices = vec![(0, tr!("properties.none").to_owned())];
     for bank in 1..=10u8 {
         let index = usize::from(bank) - 1;
-        let mut text = names.and_then(|names| names.get(index).copied()).filter(|name| !name.is_empty()).unwrap_or("Unused").to_owned();
+        let mut text =
+            names.and_then(|names| names.get(index).copied()).filter(|name| !name.is_empty()).unwrap_or(tr!("properties.bank.unused")).to_owned();
         // A slot with no banks holds 0xFFFFFFFF there: no overlay to name.
         if let Some(overlay) = overlays.and_then(|table| table.get(slot)?.get(index)).filter(|&&overlay| overlay != u32::MAX) {
-            text.push_str(&format!(" (overlay {overlay})"));
+            text = tr!("properties.bank.with_overlay", name = text, overlay);
         }
         let actors = bank_actors(view, slot, bank);
         if !actors.is_empty() {
             let rest = actors.len().saturating_sub(BANK_ACTORS_NAMED);
             let named: Vec<&str> = actors.iter().take(BANK_ACTORS_NAMED).map(String::as_str).collect();
-            text.push_str(&format!(": {}", named.join(", ")));
-            if rest != 0 {
-                text.push_str(&format!(" and {rest} more"));
-            }
+            let named = named.join(", ");
+            let actors = if rest != 0 { tr!("properties.bank.actors_and_more", actors = named, rest) } else { named };
+            text = tr!("properties.bank.with_actors", text, actors);
         }
         choices.push((i64::from(bank), text));
     }
@@ -461,7 +578,7 @@ const MUSIC_NAMES: [(u8, &str); 52] = [
 fn music_choices() -> Vec<(i64, String)> {
     (0..=u8::MAX)
         .map(|id| {
-            let name = MUSIC_NAMES.iter().find(|(number, _)| *number == id).map_or("unnamed", |(_, name)| name);
+            let name = MUSIC_NAMES.iter().find(|(number, _)| *number == id).map_or(tr!("properties.music.unnamed"), |(_, name)| name);
             (i64::from(id), name.to_owned())
         })
         .collect()
@@ -504,17 +621,14 @@ const ENTRANCE_FLAG_ROW: usize = 13;
 
 /// What each bit of an entrance's flags does, read off `Entrance::tryUseEntrance` and `Entrance::accessEntrance`.
 const ENTRANCE_FLAGS: [(&str, &str); 8] = [
-    ("Bottom screen", "The player arrives on the bottom screen, and the fade into it crosses screens."),
-    ("Closed to player 2", "The second player cannot enter this entrance."),
-    ("Closed to player 1", "The first player cannot enter this entrance."),
-    (
-        "Connected pipe",
-        "The player rides a path to the other end rather than warping. Target stage is then the path's ID, and Target area is kept for the ride: the game's headers call it travelling the path backwards.",
-    ),
-    ("Wipe fade", "Entering fades with a wipe from one screen to the other, in place of the character's own shape."),
-    ("Unknown 0x20", "Nothing in the game's entrance code reads this bit."),
-    ("Exact X", "The player arrives at the entrance's own X. Without it most types move the player half a tile right, onto the middle of it."),
-    ("Exit only", "The player can arrive here but cannot enter it."),
+    ("Bottom screen", key!("properties.note.bottom_screen")),
+    ("Closed to player 2", key!("properties.note.closed_to_player_2")),
+    ("Closed to player 1", key!("properties.note.closed_to_player_1")),
+    ("Connected pipe", key!("properties.note.connected_pipe")),
+    ("Wipe fade", key!("properties.note.wipe_fade")),
+    ("Unknown 0x20", key!("properties.note.unknown_0x20")),
+    ("Exact X", key!("properties.note.exact_x")),
+    ("Exit only", key!("properties.note.exit_only")),
 ];
 
 /// The lines of the panel's list for `kind`: every item of it, and under each selected path its nodes. Kinds the
@@ -547,23 +661,32 @@ pub fn line_label(view: &LevelView, item: Item) -> String {
     let course = &view.snapshot.course;
     let index = item.index;
     let label = match item.kind {
-        Kind::Object => {
-            view.snapshot.objects.get(index).map(|o| format!("Object {}:{} ({}, {}) {}×{}", o.tileset_slot, o.object_id, o.x, o.y, o.width, o.height))
-        }
+        Kind::Object => view
+            .snapshot
+            .objects
+            .get(index)
+            .map(|o| tr!("properties.line.object", slot = o.tileset_slot, id = o.object_id, x = o.x, y = o.y, width = o.width, height = o.height)),
         Kind::Sprite => course.sprites.get(index).map(|s| {
             let actor = view.art.actors.actor(s.id, view.sprite_hash(index));
-            let name = actor.map_or_else(|| format!("Actor {}", s.id), |a| a.definition.name.clone());
+            let name = actor.map_or_else(|| tr!("properties.actor", id = s.id), |a| a.definition.name.clone());
             format!("{name} ({}, {})", s.x, s.y)
         }),
         Kind::Entrance => course.entrances.get(index).map(|e| {
-            let kind = ENTRANCE_TYPES.get(usize::from(e.kind)).map_or_else(|| format!("Type {}", e.kind), |name| (*name).to_owned());
-            format!("Entrance {} · {kind} ({}, {})", e.id, e.x, e.y)
+            let kind = ENTRANCE_TYPES.get(usize::from(e.kind)).map_or_else(|| tr!("properties.line.type", kind = e.kind), |name| (*name).to_owned());
+            tr!("properties.line.entrance", id = e.id, kind, x = e.x, y = e.y)
         }),
-        Kind::View => course.views.get(index).map(|v| format!("View {} ({}, {}) {}×{}", v.id, v.x, v.y, v.width, v.height)),
-        Kind::Zone => course.zones.get(index).map(|z| format!("Zone {} ({}, {}) {}×{}", z.id, z.x, z.y, z.width, z.height)),
+        Kind::View => course.views.get(index).map(|v| tr!("properties.line.view", id = v.id, x = v.x, y = v.y, width = v.width, height = v.height)),
+        Kind::Zone => course.zones.get(index).map(|z| tr!("properties.line.zone", id = z.id, x = z.x, y = z.y, width = z.width, height = z.height)),
         Kind::Path | Kind::ProgressPath => paths(&view.snapshot, item.kind).get(index).and_then(|path| match item.node {
-            Some(node) => path.nodes.get(node).map(|n| format!("Node {node} ({}, {})", n.x, n.y)),
-            None => Some(format!("{} {} · {} node{}", item.kind.name(), path.id, path.nodes.len(), if path.nodes.len() == 1 { "" } else { "s" })),
+            Some(node) => path.nodes.get(node).map(|n| tr!("properties.line.node", node, x = n.x, y = n.y)),
+            None => {
+                let nodes = tr_n!("properties.line.nodes", path.nodes.len());
+                Some(if item.kind == Kind::ProgressPath {
+                    tr!("properties.line.progress_path", id = path.id, nodes)
+                } else {
+                    tr!("properties.line.path", id = path.id, nodes)
+                })
+            }
         }),
     };
     label.unwrap_or_default()
@@ -593,16 +716,16 @@ impl Rows {
 
 /// The settings bits the Code Reference names, each a checkbox of the Course tab.
 const COURSE_SETTINGS: [(u16, &str, &str); 4] = [
-    (0x01, "Start as Mini", "Every player starts the level as Mini Mario."),
-    (0x02, "Mini physics", "Every player moves as Mini Mario does."),
-    (0x08, "Pipe and cannon range", "Changes how far from the players pipes and cannons stay in the level."),
-    (0x20, "Wrap around", "The level loops sideways onto itself."),
+    (0x01, "Start as Mini", key!("properties.note.start_as_mini")),
+    (0x02, "Mini physics", key!("properties.note.mini_physics")),
+    (0x08, "Pipe and cannon range", key!("properties.note.pipe_and_cannon_range")),
+    (0x20, "Wrap around", key!("properties.note.wrap_around")),
 ];
 
 /// The first of the Course tab's rows that is a settings bit.
 const COURSE_SETTINGS_ROW: usize = 3;
 
-const MEGA_DROP_CHANCES: [&str; 3] = ["One in three", "One in two", "None"];
+const MEGA_DROP_CHANCES: [&str; 3] = [key!("properties.mega_drop.one_in_three"), key!("properties.mega_drop.one_in_two"), key!("properties.none")];
 
 /// The block whose first record holds the palette and screen of each of the Course tab's layers, in its order.
 const GRAPHICS_BLOCKS: [ScreenBlock; 3] = [ScreenBlock::Tileset, ScreenBlock::Background, ScreenBlock::Foreground];
@@ -611,26 +734,21 @@ const GRAPHICS_BLOCKS: [ScreenBlock; 3] = [ScreenBlock::Tileset, ScreenBlock::Ba
 /// change: empty when nothing.
 fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -> String {
     let Some(first) = block.records(course).first() else {
-        return format!("The level has no {} entry, so it has no {} colours. Add one in the Layers tab.", block.name(), block.name());
+        return tr!("properties.warning.no_entry", block = block_name(block));
     };
-    let shown = |value: u16| if value == u16::MAX { "none".to_owned() } else { value.to_string() };
+    let shown = |value: u16| if value == u16::MAX { tr!("properties.value_none").to_owned() } else { value.to_string() };
     let mut differ = Vec::new();
     if first.palette_id != graphics {
-        differ.push(format!("palette {}", shown(first.palette_id)));
+        differ.push(tr!("properties.warning.palette", value = shown(first.palette_id)));
     }
     // A tileset record's screen field is its rotation instead.
     if block != ScreenBlock::Tileset && first.screen_id != graphics {
-        differ.push(format!("screen {}", shown(first.screen_id)));
+        differ.push(tr!("properties.warning.screen", value = shown(first.screen_id)));
     }
     if differ.is_empty() {
         return String::new();
     }
-    format!(
-        "The first {} entry has {}, not {}. Picking here sets them to match; the advanced mode keeps them apart, here and in the Layers tab.",
-        block.name(),
-        differ.join(" and "),
-        shown(graphics)
-    )
+    tr!("properties.warning.mismatch", block = block_name(block), differing = differ.join(tr!("properties.joiner_and")), graphics = shown(graphics))
 }
 
 /// A tileset record's screen when the views naming it turn with the stage (`setupBgParallax`).
@@ -642,16 +760,16 @@ fn layer_choices(view: &LevelView, layer: BackgroundLayer) -> Option<Vec<(i64, S
     if named.is_empty() {
         return None;
     }
-    let none = std::iter::once((i64::from(u16::MAX), "None".to_owned()));
+    let none = std::iter::once((i64::from(u16::MAX), tr!("properties.none").to_owned()));
     Some(none.chain(named.iter().map(|definition| (i64::from(definition.id), definition.name.clone()))).collect())
 }
 
 /// The hint of the box that filters a tileset's list, `None`, or a background or foreground's.
 fn layer_filter(layer: Option<BackgroundLayer>) -> &'static str {
     match layer {
-        None => "Filter tilesets…",
-        Some(BackgroundLayer::Background) => "Filter backgrounds…",
-        Some(BackgroundLayer::Foreground) => "Filter foregrounds…",
+        None => tr!("properties.filter.tilesets"),
+        Some(BackgroundLayer::Background) => tr!("properties.filter.backgrounds"),
+        Some(BackgroundLayer::Foreground) => tr!("properties.filter.foregrounds"),
     }
 }
 
@@ -677,25 +795,30 @@ fn camera_for_view<'a>(course: &'a NsmbLevelCourse, v: &NsmbLevelView) -> Option
 /// The rows of one camera settings entry, but its ID: in the Cameras tab, and inline in the Views tab outside the
 /// advanced mode, which leaves out the field nobody has traced.
 fn camera_rows(rows: &mut Vec<Row>, camera: &NsmbLevelCamera, advanced: bool) {
-    let lines = "The game moves the camera up or down only as far as keeps the player between two lines down the screen.";
     for (label, value, min, max, note) in [
-        ("Top offset", i64::from(camera.top_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The upper is 64 pixels down plus this.")),
-        ("Bottom offset", i64::from(camera.bottom_offset), i64::from(i32::MIN), i64::from(i32::MAX), format!("{lines} The lower is 128 pixels down plus this.")),
+        ("Top offset", i64::from(camera.top_offset), i64::from(i32::MIN), i64::from(i32::MAX), tr!("properties.note.camera_top_offset")),
+        ("Bottom offset", i64::from(camera.bottom_offset), i64::from(i32::MIN), i64::from(i32::MAX), tr!("properties.note.camera_bottom_offset")),
         (
             "Top offset (special)",
             i64::from(camera.top_offset_special),
             i64::from(i32::MIN),
             i64::from(i32::MAX),
-            "The upper line in the game's second camera mode. Which of the player's moves switch to it has not been traced.".to_owned(),
+            tr!("properties.note.camera_top_offset_special"),
         ),
-        ("Bottom offset (special)", i64::from(camera.bottom_offset_special), i64::from(i32::MIN), i64::from(i32::MAX), "The lower line in that second mode.".to_owned()),
-        ("Scroll height", i64::from(camera.scroll_height), 0, 65535, "15 is none. Anything else has the game note a camera height this many tiles above where it rests on the view's floor; what reads it has not been traced.".to_owned()),
-        ("Unknown 0x14", i64::from(camera.unknown), 0, i64::from(u32::MAX), String::new()),
+        (
+            "Bottom offset (special)",
+            i64::from(camera.bottom_offset_special),
+            i64::from(i32::MIN),
+            i64::from(i32::MAX),
+            tr!("properties.note.camera_bottom_offset_special"),
+        ),
+        ("Scroll height", i64::from(camera.scroll_height), 0, 65535, tr!("properties.note.camera_scroll_height")),
+        ("Unknown 0x14", i64::from(camera.unknown), 0, i64::from(u32::MAX), ""),
     ] {
         if !advanced && label == "Unknown 0x14" {
             continue;
         }
-        rows.push(Row { note, ..Row::number(label, Some(value), min, max, Span::Full) });
+        rows.push(Row { note: note.to_owned(), ..Row::number(label, Some(value), min, max, Span::Full) });
     }
 }
 
@@ -714,11 +837,10 @@ fn set_camera_field(camera: &mut NsmbLevelCamera, label: &str, value: i64) -> Op
 }
 
 fn camera_note(course: &NsmbLevelCourse, v: &NsmbLevelView) -> String {
-    let lead = "The camera settings this view uses, which are edited in the Cameras tab.";
     match camera_for_view(course, v) {
-        None => format!("{lead} The level has none."),
-        Some((_, camera)) if camera.id & 0xff == u16::from(v.camera_settings_id) => lead.to_owned(),
-        Some((_, camera)) => format!("{lead} None have ID {}, so the game uses the level's first ({}).", v.camera_settings_id, camera.id),
+        None => tr!("properties.note.camera_none").to_owned(),
+        Some((_, camera)) if camera.id & 0xff == u16::from(v.camera_settings_id) => tr!("properties.note.camera_lead").to_owned(),
+        Some((_, camera)) => tr!("properties.note.camera_fallback", id = v.camera_settings_id, first = camera.id),
     }
 }
 
@@ -726,53 +848,61 @@ fn camera_note(course: &NsmbLevelCourse, v: &NsmbLevelView) -> String {
 /// record shows.
 fn layer_note(view: &LevelView, block: ScreenBlock, v: &NsmbLevelView) -> String {
     let course = &view.snapshot.course;
-    let what = block.name();
-    let lead = format!("The {what} entry this view uses, which is edited in the Layers tab.");
-    let Some((_, record)) = screen_for_view(course, block, v) else { return format!("{lead} The level has no {what} entries.") };
+    let what = block_name(block);
+    let mut parts = vec![tr!("properties.note.layer_lead", block = what)];
+    let Some((_, record)) = screen_for_view(course, block, v) else {
+        parts.push(tr!("properties.note.layer_no_entries", block = what));
+        return parts.join(" ");
+    };
     let id = match block {
         ScreenBlock::Background => v.background_id,
         ScreenBlock::Tileset => v.tileset_id,
         ScreenBlock::Foreground => v.foreground_id,
     };
-    let fallback = if record.id == u16::from(id) { String::new() } else { format!(" No entry has this ID, so the game uses entry {}.", record.id) };
+    if record.id != u16::from(id) {
+        parts.push(tr!("properties.note.layer_fallback", entry = record.id));
+    }
     if block == ScreenBlock::Tileset {
         // The game loads one tileset for the whole level, from the header and the first record; the record a view names
         // only says whether the view turns.
-        let turns = if record.screen_id == ROTATING_TILESET { " It turns with the stage." } else { " It does not turn." };
-        return format!("{lead}{fallback}{turns} It does not change the tiles: every view shows the level's one tileset, the Course tab's.");
+        let turns =
+            if record.screen_id == ROTATING_TILESET { tr!("properties.note.layer_turns") } else { tr!("properties.note.layer_does_not_turn") };
+        parts.push(turns.to_owned());
+        parts.push(tr!("properties.note.layer_tileset_tiles").to_owned());
+        return parts.join(" ");
     }
     let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
     if record.screen_id == u16::MAX || record.scroll_y == u16::MAX {
-        return format!("{lead}{fallback} That entry shows no screen, so this view has no {what}.");
+        parts.push(tr!("properties.note.layer_no_screen", block = what));
+        return parts.join(" ");
     }
-    match view.art.graphics.as_ref().and_then(|graphics| graphics.backgrounds.name(layer, record.screen_id)) {
-        Some(name) => format!("{lead}{fallback} It shows screen {}, {name}.", record.screen_id),
-        None => format!("{lead}{fallback} It shows screen {}.", record.screen_id),
-    }
+    parts.push(match view.art.graphics.as_ref().and_then(|graphics| graphics.backgrounds.name(layer, record.screen_id)) {
+        Some(name) => tr!("properties.note.layer_screen_named", id = record.screen_id, name),
+        None => tr!("properties.note.layer_screen", id = record.screen_id),
+    });
+    parts.join(" ")
 }
 
 /// Where the game opens on coming in through an entrance: the screen's corner and how far each layer has scrolled.
 fn spawn_note(view: &LevelView, entrance: &NsmbLevelEntrance) -> String {
     let screen = view.spawn_screen(entrance);
     let (player_x, player_y) = bigstar_level::entrance_spawn_point(entrance);
-    let mut note = format!(
-        "\n\nComing in here the player stands at {player_x}, {player_y} and the screen's top left corner is at {}, {}.",
-        screen.rect.left(),
-        screen.rect.top()
-    );
+    let mut note = format!("\n\n{}", tr!("properties.note.spawn", player_x, player_y, x = screen.rect.left(), y = screen.rect.top()));
     if screen.view.is_none() {
-        note.push_str(" No view has this ID, so nothing bounds the camera or scrolls the layers.");
+        note.push_str(&format!(" {}", tr!("properties.note.spawn_no_view")));
         return note;
     }
     for layer in [BackgroundLayer::Background, BackgroundLayer::Foreground] {
-        match view.screen_layer(&screen, layer) {
-            Some(scroll) => note.push_str(&format!(" The {} is scrolled to {}, {}.", layer.name(), scroll.x >> 12, scroll.y)),
-            None => note.push_str(&format!(" The view shows no {}.", layer.name())),
-        }
+        let layer_text = layer_name(layer);
+        let sentence = match view.screen_layer(&screen, layer) {
+            Some(scroll) => tr!("properties.note.spawn_scrolled", layer = layer_text, x = scroll.x >> 12, y = scroll.y),
+            None => tr!("properties.note.spawn_no_layer", layer = layer_text),
+        };
+        note.push_str(&format!(" {sentence}"));
     }
-    note.push_str(" The toolbar's DS menu draws it.");
+    note.push_str(&format!(" {}", tr!("properties.note.spawn_ds_menu")));
     if !matches!(entrance.camera_zoom, 0 | 16 | 255) {
-        note.push_str(" This entrance changes the zoom, which the prediction leaves out.");
+        note.push_str(&format!(" {}", tr!("properties.note.spawn_zoom")));
     }
     note
 }
@@ -796,17 +926,19 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
         let first = values.next()?;
         values.all(|v| v == first).then_some(first)
     }
-    let full = |rows: &mut Vec<Row>, label: &str, value: Option<i64>, min: i64, max: i64| rows.push(Row::number(label, value, min, max, Span::Full));
-    let pair = |rows: &mut Vec<Row>, group: &str, (a, av): (&str, Option<i64>), (b, bv): (&str, Option<i64>), min: i64, max: i64| {
-        for (label, value) in [(a, av), (b, bv)] {
-            rows.push(Row { group: group.to_owned(), ..Row::number(label, value, min, max, Span::Half) });
-        }
-    };
+    let full =
+        |rows: &mut Vec<Row>, label: &'static str, value: Option<i64>, min: i64, max: i64| rows.push(Row::number(label, value, min, max, Span::Full));
+    let pair =
+        |rows: &mut Vec<Row>, group: &'static str, (a, av): (&'static str, Option<i64>), (b, bv): (&'static str, Option<i64>), min: i64, max: i64| {
+            for (label, value) in [(a, av), (b, bv)] {
+                rows.push(Row { group: field_label(group).to_owned(), ..Row::number(label, value, min, max, Span::Half) });
+            }
+        };
     match panel.tab {
         Tab::Course => {
             let h = &course.header;
             let entrance = |id: u8| {
-                if course.entrances.iter().any(|e| e.id == id) { String::new() } else { format!("No entrance has ID {id}.") }
+                if course.entrances.iter().any(|e| e.id == id) { String::new() } else { tr!("properties.note.no_entrance", id) }
             };
             full(rows, "Start entrance", Some(i64::from(h.entrances[0])), 0, 255);
             if let Some(row) = rows.last_mut() {
@@ -820,7 +952,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             for (bit, label, note) in COURSE_SETTINGS {
                 rows.push(Row {
                     editor: Editor::Boolean,
-                    note: note.to_owned(),
+                    note: i18n::text(note).to_owned(),
                     ..Row::number(label, Some(i64::from(h.settings & bit != 0)), 0, 1, Span::Full)
                 });
             }
@@ -828,7 +960,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 full(rows, "Settings (raw)", Some(i64::from(h.settings)), 0, 65535);
                 if let Some(row) = rows.last_mut() {
                     row.editor = Editor::Hex { bytes: 2 };
-                    row.note = "Every settings bit, the named ones above among them.".to_owned();
+                    row.note = tr!("properties.note.settings_raw").to_owned();
                 }
             }
             full(rows, "Sound group", Some(i64::from(h.sound_group)), 0, 65535);
@@ -836,7 +968,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             full(rows, "Sprite priority", Some(i64::from(h.sprite_priority)), 0, 65535);
             full(rows, "Mega Mushroom drops", Some(i64::from(h.mega_drop_chance)), 0, 65535);
             if let Some(row) = rows.last_mut() {
-                row.choose(MEGA_DROP_CHANCES.iter().zip(0i64..).map(|(name, value)| (value, (*name).to_owned())).collect());
+                row.choose(MEGA_DROP_CHANCES.iter().zip(0i64..).map(|(name, value)| (value, i18n::text(name).to_owned())).collect());
                 row.representable = usize::from(h.mega_drop_chance) < MEGA_DROP_CHANCES.len();
             }
             // The header's three of each layer, a tileset, a background and a foreground together for each of the
@@ -860,25 +992,19 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         full(rows, name, Some(i64::from(value)), 0, 65535);
                         let Some(row) = rows.last_mut() else { continue };
                         if i == 0 {
-                            row.heading = format!("Graphics set {}", at + 1);
+                            row.heading = tr!("properties.heading.graphics_set", number = at + 1);
                         }
                         if let Some(choices) = choices {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(value));
                             row.choose_filtered(choices.clone(), Some(layer_filter(*layer)));
                         }
                         row.note = match (at, layer) {
-                            (0, None) => "Its colours are the first tileset entry's palette, in the Layers tab.".to_owned(),
-                            (0, Some(layer)) => format!(
-                                "The {} image's tiles. Its colours and screen are the {} entries', in the Layers tab.",
-                                layer.name(),
-                                layer.name()
-                            ),
-                            _ => {
-                                "The header holds three of each, and the game loads the first. What reads the others has not been traced.".to_owned()
-                            }
+                            (0, None) => tr!("properties.note.header_tileset_first").to_owned(),
+                            (0, Some(layer)) => tr!("properties.note.header_layer_first", layer = layer_name(*layer)),
+                            _ => tr!("properties.note.header_other").to_owned(),
                         };
                         if at == 0 && layer.is_none() && value == u16::MAX {
-                            row.warning = NO_TILESET.to_owned();
+                            row.warning = i18n::text(NO_TILESET).to_owned();
                         }
                     }
                 }
@@ -892,7 +1018,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     full(rows, name, Some(i64::from(value)), 0, 65535);
                     let Some(row) = rows.last_mut() else { continue };
                     if i == 0 {
-                        row.heading = "Graphics".to_owned();
+                        row.heading = tr!("properties.heading.graphics").to_owned();
                     }
                     if let Some(choices) = choices {
                         let mut choices = choices.clone();
@@ -903,8 +1029,8 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         row.choose_filtered(choices, Some(layer_filter(*layer)));
                     }
                     row.note = match layer {
-                        None => "The level's tileset, and its colours.".to_owned(),
-                        Some(layer) => format!("The level's {} image: its tiles, its colours and its screen.", layer.name()),
+                        None => tr!("properties.note.level_tileset").to_owned(),
+                        Some(layer) => tr!("properties.note.level_layer", layer = layer_name(*layer)),
                     };
                     row.warning = layer_mismatch(course, block, value);
                 }
@@ -922,21 +1048,24 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     .filter(|v| screen_for_view(course, block, v).is_some_and(|(found, _)| found == at))
                     .map(|v| v.id.to_string())
                     .collect();
-                let used = if users.is_empty() { "No view uses it.".to_owned() } else { format!("Used by views {}.", users.join(", ")) };
+                let used = if users.is_empty() {
+                    tr!("properties.note.used_by_none_entry").to_owned()
+                } else {
+                    tr!("properties.note.used_by_views_entry", views = users.join(", "))
+                };
                 // Outside the advanced mode the entries keep their IDs, rotation, screen and palette: the Course tab sets
                 // the screen and palette, with the graphics they match, and a view's Rotates the rotating tileset entry.
                 if panel.advanced {
                     full(rows, "ID", Some(i64::from(record.id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
-                        row.note = format!("Views name a {} entry by this ID; one naming an ID no entry has gets the first. {used}", block.name());
+                        row.note = tr!("properties.note.layer_id", block = block_name(block), used);
                     }
                 }
                 if panel.advanced && block == ScreenBlock::Tileset {
                     rows.push(Row {
                         editor: Editor::Boolean,
                         representable: matches!(record.screen_id, 0 | ROTATING_TILESET),
-                        note: "0xFF00 here has the views naming this entry turn with the stage, as the rotating rooms of World 8 Final Castle do. No other level in the game uses it."
-                            .to_owned(),
+                        note: tr!("properties.note.layer_rotates").to_owned(),
                         ..Row::number("Rotates", Some(i64::from(record.screen_id == ROTATING_TILESET)), 0, 1, Span::Full)
                     });
                     // The same field as a number, for what the checkbox cannot say: two of Nintendo's levels hold their
@@ -944,13 +1073,13 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     // tileset from it.
                     full(rows, "Rotates (raw)", Some(i64::from(record.screen_id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
-                        row.note = "The field the checkbox above reads. Only 0xFF00 does anything; G04_1 and J07_1 hold their tileset's number here, which the game ignores.".to_owned();
+                        row.note = tr!("properties.note.layer_rotates_raw").to_owned();
                     }
                 } else if panel.advanced {
                     let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
                     full(rows, "Screen", Some(i64::from(record.screen_id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
-                        row.note = format!("The {} image the views naming this entry show. 65535 shows none.", layer.name());
+                        row.note = tr!("properties.note.layer_screen_image", layer = layer_name(layer));
                         if let Some(choices) = layer_choices(view, layer) {
                             row.representable = choices.iter().any(|(id, _)| *id == i64::from(record.screen_id));
                             row.choose_filtered(choices, Some(layer_filter(Some(layer))));
@@ -961,13 +1090,9 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     full(rows, "Palette", Some(i64::from(record.palette_id)), 0, 65535);
                     if let Some(row) = rows.last_mut() {
                         row.note = if at == 0 {
-                            format!(
-                                "The colours of the whole level's {}: the game loads them from the first {} entry only.",
-                                block.name(),
-                                block.name()
-                            )
+                            tr!("properties.note.palette_first", block = block_name(block))
                         } else {
-                            format!("Unused: the game loads the {}'s colours from the first entry only.", block.name())
+                            tr!("properties.note.palette_other", block = block_name(block))
                         };
                         // The game's tables hold a background's palette at its graphics' number, so the names are the same.
                         let layer = match block {
@@ -988,20 +1113,14 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 // Read by nothing. Across the game's 578 entries, 0x06 mostly repeats the layer's number in the header's
                 // second graphics set (94 of the 108 entries that set it) and 0x08 is always 65535, so both likely
                 // survive from an older layout of the level format.
-                const UNUSED_06: &str = "Unused, likely left over from a migration of the level format: it mostly holds this layer's graphics \
-                                         set 2 number, in the first entry (as in A01_1) or, in J08_1 only, the second.";
-                const UNUSED_08: &str =
-                    "Unused, likely left over from a migration of the level format, next to 0x06's graphics set 2: 65535 in every level.";
+                let unused_06 = tr!("properties.note.unused_06");
+                let unused_08 = tr!("properties.note.unused_08");
                 for (label, value, note) in [
-                    ("Unused 0x06", record.unused_06, UNUSED_06),
-                    ("Unused 0x08", record.unused_08, UNUSED_08),
+                    ("Unused 0x06", record.unused_06, unused_06),
+                    ("Unused 0x08", record.unused_08, unused_08),
                     ("Scroll speed X", record.scroll_x, ""),
-                    (
-                        "Scroll speed Y",
-                        record.scroll_y,
-                        "The low nibble is a speed and the next a scroll mode. 65535 hides the layer in the views naming this entry.",
-                    ),
-                    ("Vertical offset", record.vertical_offset, "Moves the image up or down in steps of eight pixels."),
+                    ("Scroll speed Y", record.scroll_y, tr!("properties.note.scroll_speed_y")),
+                    ("Vertical offset", record.vertical_offset, tr!("properties.note.vertical_offset")),
                     ("Unused 0x10", record.unused_10, ""),
                     ("Unused 0x12", record.unused_12, ""),
                 ] {
@@ -1011,7 +1130,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                         continue;
                     }
                     full(rows, label, Some(i64::from(value)), 0, 65535);
-                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || [UNUSED_06, UNUSED_08].contains(&note)) {
+                    if let Some(row) = rows.last_mut().filter(|_| block != ScreenBlock::Tileset || [unused_06, unused_08].contains(&note)) {
                         row.note = note.to_owned();
                     }
                 }
@@ -1025,10 +1144,14 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     .filter(|v| camera_for_view(course, v).is_some_and(|(found, _)| found == index))
                     .map(|v| v.id.to_string())
                     .collect();
-                let used = if users.is_empty() { "No view uses them.".to_owned() } else { format!("Used by views {}.", users.join(", ")) };
+                let used = if users.is_empty() {
+                    tr!("properties.note.used_by_none_camera").to_owned()
+                } else {
+                    tr!("properties.note.used_by_views_camera", views = users.join(", "))
+                };
                 full(rows, "ID", Some(i64::from(camera.id)), 0, 65535);
                 if let Some(row) = rows.last_mut() {
-                    row.note = format!("Views name camera settings by the low byte of this ID; one naming an ID none has gets the first. {used}");
+                    row.note = tr!("properties.note.camera_id", used);
                 }
                 camera_rows(rows, camera, true);
             }
@@ -1037,15 +1160,15 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             // Every slot at once, as NSMB Editor shows them: the level is set up by looking across them, not one by one.
             for slot in bank_slots(&course.object_banks) {
                 let bank = course.object_banks.get(slot).copied().unwrap_or(0);
-                full(rows, &format!("Slot {slot}"), Some(i64::from(bank)), 0, 10);
+                full(rows, "Slot", Some(i64::from(bank)), 0, 10);
                 let Some(row) = rows.last_mut() else { continue };
+                row.label = tr!("properties.field.slot", slot);
                 row.representable = bank <= 10;
                 row.choose(bank_choices(view, slot, overlays));
                 // The sprites placed here that this slot's bank leaves out of the game.
                 let left_out = (0..course.sprites.len()).filter(|&i| view.missing_bank(i).is_some_and(|(s, _)| usize::from(s) == slot)).count();
                 if left_out != 0 {
-                    let sprites = if left_out == 1 { "sprite needs" } else { "sprites need" };
-                    row.note = format!("{left_out} placed {sprites} another bank in this slot, so the game leaves them out.");
+                    row.note = tr_n!("properties.note.bank_left_out", left_out);
                 }
             }
         }
@@ -1100,10 +1223,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 255,
             );
             if let Some(row) = rows.get_mut(3) {
-                row.note = "The event this actor activates when it fires.".to_owned();
+                row.note = tr!("properties.note.target_event").to_owned();
             }
             if let Some(row) = rows.get_mut(4) {
-                row.note = "The event that has to be active for this actor to act.".to_owned();
+                row.note = tr!("properties.note.trigger_event").to_owned();
             }
             if let (Some(actor), Some(sprite)) = (&actor, list.get(index)) {
                 for field in &actor.definition.fields {
@@ -1119,49 +1242,30 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
             pair(rows, "Position", ("X", get(|e| i64::from(e.x))), ("Y", get(|e| i64::from(e.y))), 0, 65535);
             pair(rows, "Camera offset", ("X", get(|e| i64::from(e.camera_x))), ("Y", get(|e| i64::from(e.camera_y))), 0, 65535);
             let bytes: [(&str, EntranceByte, &str); 11] = [
-                ("ID", |e| i64::from(e.id), "The number other entrances and the level header name this one by."),
+                ("ID", |e| i64::from(e.id), tr!("properties.note.entrance_id")),
                 ("Type", |e| i64::from(e.kind), ""),
-                (
-                    "Target area",
-                    |e| i64::from(e.target_stage_area),
-                    "0 stays in this area, and the stage and group are then ignored. Otherwise the area's number plus one.",
-                ),
-                (
-                    "Target stage / pipe path",
-                    |e| i64::from(e.target_stage_index),
-                    "0 is this stage, otherwise the stage's number plus one. On a connected pipe, the ID of the path it follows.",
-                ),
-                ("Target group", |e| i64::from(e.target_stage_group), "0 is this world, otherwise the world's number plus one."),
-                ("Target entrance", |e| i64::from(e.target_entrance), "The ID of the entrance the player comes out of."),
-                (
-                    "Camera zoom",
-                    |e| i64::from(e.camera_zoom),
-                    "In sixteenths: 16 is the normal zoom, and so is 0. The game keeps it between 8 and 24; 255 leaves the zoom as it is.",
-                ),
-                ("View ID", |e| i64::from(e.view_id), "The view the player arrives in, which bounds the camera and picks the music. 255 is none."),
-                (
-                    "World-map node",
-                    |e| i64::from(e.target_worldmap_node),
-                    "0: a normal entrance. 1 to 254: entering it exits the level to the world map, with the player on map node (this number minus 1). 255: exits to the world map where the player already stood.",
-                ),
-                ("Unknown 0x10", |e| i64::from(e.unknown_10), "Nothing in the game's entrance code reads this byte."),
-                (
-                    "Unknown 0x11",
-                    |e| i64::from(e.unknown_11),
-                    "Anything but 0 replaces the warp: entering fades out and back in within this area, ignoring the target. What the number means beyond that has not been found.",
-                ),
+                ("Target area", |e| i64::from(e.target_stage_area), tr!("properties.note.target_area")),
+                ("Target stage / pipe path", |e| i64::from(e.target_stage_index), tr!("properties.note.target_stage")),
+                ("Target group", |e| i64::from(e.target_stage_group), tr!("properties.note.target_group")),
+                ("Target entrance", |e| i64::from(e.target_entrance), tr!("properties.note.target_entrance")),
+                ("Camera zoom", |e| i64::from(e.camera_zoom), tr!("properties.note.camera_zoom")),
+                ("View ID", |e| i64::from(e.view_id), tr!("properties.note.entrance_view_id")),
+                ("World-map node", |e| i64::from(e.target_worldmap_node), tr!("properties.note.world_map_node")),
+                ("Unknown 0x10", |e| i64::from(e.unknown_10), tr!("properties.note.unknown_0x10")),
+                ("Unknown 0x11", |e| i64::from(e.unknown_11), tr!("properties.note.unknown_0x11")),
             ];
             let flag_rows = |rows: &mut Vec<Row>| {
                 for (bit, (label, note)) in ENTRANCE_FLAGS.into_iter().enumerate() {
                     let value = common(&indices, list, |e| i64::from(e.flags >> bit & 1));
                     rows.push(Row {
-                        label: label.to_owned(),
+                        id: label,
+                        label: field_label(label).to_owned(),
                         value,
                         editor: Editor::Boolean,
                         span: Span::Full,
                         group: String::new(),
                         heading: String::new(),
-                        note: note.to_owned(),
+                        note: i18n::text(note).to_owned(),
                         warning: String::new(),
                         representable: true,
                     });
@@ -1181,10 +1285,10 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 let named = row.value.is_none_or(|v| usize::try_from(v).is_ok_and(|v| v < ENTRANCE_TYPES.len()));
                 row.choose((0i64..).zip(ENTRANCE_TYPES).map(|(value, name)| (value, name.to_owned())).collect());
                 row.representable = named;
-                row.note = "How the player arrives, and for doors and pipes how they leave. The game's tables stop at Vine: Nintendo's levels use the connected mini pipes after it, but the game reads past its tables for them.".to_owned();
+                row.note = tr!("properties.note.entrance_type").to_owned();
             }
             // Where all of the above puts the camera and the two layers, for the one entrance being looked at.
-            if let ([only], Some(row)) = (indices.as_slice(), rows.iter_mut().find(|row| row.label == "View ID"))
+            if let ([only], Some(row)) = (indices.as_slice(), rows.iter_mut().find(|row| row.id == "View ID"))
                 && let Some(entrance) = list.get(*only)
             {
                 row.note.push_str(&spawn_note(view, entrance));
@@ -1217,9 +1321,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     if !panel.advanced && label == "Tileset" {
                         rows.push(Row {
                             editor: Editor::Boolean,
-                            note: "The view turns with the stage, as the rotating rooms of World 8 Final Castle do. Checking it adds the \
-                                   rotating tileset entry 1 the view names, and unchecking it on the last view to turn removes it."
-                                .to_owned(),
+                            note: tr!("properties.note.view_rotates").to_owned(),
                             warning: rotator_conflict(course),
                             ..Row::number("Rotates", Some(i64::from(view_rotates(course, v))), 0, 1, Span::Full)
                         });
@@ -1228,7 +1330,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     full(rows, label, Some(i64::from(value)), 0, 255);
                     let Some(row) = rows.last_mut() else { continue };
                     match label {
-                        "BGM" => row.choose_filtered(music_choices(), Some("Filter music…")),
+                        "BGM" => row.choose_filtered(music_choices(), Some(tr!("properties.filter.music"))),
                         "Camera settings" => row.note = camera_note(course, v),
                         // A view names a record of each layer, and the record says which screen scrolls there and how.
                         "Background" => row.note = layer_note(view, ScreenBlock::Background, v),
@@ -1241,10 +1343,8 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                     let first = rows.len();
                     camera_rows(rows, &camera_for_view(course, v).map(|(_, camera)| camera.clone()).unwrap_or_default(), false);
                     if let Some(row) = rows.get_mut(first) {
-                        row.heading = "Camera".to_owned();
-                        row.note.push_str(
-                            " Views with the same camera values share one camera settings entry, which is made and removed as they change.",
-                        );
+                        row.heading = tr!("properties.heading.camera").to_owned();
+                        row.note.push_str(&format!(" {}", tr!("properties.note.camera_shared")));
                     }
                 }
             }
@@ -1300,9 +1400,10 @@ fn declared_row(field: &SpriteFieldDefinition, value: i32) -> Row {
         if !note.is_empty() {
             note.push_str("\n\n");
         }
-        note.push_str(&format!("This actor does not name the value {value}, which is what these bits hold."));
+        note.push_str(&tr!("properties.note.unnamed_value", value));
     }
     Row {
+        id: "",
         label: field.label.clone(),
         value: Some(value),
         editor,
@@ -1459,7 +1560,7 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             let name = format!("Edit {} entry", block.name());
             // A tileset record has its rotation field twice, as a checkbox and as a number, and outside the advanced
             // mode it hides some rows, so each row finds its field by its label.
-            let field = match rows.rows.get(changed)?.label.as_str() {
+            let field = match rows.rows.get(changed)?.id {
                 "Rotates" => {
                     record.screen_id = if value != 0 { ROTATING_TILESET } else { 0 };
                     return Some(LevelEdit::SetScreens { block, screens, name });
@@ -1482,7 +1583,7 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
         Tab::Cameras => {
             let mut cameras = course.cameras.clone();
             let camera = cameras.get_mut(*rows.indices.first()?)?;
-            match rows.rows.get(changed)?.label.as_str() {
+            match rows.rows.get(changed)?.id {
                 "ID" => camera.id = narrow(value, camera.id),
                 label => set_camera_field(camera, label, value)?,
             }
@@ -1569,7 +1670,7 @@ pub fn apply(view: &LevelView, panel: &PanelState, rows: &Rows, changed: usize, 
             let index = *rows.indices.first()?;
             let mut v: NsmbLevelView = course.views.get(index)?.clone();
             // By label, as the advanced mode shows different rows.
-            match rows.rows.get(changed)?.label.as_str() {
+            match rows.rows.get(changed)?.id {
                 "Rotates" => return rotates_edit(course, index, value != 0),
                 "X" => v.x = narrow(value, v.x),
                 "Y" => v.y = narrow(value, v.y),
@@ -1722,8 +1823,11 @@ fn rotator_conflict(course: &NsmbLevelCourse) -> String {
         return String::new();
     }
     let users: Vec<String> = course.views.iter().filter(|v| u16::from(v.tileset_id) == ROTATOR_ID).map(|v| v.id.to_string()).collect();
-    let used = if users.is_empty() { String::new() } else { format!(", which views {} use,", users.join(", ")) };
-    format!("Tileset entry 1{used} does not rotate, so this cannot add the rotating one there. The advanced mode edits the entries themselves.")
+    if users.is_empty() {
+        tr!("properties.warning.rotator_plain").to_owned()
+    } else {
+        tr!("properties.warning.rotator_used", views = users.join(", "))
+    }
 }
 
 /// The Rotates checkbox of the Views tab: the view names the rotating tileset entry, which is added for the first view to
@@ -1846,23 +1950,23 @@ pub fn record_lines(view: &LevelView, tab: Tab) -> Vec<String> {
             .into_iter()
             .flat_map(|block| block.records(course).iter().map(move |record| (block, record)))
             .map(|(block, record)| {
-                let mut name = block.name().to_owned();
-                name[..1].make_ascii_uppercase();
+                let name = block_title(block);
+                let id = record.id;
                 match block {
-                    ScreenBlock::Tileset if record.screen_id == ROTATING_TILESET => format!("{name} {} · rotates", record.id),
-                    ScreenBlock::Tileset => format!("{name} {}", record.id),
-                    _ if record.screen_id == u16::MAX => format!("{name} {} · no screen", record.id),
+                    ScreenBlock::Tileset if record.screen_id == ROTATING_TILESET => tr!("properties.record.rotates", name, id),
+                    ScreenBlock::Tileset => tr!("properties.record.plain", name, id),
+                    _ if record.screen_id == u16::MAX => tr!("properties.record.no_screen", name, id),
                     _ => {
                         let layer = if block == ScreenBlock::Background { BackgroundLayer::Background } else { BackgroundLayer::Foreground };
                         match view.art.graphics.as_ref().and_then(|graphics| graphics.backgrounds.name(layer, record.screen_id)) {
-                            Some(screen) => format!("{name} {} · {screen}", record.id),
-                            None => format!("{name} {} · screen {}", record.id, record.screen_id),
+                            Some(screen) => tr!("properties.record.screen_name", name, id, screen),
+                            None => tr!("properties.record.screen_id", name, id, screen = record.screen_id),
                         }
                     }
                 }
             })
             .collect(),
-        Tab::Cameras => course.cameras.iter().map(|camera| format!("Camera settings {}", camera.id)).collect(),
+        Tab::Cameras => course.cameras.iter().map(|camera| tr!("properties.record.camera_settings", id = camera.id)).collect(),
         _ => Vec::new(),
     }
 }

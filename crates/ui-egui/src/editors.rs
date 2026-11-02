@@ -4,6 +4,7 @@
 use bigstar_formats::{compress_nitro_lz10, compress_nitro_lz11, decompress_nitro_lz, is_bmg, is_ncrt};
 
 use crate::graphics_editor::GraphicsDoc;
+use crate::i18n::tr;
 use crate::message_editor::MessageDoc;
 use crate::module_viewer::ModuleDoc;
 use crate::resource_editor::ResourceDoc;
@@ -22,10 +23,10 @@ pub enum EditorKind {
 
 pub fn editor_name(kind: EditorKind) -> &'static str {
     match kind {
-        EditorKind::Messages => "Messages",
-        EditorKind::Graphics => "Graphics",
-        EditorKind::Module => "Runtime module",
-        EditorKind::None => "None",
+        EditorKind::Messages => tr!("editors.messages"),
+        EditorKind::Graphics => tr!("editors.graphics"),
+        EditorKind::Module => tr!("editors.runtime_module"),
+        EditorKind::None => tr!("editors.none"),
     }
 }
 

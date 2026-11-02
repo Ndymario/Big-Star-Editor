@@ -7,6 +7,7 @@ use egui::Ui;
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::dialogs;
+use crate::i18n::tr;
 use crate::session::Session;
 use crate::theme::Tokens;
 
@@ -30,7 +31,7 @@ impl Builds {
     /// configuration. The host checks the rest.
     pub fn run(&mut self, session: &mut Session) {
         if session.build.running {
-            session.report("NCPatcher is already running.".to_owned());
+            session.report(tr!("builds.already_running").to_owned());
             return;
         }
         session.request_build_config();
@@ -45,7 +46,7 @@ impl Builds {
         {
             self.waiting_config = false;
             match kind {
-                BuildConfigKind::None => session.report("This project has no ncpatcher.yaml, so there is nothing for NCPatcher to build.".to_owned()),
+                BuildConfigKind::None => session.report(tr!("builds.no_config").to_owned()),
                 BuildConfigKind::Legacy(file) => self.migrate = Some(file),
                 BuildConfigKind::Yaml => session.start_build(true),
             }
@@ -58,21 +59,21 @@ impl Builds {
     }
 
     pub fn build_menu(&mut self, ui: &mut Ui, session: &mut Session) {
-        if Button::menu("Run Patcher…").enabled(!session.build.running).show(ui).clicked() {
+        if Button::menu(tr!("builds.menu.run_patcher")).enabled(!session.build.running).show(ui).clicked() {
             self.run(session);
             ui.close();
         }
-        if Button::menu("Cancel Build").enabled(session.build.running && !session.build.cancelling).show(ui).clicked() {
+        if Button::menu(tr!("builds.menu.cancel_build")).enabled(session.build.running && !session.build.cancelling).show(ui).clicked() {
             session.cancel_build();
             ui.close();
         }
         ui.separator();
-        if Button::menu("Clean ROM…").show(ui).clicked() {
+        if Button::menu(tr!("builds.menu.clean_rom")).show(ui).clicked() {
             session.choose_clean_rom();
             ui.close();
         }
         // NCPatcher's own extractor writes a directory it can read back, so that is the one that runs.
-        if Button::menu("Extract ROM…").show(ui).clicked() {
+        if Button::menu(tr!("builds.menu.extract_rom")).show(ui).clicked() {
             let project = session.project.as_ref().map(|p| p.path.clone()).unwrap_or_default();
             self.extract = Some(if project.is_empty() { "extracted".to_owned() } else { format!("{project}/extracted") });
             ui.close();
@@ -84,17 +85,17 @@ impl Builds {
         let Some(settings) = &session.settings else { return };
         let current = settings.active_variant.clone();
         let mut chosen = current.clone();
-        ui.label("Variant:");
+        ui.label(tr!("builds.variant"));
         controls::drop_down("variant-selector")
-            .selected_text(if current.is_empty() { "(none)".to_owned() } else { current.clone() })
+            .selected_text(if current.is_empty() { tr!("builds.variant_none").to_owned() } else { current.clone() })
             .show_ui(ui, |ui| {
-                ui.choice_value(&mut chosen, String::new(), "(none)");
+                ui.choice_value(&mut chosen, String::new(), tr!("builds.variant_none"));
                 for variant in &settings.variants {
                     ui.choice_value(&mut chosen, variant.clone(), variant);
                 }
             })
             .response
-            .on_hover_text("The build variant you are editing.\nSwitching reloads the levels and graphics for that variant.");
+            .on_hover_text(tr!("builds.variant_hint"));
         if chosen != current {
             session.set_active_variant(&chosen);
         }
@@ -103,13 +104,13 @@ impl Builds {
     /// The Output panel's body: what the build is doing, its diagnostics, and the log.
     pub fn output(&mut self, ui: &mut Ui, session: &mut Session) {
         ui.horizontal(|ui| {
-            let status = if session.build.status.is_empty() { "Idle" } else { session.build.status.as_str() };
+            let status = if session.build.status.is_empty() { tr!("builds.idle") } else { session.build.status.as_str() };
             ui.label(status);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if session.build.running
                     && ui
-                        .add(Button::new("Cancel").small().enabled(!session.build.cancelling))
-                        .on_hover_text("Stops NCPatcher. The project is left as it was before this build.")
+                        .add(Button::new(tr!("common.cancel")).small().enabled(!session.build.cancelling))
+                        .on_hover_text(tr!("builds.cancel_hint"))
                         .clicked()
                 {
                     session.cancel_build();
@@ -125,9 +126,9 @@ impl Builds {
         if !session.build.diagnostics.is_empty() {
             egui::ScrollArea::vertical().id_salt("diagnostics").max_height(140.0).show(ui, |ui| {
                 egui::Grid::new("diagnostics-grid").num_columns(3).striped(true).show(ui, |ui| {
-                    ui.strong("Code");
-                    ui.strong("Message");
-                    ui.strong("Location");
+                    ui.strong(tr!("builds.code"));
+                    ui.strong(tr!("builds.message"));
+                    ui.strong(tr!("builds.location"));
                     ui.end_row();
                     let t = Tokens::get(ui.ctx());
                     for diagnostic in &session.build.diagnostics {
@@ -145,8 +146,9 @@ impl Builds {
                         } else {
                             format!("{}:{}:{}", diagnostic.file, diagnostic.line, diagnostic.column)
                         };
-                        if !location.is_empty() && controls::link(ui, &location).on_hover_text("Shows where it was reported").clicked() {
-                            self.location = Some(format!("{}\n\nLine {}, column {}", diagnostic.file, diagnostic.line, diagnostic.column));
+                        if !location.is_empty() && controls::link(ui, &location).on_hover_text(tr!("builds.location_hint")).clicked() {
+                            self.location =
+                                Some(tr!("builds.location_detail", file = diagnostic.file, line = diagnostic.line, column = diagnostic.column));
                         }
                         ui.end_row();
                     }
@@ -172,15 +174,13 @@ impl Builds {
     pub fn windows(&mut self, ctx: &egui::Context, session: &mut Session) {
         if let Some(file) = self.migrate.clone() {
             let mut answer = None;
-            dialogs::modal(ctx, "migrate-config", "Legacy NCPatcher Project", 480.0, |ui| {
-                ui.label(format!(
-                    "This project still uses the old ncpatcher.json:\n\n{file}\n\nNCPatcher 2 needs ncpatcher.yaml. Convert it now?\nThe original ncpatcher.json is kept."
-                ));
+            dialogs::modal(ctx, "migrate-config", tr!("builds.migrate.title"), 480.0, |ui| {
+                ui.label(tr!("builds.migrate.message", file));
                 dialogs::actions(ui, |ui| {
-                    if Button::new("Convert").primary().show(ui).clicked() {
+                    if Button::new(tr!("builds.migrate.convert")).primary().show(ui).clicked() {
                         answer = Some(true);
                     }
-                    if Button::new("Cancel").show(ui).clicked() {
+                    if Button::new(tr!("common.cancel")).show(ui).clicked() {
                         answer = Some(false);
                     }
                 });
@@ -193,16 +193,16 @@ impl Builds {
                 }
                 Some(false) => {
                     self.migrate = None;
-                    session.report("Run Patcher cancelled: the project still uses ncpatcher.json.".to_owned());
+                    session.report(tr!("builds.migrate.cancelled").to_owned());
                 }
                 None => {}
             }
         }
         if let Some(text) = self.location.clone() {
             // Big Star has no YAML editor of its own, so the honest thing is to say exactly where the problem is.
-            let (close, dismissed) = dialogs::modal(ctx, "diagnostic-location", "Diagnostic Location", 440.0, |ui| {
+            let (close, dismissed) = dialogs::modal(ctx, "diagnostic-location", tr!("builds.diagnostic_location.title"), 440.0, |ui| {
                 ui.label(text);
-                dialogs::actions(ui, |ui| Button::new("OK").primary().show(ui).clicked())
+                dialogs::actions(ui, |ui| Button::new(tr!("common.ok")).primary().show(ui).clicked())
             });
             if close || dismissed {
                 self.location = None;
@@ -211,10 +211,10 @@ impl Builds {
         if let Some(folder) = &mut self.extract {
             let mut open = true;
             let mut run = false;
-            dialogs::window("Extract ROM").open(&mut open).show(ctx, |ui| {
-                ui.label("The folder in the workspace that the built ROM's files are extracted to.");
-                ui.add(TextField::new(folder).name("Folder").width(Width::Px(360.0)));
-                run = dialogs::actions(ui, |ui| Button::new("Extract").primary().show(ui).clicked());
+            dialogs::window(tr!("builds.extract.title")).open(&mut open).show(ctx, |ui| {
+                ui.label(tr!("builds.extract.description"));
+                ui.add(TextField::new(folder).name(tr!("builds.extract.folder")).width(Width::Px(360.0)));
+                run = dialogs::actions(ui, |ui| Button::new(tr!("builds.extract.extract")).primary().show(ui).clicked());
             });
             if run {
                 session.extract_rom(folder);

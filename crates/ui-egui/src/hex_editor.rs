@@ -7,6 +7,7 @@ use std::ops::Range;
 use egui::{Event, EventFilter, FontId, Key, Modifiers, Pos2, Rect, Sense, Stroke, Ui, pos2, vec2};
 
 use crate::controls::{self, Button, Choice, TextField, Width};
+use crate::i18n::{self, key, tr, tr_n};
 use crate::theme::Tokens;
 
 /// Hex digits, any whitespace between them; `None` for anything else or an odd count.
@@ -443,7 +444,7 @@ enum Kind {
 }
 
 const KINDS: &[(Kind, &str)] = &[
-    (Kind::Binary, "Binary (8 bit)"),
+    (Kind::Binary, key!("hex_editor.binary_8_bit")),
     (Kind::Signed(1), "Int8"),
     (Kind::Unsigned(1), "UInt8"),
     (Kind::Signed(2), "Int16"),
@@ -603,61 +604,65 @@ pub fn show(ui: &mut Ui, doc: &mut HexDoc, id: impl egui::AsIdSalt, save: bool) 
 fn toolbar(ui: &mut Ui, doc: &mut HexDoc, save: bool, action: &mut Option<HexAction>) {
     ui.horizontal_wrapped(|ui| {
         if save {
-            let button = Button::new("Save").with_icon(crate::icons::SAVE).enabled(doc.dirty());
+            let button = Button::new(tr!("common.save")).with_icon(crate::icons::SAVE).enabled(doc.dirty());
             if (if doc.dirty() { button.primary() } else { button }).show(ui).clicked() {
                 *action = Some(HexAction::Save);
             }
             ui.separator();
         }
-        if controls::icon_button(ui, crate::icons::UNDO, "Undo").on_hover_text("Undo (Ctrl+Z)").clicked() {
+        if controls::icon_button(ui, crate::icons::UNDO, tr!("common.undo")).on_hover_text(tr!("hex_editor.undo_ctrl_z")).clicked() {
             doc.undo();
         }
-        if controls::icon_button(ui, crate::icons::REDO, "Redo").on_hover_text("Redo (Ctrl+Y)").clicked() {
+        if controls::icon_button(ui, crate::icons::REDO, tr!("common.redo")).on_hover_text(tr!("hex_editor.redo_ctrl_y")).clicked() {
             doc.redo();
         }
         ui.separator();
-        ui.label("Go to");
-        let goto = TextField::new(&mut doc.goto).hint("Offset").name("Go to offset").code().width(Width::Px(90.0)).show(ui);
+        ui.label(tr!("hex_editor.go_to"));
+        let goto =
+            TextField::new(&mut doc.goto).hint(tr!("hex_editor.offset")).name(tr!("hex_editor.go_to_offset")).code().width(Width::Px(90.0)).show(ui);
         let entered = goto.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        if entered || Button::new("Go").small().show(ui).on_hover_text("Hex, or decimal after a #").clicked() {
+        if entered || Button::new(tr!("hex_editor.go")).small().show(ui).on_hover_text(tr!("hex_editor.hex_or_decimal_after_a_hash")).clicked() {
             match parse_offset(&doc.goto) {
                 Some(offset) if offset <= doc.bytes.len() => {
                     doc.message = None;
                     doc.move_caret(offset, false);
                 }
-                _ => doc.message = Some(format!("No offset {} in this file.", doc.goto.trim())),
+                _ => doc.message = Some(tr!("hex_editor.no_offset_in_this_file", offset = doc.goto.trim())),
             }
         }
         ui.separator();
-        ui.label("Find");
-        let hint = if doc.find_as == FindAs::Hex { "Hex bytes" } else { "Text" };
-        let find = TextField::new(&mut doc.find).hint(hint).name("Find").code().width(Width::Px(150.0)).show(ui);
-        controls::drop_down("hex-find-as").selected_text(if doc.find_as == FindAs::Hex { "Hex" } else { "Text" }).width(60.0).show_ui(ui, |ui| {
-            ui.choice_value(&mut doc.find_as, FindAs::Hex, "Hex");
-            ui.choice_value(&mut doc.find_as, FindAs::Text, "Text");
-        });
+        ui.label(tr!("hex_editor.find"));
+        let hint = if doc.find_as == FindAs::Hex { tr!("hex_editor.hex_bytes") } else { tr!("hex_editor.text") };
+        let find = TextField::new(&mut doc.find).hint(hint).name(tr!("hex_editor.find")).code().width(Width::Px(150.0)).show(ui);
+        controls::drop_down("hex-find-as")
+            .selected_text(if doc.find_as == FindAs::Hex { tr!("hex_editor.hex") } else { tr!("hex_editor.text") })
+            .width(60.0)
+            .show_ui(ui, |ui| {
+                ui.choice_value(&mut doc.find_as, FindAs::Hex, tr!("hex_editor.hex"));
+                ui.choice_value(&mut doc.find_as, FindAs::Text, tr!("hex_editor.text"));
+            });
         let entered = find.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-        let previous = Button::new("Previous").small().show(ui).clicked();
-        let next = Button::new("Next").small().show(ui).clicked();
+        let previous = Button::new(tr!("hex_editor.previous")).small().show(ui).clicked();
+        let next = Button::new(tr!("hex_editor.next")).small().show(ui).clicked();
         if entered || previous || next {
             let needle = match doc.find_as {
                 FindAs::Hex => unhex(&doc.find),
                 FindAs::Text => Some(text_bytes(&doc.find)),
             };
             doc.message = match needle {
-                None => Some("Find takes whole bytes in hex.".to_owned()),
+                None => Some(tr!("hex_editor.find_takes_whole_bytes_in_hex").to_owned()),
                 Some(needle) if doc.find_next(&needle, previous) => None,
-                Some(_) => Some("Not found.".to_owned()),
+                Some(_) => Some(tr!("hex_editor.not_found").to_owned()),
             };
         }
         ui.separator();
-        ui.label("Columns");
+        ui.label(tr!("hex_editor.columns"));
         controls::drop_down("hex-columns").selected_text(doc.columns.to_string()).width(48.0).show_ui(ui, |ui| {
             for columns in [8, 16, 32] {
                 ui.choice_value(&mut doc.columns, columns, columns.to_string());
             }
         });
-        controls::toggle(ui, &mut doc.inspector, "Inspector");
+        controls::toggle(ui, &mut doc.inspector, tr!("hex_editor.inspector"));
         if let Some(message) = &doc.message {
             controls::warning_text(ui, message);
         }
@@ -677,12 +682,12 @@ fn grid(ui: &mut Ui, doc: &mut HexDoc, id: egui::Id) {
     let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), row_height), Sense::hover());
     let painter = ui.painter_at(header);
     let left = header.left() + 6.0;
-    painter.text(pos2(left, header.center().y), egui::Align2::LEFT_CENTER, "Offset", font.clone(), t.muted);
+    painter.text(pos2(left, header.center().y), egui::Align2::LEFT_CENTER, tr!("hex_editor.offset"), font.clone(), t.muted);
     for column in 0..doc.columns {
         let x = left + layout.hex_x(column);
         painter.text(pos2(x, header.center().y), egui::Align2::LEFT_CENTER, format!("{column:02X}"), font.clone(), t.muted);
     }
-    painter.text(pos2(left + layout.text_x(0), header.center().y), egui::Align2::LEFT_CENTER, "Decoded text", font.clone(), t.muted);
+    painter.text(pos2(left + layout.text_x(0), header.center().y), egui::Align2::LEFT_CENTER, tr!("hex_editor.decoded_text"), font.clone(), t.muted);
     painter.line_segment([header.left_bottom(), header.right_bottom()], Stroke::new(1.0, t.border));
 
     let rows = len / doc.columns + 1;
@@ -901,37 +906,41 @@ fn context_menu(response: &egui::Response, doc: &mut HexDoc) {
     controls::context_menu(response, |ui| {
         let some = !doc.bytes.is_empty();
         let selected = !doc.selection().is_empty();
-        for (form, label) in [(CopyAs::Hex, "Copy as Hex"), (CopyAs::Text, "Copy as Text"), (CopyAs::Array, "Copy as C Array")] {
+        for (form, label) in [
+            (CopyAs::Hex, tr!("hex_editor.copy_as_hex")),
+            (CopyAs::Text, tr!("hex_editor.copy_as_text")),
+            (CopyAs::Array, tr!("hex_editor.copy_as_c_array")),
+        ] {
             if Button::menu(label).enabled(some).show(ui).clicked() {
                 ui.ctx().copy_text(doc.copied(form));
                 ui.close();
             }
         }
-        if Button::menu("Copy Offset").show(ui).clicked() {
+        if Button::menu(tr!("hex_editor.copy_offset")).show(ui).clicked() {
             ui.ctx().copy_text(format!("0x{:X}", doc.focus()));
             ui.close();
         }
         ui.separator();
-        for (value, label) in [(0x00, "Fill Selection with 00"), (0xff, "Fill Selection with FF")] {
+        for (value, label) in [(0x00, tr!("hex_editor.fill_selection_with_00")), (0xff, tr!("hex_editor.fill_selection_with_ff"))] {
             if Button::menu(label).enabled(selected).show(ui).clicked() {
                 doc.fill(value);
                 ui.close();
             }
         }
-        if Button::menu("Delete Selection").enabled(selected).show(ui).clicked() {
+        if Button::menu(tr!("hex_editor.delete_selection")).enabled(selected).show(ui).clicked() {
             doc.delete(false);
             ui.close();
         }
-        if Button::menu("Select All").enabled(some).show(ui).clicked() {
+        if Button::menu(tr!("hex_editor.select_all")).enabled(some).show(ui).clicked() {
             doc.select(0..doc.bytes.len());
             ui.close();
         }
         ui.separator();
-        if Button::menu("Undo").enabled(doc.can_undo()).show(ui).clicked() {
+        if Button::menu(tr!("common.undo")).enabled(doc.can_undo()).show(ui).clicked() {
             doc.undo();
             ui.close();
         }
-        if Button::menu("Redo").enabled(doc.can_redo()).show(ui).clicked() {
+        if Button::menu(tr!("common.redo")).enabled(doc.can_redo()).show(ui).clicked() {
             doc.redo();
             ui.close();
         }
@@ -941,23 +950,24 @@ fn context_menu(response: &egui::Response, doc: &mut HexDoc) {
 fn inspector(ui: &mut Ui, doc: &mut HexDoc) {
     let at = doc.focus();
     ui.horizontal(|ui| {
-        ui.strong("Data Inspector");
+        ui.strong(tr!("hex_editor.data_inspector"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            controls::drop_down("hex-endian").selected_text(if doc.endian == Endian::Little { "Little-endian" } else { "Big-endian" }).show_ui(
-                ui,
-                |ui| {
-                    ui.choice_value(&mut doc.endian, Endian::Little, "Little-endian");
-                    ui.choice_value(&mut doc.endian, Endian::Big, "Big-endian");
-                },
-            );
+            controls::drop_down("hex-endian")
+                .selected_text(if doc.endian == Endian::Little { tr!("hex_editor.little_endian") } else { tr!("hex_editor.big_endian") })
+                .show_ui(ui, |ui| {
+                    ui.choice_value(&mut doc.endian, Endian::Little, tr!("hex_editor.little_endian"));
+                    ui.choice_value(&mut doc.endian, Endian::Big, tr!("hex_editor.big_endian"));
+                });
         });
     });
-    ui.weak(format!("At 0x{at:X} ({at}). Type a value and press Enter to write it."));
+    ui.weak(tr!("hex_editor.at_offset", hex = format!("{at:X}"), at));
     ui.add_space(4.0);
     let mut write = None;
     egui::Grid::new("hex-inspector").num_columns(2).striped(true).spacing([8.0, 2.0]).show(ui, |ui| {
         for (row, (kind, name)) in KINDS.iter().enumerate() {
-            ui.label(egui::RichText::new(*name).weak());
+            // Most names are the type's own, which `text` hands back as it was written.
+            let name = i18n::text(name);
+            ui.label(egui::RichText::new(name).weak());
             let Some(raw) = doc.read(at, kind.size()) else {
                 ui.weak("—");
                 ui.end_row();
@@ -975,7 +985,7 @@ fn inspector(ui: &mut Ui, doc: &mut HexDoc) {
                 if ui.input(|i| i.key_pressed(Key::Enter)) {
                     match kind.parse(&text) {
                         Some(value) => write = Some((kind.size(), value)),
-                        None => doc.message = Some(format!("{} is not a {name}.", text.trim())),
+                        None => doc.message = Some(tr!("hex_editor.is_not_a_kind", value = text.trim(), kind = name)),
                     }
                 }
                 doc.editing = None;
@@ -994,30 +1004,30 @@ fn status(ui: &mut Ui, doc: &mut HexDoc) {
     ui.painter().hline(ui.max_rect().x_range(), ui.cursor().top(), Stroke::new(1.0, t.border));
     ui.add_space(3.0);
     ui.horizontal_wrapped(|ui| {
-        let mode = if doc.insert { "Insert" } else { "Overwrite" };
-        if Button::new(mode).small().ghost().show(ui).on_hover_text("Insert key: whether typing inserts bytes or writes over them").clicked() {
+        let mode = if doc.insert { tr!("hex_editor.insert") } else { tr!("hex_editor.overwrite") };
+        if Button::new(mode).small().ghost().show(ui).on_hover_text(tr!("hex_editor.insert_key_whether_typing_inserts_bytes")).clicked() {
             doc.insert = !doc.insert;
         }
         ui.separator();
-        ui.monospace(format!("Offset: 0x{:X}", doc.caret));
+        ui.monospace(tr!("hex_editor.status_offset", hex = format!("{:X}", doc.caret)));
         ui.separator();
-        ui.monospace(format!("Size: 0x{:X} ({})", doc.bytes.len(), doc.bytes.len()));
+        ui.monospace(tr!("hex_editor.status_size", hex = format!("{:X}", doc.bytes.len()), size = doc.bytes.len()));
         let selection = doc.selection();
         if selection.is_empty() {
             return;
         }
         ui.separator();
         let (start, end, count) = (selection.start, selection.end - 1, selection.len());
-        ui.monospace(format!("Selection: 0x{start:X}–0x{end:X} ({count} byte{})", if count == 1 { "" } else { "s" }));
+        ui.monospace(tr_n!("hex_editor.status_selection", count, start = format!("{start:X}"), end = format!("{end:X}")));
         if let Some((unsigned, signed)) = doc.selection_value() {
             ui.separator();
             let hex = format!("{unsigned:0width$X}", width = selection.len() * 2);
             let value = if signed == unsigned as i64 {
-                format!("Value: 0x{hex} = {unsigned}")
+                tr!("hex_editor.status_value", hex, unsigned)
             } else {
-                format!("Value: 0x{hex} = {unsigned} ({signed} signed)")
+                tr!("hex_editor.status_value_signed", hex, unsigned, signed)
             };
-            ui.monospace(value).on_hover_text("The selected bytes as one integer, in the inspector's byte order");
+            ui.monospace(value).on_hover_text(tr!("hex_editor.the_selected_bytes_as_one_integer"));
         }
     });
 }

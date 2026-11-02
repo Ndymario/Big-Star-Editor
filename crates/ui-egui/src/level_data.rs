@@ -2,6 +2,7 @@
 //! registration the sprites imply. A port of `LevelDataWidget`.
 
 use crate::controls::{self, Button, TextField, Width};
+use crate::i18n::tr;
 use bigstar_formats::{GlueValue, fnv1a_32};
 use bigstar_level::{LevelDataDeclaration, LevelDataEditor, LevelDataKind, ModuleDataCatalog};
 use bigstar_protocol::{LevelEdit, LevelSnapshot};
@@ -92,12 +93,11 @@ pub fn custom_view_data(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&
         return None;
     }
     let mut edit = None;
-    controls::section(ui, "Custom data", |ui| {
+    controls::section(ui, tr!("level_data.custom_data"), |ui| {
         let read_only = snapshot.glue_error.is_some() || busy;
         for (declaration, width) in masks {
             let Some(mask) = stored_mask(snapshot, declaration.hash, width) else {
-                ui.add_enabled(false, egui::Label::new(&declaration.key))
-                    .on_disabled_hover_text("The level stores this key at a different size; edit its bytes in the Level Data tab.");
+                ui.add_enabled(false, egui::Label::new(&declaration.key)).on_disabled_hover_text(tr!("level_data.key_size_mismatch"));
                 continue;
             };
             let fits = views.iter().all(|&v| usize::from(v) < width * 8);
@@ -106,8 +106,7 @@ pub fn custom_view_data(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&
             let response = ui
                 .add_enabled_ui(!read_only && fits, |ui| controls::checkbox_undecided(ui, &mut on, set != 0 && set != views.len(), &declaration.key))
                 .inner;
-            let response =
-                if fits { response } else { response.on_disabled_hover_text(format!("A {}-bit mask has no bit for a view this high.", width * 8)) };
+            let response = if fits { response } else { response.on_disabled_hover_text(tr!("level_data.mask_too_narrow", bits = width * 8)) };
             if response.changed() {
                 edit = set_views(snapshot, declaration.hash, width, views, on);
             }
@@ -185,7 +184,7 @@ pub fn set_flag(snapshot: &LevelSnapshot, hash: u32, on: bool) -> Option<LevelEd
 
 /// Sets a value's bytes from hex text, adding the value after the others when the level does not hold it yet.
 pub fn set_value(snapshot: &LevelSnapshot, hash: u32, text: &str) -> Result<LevelEdit, String> {
-    let bytes = parse_hex(text).ok_or("Enter an even number of hexadecimal digits, at least two.")?;
+    let bytes = parse_hex(text).ok_or(tr!("level_data.error.hex_digits"))?;
     Ok(set_payload(snapshot, hash, bytes))
 }
 
@@ -208,7 +207,9 @@ pub fn registration(snapshot: &LevelSnapshot, modules: Option<&ModuleDataCatalog
         .iter()
         .enumerate()
         .map(|(i, &hash)| {
-            let name = modules.and_then(|m| m.stage_object_by_hash(hash)).map_or_else(|| format!("0x{hash:08x} (undeclared)"), |o| o.name.clone());
+            let name = modules
+                .and_then(|m| m.stage_object_by_hash(hash))
+                .map_or_else(|| tr!("level_data.undeclared", hash = format!("0x{hash:08x}")), |o| o.name.clone());
             (u32::from(snapshot.stage_object_id_base) + i as u32, name)
         })
         .collect()
@@ -227,26 +228,26 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
     let mut outcome = None;
     let read_only = snapshot.glue_error.is_some() || busy;
     if let Some(error) = &snapshot.glue_error {
-        controls::error_text(ui, format!("This glue data cannot be read: {error}\nIt is read-only and is saved back exactly as it was."));
+        controls::error_text(ui, tr!("level_data.glue_unreadable", error));
     }
-    ui.label(RichText::new("Level data").strong());
+    ui.label(RichText::new(tr!("level_data.level_data")).strong());
     let rows = rows(snapshot, modules);
     if rows.is_empty() {
-        ui.weak("This level has no level data, and no module defines any.");
+        ui.weak(tr!("level_data.no_data"));
     }
     egui::Grid::new("level-data").num_columns(3).striped(true).show(ui, |ui| {
-        ui.weak("Key");
-        ui.weak("Shape");
-        ui.weak("Value / raw bytes");
+        ui.weak(tr!("level_data.key"));
+        ui.weak(tr!("level_data.shape"));
+        ui.weak(tr!("level_data.value_raw_bytes"));
         ui.end_row();
         for row in &rows {
             ui.label(&row.key).on_hover_text(format!("0x{:08x}", row.hash));
             ui.label(if row.flag {
-                "flag"
+                tr!("level_data.flag")
             } else if row.view_mask.is_some() {
-                "view mask"
+                tr!("level_data.view_mask")
             } else {
-                "value"
+                tr!("level_data.value")
             });
             if let Some(width) = row.view_mask {
                 // Edited on the views themselves; here it is a summary, plus the bits no view of this area can show.
@@ -254,12 +255,16 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
                 let area = area_views(snapshot).iter().filter(|&&v| usize::from(v) < width * 8).fold(0u32, |bits, &v| bits | 1 << v);
                 ui.horizontal_wrapped(|ui| {
                     let set = mask & area;
-                    ui.label(if set == 0 { "No views".to_owned() } else { format!("Views {}", id_ranges(set)) })
-                        .on_hover_text("Set it on each view, under Custom data in its properties.");
+                    ui.label(if set == 0 { tr!("level_data.no_views").to_owned() } else { tr!("level_data.views", ids = id_ranges(set)) })
+                        .on_hover_text(tr!("level_data.set_on_views"));
                     let stray = mask & !area;
                     if stray != 0 {
-                        ui.weak(format!("and {}, which this area lacks", id_ranges(stray)));
-                        if ui.add(Button::new("Clear").small().enabled(!read_only)).on_hover_text("Clear the bits no view here has.").clicked() {
+                        ui.weak(tr!("level_data.stray_views", ids = id_ranges(stray)));
+                        if ui
+                            .add(Button::new(tr!("level_data.clear")).small().enabled(!read_only))
+                            .on_hover_text(tr!("level_data.clear_hover"))
+                            .clicked()
+                        {
                             outcome = Some(Outcome::Edit(set_payload(snapshot, row.hash, mask_bytes(mask & area, width))));
                         }
                     }
@@ -272,7 +277,7 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
             } else {
                 let shown = if row.present { hex(&row.payload) } else { String::new() };
                 let draft = drafts.entry(row.hash).or_insert_with(|| shown.clone());
-                let hint = if row.present { "" } else { "absent — enter bytes to add" };
+                let hint = if row.present { "" } else { tr!("level_data.absent_hint") };
                 let edit = ui.add_enabled(!read_only, TextField::new(draft).hint(hint).code().width(Width::Px(220.0)));
                 if edit.lost_focus() && *draft != shown {
                     outcome = Some(match set_value(snapshot, row.hash, draft) {
@@ -288,10 +293,10 @@ pub fn show(ui: &mut Ui, snapshot: &LevelSnapshot, modules: Option<&ModuleDataCa
         }
     });
     ui.add_space(8.0);
-    ui.label(RichText::new("Derived registration (read-only)").strong());
+    ui.label(RichText::new(tr!("level_data.derived_registration")).strong());
     let registered = registration(snapshot, modules);
     if registered.is_empty() {
-        ui.weak("No module sprites are placed in this level.");
+        ui.weak(tr!("level_data.no_module_sprites"));
     }
     egui::Grid::new("registration").num_columns(2).striped(true).show(ui, |ui| {
         for (id, name) in registered {

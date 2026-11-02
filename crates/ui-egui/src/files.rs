@@ -11,7 +11,7 @@ use bigstar_protocol::{FileEntry, FileIcon, FileStatus, FilesystemListing};
 use egui::{RichText, Ui};
 
 use crate::editors::{EditorKind, ROM_USER_METADATA_ID, classify, editor_name};
-use crate::i18n::Language;
+use crate::i18n::{self, key, tr};
 use crate::services::Services;
 use crate::session::{FileRead, Session};
 
@@ -143,12 +143,12 @@ pub fn build_tree(entries: &[FileEntry]) -> Node {
 
 pub fn status_text(entry: &FileEntry) -> String {
     match entry.status {
-        FileStatus::Pending if entry.id.is_some() && !entry.id_is_planned => "Pending rebuild".to_owned(),
-        FileStatus::Pending => "Pending insertion".to_owned(),
-        FileStatus::Orphaned => "Orphaned — reverting".to_owned(),
-        FileStatus::Vanilla => "Vanilla".to_owned(),
-        FileStatus::Replaced => "Replaced".to_owned(),
-        FileStatus::Added => "Added".to_owned(),
+        FileStatus::Pending if entry.id.is_some() && !entry.id_is_planned => tr!("files.status.pending_rebuild").to_owned(),
+        FileStatus::Pending => tr!("files.status.pending_insertion").to_owned(),
+        FileStatus::Orphaned => tr!("files.status.orphaned_reverting").to_owned(),
+        FileStatus::Vanilla => tr!("files.status.vanilla").to_owned(),
+        FileStatus::Replaced => tr!("files.status.replaced").to_owned(),
+        FileStatus::Added => tr!("files.status.added").to_owned(),
     }
 }
 
@@ -164,7 +164,7 @@ pub fn id_text(entry: &FileEntry) -> String {
 
 pub fn provenance(entry: &FileEntry) -> String {
     match (entry.module.is_empty(), entry.component.is_empty()) {
-        (true, _) if entry.from_module => "project".to_owned(),
+        (true, _) if entry.from_module => tr!("files.provenance.project").to_owned(),
         (true, _) => String::new(),
         (false, true) => entry.module.clone(),
         (false, false) => format!("{} / {}", entry.module, entry.component),
@@ -174,21 +174,24 @@ pub fn provenance(entry: &FileEntry) -> String {
 /// Everything the hidden columns would say about a file, on one line.
 pub fn details(entry: &FileEntry, editor: Option<EditorKind>) -> String {
     let id = match (entry.member_id, entry.id) {
-        (Some(member), _) => format!("{member} (inside {})", entry.path.split('!').next().unwrap_or_default()),
-        (None, None) => "unassigned".to_owned(),
-        (None, Some(id)) if entry.id_is_planned => format!("{id} (planned — assigned by the next build)"),
+        (Some(member), _) => {
+            let container = entry.path.split('!').next().unwrap_or_default();
+            tr!("files.details.id_inside", member, container)
+        }
+        (None, None) => tr!("files.details.unassigned").to_owned(),
+        (None, Some(id)) if entry.id_is_planned => tr!("files.details.id_planned", id),
         (None, Some(id)) => id.to_string(),
     };
-    let mut fields = vec![entry.path.clone(), format!("File ID: {id}"), format!("Size: {} bytes", entry.size)];
+    let mut fields = vec![entry.path.clone(), tr!("files.details.file_id", id), tr!("files.details.size", size = entry.size)];
     if let Some(kind) = editor.filter(|k| *k != EditorKind::None) {
-        fields.push(format!("Opens in: {}", editor_name(kind)));
+        fields.push(tr!("files.details.opens_in", editor = editor_name(kind)));
     }
     let from = provenance(entry);
     if !from.is_empty() {
-        fields.push(format!("From: {from}"));
+        fields.push(tr!("files.details.from", from));
     }
     if !entry.variant.is_empty() {
-        fields.push(format!("Variant: {}", entry.variant));
+        fields.push(tr!("files.details.variant", variant = entry.variant));
     }
     fields.join("   ·   ")
 }
@@ -212,11 +215,11 @@ enum Column {
 }
 
 const COLUMNS: [(Column, &str); 5] = [
-    (Column::Status, "Status"),
-    (Column::Provenance, "Provenance"),
-    (Column::Variant, "Variant"),
-    (Column::FileId, "File ID"),
-    (Column::Size, "Size"),
+    (Column::Status, key!("files.column.status")),
+    (Column::Provenance, key!("files.column.provenance")),
+    (Column::Variant, key!("files.column.variant")),
+    (Column::FileId, key!("files.column.file_id")),
+    (Column::Size, key!("files.column.size")),
 ];
 
 /// What the person is about to do that needs an answer first.
@@ -331,7 +334,7 @@ impl FilesDock {
         }
         for (path, bytes) in session.take_file_reads(FileRead::Extract) {
             let name = path.rsplit(['/', '!']).next().unwrap_or(&path).to_owned();
-            if let Err(error) = services.save_file("Extract file", &name, "", &bytes) {
+            if let Err(error) = services.save_file(tr!("files.extract_file"), &name, "", &bytes) {
                 session.report(error);
             }
         }
@@ -345,7 +348,7 @@ impl FilesDock {
         opened
     }
 
-    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services, language: Language) {
+    pub fn show(&mut self, ui: &mut Ui, session: &mut Session, services: &dyn Services) {
         session.refresh_filesystem_once();
         let Some(listing) = session.filesystem.clone() else {
             ui.add(controls::Spinner::new());
@@ -355,8 +358,9 @@ impl FilesDock {
         ui.horizontal_wrapped(|ui| {
             // Where add and replace write, not what the tree shows. A ROM edited directly is written into itself.
             if !rom_mode {
-                ui.label("Save to module");
-                let current = listing.modules.iter().find(|m| m.key == listing.active_module).map_or("(none)".to_owned(), |m| m.name.clone());
+                ui.label(tr!("files.save_to_module"));
+                let current =
+                    listing.modules.iter().find(|m| m.key == listing.active_module).map_or(tr!("files.none").to_owned(), |m| m.name.clone());
                 // A drop-down sits in a Ui of its own, which a wrapping row moves to its next line only when it is
                 // placed at a size: the name's, but no wider than the dock, the name cut short to it.
                 let font = egui::TextStyle::Button.resolve(ui.style());
@@ -377,25 +381,25 @@ impl FilesDock {
                 if session.local_files {
                     match &listing.virtual_rom {
                         None => {
-                            if Button::new(language.tr("Expose as folder")).enabled(!listing.modules.is_empty()).show(ui).clicked() {
+                            if Button::new(tr!("files.expose_as_folder")).enabled(!listing.modules.is_empty()).show(ui).clicked() {
                                 session.expose_virtual_rom();
                             }
                         }
                         Some(folder) => {
-                            if Button::new(language.tr("Open folder")).show(ui).clicked() {
+                            if Button::new(tr!("files.open_folder")).show(ui).clicked() {
                                 self.folder_error = services.open_folder(folder).err();
                             }
-                            if Button::new(language.tr("Stop exposing")).show(ui).clicked() {
+                            if Button::new(tr!("files.stop_exposing")).show(ui).clicked() {
                                 session.hide_virtual_rom();
                             }
                         }
                     }
                 }
             }
-            controls::menu_button(ui, "Columns", |ui| {
+            controls::menu_button(ui, tr!("files.columns"), |ui| {
                 for (column, name) in COLUMNS {
                     let mut shown = self.columns.contains(&column);
-                    if controls::checkbox(ui, &mut shown, name).changed() {
+                    if controls::checkbox(ui, &mut shown, i18n::text(name)).changed() {
                         if shown {
                             self.columns.push(column);
                             self.columns.sort_by_key(|c| COLUMNS.iter().position(|(k, _)| k == c));
@@ -407,16 +411,13 @@ impl FilesDock {
             });
         });
         if listing.pending {
-            controls::warning_text(
-                ui,
-                "Module files have changed since the last build. Run Patcher to give new files their IDs and rebuild the ROM.",
-            );
+            controls::warning_text(ui, tr!("files.module_files_changed"));
         }
         if let Some(error) = &listing.error {
-            ui.weak(format!("NCPatcher: {error}"));
+            ui.weak(tr!("files.ncpatcher_error", error));
         }
         if let Some(folder) = &listing.virtual_rom {
-            ui.weak(format!("{} {folder}", language.tr("Files changed in this folder go into the active module:")));
+            ui.weak(format!("{} {folder}", tr!("files.changed_files_hint")));
         }
         if let Some(error) = &self.folder_error {
             ui.weak(error.as_str());
@@ -435,10 +436,10 @@ impl FilesDock {
             let path_width = (ui.available_width() - others).max(0.0);
             let mut second = None;
             let grid = egui::Grid::new("filesystem-tree").num_columns(1 + self.columns.len()).striped(true).spacing([GAP, 2.0]).show(ui, |ui| {
-                ui.label(RichText::new("Path").weak());
+                ui.label(RichText::new(tr!("files.path")).weak());
                 for (column, name) in COLUMNS {
                     if self.columns.contains(&column) {
-                        let left = ui.label(RichText::new(name).weak()).rect.left();
+                        let left = ui.label(RichText::new(i18n::text(name)).weak()).rect.left();
                         second.get_or_insert(left);
                     }
                 }
@@ -457,14 +458,14 @@ impl FilesDock {
                 ui.add(egui::Label::new(details(entry, editor)).wrap());
             }
             None => {
-                ui.weak("No file selected.");
+                ui.weak(tr!("files.no_file_selected"));
             }
         }
         ui.horizontal_wrapped(|ui| {
             controls::compact(ui);
             let has_target = !listing.modules.is_empty();
-            if Button::new("Add file").enabled(has_target).show(ui).clicked()
-                && let Some(chosen) = services.open_file("Add file to module", &[])
+            if Button::new(tr!("files.add_file")).enabled(has_target).show(ui).clicked()
+                && let Some(chosen) = services.open_file(tr!("files.add_file_to_module"), &[])
             {
                 match chosen {
                     Ok((name, bytes)) => self.prompt = Some(Prompt::Add { path: format!("z_new/{name}"), name, bytes }),
@@ -472,8 +473,8 @@ impl FilesDock {
                 }
             }
             let selected = entry.is_some();
-            if Button::new("Replace").enabled(selected).show(ui).clicked()
-                && let (Some(entry), Some(chosen)) = (&entry, services.open_file("Replacement file", &[]))
+            if Button::new(tr!("files.replace")).enabled(selected).show(ui).clicked()
+                && let (Some(entry), Some(chosen)) = (&entry, services.open_file(tr!("files.replacement_file"), &[]))
             {
                 match chosen {
                     Ok((_, bytes)) => session.write_file(&entry.path, bytes),
@@ -483,23 +484,23 @@ impl FilesDock {
             // A member cannot be removed: dropping one renumbers every member after it, and the game addresses them by
             // number.
             let removable = entry.as_ref().is_some_and(|e| e.from_module && !e.module.is_empty() && !e.inside_archive());
-            if Button::new("Remove").enabled(removable).show(ui).clicked()
+            if Button::new(tr!("common.remove")).enabled(removable).show(ui).clicked()
                 && let Some(entry) = &entry
             {
                 self.prompt = Some(Prompt::Remove { path: entry.path.clone() });
             }
-            if Button::new("Extract").enabled(selected).show(ui).clicked()
+            if Button::new(tr!("files.extract")).enabled(selected).show(ui).clicked()
                 && let Some(entry) = &entry
             {
                 session.read_file(&entry.path, FileRead::Extract);
             }
             let opens = editor.is_some_and(|k| k != EditorKind::None);
-            if Button::new("Open").enabled(opens).show(ui).clicked()
+            if Button::new(tr!("common.open")).enabled(opens).show(ui).clicked()
                 && let Some(entry) = &entry
             {
                 session.read_file(&entry.path, FileRead::Open);
             }
-            if Button::new("Hex edit").enabled(selected).show(ui).clicked()
+            if Button::new(tr!("files.hex_edit")).enabled(selected).show(ui).clicked()
                 && let Some(entry) = &entry
             {
                 session.read_file(&entry.path, FileRead::Hex);
@@ -584,9 +585,9 @@ impl FilesDock {
                     let response = ui.label(id_text(entry));
                     if entry.inside_archive() {
                         let container = entry.path.split('!').next().unwrap_or_default();
-                        response.on_hover_text(format!("Its ID inside {container}, which is not the same as a ROM file ID."));
+                        response.on_hover_text(tr!("files.member_id_hint", container));
                     } else if entry.id_is_planned {
-                        response.on_hover_text("The ID the next build will give this file. It has none yet.");
+                        response.on_hover_text(tr!("files.planned_id_hint"));
                     }
                 }
                 Column::Size => {
@@ -616,19 +617,19 @@ impl FilesDock {
         let Some(prompt) = &mut self.prompt else { return };
         let mut close = false;
         let title = match prompt {
-            Prompt::Add { .. } => "ROM destination",
-            Prompt::Overwrite { .. } => "Replace existing module file",
-            Prompt::Remove { .. } => "Remove module file",
+            Prompt::Add { .. } => tr!("files.rom_destination"),
+            Prompt::Overwrite { .. } => tr!("files.replace_existing_module_file"),
+            Prompt::Remove { .. } => tr!("files.remove_module_file"),
         };
         dialogs::modal(ctx, "file-prompt", title, 440.0, |ui| match prompt {
             Prompt::Add { name, bytes, path } => {
-                ui.label(format!("Where in the ROM {name} goes. New files must be under z_new/."));
-                TextField::new(path).name("ROM path").show(ui);
+                ui.label(tr!("files.where_in_the_rom", name = name.as_str()));
+                TextField::new(path).name(tr!("files.rom_path")).show(ui);
                 dialogs::actions(ui, |ui| {
-                    if Button::new("Add").primary().show(ui).clicked() {
+                    if Button::new(tr!("common.add")).primary().show(ui).clicked() {
                         let target = path.trim().to_owned();
                         if !listing.entries.iter().any(|e| e.path == target) && !target.starts_with("z_new/") {
-                            session.report("New NitroFS files must be under z_new/.".to_owned());
+                            session.report(tr!("files.new_files_must_be_under").to_owned());
                         } else {
                             // The variants already holding the path are asked first, so the person can be warned.
                             session.ask_file_targets(&target);
@@ -636,32 +637,32 @@ impl FilesDock {
                             close = true;
                         }
                     }
-                    if Button::new("Cancel").show(ui).clicked() {
+                    if Button::new(tr!("common.cancel")).show(ui).clicked() {
                         close = true;
                     }
                 });
             }
             Prompt::Overwrite { path, bytes, holding } => {
-                let names: Vec<&str> = holding.iter().map(|v| if v.is_empty() { "(base)" } else { v.as_str() }).collect();
-                ui.label(format!("This file already exists in: {}. Replace it in the active variant?", names.join(", ")));
+                let names: Vec<&str> = holding.iter().map(|v| if v.is_empty() { tr!("files.base") } else { v.as_str() }).collect();
+                ui.label(tr!("files.already_exists_in", variants = names.join(", ")));
                 dialogs::actions(ui, |ui| {
-                    if Button::new("Replace").primary().show(ui).clicked() {
+                    if Button::new(tr!("files.replace")).primary().show(ui).clicked() {
                         session.write_file(path, std::mem::take(bytes));
                         close = true;
                     }
-                    if Button::new("Cancel").show(ui).clicked() {
+                    if Button::new(tr!("common.cancel")).show(ui).clicked() {
                         close = true;
                     }
                 });
             }
             Prompt::Remove { path } => {
-                ui.label(format!("Move this module file to the project's trash (.bigstar/trash)?\n\n{path}"));
+                ui.label(tr!("files.move_to_trash", path = path.as_str()));
                 dialogs::actions(ui, |ui| {
-                    if Button::new("Remove").danger().show(ui).clicked() {
+                    if Button::new(tr!("common.remove")).danger().show(ui).clicked() {
                         session.remove_file(path);
                         close = true;
                     }
-                    if Button::new("Cancel").show(ui).clicked() {
+                    if Button::new(tr!("common.cancel")).show(ui).clicked() {
                         close = true;
                     }
                 });

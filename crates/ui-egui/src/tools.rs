@@ -4,6 +4,7 @@
 
 use crate::controls::{self, Button};
 use crate::hex_editor::HexDoc;
+use crate::i18n::tr;
 use crate::{dialogs, icons};
 use bigstar_level::{LevelPackage, decode_nml, encode_nml};
 use bigstar_protocol::{LevelBytes, LevelEdit, LevelId};
@@ -57,7 +58,7 @@ pub fn nml(bytes: LevelBytes) -> Result<Vec<u8>, String> {
 /// The edit importing an `.nml` makes.
 pub fn import_edit(bytes: &[u8]) -> Result<LevelEdit, String> {
     let package = decode_nml(bytes).map_err(|e| e.message)?;
-    Ok(LevelEdit::ReplaceSerialized { course: package.course, bgdat: package.bgdat, name: "Import level".to_owned() })
+    Ok(LevelEdit::ReplaceSerialized { course: package.course, bgdat: package.bgdat, name: tr!("tools.import_level").to_owned() })
 }
 
 impl Tools {
@@ -71,20 +72,20 @@ impl Tools {
         self.metadata = false;
         match listing.entries.iter().find(|entry| entry.id == Some(crate::editors::ROM_USER_METADATA_ID)).map(|entry| entry.path.clone()) {
             Some(path) => session.read_file(&path, crate::session::FileRead::Open),
-            None => session.report("This ROM has no file 131, where its metadata is kept.".to_owned()),
+            None => session.report(tr!("tools.no_file_131").to_owned()),
         }
     }
 
     pub fn take_bytes(&mut self, session: &mut Session, services: &dyn Services) {
         let Some((level, purpose, bytes)) = session.level_bytes.take() else { return };
-        let title = session.levels.get(&level).map_or_else(|| "level".to_owned(), |v| v.snapshot.title.clone());
+        let title = session.levels.get(&level).map_or_else(|| tr!("tools.level").to_owned(), |v| v.snapshot.title.clone());
         match purpose {
             BytesFor::HexEditor => {
                 self.hex =
                     Some(HexEditor { level, title, course: HexDoc::new(bytes.course), bgdat: HexDoc::new(bytes.bgdat), page: HexPage::Course });
             }
             BytesFor::Export => {
-                let written = nml(bytes).and_then(|encoded| services.save_file("Export Level", &format!("{title}.nml"), "nml", &encoded));
+                let written = nml(bytes).and_then(|encoded| services.save_file(tr!("tools.export_level"), &format!("{title}.nml"), "nml", &encoded));
                 if let Err(error) = written {
                     session.report(error);
                 }
@@ -97,7 +98,7 @@ impl Tools {
         if session.active.is_none() {
             return;
         }
-        match services.open_file("Import Level", &["nml"]) {
+        match services.open_file(tr!("tools.import_level_title"), &["nml"]) {
             Some(Ok((_, bytes))) => match import_edit(&bytes) {
                 Ok(edit) => session.edit(edit),
                 Err(error) => session.report(error),
@@ -117,8 +118,8 @@ impl Tools {
         let Some(editor) = &mut self.hex else { return };
         let mut open = true;
         let mut done = false;
-        dialogs::window(format!("Level Hex Editor — {}", editor.title)).open(&mut open).default_size([1040.0, 640.0]).show(ctx, |ui| {
-            controls::tabs(ui, "hex-page", &mut editor.page, &[(HexPage::Course, "Course"), (HexPage::Bgdat, "BGDat")]);
+        dialogs::window(tr!("tools.level_hex_editor", title = editor.title.as_str())).open(&mut open).default_size([1040.0, 640.0]).show(ctx, |ui| {
+            controls::tabs(ui, "hex-page", &mut editor.page, &[(HexPage::Course, tr!("tools.course")), (HexPage::Bgdat, tr!("tools.bgdat"))]);
             let doc = match editor.page {
                 HexPage::Course => &mut editor.course,
                 HexPage::Bgdat => &mut editor.bgdat,
@@ -129,12 +130,12 @@ impl Tools {
             });
             dialogs::actions(ui, |ui| {
                 let changed = editor.course.dirty() || editor.bgdat.dirty();
-                if Button::new("Save").primary().enabled(changed).show(ui).clicked() {
+                if Button::new(tr!("common.save")).primary().enabled(changed).show(ui).clicked() {
                     let (course, bgdat) = (editor.course.bytes.clone(), editor.bgdat.bytes.clone());
-                    session.edit_level(editor.level, LevelEdit::ReplaceSerialized { course, bgdat, name: "Hex edit level".to_owned() });
+                    session.edit_level(editor.level, LevelEdit::ReplaceSerialized { course, bgdat, name: tr!("tools.hex_edit_level").to_owned() });
                     done = true;
                 }
-                if Button::new("Cancel").show(ui).clicked() {
+                if Button::new(tr!("common.cancel")).show(ui).clicked() {
                     done = true;
                 }
             });
@@ -147,28 +148,32 @@ impl Tools {
     fn finder_window(&mut self, ctx: &egui::Context, session: &mut Session, workspace: &mut Workspace) {
         let Some(finder) = &mut self.finder else { return };
         let mut open = true;
-        let title = if finder.sprites { "Sprite Finder" } else { "Object Finder" };
+        let title = if finder.sprites { tr!("tools.sprite_finder") } else { tr!("tools.object_finder") };
         dialogs::window(title).open(&mut open).default_size([640.0, 420.0]).show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.label(if finder.sprites { "Placement type" } else { "Object ID" });
+                ui.label(if finder.sprites { tr!("tools.placement_type") } else { tr!("tools.object_id") });
                 let maximum = if finder.sprites { u16::MAX } else { 4095 };
                 ui.add(controls::number(&mut finder.id).range(0..=maximum));
-                if Button::new("Find").with_icon(icons::SEARCH).primary().show(ui).clicked() {
+                if Button::new(tr!("tools.find")).with_icon(icons::SEARCH).primary().show(ui).clicked() {
                     session.find(finder.sprites, finder.id);
                 }
             });
             ui.separator();
             let Some(found) = session.found.clone().filter(|f| f.sprites == finder.sprites) else {
-                ui.weak("Searches every level in the project, including unsaved edits.");
+                ui.weak(tr!("tools.searches_every_level"));
                 return;
             };
             if found.entities.is_empty() {
-                ui.weak(format!("Nothing uses {} {}.", if found.sprites { "sprite type" } else { "object" }, found.id));
+                ui.weak(if found.sprites {
+                    tr!("tools.nothing_uses_sprite_type", id = found.id)
+                } else {
+                    tr!("tools.nothing_uses_object", id = found.id)
+                });
                 return;
             }
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Grid::new("found").num_columns(5).striped(true).show(ui, |ui| {
-                    for heading in ["Level", "Index", "X", "Y", "Settings"] {
+                    for heading in [tr!("tools.level"), tr!("tools.index"), tr!("tools.x"), tr!("tools.y"), tr!("tools.settings")] {
                         ui.label(RichText::new(heading).weak());
                     }
                     ui.end_row();
@@ -199,30 +204,30 @@ impl Tools {
             return;
         }
         let mut open = true;
-        dialogs::window("Sprite Event Viewer").open(&mut open).default_size([520.0, 380.0]).show(ctx, |ui| {
+        dialogs::window(tr!("tools.sprite_event_viewer")).open(&mut open).default_size([520.0, 380.0]).show(ctx, |ui| {
             let Some(view) = session.level_mut() else {
-                ui.weak("Open an editable level first.");
+                ui.weak(tr!("tools.open_an_editable_level_first"));
                 return;
             };
-            ui.weak(format!("Events of {}", view.snapshot.title));
+            ui.weak(tr!("tools.events_of", title = view.snapshot.title.as_str()));
             let mut rows: Vec<(u8, usize, u16, String)> = Vec::new();
             for (index, sprite) in view.snapshot.course.sprites.iter().enumerate() {
                 let name = view
                     .art
                     .actors
                     .actor(sprite.id, view.sprite_hash(index))
-                    .map_or_else(|| format!("Actor {}", sprite.id), |a| a.definition.name.clone());
+                    .map_or_else(|| tr!("tools.actor_n", id = sprite.id), |a| a.definition.name.clone());
                 rows.extend(sprite.events.iter().filter(|&&event| event != 0).map(|&event| (event, index, sprite.id, name.clone())));
             }
             rows.sort_by_key(|row| row.0);
             if rows.is_empty() {
-                ui.weak("No sprite in this level names an event.");
+                ui.weak(tr!("tools.no_sprite_names_an_event"));
                 return;
             }
             let mut picked = None;
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 egui::Grid::new("events").num_columns(4).striped(true).show(ui, |ui| {
-                    for heading in ["Event", "Sprite", "Type", "Name"] {
+                    for heading in [tr!("tools.event"), tr!("tools.sprite"), tr!("tools.type"), tr!("tools.name")] {
                         ui.label(RichText::new(heading).weak());
                     }
                     ui.end_row();
@@ -248,25 +253,25 @@ impl Tools {
 }
 
 /// The Tools menu: the editors and the ROM's own details.
-pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, language: crate::i18n::Language) {
+pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session) {
     let editing = session.active.is_some();
     let project = session.project.is_some();
-    if Button::menu("Tilesets and Backgrounds…").enabled(editing).show(ui).clicked() {
+    if Button::menu(tr!("tools.tilesets_and_backgrounds")).enabled(editing).show(ui).clicked() {
         if let Some(level) = session.active {
             session.request_tileset_resources(level);
         }
         ui.close();
     }
-    if Button::menu(format!("{}…", language.tr("Hex Editor"))).enabled(editing).show(ui).clicked() {
+    if Button::menu(format!("{}…", tr!("tools.hex_editor"))).enabled(editing).show(ui).clicked() {
         session.request_level_bytes(BytesFor::HexEditor);
         ui.close();
     }
     ui.separator();
-    if Button::menu("ROM Banner…").enabled(project).show(ui).clicked() {
+    if Button::menu(tr!("tools.rom_banner")).enabled(project).show(ui).clicked() {
         session.request_banner();
         ui.close();
     }
-    if Button::menu("ROM User Metadata…").enabled(project).show(ui).clicked() {
+    if Button::menu(tr!("tools.rom_user_metadata")).enabled(project).show(ui).clicked() {
         tools.metadata = true;
         session.refresh_filesystem_once();
         ui.close();
@@ -276,11 +281,11 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session, language: cra
 /// The File menu's lines for the open level: writing it out to a file and reading one in over it.
 pub fn level_file_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session, services: &dyn Services) {
     let editing = session.active.is_some();
-    if Button::menu("Import Level (.nml)…").enabled(editing).show(ui).clicked() {
+    if Button::menu(tr!("tools.import_level_nml")).enabled(editing).show(ui).clicked() {
         tools.import(session, services);
         ui.close();
     }
-    if Button::menu("Export Level (.nml)…").enabled(editing).show(ui).clicked() {
+    if Button::menu(tr!("tools.export_level_nml")).enabled(editing).show(ui).clicked() {
         session.request_level_bytes(BytesFor::Export);
         ui.close();
     }
@@ -289,17 +294,17 @@ pub fn level_file_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session, s
 /// The Edit menu's lines for finding things across the levels and within the open one.
 pub fn find_items(ui: &mut Ui, tools: &mut Tools, session: &mut Session) {
     let project = session.project.is_some();
-    if Button::menu("Find Object…").enabled(project).show(ui).clicked() {
+    if Button::menu(tr!("tools.find_object")).enabled(project).show(ui).clicked() {
         tools.finder = Some(Finder { sprites: false, id: 0 });
         session.found = None;
         ui.close();
     }
-    if Button::menu("Find Sprite…").enabled(project).show(ui).clicked() {
+    if Button::menu(tr!("tools.find_sprite")).enabled(project).show(ui).clicked() {
         tools.finder = Some(Finder { sprites: true, id: 0 });
         session.found = None;
         ui.close();
     }
-    if Button::menu("Sprite Events…").enabled(session.active.is_some()).show(ui).clicked() {
+    if Button::menu(tr!("tools.sprite_events")).enabled(session.active.is_some()).show(ui).clicked() {
         tools.events = true;
         ui.close();
     }

@@ -6,6 +6,7 @@ use bigstar_formats::{bgr555_to_rgb, expand_5_to_8, shrink_8_to_5};
 use egui::{Color32, Sense, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::controls::{self, TextField, Width};
+use crate::i18n::tr;
 
 /// The colours the two buttons paint, as indices into the whole palette.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,7 +73,7 @@ fn swatch(ui: &mut Ui, rgba: [u8; 4], size: f32) -> (egui::Rect, egui::Response)
 /// whether the colours belong to the file being edited. Returns a colour the person changed, as its index and RGB.
 pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, editable: bool) -> Option<(usize, [u8; 3])> {
     if colours.is_empty() {
-        ui.weak("No palette.");
+        ui.weak(tr!("palette_panel.no_palette"));
         return None;
     }
     let row = row.max(1);
@@ -81,12 +82,16 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
 
     // The two chosen colours, and the swap between them.
     ui.horizontal(|ui| {
-        for (label, index, primary) in [("Left", chosen.fg, true), ("Right", chosen.bg, false)] {
+        for (left, index, primary) in [(true, chosen.fg, true), (false, chosen.bg, false)] {
             let (rect, response) = swatch(ui, colours.get(index).copied().unwrap_or([0, 0, 0, 255]), 28.0);
             ui.painter().rect_stroke(rect, 1.0, Stroke::new(1.0, strong), StrokeKind::Inside);
-            response.on_hover_text(format!("{label} button paints colour {index}"));
+            response.on_hover_text(if left {
+                tr!("palette_panel.left_button_paints_colour", index)
+            } else {
+                tr!("palette_panel.right_button_paints_colour", index)
+            });
             ui.label(format!("{index}"));
-            if primary && controls::Button::new("Swap").small().show(ui).on_hover_text("Swap the two colours (X)").clicked() {
+            if primary && controls::Button::new(tr!("palette_panel.swap")).small().show(ui).on_hover_text(tr!("palette_panel.swap_tip")).clicked() {
                 chosen.swap();
             }
         }
@@ -113,8 +118,9 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
         }
         let response = ui.interact(rect, ui.id().with(("swatch", index)), Sense::click());
         let [r, g, b] = bgr555(*rgba);
-        let response = response.on_hover_text(format!("Colour {index} (row {}, index {})\nBGR555 {r}, {g}, {b}", index / 16, index % row));
-        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, chosen.fg == index, format!("Colour {index}")));
+        let response = response.on_hover_text(tr!("palette_panel.swatch_tip", index, row = index / 16, slot = index % row, r, g, b));
+        response
+            .widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, true, chosen.fg == index, tr!("palette_panel.colour_index", index)));
         if response.clicked() {
             chosen.choose(index, true, row);
         }
@@ -123,7 +129,7 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
         }
     }
     if !editable {
-        ui.weak("These colours come from another file; open it to change them.");
+        ui.weak(tr!("palette_panel.colours_from_another_file"));
         return None;
     }
 
@@ -133,7 +139,7 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
     let mut channels = bgr555(rgba);
     let before = channels;
     ui.add_space(4.0);
-    ui.label(format!("Colour {index}"));
+    ui.label(tr!("palette_panel.colour_index", index));
     for (name, channel) in ["R", "G", "B"].iter().zip(channels.iter_mut()) {
         ui.horizontal(|ui| {
             ui.label(*name);
@@ -149,7 +155,7 @@ pub fn show(ui: &mut Ui, colours: &[[u8; 4]], chosen: &mut Colours, row: usize, 
         let packed = channels[0] | (channels[1] << 5) | (channels[2] << 10);
         let id = egui::Id::new(("palette-hex-text", index));
         let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| format!("{packed:04X}"));
-        let response = ui.add(TextField::new(&mut text).width(Width::Px(56.0)).code()).on_hover_text("BGR555, as the file stores it");
+        let response = ui.add(TextField::new(&mut text).width(Width::Px(56.0)).code()).on_hover_text(tr!("palette_panel.bgr555_tip"));
         if response.lost_focus() {
             if let Ok(value) = u16::from_str_radix(text.trim(), 16) {
                 changed = Some(bgr555_to_rgb(value));

@@ -19,6 +19,7 @@ use egui::{
 use crate::block_icons;
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
+use crate::i18n::tr;
 use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, VIEW_TAB_TEXT, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
@@ -261,7 +262,7 @@ fn toolbar(ui: &mut Ui, view: &mut LevelView) {
 fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
     {
         // What right-click creates. Choosing it never touches the selection.
-        ui.label("Create");
+        ui.label(tr!("canvas.toolbar.create"));
         controls::drop_down("create-kind").selected_text(view.placement.kind.name()).show_ui(ui, |ui| {
             for kind in Kind::ALL {
                 ui.choice_value(&mut view.placement.kind, kind, kind.name());
@@ -269,28 +270,28 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
         });
         match view.placement.kind {
             Kind::Object => {
-                ui.add(controls::number(&mut view.placement.object_slot).range(0..=2).prefix("slot "));
-                ui.add(controls::number(&mut view.placement.object_id).range(0..=4095).prefix("object "));
+                ui.add(controls::number(&mut view.placement.object_slot).range(0..=2).prefix(tr!("canvas.toolbar.slot_prefix")));
+                ui.add(controls::number(&mut view.placement.object_id).range(0..=4095).prefix(tr!("canvas.toolbar.object_prefix")));
             }
             Kind::Sprite => match view.placement.sprite_hash {
                 Some(hash) => {
-                    ui.weak(format!("module actor {hash:08x}"));
+                    ui.weak(tr!("canvas.toolbar.module_actor", hash = format!("{hash:08x}")));
                 }
                 None => {
-                    ui.add(controls::number(&mut view.placement.sprite_type).prefix("type "));
+                    ui.add(controls::number(&mut view.placement.sprite_type).prefix(tr!("canvas.toolbar.type_prefix")));
                 }
             },
             _ => {}
         }
         ui.separator();
         let options = &mut view.options;
-        controls::toggle(ui, &mut options.snap, "Snap");
+        controls::toggle(ui, &mut options.snap, tr!("canvas.toolbar.snap"));
         let mut eight = options.snap_size < TILE;
         if controls::toggle(ui, &mut eight, "8 px").changed() {
             options.snap_size = if eight { 8.0 } else { TILE };
         }
-        controls::toggle(ui, &mut options.show_grid, "Grid");
-        controls::toggle(ui, &mut options.show_minimap, "Minimap");
+        controls::toggle(ui, &mut options.show_grid, tr!("canvas.toolbar.grid"));
+        controls::toggle(ui, &mut options.show_minimap, tr!("canvas.toolbar.minimap"));
         controls::menu_button(ui, options.ds_screens.short(), |ui| {
             for choice in DsScreens::ALL {
                 if Button::menu(choice.name()).selected(options.ds_screens == choice).show(ui).clicked() {
@@ -300,9 +301,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
             }
         })
         .response
-        .on_hover_text(
-            "The DS screen (256×192), with its backgrounds scrolled as the game scrolls them: under the cursor, at each selected entrance, or both",
-        );
+        .on_hover_text(tr!("canvas.toolbar.ds_screens_tip"));
         // Named in short on the toolbar, which has no room to spare, and in full in the menu.
         controls::menu_button(ui, options.backgrounds.short(), |ui| {
             for choice in Backgrounds::ALL {
@@ -312,17 +311,15 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
                 }
             }
             ui.separator();
-            if Button::menu("Animate backgrounds").selected(options.animate_backgrounds).show(ui).clicked() {
+            if Button::menu(tr!("canvas.toolbar.animate_backgrounds")).selected(options.animate_backgrounds).show(ui).clicked() {
                 options.animate_backgrounds = !options.animate_backgrounds;
                 ui.close();
             }
         })
         .response
-        .on_hover_text(
-            "Where the background layers are drawn: nowhere, only inside the views as the game shows them, or over the whole level; and whether they move as the game moves them",
-        );
+        .on_hover_text(tr!("canvas.toolbar.backgrounds_tip"));
         ui.separator();
-        if Button::new("Fit").show(ui).clicked() {
+        if Button::new(tr!("canvas.toolbar.fit")).show(ui).clicked() {
             view.needs_fit = true;
             view.zoom_pinned = false;
         }
@@ -332,7 +329,7 @@ fn toolbar_items(ui: &mut Ui, view: &mut LevelView) {
             }
         }
         ui.weak(format!("{:.0}%", view.zoom * 100.0));
-        if Button::new("Fullscreen").show(ui).clicked() {
+        if Button::new(tr!("canvas.toolbar.fullscreen")).show(ui).clicked() {
             let fullscreen = ui.input(|i| i.viewport().fullscreen.unwrap_or(false));
             ui.ctx().send_viewport_cmd(ViewportCommand::Fullscreen(!fullscreen));
         }
@@ -543,7 +540,7 @@ fn keys(ui: &Ui, view: &mut LevelView, busy: bool, out: &mut CanvasOutput) {
             Event::Paste(text) if !busy => {
                 match clipboard::paste(&text) {
                     Ok(items) => {
-                        edits.push(LevelEdit::Add { items, name: "Paste selection".to_owned() });
+                        edits.push(LevelEdit::Add { items, name: tr!("level_view.edit.paste_selection").to_owned() });
                         busy = true;
                     }
                     Err(error) => out.error = Some(error),
@@ -1036,8 +1033,8 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
                 let hash = view.sprite_hash(index);
                 let label = match (view.art.actors.actor(sprite.id, hash), hash) {
                     (Some(actor), _) => actor.definition.name.clone(),
-                    (None, Some(hash)) => format!("0x{hash:08x} (foreign)"),
-                    (None, None) => format!("Actor {}", sprite.id),
+                    (None, Some(hash)) => tr!("canvas.foreign_actor", hash = format!("{hash:08x}")),
+                    (None, None) => tr!("canvas.actor_number", id = sprite.id),
                 };
                 painter.text(Pos2::new(r.right() + 2.0 * frame.zoom, r.top() - 2.0 * frame.zoom), Align2::LEFT_TOP, label, font, colors.label_text);
             }
@@ -1273,10 +1270,13 @@ fn overlays(painter: &Painter, view: &LevelView, frame: Frame, colors: &Colors) 
         } else {
             painter.rect_stroke(rect, 0.0, Stroke::new(2.0, red), StrokeKind::Outside);
         }
-        let mut text = format!("{}{}, {}", if screen.spawn { "Spawn camera " } else { "" }, screen.rect.left(), screen.rect.top());
-        for (name, layer) in [("BG", BackgroundLayer::Background), ("FG", BackgroundLayer::Foreground)] {
+        let (x, y) = (screen.rect.left(), screen.rect.top());
+        let mut text = if screen.spawn { tr!("canvas.spawn_camera", x, y) } else { format!("{x}, {y}") };
+        for (name, layer) in
+            [(tr!("canvas.layer_background"), BackgroundLayer::Background), (tr!("canvas.layer_foreground"), BackgroundLayer::Foreground)]
+        {
             if let Some(scroll) = view.screen_layer(&screen, layer) {
-                text.push_str(&format!("   {name} {}, {}", scroll.x >> 12, scroll.y));
+                text.push_str(&format!("   {}", tr!("canvas.layer_scroll", name, x = scroll.x >> 12, y = scroll.y)));
             }
         }
         let galley = painter.layout_no_wrap(text, FontId::proportional(11.0), Color32::WHITE);
@@ -1316,18 +1316,22 @@ pub fn show_preview(ui: &mut Ui, view: &mut LevelView, store: &HashMap<TextureId
     let course = &snapshot.course;
     ui.heading(&snapshot.title);
     ui.weak(&snapshot.area);
-    ui.label(format!(
-        "Objects {}   Sprites {}   Entrances {}   Views {}   Zones {}",
-        snapshot.objects.len(),
-        course.sprites.len(),
-        course.entrances.len(),
-        course.views.len(),
-        course.zones.len()
+    ui.label(tr!(
+        "canvas.preview.counts",
+        objects = snapshot.objects.len(),
+        sprites = course.sprites.len(),
+        entrances = course.entrances.len(),
+        views = course.views.len(),
+        zones = course.zones.len()
     ));
     let r = snapshot.tileset_references;
-    ui.label(format!(
-        "Tileset {}   BG graphics {}   BG screen {}   FG graphics {}   FG screen {}",
-        r.tileset_id, r.background_graphics_id, r.background_screen_id, r.foreground_graphics_id, r.foreground_screen_id
+    ui.label(tr!(
+        "canvas.preview.references",
+        tileset = r.tileset_id,
+        bg_graphics = r.background_graphics_id,
+        bg_screen = r.background_screen_id,
+        fg_graphics = r.foreground_graphics_id,
+        fg_screen = r.foreground_screen_id
     ));
     let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
     if rect.width() < 20.0 || rect.height() < 20.0 {

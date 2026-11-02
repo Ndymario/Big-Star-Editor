@@ -19,6 +19,6 @@ Automated tests cover the exchange codecs, unsafe-path and duplicate refusal, co
 ## Recovery and language
 
 - After the one-minute autosave interval, terminate with a dirty level and verify startup recovery. Save once and repeat with Discard/No to verify both cleanup paths.
-- Restart in English, Dutch, Portuguese, Spanish, and French and verify the translated project shell and Hub vocabulary.
+- Restart in English and Portuguese (Portugal) and verify the translated project shell and Hub vocabulary.
 
 The same checks are appended as items 27–38 in the living `docs/m4-manual-checklist.md`.

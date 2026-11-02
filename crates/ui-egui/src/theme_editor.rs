@@ -5,6 +5,7 @@ use egui::{Color32, Ui};
 
 use crate::controls::{self, Button, Choice as _, TextField};
 use crate::dialogs;
+use crate::i18n::{self, tr};
 use crate::theme::{self, AnyTheme, Theme, Tokens};
 
 const WIDTH: f32 = 340.0;
@@ -25,7 +26,8 @@ pub(crate) struct ThemeDraft {
 impl ThemeDraft {
     /// A new theme, starting from `from` as it looks now, with the system's accent colour if it is in use.
     pub(crate) fn copy_of(from: AnyTheme<'_>, theme: &Theme, accent: Option<Color32>, shown_dark: bool) -> Self {
-        let name = format!("{} {}", from.name, if from.built_in { "(Custom)" } else { "(Copy)" });
+        let from_name = from.display_name();
+        let name = if from.built_in { tr!("theme_editor.name_custom", name = from_name) } else { tr!("theme_editor.name_copy", name = from_name) };
         let (light, dark) = (theme.accented(from.light.clone(), accent), theme.accented(from.dark.clone(), accent));
         Self { editing: None, name, light, dark, shown_dark }
     }
@@ -59,20 +61,20 @@ fn picker(ui: &mut Ui, color: &mut Color32) -> bool {
 pub(crate) fn window(ctx: &egui::Context, draft: &mut ThemeDraft, showing_dark: &mut bool, preferences: Option<egui::Rect>) -> Option<bool> {
     let mut open = true;
     let mut answer = None;
-    let mut window = dialogs::window("Edit theme").open(&mut open).resizable(false);
+    let mut window = dialogs::window(tr!("theme_editor.title")).open(&mut open).resizable(false);
     if let Some(rect) = preferences {
         window = window.beside(rect, WIDTH);
     }
     window.show(ctx, |ui| {
         ui.set_width(WIDTH);
-        ui.label("Theme name");
-        TextField::new(&mut draft.name).name("Theme name").show(ui);
+        ui.label(tr!("theme_editor.theme_name"));
+        TextField::new(&mut draft.name).name(tr!("theme_editor.theme_name")).show(ui);
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.choice_value(showing_dark, false, "Light colours");
-            ui.choice_value(showing_dark, true, "Dark colours");
+            ui.choice_value(showing_dark, false, tr!("theme_editor.light_colours"));
+            ui.choice_value(showing_dark, true, tr!("theme_editor.dark_colours"));
         });
-        ui.weak("Each mode has its own colours.");
+        ui.weak(tr!("theme_editor.each_mode"));
         ui.add_space(4.0);
         let palette = draft.palette_mut(*showing_dark);
         ui.horizontal(|ui| {
@@ -80,13 +82,13 @@ pub(crate) fn window(ctx: &egui::Context, draft: &mut ThemeDraft, showing_dark: 
             if picker(ui, &mut accent) {
                 *palette = palette.clone().with_accent(accent);
             }
-            ui.label("Accent colour").on_hover_text("Sets the accent's other colours along with it.");
+            ui.label(tr!("theme_editor.accent_colour")).on_hover_text(tr!("theme_editor.accent_hint"));
         });
         ui.add_space(4.0);
         let height = (ctx.content_rect().height() - 320.0).clamp(160.0, 480.0);
         egui::ScrollArea::vertical().id_salt("theme-colours").max_height(height).min_scrolled_height(height).auto_shrink(false).show(ui, |ui| {
             for (group, tokens) in &theme::TOKEN_GROUPS {
-                ui.label(egui::RichText::new(*group).strong());
+                ui.label(egui::RichText::new(i18n::text(group)).strong());
                 for token in *tokens {
                     let color = (token.color)(palette);
                     ui.horizontal(|ui| {
@@ -96,7 +98,7 @@ pub(crate) fn window(ctx: &egui::Context, draft: &mut ThemeDraft, showing_dark: 
                             egui::Layout::left_to_right(egui::Align::Center),
                             |ui| {
                                 ui.set_min_width(LABEL_WIDTH);
-                                ui.label(token.label);
+                                ui.label(i18n::text(token.label));
                             },
                         );
                         ui.weak(egui::RichText::new(theme::channels(*color)).monospace());
@@ -105,12 +107,12 @@ pub(crate) fn window(ctx: &egui::Context, draft: &mut ThemeDraft, showing_dark: 
                 ui.add_space(6.0);
             }
         });
-        let save = if draft.editing.is_some() { "Save changes" } else { "Save theme" };
+        let save = if draft.editing.is_some() { tr!("theme_editor.save_changes") } else { tr!("theme_editor.save_theme") };
         dialogs::actions(ui, |ui| {
             if Button::new(save).primary().enabled(!draft.name.trim().is_empty()).show(ui).clicked() {
                 answer = Some(true);
             }
-            if Button::new("Cancel").show(ui).clicked() {
+            if Button::new(tr!("common.cancel")).show(ui).clicked() {
                 answer = Some(false);
             }
         });

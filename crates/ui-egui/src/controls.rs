@@ -5,6 +5,7 @@
 use egui::{Color32, CornerRadius, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, WidgetText, pos2, vec2};
 
 use crate::{
+    i18n::tr,
     icons::{self, Icon},
     motion,
     theme::{self, Tokens},
@@ -400,7 +401,9 @@ pub fn disclosure(ui: &mut Ui, open: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let hover = motion::hover(ui, &response, motion::COLOR);
     icon.paint(ui.painter(), rect.shrink(2.0), motion::mix(t.muted, t.foreground, hover));
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, if open { "Collapse" } else { "Expand" }));
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, true, if open { tr!("controls.collapse") } else { tr!("controls.expand") })
+    });
     response
 }
 
@@ -651,7 +654,7 @@ pub fn search(ui: &mut Ui, text: &mut String, hint: &str, width: Width) -> Respo
         icons::SEARCH.show(ui, icons::SIZE_SM, t.subtle);
         let room = width.resolve(ui.available_width()) - CLEAR - icons::SIZE_SM - 4.0;
         let mut response = TextField::new(text).hint(hint).width(Width::Px(room.max(FIELD_MIN))).show(ui);
-        if !text.is_empty() && icon_button(ui, icons::CLOSE, "Clear search").clicked() {
+        if !text.is_empty() && icon_button(ui, icons::CLOSE, tr!("controls.clear_search")).clicked() {
             text.clear();
             response.mark_changed();
         }
@@ -721,7 +724,7 @@ pub fn steppers(ui: &mut Ui) -> i64 {
     let (rect, whole) = ui.allocate_exact_size(vec2(STEPPER_WIDTH, ui.spacing().interact_size.y), Sense::hover());
     let enabled = ui.is_enabled();
     let mut step = 0;
-    for (by, name) in [(1, "Increase"), (-1, "Decrease")] {
+    for (by, name) in [(1, tr!("controls.increase")), (-1, tr!("controls.decrease"))] {
         let half = if by > 0 { rect.split_top_bottom_at_fraction(0.5).0 } else { rect.split_top_bottom_at_fraction(0.5).1 };
         let response = ui.interact(half, whole.id.with(by), Sense::click());
         response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name));
@@ -921,7 +924,7 @@ impl<'a, T: Copy + Into<i64>, S: AsRef<str>> NumberedChoice<'a, T, S> {
         let selected = match current {
             Some(value) => match choices.iter().find(|(v, _)| (*v).into() == value) {
                 Some((_, name)) => numbered(value, name.as_ref(), hex),
-                None => numbered(value, "not listed", hex),
+                None => numbered(value, tr!("controls.not_listed"), hex),
             },
             None => "—".to_owned(),
         };
@@ -1122,7 +1125,7 @@ impl Spinner {
 impl egui::Widget for Spinner {
     fn ui(self, ui: &mut Ui) -> Response {
         let (rect, response) = ui.allocate_exact_size(Vec2::splat(self.size), Sense::hover());
-        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, "Loading"));
+        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, tr!("controls.loading")));
         if !ui.is_rect_visible(rect) {
             return response;
         }
@@ -1240,10 +1243,10 @@ pub fn document_header(ui: &mut Ui, path: &str, remark: &str, can_save: bool) ->
             ui.weak(remark);
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let save = Button::new("Save").with_icon(icons::SAVE).enabled(can_save);
+            let save = Button::new(tr!("common.save")).with_icon(icons::SAVE).enabled(can_save);
             (if can_save { save.primary() } else { save })
                 .show(ui)
-                .on_hover_text("Writes the file into the module it comes from, or the active one")
+                .on_hover_text(tr!("controls.writes_the_file_into_the_module_it_comes_from_or_the_active_one"))
                 .clicked()
         })
         .inner
@@ -1327,7 +1330,7 @@ pub fn notice_line(ui: &mut Ui, notice: &mut Option<String>, warning: bool) {
             } else {
                 ui.weak(text);
             }
-            Button::icon(icons::CLOSE).ghost().small().name("Dismiss").show(ui).on_hover_text("Dismiss").clicked()
+            Button::icon(icons::CLOSE).ghost().small().name(tr!("controls.dismiss")).show(ui).on_hover_text(tr!("controls.dismiss")).clicked()
         })
         .inner;
     if dismissed {

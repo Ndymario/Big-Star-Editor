@@ -14,6 +14,7 @@ use serde::{Deserialize, Serialize};
 use crate::editors::{rewrap, unwrap_with};
 use crate::files::DraggedFile;
 use crate::history::{History, Snapshots, Undoable};
+use crate::i18n::tr;
 use crate::image_manager::{self, Bitmap, Group, Images, Lists, ManagerAction, ManagerState};
 use crate::paint::{Grid, IndexedSheet, Pattern, RawScreen};
 use crate::palette_panel;
@@ -330,18 +331,18 @@ impl GraphicsDoc {
                 Err(e) => fail(e.message),
             },
             GraphicsFormatKind::RawPaletteCandidate if body.is_empty() || !body.len().is_multiple_of(2) => {
-                fail("raw palette size must be even".to_owned())
+                fail(tr!("graphics_editor.raw_palette_size_even").to_owned())
             }
             GraphicsFormatKind::RawPaletteCandidate => (Mode::RawPalette, None),
             GraphicsFormatKind::RawCharacterGraphicsCandidate if body.is_empty() || !body.len().is_multiple_of(32) => {
-                fail("raw 4bpp graphics must contain complete tiles".to_owned())
+                fail(tr!("graphics_editor.raw_4bpp_complete_tiles").to_owned())
             }
             GraphicsFormatKind::RawCharacterGraphicsCandidate => (Mode::RawCharacters, None),
             GraphicsFormatKind::RawScreenMapCandidate if body.is_empty() || !body.len().is_multiple_of(2) => {
-                fail("raw screen map size must be even".to_owned())
+                fail(tr!("graphics_editor.raw_screen_map_size_even").to_owned())
             }
             GraphicsFormatKind::RawScreenMapCandidate => (Mode::RawScreen, None),
-            GraphicsFormatKind::Unknown => fail("this file is not a supported Nintendo DS graphics resource".to_owned()),
+            GraphicsFormatKind::Unknown => fail(tr!("graphics_editor.not_supported_resource").to_owned()),
         };
         self.mode = mode;
         self.error = error;
@@ -368,8 +369,8 @@ impl GraphicsDoc {
 
     pub fn primary_choices(&self) -> Vec<String> {
         match self.mode {
-            Mode::Ncer => (0..self.ncer.as_ref().map_or(0, |n| n.cells.len())).map(|i| format!("Cell {i}")).collect(),
-            Mode::Nanr => (0..self.nanr.as_ref().map_or(0, |n| n.sequences.len())).map(|i| format!("Sequence {i}")).collect(),
+            Mode::Ncer => (0..self.ncer.as_ref().map_or(0, |n| n.cells.len())).map(|i| tr!("graphics_editor.cell_n", n = i)).collect(),
+            Mode::Nanr => (0..self.nanr.as_ref().map_or(0, |n| n.sequences.len())).map(|i| tr!("graphics_editor.sequence_n", n = i)).collect(),
             Mode::RawCharacters => vec!["4bpp".to_owned(), "8bpp".to_owned()],
             Mode::Tex0 => self.tex0.as_ref().map(|t| t.textures.iter().map(|x| x.name.clone()).collect()).unwrap_or_default(),
             _ => Vec::new(),
@@ -419,11 +420,11 @@ impl GraphicsDoc {
             None => {
                 let name = path.rsplit(['/', '!']).next().unwrap_or(path);
                 self.companion_error = Some(if self.pairs_characters() {
-                    format!("{name} was not attached: drop it on the Graphics file row or the palette list to say which it is.")
+                    tr!("graphics_editor.not_attached_drop_either", name)
                 } else if self.pairs_palette() {
-                    format!("{name} is not a palette: drop it on the palette list to read it as one.")
+                    tr!("graphics_editor.not_a_palette", name)
                 } else {
-                    format!("{name} was not attached: this file is drawn without a palette or graphics file.")
+                    tr!("graphics_editor.not_attached_no_pairing", name)
                 });
                 self.touched(false);
             }
@@ -630,16 +631,16 @@ impl GraphicsDoc {
         match self.mode {
             Mode::Nclr => {
                 let palette = self.nclr.as_ref().map(|n| n.palette.clone()).unwrap_or_default();
-                self.palette_view(&palette, format!("NCLR palette — {} colours", palette.len() / 2))
+                self.palette_view(&palette, tr!("graphics_editor.nclr_palette_info", colours = palette.len() / 2))
             }
-            Mode::RawPalette => self.palette_view(&self.body, format!("Raw BGR555 palette — {} colours", self.body.len() / 2)),
+            Mode::RawPalette => self.palette_view(&self.body, tr!("graphics_editor.raw_palette_info", colours = self.body.len() / 2)),
             Mode::Ncgr | Mode::RawCharacters => self.characters_view(),
             Mode::Nscr => {
                 let nscr = self.nscr.as_ref();
                 let (screen, width, height) = nscr.map_or((Vec::new(), 0, 0), |n| (n.screen.clone(), usize::from(n.width), usize::from(n.height)));
                 self.screen_view(&screen, width, height, "NSCR")
             }
-            Mode::RawScreen => self.screen_view(&self.body, self.pairing.width * 8, 0, "Raw screen map"),
+            Mode::RawScreen => self.screen_view(&self.body, self.pairing.width * 8, 0, tr!("graphics_editor.raw_screen_map")),
             Mode::Ncer => self.cells_view(),
             Mode::Nanr => self.animation_view(),
             Mode::Tex0 => self.texture_view(),
@@ -681,13 +682,17 @@ impl GraphicsDoc {
             put(&mut image, x, y, unpack(&palette, row + usize::from(value)));
         }
         let colours = palette.len() / 2;
-        let info = format!(
-            "{} — {tiles} tiles, {}bpp, {}.{}",
-            if self.mode == Mode::Ncgr { "NCGR" } else { "Raw graphics" },
-            if eight { 8 } else { 4 },
-            if linear { "bitmap arrangement (NCBR)" } else { "8x8 tiled" },
-            if self.palettes.is_empty() { " Indices are shown as greys until a palette file is attached." } else { "" }
+        let mut info = tr!(
+            "graphics_editor.characters_info",
+            kind = if self.mode == Mode::Ncgr { "NCGR" } else { tr!("graphics_editor.raw_graphics") },
+            tiles,
+            bpp = if eight { 8 } else { 4 },
+            arrangement = if linear { tr!("graphics_editor.bitmap_arrangement") } else { tr!("graphics_editor.tiled_8x8") }
         );
+        if self.palettes.is_empty() {
+            info.push(' ');
+            info.push_str(tr!("graphics_editor.indices_shown_as_greys"));
+        }
         let swatches = (0..colours).map(|i| unpack(&palette, i)).collect();
         Rendered { image: Some(image), grid: 1, info, swatches, swatches_editable: !self.palettes.is_empty() }
     }
@@ -733,10 +738,11 @@ impl GraphicsDoc {
                 }
             }
         }
-        let info = format!(
-            "{name} — {entries} map entries.{}",
-            if composed { "" } else { " Tile colours are identifiers; choose a graphics file to see the picture and paint it." }
-        );
+        let mut info = tr!("graphics_editor.screen_info", name, entries);
+        if !composed {
+            info.push(' ');
+            info.push_str(tr!("graphics_editor.tile_colours_are_identifiers"));
+        }
         let swatches = if composed { (0..palette.len() / 2).map(|i| unpack(&palette, i)).collect() } else { Vec::new() };
         Rendered { image: Some(image), grid: 0, info, swatches, swatches_editable: false }
     }
@@ -754,7 +760,7 @@ impl GraphicsDoc {
                         return Rendered {
                             image: Some(image),
                             grid: 0,
-                            info: format!("NCER cell {index} — {oam} OAM objects, composed with {from}."),
+                            info: tr!("graphics_editor.ncer_composed_info", index, oam, from),
                             swatches: (0..packed.len() / 2).map(|i| unpack(&packed, i)).collect(),
                             swatches_editable: false,
                         };
@@ -796,7 +802,7 @@ impl GraphicsDoc {
                     }
                 }
             }
-            info = format!("NCER cell {index} — {} OAM objects. Outlines show placement; choose a graphics file to draw the cell.", cell.oam.len());
+            info = tr!("graphics_editor.ncer_outlines_info", index, oam = cell.oam.len());
         }
         Rendered { image: Some(image), grid: 0, info, swatches: Vec::new(), swatches_editable: false }
     }
@@ -804,15 +810,16 @@ impl GraphicsDoc {
     fn animation_view(&self) -> Rendered {
         let Some(nanr) = &self.nanr else { return Rendered::default() };
         let Some(sequence) = nanr.sequences.get(self.primary) else {
-            return Rendered { info: "NANR contains no animation sequences.".to_owned(), ..Rendered::default() };
+            return Rendered { info: tr!("graphics_editor.nanr_no_sequences").to_owned(), ..Rendered::default() };
         };
         let duration: u32 = sequence.frames.iter().map(|f| u32::from(f.duration)).sum();
-        let info = format!(
-            "NANR sequence {} — {} frames, {duration} ticks, loop starts at frame {}, play mode {}.",
-            self.primary,
-            sequence.frames.len(),
-            sequence.loop_start,
-            sequence.play_mode
+        let info = tr!(
+            "graphics_editor.nanr_sequence_info",
+            index = self.primary,
+            frames = sequence.frames.len(),
+            duration,
+            loop_start = sequence.loop_start,
+            play_mode = sequence.play_mode
         );
         Rendered { info, ..Rendered::default() }
     }
@@ -820,7 +827,7 @@ impl GraphicsDoc {
     fn texture_view(&self) -> Rendered {
         let Some(tex0) = &self.tex0 else { return Rendered::default() };
         let Some(texture) = tex0.textures.get(self.primary) else {
-            return Rendered { info: "TEX0 contains no textures.".to_owned(), ..Rendered::default() };
+            return Rendered { info: tr!("graphics_editor.tex0_no_textures").to_owned(), ..Rendered::default() };
         };
         let empty = Tex0Palette::default();
         let palette = tex0.palettes.get(self.secondary.min(tex0.palettes.len().saturating_sub(1))).unwrap_or(&empty);
@@ -828,9 +835,12 @@ impl GraphicsDoc {
             Ok(image) => Rendered {
                 image: Some(image),
                 grid: 0,
-                info: format!(
-                    "TEX0 texture {} — {}×{}, format {}. Pick a palette colour to edit it.",
-                    texture.name, texture.original_width, texture.original_height, texture.format as u8
+                info: tr!(
+                    "graphics_editor.tex0_texture_info",
+                    name = texture.name,
+                    width = texture.original_width,
+                    height = texture.original_height,
+                    format = texture.format as u8
                 ),
                 swatches: (0..palette.colors.len() / 2).map(|i| unpack(&palette.colors, i)).collect(),
                 swatches_editable: !tex0.palettes.is_empty(),
@@ -968,7 +978,7 @@ impl GraphicsDoc {
             }
         }
         let after = self.contents();
-        self.history.record("Change colour", before, &after);
+        self.history.record(tr!("graphics_editor.change_colour"), before, &after);
         self.touched(true);
     }
 
@@ -1067,7 +1077,7 @@ impl Images for DocImages<'_> {
         let doc = &mut *self.0;
         if doc.mode == Mode::Tex0 {
             let texture = doc.tex0.as_mut().and_then(|t| t.textures.get_mut(index)).ok_or("no texture")?;
-            let bits = tex0_bits(texture.format).ok_or("Only 4-, 16- and 256-colour textures can be imported.")?;
+            let bits = tex0_bits(texture.format).ok_or(tr!("graphics_editor.only_paletted_textures"))?;
             for (i, &value) in pixels.iter().enumerate() {
                 let (x, y) = (i % texture.original_width.max(1), i / texture.original_width.max(1));
                 let (at, shift, mask) = tex0_texel(texture, bits, x, y);
@@ -1187,7 +1197,7 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
                     } else {
                         palette_files(ui, doc, &mut actions);
                     }
-                    ui.weak("Drag palette files here from the Filesystem dock, or open one, to draw the graphics in them.");
+                    ui.weak(tr!("graphics_editor.drag_palette_files_here"));
                 });
                 if let Some(path) = dropped_on(ui, listed.response.rect) {
                     actions.push(GraphicsAction::Load { path, palette: Some(true) });
@@ -1212,10 +1222,10 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
                 let shown = rendered.swatches.get(start..(start + size).min(rendered.swatches.len())).unwrap_or_default();
                 let file = doc.palettes.get(doc.shown_palette()).filter(|_| doc.mode != Mode::Tex0).map(|p| p.name().to_owned());
                 ui.strong(match (file, doc.palette_count() > 1) {
-                    (Some(file), true) => format!("{file} · Palette {chosen}"),
+                    (Some(file), true) => tr!("graphics_editor.file_palette_n", file, n = chosen),
                     (Some(file), false) => file,
-                    (None, true) => format!("Palette {chosen}"),
-                    (None, false) => "Palette".to_owned(),
+                    (None, true) => tr!("graphics_editor.palette_n", n = chosen),
+                    (None, false) => tr!("graphics_editor.palette").to_owned(),
                 });
                 let edited = egui::ScrollArea::both()
                     .show(ui, |ui| palette_panel::show(ui, shown, &mut view.pixels.colours, size.max(1), rendered.swatches_editable))
@@ -1267,16 +1277,16 @@ fn dropped_on(ui: &Ui, rect: egui::Rect) -> Option<String> {
 /// The palette files attached to a screen or cells, which have no image manager: the one drawn with, chosen, and
 /// each with a button to take it off.
 fn palette_files(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>) {
-    ui.strong("Palette files");
+    ui.strong(tr!("graphics_editor.palette_files"));
     let files: Vec<String> = doc.palette_files().into_iter().map(str::to_owned).collect();
     if files.is_empty() {
-        ui.weak("(none)");
+        ui.weak(tr!("graphics_editor.none"));
     }
     let shown = doc.shown_palette();
     for (i, path) in files.iter().enumerate() {
         let name = path.rsplit(['/', '!']).next().unwrap_or(path);
         ui.horizontal(|ui| {
-            if controls::icon_button(ui, crate::icons::CLOSE, &format!("Detach {name}")).clicked() {
+            if controls::icon_button(ui, crate::icons::CLOSE, &tr!("graphics_editor.detach_name", name)).clicked() {
                 doc.detach_palette(i);
                 actions.push(GraphicsAction::Remember);
             }
@@ -1294,11 +1304,11 @@ fn attached_slot(ui: &mut Ui, current: Option<&str>) -> (Option<String>, bool) {
     let dragging = egui::DragAndDrop::has_payload_of_type::<DraggedFile>(ui.ctx());
     let mut detached = false;
     let inner = ui.horizontal(|ui| {
-        let name = current.map_or("(none)", |path| path.rsplit(['/', '!']).next().unwrap_or(path));
+        let name = current.map_or(tr!("graphics_editor.none"), |path| path.rsplit(['/', '!']).next().unwrap_or(path));
         let label = ui.add(egui::Label::new(egui::RichText::new(name).color(if current.is_some() { t.foreground } else { t.muted })).truncate());
         if let Some(path) = current {
             label.on_hover_text(path);
-            detached = controls::icon_button(ui, crate::icons::CLOSE, "Detach").clicked();
+            detached = controls::icon_button(ui, crate::icons::CLOSE, tr!("graphics_editor.detach")).clicked();
         }
     });
     let rect = inner.response.rect.expand(2.0);
@@ -1325,7 +1335,7 @@ fn options(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>
         let listed = doc.mode == Mode::Tex0;
         let primary = if listed { Vec::new() } else { doc.primary_choices() };
         if !primary.is_empty() {
-            ui.label(if doc.mode == Mode::RawCharacters { "Bit depth" } else { "Image/cell" });
+            ui.label(if doc.mode == Mode::RawCharacters { tr!("graphics_editor.bit_depth") } else { tr!("graphics_editor.image_cell") });
             let mut chosen = doc.primary.min(primary.len() - 1);
             controls::drop_down("graphics-primary").selected_text(primary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
                 for (i, name) in primary.iter().enumerate() {
@@ -1339,7 +1349,7 @@ fn options(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>
         }
         let secondary = if listed { Vec::new() } else { doc.secondary_choices() };
         if !secondary.is_empty() {
-            ui.label("Palette");
+            ui.label(tr!("graphics_editor.palette"));
             let mut chosen = doc.secondary.min(secondary.len() - 1);
             controls::drop_down("graphics-secondary").selected_text(secondary.get(chosen).cloned().unwrap_or_default()).show_ui(ui, |ui| {
                 for (i, name) in secondary.iter().enumerate() {
@@ -1355,7 +1365,7 @@ fn options(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>
         // NSMB Editor, the person says which go together, by dragging a file from the tree onto this row, or by
         // opening it and choosing this editor. Palettes are listed below, any number of them.
         if doc.pairs_characters() {
-            ui.label("Graphics file");
+            ui.label(tr!("graphics_editor.graphics_file"));
             let (dropped, detached) = attached_slot(ui, doc.pairing.characters.clone().as_deref());
             if detached {
                 doc.set_companion_characters(None, None);
@@ -1368,10 +1378,12 @@ fn options(ui: &mut Ui, doc: &mut GraphicsDoc, actions: &mut Vec<GraphicsAction>
         }
         if doc.uses_width() {
             // A headerless sheet carries no width or pixel format, so they are asked for instead of guessed.
-            ui.label("Width");
+            ui.label(tr!("graphics_editor.width"));
             let mut width = doc.pairing.width;
             ui.add(
-                controls::number(&mut width).range(0..=256).custom_formatter(|n, _| if n == 0.0 { "auto".to_owned() } else { format!("{n} tiles") }),
+                controls::number(&mut width)
+                    .range(0..=256)
+                    .custom_formatter(|n, _| if n == 0.0 { tr!("graphics_editor.auto").to_owned() } else { tr!("graphics_editor.n_tiles", n) }),
             );
             if width != doc.pairing.width {
                 doc.set_width(width);
@@ -1391,8 +1403,8 @@ fn manager(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services
         Some(tex0) if doc.mode == Mode::Tex0 => {
             (tex0.textures.iter().map(|t| t.name.clone()).collect(), tex0.palettes.iter().map(|p| p.name.clone()).collect())
         }
-        _ if doc.palettes.is_empty() => (vec![name.clone()], vec!["Greys (no palette file)".to_owned()]),
-        _ => (vec![name.clone()], doc.palette_slots().iter().map(|&(_, row)| format!("Palette {row}")).collect::<Vec<_>>()),
+        _ if doc.palettes.is_empty() => (vec![name.clone()], vec![tr!("graphics_editor.greys_no_palette_file").to_owned()]),
+        _ => (vec![name.clone()], doc.palette_slots().iter().map(|&(_, row)| tr!("graphics_editor.palette_n", n = row)).collect::<Vec<_>>()),
     };
     // Each attached file heads its rows, as NSMB Editor lists every palette opened for the graphics.
     let groups: Vec<Group> = if tex0 {
@@ -1409,9 +1421,9 @@ fn manager(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services
     view.manager.bitmap = if tex0 { doc.primary } else { 0 };
     view.manager.palette = if tex0 { doc.secondary } else { doc.palette_slots().iter().position(|&slot| slot == shown).unwrap_or(0) };
     let no_import = if tex0 {
-        doc.chosen_texture().filter(|t| tex0_bits(t.format).is_none()).map(|_| "Only 4-, 16- and 256-colour textures can be imported.")
+        doc.chosen_texture().filter(|t| tex0_bits(t.format).is_none()).map(|_| tr!("graphics_editor.only_paletted_textures"))
     } else if doc.palettes.is_empty() {
-        Some("Attach a palette file first: an import's colours are matched to it, or written into it.")
+        Some(tr!("graphics_editor.attach_palette_first"))
     } else {
         None
     };
@@ -1443,7 +1455,7 @@ fn manager(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services
     };
     let palettes: Vec<usize> = (0..palettes.len()).collect();
     let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem).to_owned();
-    doc.begin_edit("Import bitmap");
+    doc.begin_edit(tr!("graphics_editor.import_bitmap"));
     let result = image_manager::run(action, &view.manager, &mut DocImages(doc), &all, &palettes, services, &stem);
     doc.end_edit();
     view.notice = result.err();
@@ -1483,8 +1495,8 @@ fn sheet_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, ima
 fn tile_side(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
     let (tiles, rows) = doc.companion_counts();
     view.tiles.palette = view.tiles.palette.clamp(0, rows as i16 - 1);
-    ui.strong("Tiles");
-    ui.weak("Drag to choose the tiles to paint with.");
+    ui.strong(tr!("graphics_editor.tiles"));
+    ui.weak(tr!("graphics_editor.drag_to_choose_tiles"));
     let row = view.tiles.palette.max(0) as usize;
     let Some(sheet) = doc.companion_sheet(row) else { return };
     let version = doc.version * 16 + row as u64;
@@ -1534,11 +1546,11 @@ pub(crate) fn entry_text(at: Option<crate::paint::Point>, entry: Option<ScreenMa
         (Some((x, y)), Some(entry)) => {
             let flips = match (entry.horizontal_flip, entry.vertical_flip) {
                 (false, false) => "",
-                (true, false) => " · flipped X",
-                (false, true) => " · flipped Y",
-                (true, true) => " · flipped X and Y",
+                (true, false) => tr!("graphics_editor.flipped_x"),
+                (false, true) => tr!("graphics_editor.flipped_y"),
+                (true, true) => tr!("graphics_editor.flipped_xy"),
             };
-            format!("{x}, {y} · tile {} · palette {}{flips}", entry.tile, entry.palette)
+            tr!("graphics_editor.entry_text", x, y, tile = entry.tile, palette = entry.palette, flips)
         }
         _ => String::new(),
     }

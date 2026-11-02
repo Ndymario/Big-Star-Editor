@@ -8,6 +8,7 @@ use egui::{Color32, Key, Modifiers, PointerButton, Pos2, Rect, Sense, Stroke, St
 use serde::{Deserialize, Serialize};
 
 use crate::controls::{self, Button};
+use crate::i18n::tr;
 use crate::icons;
 use crate::paint::Point;
 
@@ -102,9 +103,9 @@ impl Grids {
     /// The switch for a grid every `step` image pixels: one pixel, a tile, or a 16-pixel block or more.
     fn switch(&mut self, step: usize) -> (&mut bool, &'static str) {
         match step {
-            1 => (&mut self.pixel, "Pixel grid"),
-            16.. => (&mut self.block, "Block grid"),
-            _ => (&mut self.tile, "Tile grid"),
+            1 => (&mut self.pixel, tr!("zoom_canvas.pixel_grid")),
+            16.. => (&mut self.block, tr!("zoom_canvas.block_grid")),
+            _ => (&mut self.tile, tr!("zoom_canvas.tile_grid")),
         }
     }
 
@@ -199,18 +200,18 @@ pub struct Steps {
 
 /// Zoom in, out, actual size and fit, and the grid toggles.
 pub fn zoom_controls(ui: &mut Ui, state: &mut CanvasState, steps: Steps) {
-    if Button::icon(icons::ZOOM_OUT).show(ui).on_hover_text("Zoom out (-)").clicked() {
+    if Button::icon(icons::ZOOM_OUT).show(ui).on_hover_text(tr!("zoom_canvas.zoom_out")).clicked() {
         state.zoom_by(-1);
     }
-    let label = if state.zoom.is_none() { format!("Fit {}×", state.shown_zoom) } else { format!("{}×", state.shown_zoom) };
-    ui.label(label).on_hover_text("Ctrl+wheel zooms about the pointer");
-    if Button::icon(icons::ZOOM_IN).show(ui).on_hover_text("Zoom in (+)").clicked() {
+    let label = if state.zoom.is_none() { tr!("zoom_canvas.fit_zoom", zoom = state.shown_zoom) } else { format!("{}×", state.shown_zoom) };
+    ui.label(label).on_hover_text(tr!("zoom_canvas.ctrl_wheel_zooms_about_the_pointer"));
+    if Button::icon(icons::ZOOM_IN).show(ui).on_hover_text(tr!("zoom_canvas.zoom_in")).clicked() {
         state.zoom_by(1);
     }
-    if Button::new("1:1").small().show(ui).on_hover_text("Actual size").clicked() {
+    if Button::new("1:1").small().show(ui).on_hover_text(tr!("zoom_canvas.actual_size")).clicked() {
         state.zoom = Some(1.0);
     }
-    if Button::new("Fit").small().selected(state.zoom.is_none()).show(ui).on_hover_text("Fit the view (0)").clicked() {
+    if Button::new(tr!("zoom_canvas.fit")).small().selected(state.zoom.is_none()).show(ui).on_hover_text(tr!("zoom_canvas.fit_the_view")).clicked() {
         state.zoom = None;
     }
     let mut grids = Grids::current(ui.ctx());
@@ -298,7 +299,7 @@ pub fn show(
 ) -> CanvasInput {
     let mut input = CanvasInput::default();
     if image.width == 0 || image.height == 0 || image.pixels.len() < image.width * image.height * 4 {
-        ui.weak("Nothing to draw.");
+        ui.weak(tr!("zoom_canvas.nothing_to_draw"));
         return input;
     }
     upload(ui, name, image, version, texture);

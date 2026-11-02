@@ -5,6 +5,8 @@ use std::sync::Arc;
 
 use egui::{Color32, CornerRadius, FontFamily, FontId, Stroke, Visuals};
 
+use crate::i18n::{self, key, tr};
+
 /// One palette, light or dark.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tokens {
@@ -585,6 +587,24 @@ pub struct AnyTheme<'a> {
 }
 
 impl<'a> AnyTheme<'a> {
+    /// The name shown to people: a built-in theme's in the interface's language, a custom theme's as it was typed.
+    /// `name` stays the English one, which is what is exported and what [`distinct_name`] keeps clear of.
+    pub fn display_name(&self) -> &'a str {
+        if !self.built_in {
+            return self.name;
+        }
+        match self.id {
+            "default" => i18n::text(key!("theme.family.default")),
+            "ocean" => i18n::text(key!("theme.family.ocean")),
+            "forest" => i18n::text(key!("theme.family.forest")),
+            "sunset" => i18n::text(key!("theme.family.sunset")),
+            "midnight" => i18n::text(key!("theme.family.midnight")),
+            "lavender" => i18n::text(key!("theme.family.lavender")),
+            "overcast" => i18n::text(key!("theme.family.overcast")),
+            _ => self.name,
+        }
+    }
+
     pub fn variant(&self, dark: bool) -> &'a Tokens {
         if dark { self.dark } else { self.light }
     }
@@ -600,6 +620,7 @@ pub fn all_themes(custom: &[CustomTheme]) -> impl Iterator<Item = AnyTheme<'_>> 
 /// One colour of a palette: what a theme file calls it, what the theme editor calls it, and where it is.
 pub struct Token {
     pub key: &'static str,
+    /// The language key of what the theme editor calls it; `i18n::text` turns it into words.
     pub label: &'static str,
     pub color: fn(&mut Tokens) -> &mut Color32,
 }
@@ -608,55 +629,62 @@ const fn token(key: &'static str, label: &'static str, color: fn(&mut Tokens) ->
     Token { key, label, color }
 }
 
-/// Every colour of a palette, in the order the theme editor shows them and a theme file lists them.
+/// Every colour of a palette, in the order the theme editor shows them and a theme file lists them. A group is named by a
+/// language key, as a token is labelled.
 pub const TOKEN_GROUPS: [(&str, &[Token]); 6] = [
     (
-        "Backgrounds",
+        key!("theme.group.backgrounds"),
         &[
-            token("base", "Window", |t| &mut t.base),
-            token("surface", "Card and panel", |t| &mut t.surface),
-            token("surfaceRaised", "Raised card", |t| &mut t.surface_raised),
-            token("well", "Canvas", |t| &mut t.well),
-            token("overlay", "Dialog and menu", |t| &mut t.overlay),
+            token("base", key!("theme.token.window"), |t| &mut t.base),
+            token("surface", key!("theme.token.card_and_panel"), |t| &mut t.surface),
+            token("surfaceRaised", key!("theme.token.raised_card"), |t| &mut t.surface_raised),
+            token("well", key!("theme.token.canvas"), |t| &mut t.well),
+            token("overlay", key!("theme.token.dialog_and_menu"), |t| &mut t.overlay),
         ],
     ),
     (
-        "Controls",
+        key!("theme.group.controls"),
         &[
-            token("control", "Button", |t| &mut t.control),
-            token("controlHover", "Button under the pointer", |t| &mut t.control_hover),
-            token("controlText", "Button text", |t| &mut t.control_text),
-            token("field", "Text field", |t| &mut t.field),
+            token("control", key!("theme.token.button"), |t| &mut t.control),
+            token("controlHover", key!("theme.token.button_under_the_pointer"), |t| &mut t.control_hover),
+            token("controlText", key!("theme.token.button_text"), |t| &mut t.control_text),
+            token("field", key!("theme.token.text_field"), |t| &mut t.field),
         ],
     ),
     (
-        "Text",
+        key!("theme.group.text"),
         &[
-            token("foreground", "Text", |t| &mut t.foreground),
-            token("muted", "Muted text", |t| &mut t.muted),
-            token("subtle", "Placeholder text", |t| &mut t.subtle),
-            token("inverted", "Text on the accent", |t| &mut t.inverted),
+            token("foreground", key!("theme.token.text"), |t| &mut t.foreground),
+            token("muted", key!("theme.token.muted_text"), |t| &mut t.muted),
+            token("subtle", key!("theme.token.placeholder_text"), |t| &mut t.subtle),
+            token("inverted", key!("theme.token.text_on_the_accent"), |t| &mut t.inverted),
         ],
     ),
     (
-        "Accent",
+        key!("theme.group.accent"),
         &[
-            token("primary", "Accent", |t| &mut t.primary),
-            token("primaryHover", "Accent under the pointer", |t| &mut t.primary_hover),
-            token("primarySubtle", "Accent tint", |t| &mut t.primary_subtle),
-            token("primaryText", "Accent text", |t| &mut t.primary_text),
-            token("ring", "Focus ring", |t| &mut t.ring),
+            token("primary", key!("theme.token.accent"), |t| &mut t.primary),
+            token("primaryHover", key!("theme.token.accent_under_the_pointer"), |t| &mut t.primary_hover),
+            token("primarySubtle", key!("theme.token.accent_tint"), |t| &mut t.primary_subtle),
+            token("primaryText", key!("theme.token.accent_text"), |t| &mut t.primary_text),
+            token("ring", key!("theme.token.focus_ring"), |t| &mut t.ring),
         ],
     ),
-    ("Borders", &[token("border", "Border", |t| &mut t.border), token("borderStrong", "Strong border", |t| &mut t.border_strong)]),
     (
-        "Status",
+        key!("theme.group.borders"),
         &[
-            token("success", "Success", |t| &mut t.success),
-            token("warning", "Warning", |t| &mut t.warning),
-            token("warningSubtle", "Warning tint", |t| &mut t.warning_subtle),
-            token("danger", "Danger", |t| &mut t.danger),
-            token("dangerSubtle", "Danger tint", |t| &mut t.danger_subtle),
+            token("border", key!("theme.token.border"), |t| &mut t.border),
+            token("borderStrong", key!("theme.token.strong_border"), |t| &mut t.border_strong),
+        ],
+    ),
+    (
+        key!("theme.group.status"),
+        &[
+            token("success", key!("theme.token.success"), |t| &mut t.success),
+            token("warning", key!("theme.token.warning"), |t| &mut t.warning),
+            token("warningSubtle", key!("theme.token.warning_tint"), |t| &mut t.warning_subtle),
+            token("danger", key!("theme.token.danger"), |t| &mut t.danger),
+            token("dangerSubtle", key!("theme.token.danger_tint"), |t| &mut t.danger_subtle),
         ],
     ),
 ];
@@ -684,12 +712,12 @@ fn tokens_json(tokens: &Tokens) -> serde_json::Value {
 fn tokens_from_json(file: &serde_json::Value, key: &str, over: &Tokens) -> Result<(Tokens, bool), String> {
     let mut tokens = over.clone();
     let Some(listed) = file.get(key) else { return Ok((tokens, false)) };
-    let listed = listed.as_object().ok_or_else(|| format!("This is not a theme file: {key} is not a list of colours."))?;
+    let listed = listed.as_object().ok_or_else(|| tr!("theme.error.not_a_list", list = key))?;
     let mut any = false;
     for token in TOKEN_GROUPS.iter().flat_map(|(_, group)| group.iter()) {
         if let Some(value) = listed.get(token.key) {
             let color = value.as_str().and_then(parse_channels);
-            *(token.color)(&mut tokens) = color.ok_or_else(|| format!("{} in {key} is not three numbers from 0 to 255.", token.key))?;
+            *(token.color)(&mut tokens) = color.ok_or_else(|| tr!("theme.error.not_numbers", token = token.key, list = key))?;
             any = true;
         }
     }
@@ -717,27 +745,27 @@ pub fn theme_file_name(name: &str) -> String {
 
 fn theme_from_json(file: &serde_json::Value) -> Result<CustomTheme, String> {
     if !file.is_object() {
-        return Err("This is not a theme file: it holds no theme.".to_owned());
+        return Err(tr!("theme.error.holds_no_theme").to_owned());
     }
     let name = match file.get("name") {
         None => "",
-        Some(name) => name.as_str().ok_or("This is not a theme file: its name is not text.")?,
+        Some(name) => name.as_str().ok_or_else(|| tr!("theme.error.name_not_text").to_owned())?,
     };
     if name.trim().is_empty() {
-        return Err("This theme has no name.".to_owned());
+        return Err(tr!("theme.error.no_name").to_owned());
     }
     // What a file leaves out is the default theme's, in each mode.
     let (light, any_light) = tokens_from_json(file, "lightTokens", &default_family().light)?;
     let (dark, any_dark) = tokens_from_json(file, "darkTokens", &default_family().dark)?;
     if !any_light && !any_dark {
-        return Err("This theme has no colours.".to_owned());
+        return Err(tr!("theme.error.no_colours").to_owned());
     }
     Ok(CustomTheme { id: String::new(), name: tidy_name(name), light, dark })
 }
 
 /// The theme a file holds, with no id yet. Anything else in the file is ignored, a colour this editor cannot read is not.
 pub fn parse_theme_file(text: &str) -> Result<CustomTheme, String> {
-    let file = serde_json::from_str(text).map_err(|error| format!("This is not a theme file: {error}"))?;
+    let file = serde_json::from_str(text).map_err(|error| tr!("theme.error.not_a_theme_file", error))?;
     theme_from_json(&file)
 }
 
@@ -783,7 +811,9 @@ fn tidy_name(name: &str) -> String {
 /// `name`, numbered if a theme other than `except` already goes by it.
 pub fn distinct_name(custom: &[CustomTheme], name: &str, except: Option<&str>) -> String {
     let name = tidy_name(name);
-    let taken = |candidate: &str| all_themes(custom).any(|theme| theme.name == candidate && Some(theme.id) != except);
+    // A built-in theme is also known by its name in the interface's language, which a new name must not copy either.
+    let taken =
+        |candidate: &str| all_themes(custom).any(|theme| (theme.name == candidate || theme.display_name() == candidate) && Some(theme.id) != except);
     if !taken(&name) {
         return name;
     }
@@ -803,9 +833,9 @@ impl Mode {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Light => "Light",
-            Self::Dark => "Dark",
-            Self::System => "System",
+            Self::Light => i18n::text(key!("theme.mode.light")),
+            Self::Dark => i18n::text(key!("theme.mode.dark")),
+            Self::System => i18n::text(key!("theme.mode.system")),
         }
     }
 

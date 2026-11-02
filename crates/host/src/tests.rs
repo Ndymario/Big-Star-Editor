@@ -296,7 +296,7 @@ fn level_requests_need_an_open_project() {
 fn the_level_list_marks_the_areas_the_rom_holds() {
     let (_fixture, mut session) = Fixture::with_project("host-levels");
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
-    assert_eq!(worlds.root.groups[0].name, "${world} 1");
+    assert_eq!(worlds.root.groups[0].name, "World 1");
     assert_eq!(worlds.root.groups[0].levels[0].display_name, "1-1");
     assert_eq!(worlds.problem, None);
     let available: Vec<&str> = worlds.root.areas().into_iter().filter(|a| a.available).map(|a| a.token.as_str()).collect();
@@ -344,7 +344,7 @@ fn a_projects_level_list_replaces_the_editors() {
     let list = fixture.root.path().join("proj/levels.yaml");
     write_bytes(
         &list,
-        b"levels:\n  - group:\n      name: \"${world} 9\"\n      levels:\n        - level:\n            name: \"9-1\"\n            areas: [course/A01_1, z_new/mine/Bonus]\n",
+        b"levels:\n  - group:\n      name: \"World 9\"\n      levels:\n        - level:\n            name: \"9-1\"\n            areas: [course/A01_1, z_new/mine/Bonus]\n",
     );
     // Writing the file is a change of files, which the watcher reports in its own time; reopening reads it now.
     session.handle(Request::CloseProject).unwrap();
@@ -352,7 +352,7 @@ fn a_projects_level_list_replaces_the_editors() {
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
     assert_eq!(worlds.problem, None);
     let names: Vec<&str> = worlds.root.groups.iter().map(|group| group.name.as_str()).collect();
-    assert_eq!(names, ["${world} 9", "Custom Levels"]);
+    assert_eq!(names, ["World 9", "Custom Levels"]);
     let tokens: Vec<(&str, bool)> = worlds.root.areas().into_iter().map(|a| (a.token.as_str(), a.available)).collect();
     assert_eq!(tokens, [("course/A01_1", true), ("z_new/mine/Bonus", true), ("z_new/mine/Other", true)]);
     assert_eq!(open_level(&mut session, "z_new/mine/Bonus").title, "9-1 Area 2");
@@ -362,7 +362,7 @@ fn a_projects_level_list_replaces_the_editors() {
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let Response::Levels(worlds) = session.handle(Request::ListLevels).unwrap() else { panic!() };
     assert!(worlds.problem.as_deref().is_some_and(|problem| problem.starts_with("levels.yaml was not used")), "{:?}", worlds.problem);
-    assert_eq!(worlds.root.groups[0].name, "${world} 1");
+    assert_eq!(worlds.root.groups[0].name, "World 1");
 }
 
 #[test]

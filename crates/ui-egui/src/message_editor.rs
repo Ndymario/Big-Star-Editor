@@ -3,6 +3,7 @@
 //! port of `MessageEditorPanel`; the document is pure, and `show` draws it.
 
 use crate::controls::{self, Button, Row, TextField, Width};
+use crate::i18n::tr;
 use crate::{dialogs, icons};
 use bigstar_formats::{Bmg, BmgMessage, bmg_encoding_name, bmg_message_plain_text, bmg_message_text, parse_bmg, parse_bmg_message_text, write_bmg};
 use egui::Ui;
@@ -104,12 +105,12 @@ impl MessageDoc {
     }
 
     pub fn info(&self) -> String {
-        format!(
-            "{} message(s) · {} · file ID {} · {} attribute byte(s)",
-            self.bmg.messages.len(),
-            bmg_encoding_name(self.bmg.encoding),
-            self.bmg.file_id,
-            self.bmg.attribute_size
+        tr!(
+            "message_editor.info",
+            messages = self.bmg.messages.len(),
+            encoding = bmg_encoding_name(self.bmg.encoding),
+            file_id = self.bmg.file_id,
+            attribute_bytes = self.bmg.attribute_size
         )
     }
 
@@ -120,7 +121,7 @@ impl MessageDoc {
         Some((
             index.to_string(),
             message.id.map(|id| id.to_string()).unwrap_or_default(),
-            if preview.is_empty() { "(empty)".to_owned() } else { preview },
+            if preview.is_empty() { tr!("message_editor.empty").to_owned() } else { preview },
         ))
     }
 
@@ -176,12 +177,12 @@ impl MessageDoc {
 
     pub fn stats(&self) -> String {
         if self.active.is_none() {
-            return "No message selected.".to_owned();
+            return tr!("message_editor.no_message_selected").to_owned();
         }
         let parts = parse_bmg_message_text(&self.text);
         let escapes = parts.iter().filter(|p| p.escape).count();
         let plain: String = parts.iter().filter(|p| !p.escape).map(|p| p.text.as_str()).collect();
-        format!("{} character(s) · {} line(s) · {} escape sequence(s)", plain.chars().count(), plain.matches('\n').count() + 1, escapes)
+        tr!("message_editor.stats", characters = plain.chars().count(), lines = plain.matches('\n').count() + 1, escapes)
     }
 
     /// Adds a blank message, or a copy of the selected one, at the end and selects it.
@@ -216,7 +217,7 @@ impl MessageDoc {
         let parts = parse_bmg_message_text(&candidate);
         match parts.as_slice() {
             [part] if part.escape => Ok(candidate),
-            _ => Err("Escapes are a decimal type, a colon, and an even number of hexadecimal digits.".to_owned()),
+            _ => Err(tr!("message_editor.escapes_are_a_decimal_type").to_owned()),
         }
     }
 
@@ -316,7 +317,7 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
         return actions;
     }
     ui.label(doc.info());
-    controls::search(ui, &mut doc.filter, "Filter messages by text or ID", Width::Fill);
+    controls::search(ui, &mut doc.filter, tr!("message_editor.filter_messages_by_text_or_id"), Width::Fill);
 
     // The list takes what the editor under it leaves, however its buttons wrap.
     let mut footer = controls::Footer::new(ui, "messages", 260.0);
@@ -325,9 +326,9 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
         egui::Grid::new("message-list").num_columns(if doc.bmg.has_mid1 { 3 } else { 2 }).striped(true).show(ui, |ui| {
             ui.strong("#");
             if doc.bmg.has_mid1 {
-                ui.strong("ID");
+                ui.strong(tr!("message_editor.id"));
             }
-            ui.strong("Message");
+            ui.strong(tr!("message_editor.message"));
             ui.end_row();
             for index in 0..doc.bmg.messages.len() {
                 if !doc.visible(index) {
@@ -367,15 +368,15 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
     }
     egui::Grid::new("message-fields").num_columns(2).show(ui, |ui| {
         if doc.bmg.has_mid1 {
-            ui.label("Message ID");
+            ui.label(tr!("message_editor.message_id"));
             if ui.add_enabled(editing, controls::number(&mut doc.id).range(0..=i32::MAX)).changed() {
                 doc.commit();
             }
             ui.end_row();
         }
         if doc.bmg.attribute_size > 0 {
-            ui.label("Attributes");
-            if ui.add_enabled(editing, TextField::new(&mut doc.attributes).hint("INF1 attribute bytes, hexadecimal")).changed() {
+            ui.label(tr!("message_editor.attributes"));
+            if ui.add_enabled(editing, TextField::new(&mut doc.attributes).hint(tr!("message_editor.inf1_attribute_bytes_hexadecimal"))).changed() {
                 doc.commit();
             }
             ui.end_row();
@@ -384,34 +385,31 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
     ui.weak(doc.stats());
 
     ui.horizontal_wrapped(|ui| {
-        if Button::new("Add").with_icon(icons::PLUS).show(ui).clicked() {
+        if Button::new(tr!("common.add")).with_icon(icons::PLUS).show(ui).clicked() {
             doc.add(false);
         }
-        if Button::new("Duplicate").show(ui).clicked() {
+        if Button::new(tr!("message_editor.duplicate")).show(ui).clicked() {
             doc.add(true);
         }
-        if Button::new("Remove").enabled(editing).show(ui).clicked() {
+        if Button::new(tr!("common.remove")).enabled(editing).show(ui).clicked() {
             view.confirm_remove = doc.active;
         }
-        if Button::new("Insert escape…").enabled(editing).show(ui).clicked() {
+        if Button::new(tr!("message_editor.insert_escape_ellipsis")).enabled(editing).show(ui).clicked() {
             view.escape = Some("255:00000000".to_owned());
         }
-        if Button::new("Export text…").show(ui).clicked() {
+        if Button::new(tr!("message_editor.export_text_ellipsis")).show(ui).clicked() {
             let text = doc.export_text();
             let name = doc.path.rsplit(['/', '!']).next().unwrap_or("messages").to_owned();
             let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
-            if let Err(error) = services.save_file("Export messages", &format!("{stem}.txt"), "txt", text.as_bytes()) {
+            if let Err(error) = services.save_file(tr!("message_editor.export_messages"), &format!("{stem}.txt"), "txt", text.as_bytes()) {
                 view.notice = Some(error);
             }
         }
-        if Button::new("Import text…").show(ui).clicked() {
-            match services.open_file("Import messages", &["txt"]) {
+        if Button::new(tr!("message_editor.import_text_ellipsis")).show(ui).clicked() {
+            match services.open_file(tr!("message_editor.import_messages"), &["txt"]) {
                 Some(Ok((_, bytes))) => {
                     let done = doc.import_text(&String::from_utf8_lossy(&bytes));
-                    view.notice = Some(format!(
-                        "Updated {} message(s), appended {}, skipped {} unreadable line(s).",
-                        done.updated, done.appended, done.skipped
-                    ));
+                    view.notice = Some(tr!("message_editor.imported", updated = done.updated, appended = done.appended, skipped = done.skipped));
                 }
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
@@ -428,15 +426,13 @@ pub fn show(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView, services:
 fn prompts(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView) {
     if let Some(row) = view.confirm_remove {
         let mut answer = None;
-        dialogs::modal(ui.ctx(), ("message-remove", &doc.path), "Remove message", 440.0, |ui| {
-            ui.label(format!(
-                "Remove message {row}? Every message after it moves up by one, which breaks any code that refers to these messages by number."
-            ));
+        dialogs::modal(ui.ctx(), ("message-remove", &doc.path), tr!("message_editor.remove_message"), 440.0, |ui| {
+            ui.label(tr!("message_editor.remove_message_confirm", row));
             dialogs::actions(ui, |ui| {
-                if Button::new("Remove").danger().show(ui).clicked() {
+                if Button::new(tr!("common.remove")).danger().show(ui).clicked() {
                     answer = Some(true);
                 }
-                if Button::new("Cancel").show(ui).clicked() {
+                if Button::new(tr!("common.cancel")).show(ui).clicked() {
                     answer = Some(false);
                 }
             });
@@ -450,14 +446,14 @@ fn prompts(ui: &mut Ui, doc: &mut MessageDoc, view: &mut MessageView) {
     }
     if let Some(typed) = &mut view.escape {
         let mut answer = None;
-        dialogs::modal(ui.ctx(), ("message-escape", &doc.path), "Insert escape sequence", 440.0, |ui| {
-            ui.label("Escape as type:hexdata, for example 255:00000100");
-            TextField::new(typed).name("Escape sequence").code().show(ui);
+        dialogs::modal(ui.ctx(), ("message-escape", &doc.path), tr!("message_editor.insert_escape_sequence"), 440.0, |ui| {
+            ui.label(tr!("message_editor.escape_as_type_hexdata"));
+            TextField::new(typed).name(tr!("message_editor.escape_sequence")).code().show(ui);
             dialogs::actions(ui, |ui| {
-                if Button::new("Insert").primary().show(ui).clicked() {
+                if Button::new(tr!("message_editor.insert")).primary().show(ui).clicked() {
                     answer = Some(true);
                 }
-                if Button::new("Cancel").show(ui).clicked() {
+                if Button::new(tr!("common.cancel")).show(ui).clicked() {
                     answer = Some(false);
                 }
             });

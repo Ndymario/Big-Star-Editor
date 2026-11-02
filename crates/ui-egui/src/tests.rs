@@ -2508,10 +2508,10 @@ fn escape_leaves_a_field_or_a_list_before_it_cancels_preferences() {
         .expect("the language list")
         .click();
     harness.run();
-    assert!(harness.query_by_label("Nederlands").is_some());
+    assert!(harness.query_by_label("Português (Portugal)").is_some());
     harness.key_press(egui::Key::Escape);
     harness.run();
-    assert!(harness.query_by_label("Nederlands").is_none());
+    assert!(harness.query_by_label("Português (Portugal)").is_none());
     assert!(harness.state().preferences.is_some());
     harness.key_press(egui::Key::Escape);
     harness.run();
@@ -2694,7 +2694,7 @@ fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on
         .expect("the language list")
         .click();
     harness.run();
-    harness.get_by_label("Nederlands").click();
+    harness.get_by_label("Português (Portugal)").click();
     harness.run();
     if let Some(preferences) = harness.state_mut().preferences.as_mut() {
         preferences.autosave_minutes = 5;
@@ -2703,15 +2703,15 @@ fn preferences_choose_the_language_here_and_the_projects_autosave_and_backups_on
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
-    // The menus read in Dutch now, and the choice is kept for the next run.
-    harness.get_by_label("Gereedschap");
-    harness.get_by_label("Beeld");
-    harness.get_by_label("Bestandssysteem");
-    assert_eq!(crate::Services::load(&stored, crate::LANGUAGE_KEY).as_deref(), Some("nl"));
+    // The menus read in Portuguese now, and the choice is kept for the next run.
+    harness.get_by_label("Ferramentas");
+    harness.get_by_label("Ver");
+    harness.get_by_label("Sistema de ficheiros");
+    assert_eq!(crate::Services::load(&stored, crate::LANGUAGE_KEY).as_deref(), Some("pt"));
     let settings = harness.state().session().unwrap().settings.clone().unwrap();
     assert_eq!((settings.autosave_minutes, settings.backups_kept), (5, 3));
     let again = BigStarApp::new(Box::new(stored.sharing_values()));
-    assert_eq!(again.language, crate::Language::Dutch);
+    assert_eq!(again.language, crate::Language::from_code("pt"));
 }
 
 /// The app on `connection`, with the shelf that stands for its file dialogs.

@@ -716,7 +716,7 @@ pub struct LevelSummary {
 /// A group of the level list: a world, or anything else the list gathers, holding groups of its own before its levels.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LevelGroup {
-    /// May hold `${world}`, which the frontend reads as the word for "World" in its language.
+    /// In English; the frontend reads the names it knows, such as "World 1", in its own language.
     pub name: String,
     pub groups: Vec<LevelGroup>,
     pub levels: Vec<LevelSummary>,

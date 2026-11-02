@@ -17,6 +17,7 @@ use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutco
 use egui::{Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::i18n::tr;
 use crate::properties::{PanelState, Tab, item_count};
 
 pub const TILE: f32 = 16.0;
@@ -70,13 +71,13 @@ impl Kind {
 
     pub fn name(self) -> &'static str {
         match self {
-            Kind::Object => "Object",
-            Kind::Sprite => "Sprite",
-            Kind::Entrance => "Entrance",
-            Kind::View => "View",
-            Kind::Zone => "Zone",
-            Kind::Path => "Path",
-            Kind::ProgressPath => "Progress path",
+            Kind::Object => tr!("level_view.kind.object"),
+            Kind::Sprite => tr!("level_view.kind.sprite"),
+            Kind::Entrance => tr!("level_view.kind.entrance"),
+            Kind::View => tr!("level_view.kind.view"),
+            Kind::Zone => tr!("level_view.kind.zone"),
+            Kind::Path => tr!("level_view.kind.path"),
+            Kind::ProgressPath => tr!("level_view.kind.progress_path"),
         }
     }
 }
@@ -223,19 +224,19 @@ impl DsScreens {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Off => "No DS screen",
-            Self::Cursor => "DS screen under the cursor",
-            Self::Entrances => "DS screen of selected entrances",
-            Self::Both => "Both",
+            Self::Off => tr!("level_view.ds.name_off"),
+            Self::Cursor => tr!("level_view.ds.name_cursor"),
+            Self::Entrances => tr!("level_view.ds.name_entrances"),
+            Self::Both => tr!("level_view.ds.name_both"),
         }
     }
 
     pub fn short(self) -> &'static str {
         match self {
-            Self::Off => "DS off",
-            Self::Cursor => "DS at cursor",
-            Self::Entrances => "DS at entrances",
-            Self::Both => "DS both",
+            Self::Off => tr!("level_view.ds.short_off"),
+            Self::Cursor => tr!("level_view.ds.short_cursor"),
+            Self::Entrances => tr!("level_view.ds.short_entrances"),
+            Self::Both => tr!("level_view.ds.short_both"),
         }
     }
 }
@@ -256,17 +257,17 @@ impl Backgrounds {
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::Hidden => "No backgrounds",
-            Self::InViews => "Backgrounds inside views",
-            Self::Overflowing => "Backgrounds overflowing",
+            Self::Hidden => tr!("level_view.bg.name_hidden"),
+            Self::InViews => tr!("level_view.bg.name_in_views"),
+            Self::Overflowing => tr!("level_view.bg.name_overflowing"),
         }
     }
 
     pub fn short(self) -> &'static str {
         match self {
-            Self::Hidden => "BG off",
-            Self::InViews => "BG in views",
-            Self::Overflowing => "BG all over",
+            Self::Hidden => tr!("level_view.bg.short_hidden"),
+            Self::InViews => tr!("level_view.bg.short_in_views"),
+            Self::Overflowing => tr!("level_view.bg.short_overflowing"),
         }
     }
 }
@@ -762,7 +763,7 @@ impl LevelView {
 
     /// What view `index`'s tab says.
     pub fn view_tab_label(&self, index: usize) -> Option<String> {
-        self.snapshot.course.views.get(index).map(|v| format!("View {}", v.id))
+        self.snapshot.course.views.get(index).map(|v| tr!("level_view.view_tab", id = v.id))
     }
 
     /// What a click or a marquee can take, back to front: every entity's own box, except that a view is taken only by
@@ -1105,7 +1106,7 @@ impl LevelView {
             let target = if kind == Kind::Path { &mut updates.paths } else { &mut updates.progress_paths };
             target.push(IndexedLevelValue { index, value });
         }
-        Some(LevelEdit::Update { updates, name: "Move selection".to_owned() })
+        Some(LevelEdit::Update { updates, name: tr!("level_view.edit.move_selection").to_owned() })
     }
 
     /// Whether the resize would drag the origin of an unsigned entity past the origin of the map. Left unchecked the
@@ -1166,7 +1167,7 @@ impl LevelView {
             }
             _ => return None,
         }
-        Some(LevelEdit::Update { updates, name: "Resize selection".to_owned() })
+        Some(LevelEdit::Update { updates, name: tr!("level_view.edit.resize_selection").to_owned() })
     }
 
     /// The cell a right-click at level point `point` puts an object in.
@@ -1215,7 +1216,7 @@ impl LevelView {
         items.objects.push(self.object_between(from, to));
         self.gesture = Some(Gesture::Place { from, to, submitted: true });
         self.placing = true;
-        Some(LevelEdit::Add { items, name: "Add object".to_owned() })
+        Some(LevelEdit::Add { items, name: tr!("level_view.edit.add_object").to_owned() })
     }
 
     /// Where the object being dragged out lies, in level pixels.
@@ -1246,35 +1247,35 @@ impl LevelView {
             Kind::Object => {
                 let cell = (tile_x as i16, tile_y as i16);
                 items.objects.push(self.object_between(cell, cell));
-                "Add object"
+                tr!("level_view.edit.add_object")
             }
             Kind::Sprite => {
                 let value = NsmbLevelSprite { id: placement.sprite_type, x: tile_x as u16, y: tile_y as u16, ..Default::default() };
                 items.sprites.push(SpriteInsertion { value, hash: placement.sprite_hash });
-                if placement.sprite_hash.is_some() { "Add custom sprite" } else { "Add sprite" }
+                if placement.sprite_hash.is_some() { tr!("level_view.edit.add_custom_sprite") } else { tr!("level_view.edit.add_sprite") }
             }
             Kind::Entrance => {
                 items.entrances.push(NsmbLevelEntrance { x: pixel_x as u16, y: pixel_y as u16, ..Default::default() });
-                "Add entrance"
+                tr!("level_view.edit.add_entrance")
             }
             Kind::Zone => {
                 items.zones.push(NsmbLevelZone { x: pixel_x as u16, y: pixel_y as u16, width: 256, height: 192, ..Default::default() });
-                "Add zone"
+                tr!("level_view.edit.add_zone")
             }
             Kind::Path | Kind::ProgressPath => {
                 let node = NsmbLevelPathNode { x: pixel_x as i16, y: pixel_y as i16, ..Default::default() };
                 let path = NsmbLevelPath { nodes: vec![node], ..Default::default() };
                 if kind == Kind::Path {
                     items.paths.push(path);
-                    "Add path"
+                    tr!("level_view.edit.add_path")
                 } else {
                     items.progress_paths.push(path);
-                    "Add progress path"
+                    tr!("level_view.edit.add_progress_path")
                 }
             }
             Kind::View => {
                 items.views.push(NsmbLevelView { x: pixel_x as u16, y: pixel_y as u16, width: 256, height: 192, ..Default::default() });
-                "Add view"
+                tr!("level_view.edit.add_view")
             }
         };
         self.placing = true;
@@ -1332,7 +1333,7 @@ impl LevelView {
                 }
             }
         }
-        (!seen.is_empty()).then(|| LevelEdit::Add { items, name: "Paste selection".to_owned() })
+        (!seen.is_empty()).then(|| LevelEdit::Add { items, name: tr!("level_view.edit.paste_selection").to_owned() })
     }
 
     /// Starts a Ctrl-drag: the copies are made first and the drag carries them.
@@ -1381,7 +1382,7 @@ impl LevelView {
             };
             list.push(item.index);
         }
-        Some(LevelEdit::Remove { selection, name: "Delete selection".to_owned() })
+        Some(LevelEdit::Remove { selection, name: tr!("level_view.edit.delete_selection").to_owned() })
     }
 
     /// Everything a marquee from `a` to `b` (level pixels) touches, added to the selection.

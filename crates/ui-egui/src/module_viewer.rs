@@ -3,6 +3,7 @@
 //! is built by NCPatcher, so nothing here is edited.
 
 use crate::controls::{self, Button, Choice, Row};
+use crate::i18n::tr;
 use crate::icons;
 use crate::services::Services;
 use crate::theme::Tokens;
@@ -109,12 +110,13 @@ impl ModuleView {
 pub fn show(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView, services: &dyn Services) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(&doc.path).strong());
-        ui.weak("· NCPatcher runtime module, read only");
+        ui.weak(tr!("module_viewer.ncpatcher_runtime_module_read_only"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if Button::new("Export listing…").enabled(doc.module.is_ok()).show(ui).clicked() {
+            if Button::new(tr!("module_viewer.export_listing_ellipsis")).enabled(doc.module.is_ok()).show(ui).clicked() {
                 let name = doc.path.rsplit(['/', '!']).next().unwrap_or("module").to_owned();
                 let stem = name.rsplit_once('.').map_or(name.as_str(), |(stem, _)| stem);
-                if let Err(error) = services.save_file("Export listing", &format!("{stem}.s"), "s", doc.listing_text().as_bytes()) {
+                if let Err(error) = services.save_file(tr!("module_viewer.export_listing"), &format!("{stem}.s"), "s", doc.listing_text().as_bytes())
+                {
                     view.notice = Some(error);
                 }
             }
@@ -132,7 +134,12 @@ pub fn show(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView, services: &
         ui,
         ("module-tabs", &doc.path),
         &mut view.tab,
-        &[(ModuleTab::Overview, "Overview"), (ModuleTab::Patches, "Patches"), (ModuleTab::Exports, "Exports"), (ModuleTab::Assembly, "Assembly")],
+        &[
+            (ModuleTab::Overview, tr!("module_viewer.tab.overview")),
+            (ModuleTab::Patches, tr!("module_viewer.tab.patches")),
+            (ModuleTab::Exports, tr!("module_viewer.tab.exports")),
+            (ModuleTab::Assembly, tr!("module_viewer.tab.assembly")),
+        ],
     );
     ui.add_space(6.0);
     match view.tab {
@@ -144,34 +151,37 @@ pub fn show(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView, services: &
 }
 
 fn size(bytes: u32) -> String {
-    format!("0x{bytes:X} ({bytes} bytes)")
+    tr!("module_viewer.size_bytes", hex = format!("{bytes:X}"), bytes)
 }
 
 fn overview(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
     egui::ScrollArea::vertical().id_salt("module-overview").auto_shrink([false, false]).show(ui, |ui| {
-        controls::section(ui, "Header", |ui| {
+        controls::section(ui, tr!("module_viewer.header"), |ui| {
             egui::Grid::new("module-header").num_columns(2).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
                 let mut field = |name: &str, value: String| {
                     ui.label(name);
                     ui.monospace(value);
                     ui.end_row();
                 };
-                field("Format version", module.version.to_string());
-                field("Image size", size(module.size()));
-                field("Linked for", format!("0x{:08X}", module.base));
-                field("Load alignment", format!("{} bytes", 1u32 << module.align_log2.min(31)));
-                field("Patch count", module.patches.len().to_string());
-                field("Relocations", module.relocs.len().to_string());
-                field("Exports object", if module.exports.is_some() { "yes".to_owned() } else { "none".to_owned() });
-                field("Static destructor room", format!("{} object(s)", module.atexit_capacity));
+                field(tr!("module_viewer.format_version"), module.version.to_string());
+                field(tr!("module_viewer.image_size"), size(module.size()));
+                field(tr!("module_viewer.linked_for"), format!("0x{:08X}", module.base));
+                field(tr!("module_viewer.load_alignment"), tr!("module_viewer.n_bytes", n = 1u32 << module.align_log2.min(31)));
+                field(tr!("module_viewer.patch_count"), module.patches.len().to_string());
+                field(tr!("module_viewer.relocations"), module.relocs.len().to_string());
+                field(
+                    tr!("module_viewer.exports_object"),
+                    if module.exports.is_some() { tr!("module_viewer.yes").to_owned() } else { tr!("module_viewer.none").to_owned() },
+                );
+                field(tr!("module_viewer.static_destructor_room"), tr!("module_viewer.n_objects", n = module.atexit_capacity));
             });
         });
         ui.add_space(8.0);
-        controls::section(ui, "Layout", |ui| {
+        controls::section(ui, tr!("module_viewer.layout"), |ui| {
             egui::Grid::new("module-regions").num_columns(3).striped(true).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-                ui.strong("Part");
-                ui.strong("Offsets");
-                ui.strong("Size");
+                ui.strong(tr!("module_viewer.part"));
+                ui.strong(tr!("module_viewer.offsets"));
+                ui.strong(tr!("module_viewer.size"));
                 ui.end_row();
                 for region in module.regions() {
                     ui.label(region.name);
@@ -182,15 +192,21 @@ fn overview(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
             });
         });
         ui.add_space(8.0);
-        controls::section(ui, "Constructors and destructors", |ui| {
+        controls::section(ui, tr!("module_viewer.constructors_and_destructors"), |ui| {
             if module.constructors.is_empty() && module.destructors.is_empty() {
-                ui.weak("This module has none.");
+                ui.weak(tr!("module_viewer.this_module_has_none"));
             }
-            let functions = module.constructors.iter().map(|a| ("Constructor", a)).chain(module.destructors.iter().map(|a| ("Destructor", a)));
-            for (kind, address) in functions {
+            let functions = module.constructors.iter().map(|a| (true, a)).chain(module.destructors.iter().map(|a| (false, a)));
+            for (constructor, address) in functions {
                 let set = if address & 1 != 0 { "THUMB" } else { "ARM" };
                 let Some(offset) = module.offset_of(address & !1) else { continue };
-                if Row::new(format!("{kind} at +0x{offset:04X} ({set})")).show(ui).on_hover_text("Show it in the listing").clicked() {
+                let offset_hex = format!("{offset:04X}");
+                let label = if constructor {
+                    tr!("module_viewer.constructor_at", offset = offset_hex, set)
+                } else {
+                    tr!("module_viewer.destructor_at", offset = offset_hex, set)
+                };
+                if Row::new(label).show(ui).on_hover_text(tr!("module_viewer.show_it_in_the_listing")).clicked() {
                     view.go(offset);
                 }
             }
@@ -200,13 +216,19 @@ fn overview(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
 
 fn patches(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
     if module.patches.is_empty() {
-        controls::notice(ui, icons::INFO, "No patches", "This module writes nothing into the game when it is loaded.");
+        controls::notice(ui, icons::INFO, tr!("module_viewer.no_patches"), tr!("module_viewer.this_module_writes_nothing_into_the_game"));
         return;
     }
-    ui.weak("Written into the game when the module is attached, in this order, and reverted last first when it is detached.");
+    ui.weak(tr!("module_viewer.written_into_the_game_when_the_module_is_attached"));
     egui::ScrollArea::vertical().id_salt("module-patches").auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("module-patch-list").num_columns(5).striped(true).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-            for heading in ["#", "Game address", "Kind", "Size", "Writes"] {
+            for heading in [
+                tr!("module_viewer.number_sign"),
+                tr!("module_viewer.game_address"),
+                tr!("module_viewer.kind"),
+                tr!("module_viewer.size"),
+                tr!("module_viewer.writes"),
+            ] {
                 ui.strong(heading);
             }
             ui.end_row();
@@ -220,20 +242,30 @@ fn patches(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
                     (NcrtPatchKind::Copy, Some(offset)) => {
                         let bytes = module.image.get(offset as usize..offset as usize + usize::from(patch.size)).unwrap_or_default();
                         let shown: Vec<String> = bytes.iter().take(16).map(|b| format!("{b:02X}")).collect();
-                        format!("{}{}  (from +0x{offset:04X})", shown.join(" "), if bytes.len() > 16 { " …" } else { "" })
+                        tr!(
+                            "module_viewer.bytes_from_offset",
+                            bytes = shown.join(" "),
+                            more = if bytes.len() > 16 { " …" } else { "" },
+                            offset = format!("{offset:04X}")
+                        )
                     }
                     (_, Some(offset)) => {
                         let set = match patch.kind.destination_mode() {
                             Some(CodeMode::Thumb) => " (THUMB)",
                             _ => "",
                         };
-                        format!("a branch to +0x{offset:04X}{set}")
+                        tr!("module_viewer.a_branch_to_offset", offset = format!("{offset:04X}"), set)
                     }
-                    (_, None) => format!("a branch to 0x{:08X}", patch.value),
+                    (_, None) => tr!("module_viewer.a_branch_to_address", address = format!("{:08X}", patch.value)),
                 };
                 match offset {
                     Some(offset) => {
-                        if Row::new(egui::RichText::new(what).monospace()).fit().show(ui).on_hover_text("Show it in the listing").clicked() {
+                        if Row::new(egui::RichText::new(what).monospace())
+                            .fit()
+                            .show(ui)
+                            .on_hover_text(tr!("module_viewer.show_it_in_the_listing"))
+                            .clicked()
+                        {
                             view.go(offset);
                         }
                     }
@@ -250,13 +282,15 @@ fn patches(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
 fn exports(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
     let words = module.export_words();
     if words.is_empty() {
-        controls::notice(ui, icons::INFO, "No exports", "This module gives its loader nothing through ncprt_exports.");
+        controls::notice(ui, icons::INFO, tr!("module_viewer.no_exports"), tr!("module_viewer.this_module_gives_its_loader_nothing"));
         return;
     }
-    ui.weak("The object ncprt_exports_of returns. Its type is the module's own, so it is shown a word at a time.");
+    ui.weak(tr!("module_viewer.the_object_ncprt_exports_of_returns"));
     egui::ScrollArea::vertical().id_salt("module-exports").auto_shrink([false, false]).show(ui, |ui| {
         egui::Grid::new("module-export-list").num_columns(4).striped(true).spacing(vec2(16.0, 4.0)).show(ui, |ui| {
-            for heading in ["Field offset", "Word", "As an int", "Points at"] {
+            for heading in
+                [tr!("module_viewer.field_offset"), tr!("module_viewer.word"), tr!("module_viewer.as_an_int"), tr!("module_viewer.points_at")]
+            {
                 ui.strong(heading);
             }
             ui.end_row();
@@ -269,16 +303,21 @@ fn exports(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
                     Some(target) => {
                         let code = (bigstar_formats::NCRT_HEADER_SIZE..module.code_end()).contains(&target);
                         let what = match (code, word.value & 1 != 0) {
-                            (true, true) => format!("THUMB function at +0x{target:04X}"),
-                            (true, false) => format!("function or data at +0x{target:04X}"),
-                            (false, _) => format!("data at +0x{target:04X}"),
+                            (true, true) => tr!("module_viewer.thumb_function_at", offset = format!("{target:04X}")),
+                            (true, false) => tr!("module_viewer.function_or_data_at", offset = format!("{target:04X}")),
+                            (false, _) => tr!("module_viewer.data_at", offset = format!("{target:04X}")),
                         };
-                        if Row::new(egui::RichText::new(what).monospace()).fit().show(ui).on_hover_text("Show it in the listing").clicked() {
+                        if Row::new(egui::RichText::new(what).monospace())
+                            .fit()
+                            .show(ui)
+                            .on_hover_text(tr!("module_viewer.show_it_in_the_listing"))
+                            .clicked()
+                        {
                             view.go(target);
                         }
                     }
                     None => {
-                        ui.weak("not an address in the module");
+                        ui.weak(tr!("module_viewer.not_an_address_in_the_module"));
                     }
                 }
                 ui.end_row();
@@ -289,12 +328,12 @@ fn exports(ui: &mut Ui, module: &NcrtModule, view: &mut ModuleView) {
 
 fn assembly(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView) {
     ui.horizontal(|ui| {
-        ui.label("Instruction set");
+        ui.label(tr!("module_viewer.instruction_set"));
         let before = doc.mode;
         let name = |mode: ListingMode| match mode {
-            ListingMode::Auto => "Follow the code",
-            ListingMode::Arm => "All ARM",
-            ListingMode::Thumb => "All THUMB",
+            ListingMode::Auto => tr!("module_viewer.mode.follow_the_code"),
+            ListingMode::Arm => tr!("module_viewer.mode.all_arm"),
+            ListingMode::Thumb => tr!("module_viewer.mode.all_thumb"),
         };
         controls::drop_down(("module-mode", &doc.path)).selected_text(name(doc.mode)).show_ui(ui, |ui| {
             for mode in [ListingMode::Auto, ListingMode::Arm, ListingMode::Thumb] {
@@ -304,12 +343,8 @@ fn assembly(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView) {
         if doc.mode != before {
             doc.relist();
         }
-        controls::hint(
-            ui,
-            "A module keeps no symbols. The listing names what the header, the patches and the exports point at, reads each \
-             as the instruction set they say, and follows the branches and loads from there.",
-        );
-        if Button::new("Back").enabled(!view.back.is_empty()).show(ui).clicked()
+        controls::hint(ui, tr!("module_viewer.a_module_keeps_no_symbols"));
+        if Button::new(tr!("module_viewer.back")).enabled(!view.back.is_empty()).show(ui).clicked()
             && let Some(offset) = view.back.pop()
         {
             view.reveal = Some(offset);
@@ -357,7 +392,7 @@ fn assembly(ui: &mut Ui, doc: &mut ModuleDoc, view: &mut ModuleView) {
                         text(3, &format!("; {}", line.comment), t.muted);
                     }
                     if let Some(target) = line.target
-                        && response.on_hover_text(format!("Go to +0x{target:04X}")).clicked()
+                        && response.on_hover_text(tr!("module_viewer.go_to_offset", offset = format!("{target:04X}"))).clicked()
                     {
                         follow = Some(target);
                     }

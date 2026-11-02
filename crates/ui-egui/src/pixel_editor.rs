@@ -7,6 +7,7 @@ use bigstar_formats::RgbaImage;
 use egui::{Event, Key, Pos2, Rect, Ui, Vec2};
 
 use crate::controls::Button;
+use crate::i18n::{self, key, tr};
 use crate::icons::{self, Icon};
 use crate::paint::{self, Grid, Pattern, Point};
 use crate::palette_panel::Colours;
@@ -25,30 +26,25 @@ pub enum PixelTool {
 
 /// Each tool, its icon, its key and what it does, for the toolbar.
 pub const TOOLS: [(PixelTool, Icon, Key, &str); 7] = [
-    (PixelTool::Brush, icons::PENCIL, Key::B, "Brush (B): left paints the left colour, right the right one"),
-    (PixelTool::Eraser, icons::ERASER, Key::E, "Eraser (E): paints colour 0, which is see-through"),
-    (
-        PixelTool::Eyedropper,
-        icons::EYEDROPPER,
-        Key::I,
-        "Eyedropper (I): picks a colour into the button clicked with; Ctrl+click does this with any tool",
-    ),
-    (PixelTool::Fill, icons::BUCKET, Key::G, "Fill (G): fills the area of one colour"),
-    (PixelTool::Line, icons::LINE, Key::L, "Line (L): drag from one end to the other"),
-    (PixelTool::Rectangle, icons::RECTANGLE, Key::R, "Rectangle (R): drag corner to corner; hold Shift to fill it"),
-    (PixelTool::Select, icons::SELECT, Key::M, "Select (M): drag a rectangle to copy, cut, flip or delete; Ctrl+V pastes under the pointer"),
+    (PixelTool::Brush, icons::PENCIL, Key::B, key!("pixel_editor.tool.brush_tip")),
+    (PixelTool::Eraser, icons::ERASER, Key::E, key!("pixel_editor.tool.eraser_tip")),
+    (PixelTool::Eyedropper, icons::EYEDROPPER, Key::I, key!("pixel_editor.tool.eyedropper_tip")),
+    (PixelTool::Fill, icons::BUCKET, Key::G, key!("pixel_editor.tool.fill_tip")),
+    (PixelTool::Line, icons::LINE, Key::L, key!("pixel_editor.tool.line_tip")),
+    (PixelTool::Rectangle, icons::RECTANGLE, Key::R, key!("pixel_editor.tool.rectangle_tip")),
+    (PixelTool::Select, icons::SELECT, Key::M, key!("pixel_editor.tool.select_tip")),
 ];
 
 impl PixelTool {
     pub fn step_name(self) -> &'static str {
         match self {
-            Self::Brush => "Brush",
-            Self::Eraser => "Erase",
-            Self::Eyedropper => "Pick colour",
-            Self::Fill => "Fill",
-            Self::Line => "Line",
-            Self::Rectangle => "Rectangle",
-            Self::Select => "Edit selection",
+            Self::Brush => tr!("pixel_editor.step.brush"),
+            Self::Eraser => tr!("pixel_editor.step.erase"),
+            Self::Eyedropper => tr!("pixel_editor.step.pick_colour"),
+            Self::Fill => tr!("pixel_editor.step.fill"),
+            Self::Line => tr!("pixel_editor.step.line"),
+            Self::Rectangle => tr!("pixel_editor.step.rectangle"),
+            Self::Select => tr!("pixel_editor.step.edit_selection"),
         }
     }
 }
@@ -73,12 +69,12 @@ impl Command {
 
     pub fn step_name(&self) -> &'static str {
         match self {
-            Self::Cut => "Cut",
-            Self::Paste(_) => "Paste",
-            Self::Delete => "Delete selection",
-            Self::FlipHorizontal => "Flip horizontally",
-            Self::FlipVertical => "Flip vertically",
-            _ => "Selection",
+            Self::Cut => tr!("common.cut"),
+            Self::Paste(_) => tr!("common.paste"),
+            Self::Delete => tr!("pixel_editor.step.delete_selection"),
+            Self::FlipHorizontal => tr!("pixel_editor.step.flip_horizontally"),
+            Self::FlipVertical => tr!("pixel_editor.step.flip_vertically"),
+            _ => tr!("pixel_editor.step.selection"),
         }
     }
 }
@@ -144,10 +140,10 @@ pub enum HistoryButton {
 /// Undo and redo buttons, for an editor with its own history.
 pub fn history_buttons(ui: &mut Ui, can_undo: bool, can_redo: bool) -> Option<HistoryButton> {
     let mut asked = None;
-    if Button::icon(icons::UNDO).enabled(can_undo).name("Undo").show(ui).on_hover_text("Undo (Ctrl+Z)").clicked() {
+    if Button::icon(icons::UNDO).enabled(can_undo).name(tr!("common.undo")).show(ui).on_hover_text(tr!("pixel_editor.undo_tip")).clicked() {
         asked = Some(HistoryButton::Undo);
     }
-    if Button::icon(icons::REDO).enabled(can_redo).name("Redo").show(ui).on_hover_text("Redo (Ctrl+Y)").clicked() {
+    if Button::icon(icons::REDO).enabled(can_redo).name(tr!("common.redo")).show(ui).on_hover_text(tr!("pixel_editor.redo_tip")).clicked() {
         asked = Some(HistoryButton::Redo);
     }
     asked
@@ -168,16 +164,21 @@ impl PixelEditor {
                 ui.separator();
             }
             for (tool, icon, _, tip) in TOOLS {
-                if Button::icon(icon).selected(self.tool == tool).name(tool.step_name()).show(ui).on_hover_text(tip).clicked() {
+                if Button::icon(icon).selected(self.tool == tool).name(tool.step_name()).show(ui).on_hover_text(i18n::text(tip)).clicked() {
                     self.tool = tool;
                 }
             }
             ui.separator();
             let selected = self.selection.is_some();
-            if Button::icon(icons::FLIP_HORIZONTAL).enabled(selected).show(ui).on_hover_text("Flip the selection horizontally").clicked() {
+            if Button::icon(icons::FLIP_HORIZONTAL)
+                .enabled(selected)
+                .show(ui)
+                .on_hover_text(tr!("pixel_editor.flip_selection_horizontally"))
+                .clicked()
+            {
                 commands.push(Command::FlipHorizontal);
             }
-            if Button::icon(icons::FLIP_VERTICAL).enabled(selected).show(ui).on_hover_text("Flip the selection vertically").clicked() {
+            if Button::icon(icons::FLIP_VERTICAL).enabled(selected).show(ui).on_hover_text(tr!("pixel_editor.flip_selection_vertically")).clicked() {
                 commands.push(Command::FlipVertical);
             }
             ui.separator();
@@ -374,7 +375,7 @@ impl PixelEditor {
 pub fn position_text(at: Option<Point>, image: &RgbaImage) -> String {
     match at {
         Some((x, y)) if x >= 0 && y >= 0 && (x as usize) < image.width && (y as usize) < image.height => {
-            format!("{x}, {y} · tile {}", (y as usize / 8) * (image.width / 8).max(1) + x as usize / 8)
+            tr!("pixel_editor.position", x, y, tile = (y as usize / 8) * (image.width / 8).max(1) + x as usize / 8)
         }
         _ => String::new(),
     }

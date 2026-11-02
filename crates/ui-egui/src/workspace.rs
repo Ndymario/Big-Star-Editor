@@ -16,6 +16,7 @@ use crate::editors::EditorKind;
 use crate::graphics_editor::{GraphicsAction, GraphicsDoc, GraphicsView, Pairing, pairing_key};
 use crate::hex_editor::HexDoc;
 use crate::history::Undoable;
+use crate::i18n::tr;
 use crate::level_view::{Item, Kind};
 use crate::message_editor::{MessageAction, MessageDoc, MessageView};
 use crate::module_viewer::{ModuleDoc, ModuleView};
@@ -80,11 +81,11 @@ impl FileView {
     /// What the tab calls the editor.
     pub fn editor(&self) -> &'static str {
         match self {
-            FileView::Hex(_) => "Hex",
-            FileView::Graphics(..) => "Graphics",
-            FileView::Messages { .. } => "Messages",
+            FileView::Hex(_) => tr!("workspace.editor.hex"),
+            FileView::Graphics(..) => tr!("editors.graphics"),
+            FileView::Messages { .. } => tr!("editors.messages"),
             FileView::Resource { doc, .. } => doc.title(),
-            FileView::Module(..) => "Runtime module",
+            FileView::Module(..) => tr!("editors.runtime_module"),
         }
     }
 }
@@ -170,8 +171,6 @@ pub struct Workspace {
     next_file: u64,
     /// Tileset workspaces, by the level they belong to.
     pub tilesets: BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
-    /// The interface language, for the tabs' own names.
-    pub language: crate::i18n::Language,
 }
 
 impl Default for Workspace {
@@ -193,7 +192,6 @@ impl Default for Workspace {
             files: BTreeMap::new(),
             next_file: 1,
             tilesets: BTreeMap::new(),
-            language: crate::i18n::Language::default(),
         }
     }
 }
@@ -683,7 +681,6 @@ impl Workspace {
             closed_files: Vec::new(),
             tilesets: &mut tilesets,
             closed_tilesets: Vec::new(),
-            language: self.language,
         };
         DockArea::new(&mut self.dock)
             .style(crate::theme::dock_style(ui))
@@ -718,12 +715,13 @@ impl Workspace {
         let mut focused = None;
         for level in self.detached.clone() {
             let Some(title) = session.levels.get(&level).map(|v| v.snapshot.title.clone()) else { continue };
-            let builder = ViewportBuilder::default().with_title(format!("{title} - Big Star Editor")).with_inner_size([1000.0, 700.0]);
+            let builder =
+                ViewportBuilder::default().with_title(tr!("workspace.detached_window_title", title = title)).with_inner_size([1000.0, 700.0]);
             ctx.show_viewport_immediate(ViewportId::from_hash_of(("bigstar-level", level)), builder, |ui, _| {
                 let ctx = ui.ctx().clone();
                 egui::Panel::top(Id::new(("detached-menu", level))).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        if Button::new("Move Back to Main Window").show(ui).clicked() {
+                        if Button::new(tr!("workspace.move_back_to_main_window")).show(ui).clicked() {
                             reattach.push(level);
                         }
                         let dirty = session.levels.get(&level).is_some_and(|v| v.snapshot.dirty);
@@ -762,7 +760,7 @@ impl Workspace {
 fn document(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, level: LevelId, keyboard: bool) {
     let busy = session.busy();
     let Some(view) = session.levels.get_mut(&level) else {
-        ui.weak("This level is no longer open.");
+        ui.weak(tr!("workspace.this_level_is_no_longer_open"));
         return;
     };
     let out = canvas::show(ui, view, &session.textures, pool, busy, keyboard);
@@ -782,7 +780,6 @@ struct Viewer<'a, 'f> {
     closed_files: Vec<u64>,
     tilesets: &'f mut BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
     closed_tilesets: Vec<LevelId>,
-    language: crate::i18n::Language,
     pool: &'a mut TexturePool,
     keyboard: bool,
     close: Vec<LevelId>,
@@ -798,7 +795,7 @@ impl TabViewer for Viewer<'_, '_> {
 
     fn title(&mut self, tab: &mut DocTab) -> WidgetText {
         match tab {
-            DocTab::Preview => "Preview".into(),
+            DocTab::Preview => tr!("workspace.tab.preview").into(),
             DocTab::Level(level) => match self.session.levels.get(level) {
                 Some(view) if view.snapshot.dirty => format!("{} •", view.snapshot.title).into(),
                 Some(view) => view.snapshot.title.clone().into(),
@@ -808,13 +805,13 @@ impl TabViewer for Viewer<'_, '_> {
                 Some(doc) => {
                     let name = doc.path.rsplit(['/', '!']).next().unwrap_or(&doc.path);
                     let dirty = if doc.dirty() { " •" } else { "" };
-                    let editor = if doc.destination == Destination::Banner { "Banner" } else { doc.view.editor() };
+                    let editor = if doc.destination == Destination::Banner { tr!("workspace.tab.banner") } else { doc.view.editor() };
                     format!("{editor} — {name}{dirty}").into()
                 }
                 None => "…".into(),
             },
             DocTab::Tileset(level) => match self.tilesets.get(level) {
-                Some((doc, _)) => format!("{} — {}", self.language.tr("Tilesets"), doc.title).into(),
+                Some((doc, _)) => format!("{} — {}", tr!("workspace.tab.tilesets"), doc.title).into(),
                 None => "…".into(),
             },
         }
@@ -875,11 +872,11 @@ impl TabViewer for Viewer<'_, '_> {
 
     fn context_menu(&mut self, ui: &mut Ui, tab: &mut DocTab, _path: egui_dock::NodePath) {
         if let DocTab::Level(level) = *tab {
-            if Button::menu("Move to New Window").show(ui).clicked() {
+            if Button::menu(tr!("workspace.move_to_new_window")).show(ui).clicked() {
                 self.detach.push(level);
                 ui.close();
             }
-            if Button::menu("Close").show(ui).clicked() {
+            if Button::menu(tr!("common.close")).show(ui).clicked() {
                 self.close.push(level);
                 ui.close();
             }
@@ -908,10 +905,7 @@ fn save_tilesets(session: &mut Session, doc: &TilesetDoc) -> bool {
     if doc.references_changed() {
         session.edit_level(doc.level, bigstar_protocol::LevelEdit::SetTilesetReferences { references: doc.references });
     }
-    session.log.push(crate::session::LogLine {
-        level: bigstar_protocol::LogLevel::Info,
-        text: format!("Saved {count} edited graphics file(s) to the modules."),
-    });
+    session.log.push(crate::session::LogLine { level: bigstar_protocol::LogLevel::Info, text: tr!("workspace.saved_graphics_files", count) });
     true
 }
 
@@ -987,11 +981,8 @@ fn file_document(ui: &mut Ui, session: &mut Session, services: &dyn Services, do
         }
     };
     let (path, kind) = (&*path, *kind);
-    let remark = if kind == EditorKind::None {
-        String::new()
-    } else {
-        format!("· a {} file, shown as its bytes", crate::editors::editor_name(kind).to_lowercase())
-    };
+    let remark =
+        if kind == EditorKind::None { String::new() } else { tr!("workspace.hex_remark", editor = crate::editors::editor_name(kind).to_lowercase()) };
     if controls::document_header(ui, path, &remark, hex.dirty()) {
         session.write_file(path, hex.bytes.clone());
         hex.mark_saved();
@@ -1005,11 +996,11 @@ fn preview(ui: &mut Ui, session: &mut Session, pool: &mut TexturePool, shown: Op
         let available = areas.iter().filter(|a| a.available).count();
         let areas = areas.len();
         if session.project.is_none() {
-            "Open a project to list and preview levels.".to_owned()
+            tr!("workspace.open_a_project_to_list_and_preview_levels").to_owned()
         } else if areas == 0 {
-            "This project has no levels.".to_owned()
+            tr!("workspace.this_project_has_no_levels").to_owned()
         } else {
-            format!("Select a level. {available} of {areas} areas are in this project.")
+            tr!("workspace.select_a_level", available, areas)
         }
     };
     match shown.and_then(|level| session.levels.get_mut(&level)) {

@@ -11,6 +11,7 @@ use bigstar_formats::{
 use bigstar_level::{LevelEntityInsertions, SpriteInsertion};
 use serde_json::{Map, Value, json};
 
+use crate::i18n::tr;
 use crate::level_view::{Kind, LevelView};
 
 const HEADER: &str = "BigStar-Entities/1\n";
@@ -155,19 +156,21 @@ pub fn copy(view: &LevelView) -> Result<Option<String>, String> {
 /// What pasting `text` adds, each thing one tile (16 pixels) along from where it was copied, so a paste never lands
 /// exactly on its original. Every value is range-checked; one bad value refuses the whole paste.
 pub fn paste(text: &str) -> Result<LevelEntityInsertions, String> {
-    let payload = text.strip_prefix(HEADER).ok_or("The clipboard holds nothing copied from a Big Star level")?;
+    let payload = text.strip_prefix(HEADER).ok_or(tr!("clipboard.the_clipboard_holds_nothing_copied_from_a_big_star_level"))?;
     if payload.len() > PAYLOAD_LIMIT {
-        return Err("What was copied is too large to paste".to_owned());
+        return Err(tr!("clipboard.what_was_copied_is_too_large_to_paste").to_owned());
     }
-    let encoded = base64_decode(payload).filter(|bytes| base64_encode(bytes) == payload).ok_or("What was copied is damaged and cannot be pasted")?;
+    let encoded = base64_decode(payload)
+        .filter(|bytes| base64_encode(bytes) == payload)
+        .ok_or(tr!("clipboard.what_was_copied_is_damaged_and_cannot_be_pasted"))?;
     let json = decompress_nitro_lz(&encoded).map_err(|e| e.message)?;
-    let invalid = || "What was copied cannot be read".to_owned();
+    let invalid = || tr!("clipboard.what_was_copied_cannot_be_read").to_owned();
     let root: Value = serde_json::from_slice(&json).map_err(|_| invalid())?;
     let entities = root.get("entities").and_then(Value::as_array).ok_or_else(invalid)?;
     if root.get("schema").and_then(Value::as_str) != Some(SCHEMA) || entities.len() > ENTITY_LIMIT {
         return Err(invalid());
     }
-    let bad = || "What was copied holds values a level cannot have".to_owned();
+    let bad = || tr!("clipboard.what_was_copied_holds_values_a_level_cannot_have").to_owned();
     let number = |values: &[Value], i: usize, low: i64, high: i64| values.get(i).and_then(Value::as_i64).filter(|n| (low..=high).contains(n));
     let mut items = LevelEntityInsertions::default();
     for entry in entities {

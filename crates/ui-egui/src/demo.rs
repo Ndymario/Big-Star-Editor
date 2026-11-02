@@ -902,7 +902,7 @@ impl DemoConnection {
                 };
                 let level = |name: &str, areas| LevelSummary { display_name: name.to_owned(), areas };
                 let world = LevelGroup {
-                    name: "${world} 1".to_owned(),
+                    name: "World 1".to_owned(),
                     groups: Vec::new(),
                     levels: vec![
                         level("1-1", vec![area(AREA, "Area 1", true), area("A01_2", "Area 2", true)]),

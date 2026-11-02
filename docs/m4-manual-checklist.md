@@ -39,7 +39,7 @@ Use an imported ROM project with at least one available level. These checks inte
 35. (Dropped: `.nsmbpatch` export and import were removed.)
 36. (Dropped: xdelta create and apply were removed.)
 37. Leave a dirty level open for over one minute, terminate the process without closing normally, reopen the project, and recover it. Confirm Save clears the snapshot; repeat and choose Discard/No to confirm it is removed.
-38. Restart once in each of English, Dutch, Portuguese, Spanish, and French. Confirm the Project Hub and core menu vocabulary change without altering project data.
+38. Restart once in each of English and Portuguese (Portugal). Confirm the Project Hub and core menu vocabulary change without altering project data.
 39. Open representative BNBL, BNCL, BNCD, and ENPG resources from the Filesystem dock. Edit coordinates, a cell/OAM field, pixels, and palette colours; build and boot the affected UI while confirming untouched padding and compressed wrappers survive.
 40. Configure `rom.banner`, edit the icon, palette, and every available language title, then build each variant with a banner override. Confirm the output ROM shows the expected icon/title and the pristine input ROM is unchanged.
 41. Open **ROM User Metadata** on a ROM whose file ID 131 is `NSMBeUD`, change names/notes, and confirm the save lands in the supplier or active module layer and remains readable after NCPatcher rebuilds.

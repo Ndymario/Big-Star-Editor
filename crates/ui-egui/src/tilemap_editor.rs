@@ -7,6 +7,7 @@ use bigstar_formats::{RgbaImage, ScreenMapEntry};
 use egui::{Color32, Event, Key, Ui};
 
 use crate::controls::{self, Button};
+use crate::i18n::{self, key, tr};
 use crate::icons::{self, Icon};
 use crate::paint::{self, Grid, Pattern, Point, mirror_entry};
 use crate::pixel_editor::{Command, HistoryButton, history_buttons};
@@ -22,26 +23,21 @@ pub enum TileTool {
 }
 
 pub const TOOLS: [(TileTool, Icon, Key, &str); 5] = [
-    (
-        TileTool::Brush,
-        icons::STAMP,
-        Key::D,
-        "Draw (D): drag paints the picked tiles; Shift-drag fills a rectangle with them; right-click or right-drag picks tiles from the map",
-    ),
-    (TileTool::Select, icons::SELECT, Key::C, "Select (C): drag a rectangle to copy, cut or delete; Ctrl+V or V pastes under the pointer"),
-    (TileTool::FlipX, icons::FLIP_HORIZONTAL, Key::X, "Flip X (X): drag a rectangle to mirror it left to right"),
-    (TileTool::FlipY, icons::FLIP_VERTICAL, Key::Y, "Flip Y (Y): drag a rectangle to mirror it top to bottom"),
-    (TileTool::Palette, icons::BUCKET, Key::P, "Palette (P): drag a rectangle to give it the brush's palette"),
+    (TileTool::Brush, icons::STAMP, Key::D, key!("tilemap_editor.tool.draw_tip")),
+    (TileTool::Select, icons::SELECT, Key::C, key!("tilemap_editor.tool.select_tip")),
+    (TileTool::FlipX, icons::FLIP_HORIZONTAL, Key::X, key!("tilemap_editor.tool.flip_x_tip")),
+    (TileTool::FlipY, icons::FLIP_VERTICAL, Key::Y, key!("tilemap_editor.tool.flip_y_tip")),
+    (TileTool::Palette, icons::BUCKET, Key::P, key!("tilemap_editor.tool.palette_tip")),
 ];
 
 impl TileTool {
     pub fn step_name(self) -> &'static str {
         match self {
-            Self::Brush => "Draw tiles",
-            Self::Select => "Edit selection",
-            Self::FlipX => "Flip X",
-            Self::FlipY => "Flip Y",
-            Self::Palette => "Change palette",
+            Self::Brush => tr!("tilemap_editor.step.draw_tiles"),
+            Self::Select => tr!("tilemap_editor.step.edit_selection"),
+            Self::FlipX => tr!("tilemap_editor.step.flip_x"),
+            Self::FlipY => tr!("tilemap_editor.step.flip_y"),
+            Self::Palette => tr!("tilemap_editor.step.change_palette"),
         }
     }
 }
@@ -169,31 +165,37 @@ impl TilemapEditor {
                 ui.separator();
             }
             for (tool, icon, _, tip) in TOOLS {
-                if Button::icon(icon).selected(self.tool == tool).name(tool.step_name()).show(ui).on_hover_text(tip).clicked() {
+                if Button::icon(icon).selected(self.tool == tool).name(tool.step_name()).show(ui).on_hover_text(i18n::text(tip)).clicked() {
                     self.tool = tool;
                 }
             }
             ui.separator();
-            if Button::new("Delete").small().enabled(self.selection.is_some()).show(ui).on_hover_text("Clear the selection (Delete)").clicked() {
+            if Button::new(tr!("common.delete"))
+                .small()
+                .enabled(self.selection.is_some())
+                .show(ui)
+                .on_hover_text(tr!("tilemap_editor.clear_selection_tip"))
+                .clicked()
+            {
                 commands.push(Command::Delete);
             }
             ui.separator();
             zoom_canvas::zoom_controls(ui, &mut self.canvas, Steps { fine: 8, coarse: 8 * self.snap.max(2) });
         });
         ui.horizontal_wrapped(|ui| {
-            ui.label("Brush");
+            ui.label(tr!("tilemap_editor.brush"));
             if palettes > 1 {
-                ui.label("palette");
+                ui.label(tr!("tilemap_editor.palette"));
                 let before = self.palette;
                 ui.add(controls::number(&mut self.palette).range(0..=palettes as i16 - 1));
                 if before != self.palette {
                     self.picked = false;
                 }
             }
-            controls::toggle(ui, &mut self.flip_x, "Flip X").on_hover_text("Paint the brush mirrored left to right (Shift+X)");
-            controls::toggle(ui, &mut self.flip_y, "Flip Y").on_hover_text("Paint the brush mirrored top to bottom (Shift+Y)");
+            controls::toggle(ui, &mut self.flip_x, tr!("tilemap_editor.step.flip_x")).on_hover_text(tr!("tilemap_editor.flip_x_tip"));
+            controls::toggle(ui, &mut self.flip_y, tr!("tilemap_editor.step.flip_y")).on_hover_text(tr!("tilemap_editor.flip_y_tip"));
             if self.picked {
-                ui.weak("picked from the map");
+                ui.weak(tr!("tilemap_editor.picked_from_the_map"));
             }
         });
         asked

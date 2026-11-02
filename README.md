@@ -67,7 +67,7 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
 
 - Works as a **desktop app** (Windows, macOS and Linux) or **in your browser**, from a computer that hosts your projects.
 - Automatic **recovery** of unsaved levels, and **backups** of anything a save overwrites.
-- Available in **English, Dutch, Portuguese, Spanish and French**.
+- Available in **English and Portuguese (Portugal)**; more languages are a JSON file each, see [docs/translating.md](docs/translating.md).
 
 ## Getting started
 

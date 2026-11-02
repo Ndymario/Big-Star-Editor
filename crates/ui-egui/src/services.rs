@@ -3,6 +3,8 @@
 
 use bigstar_client::{Connection, Waker};
 
+use crate::i18n::tr;
+
 /// What a DS ROM file is called: `.nds`, or `.ids` for the iQue DS, which is the same format.
 pub const ROM_EXTENSIONS: &[&str] = &["nds", "ids"];
 
@@ -34,7 +36,7 @@ pub trait Services {
 
     /// Starts a host for the workspace at `root` and connects to it.
     fn connect_embedded(&self, _root: &str, _waker: Waker) -> Result<Box<dyn Connection>, String> {
-        Err("this build cannot run a host of its own".to_owned())
+        Err(tr!("services.this_build_cannot_run_a_host_of_its_own").to_owned())
     }
 
     /// The accent colour the person chose for their system, as red, green and blue, where the system has one. Asked
@@ -56,7 +58,7 @@ pub trait Services {
 
     /// Starts a host in this process for ROMs on this machine, with no workspace, and connects to it (desktop only).
     fn connect_local_roms(&self, _waker: Waker) -> Result<Box<dyn Connection>, String> {
-        Err("this build cannot open a ROM on this machine".to_owned())
+        Err(tr!("services.this_build_cannot_open_a_rom_on_this_machine").to_owned())
     }
 
     /// Asks the person for a ROM (`ROM_EXTENSIONS`) on this machine, in a dialog titled `title`: its full path, or `None` when they cancel
@@ -85,7 +87,7 @@ pub trait Services {
     /// Asks the person where to save `bytes` (a file named like `suggested`, of type `extension`) and writes them.
     /// `Ok(false)` when they cancelled.
     fn save_file(&self, _title: &str, _suggested: &str, _extension: &str, _bytes: &[u8]) -> Result<bool, String> {
-        Err("this build cannot save files".to_owned())
+        Err(tr!("services.this_build_cannot_save_files").to_owned())
     }
 
     /// Asks the person for a file (of one of the types `extensions`, or any when there are none) and reads it: its name
@@ -107,7 +109,7 @@ pub trait Services {
 
     /// Shows a folder on this machine in the system's file manager.
     fn open_folder(&self, _path: &str) -> Result<(), String> {
-        Err("this build cannot open folders".to_owned())
+        Err(tr!("services.this_build_cannot_open_folders").to_owned())
     }
 }
 

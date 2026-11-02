@@ -3,6 +3,7 @@
 //! `MainWindow::openTilesetEditor`'s saving; the document is pure and `show` draws it as a tab.
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
+use crate::i18n::{self, key, tr};
 use crate::icons;
 use crate::properties::TILESET_NAMES;
 use std::collections::BTreeMap;
@@ -36,7 +37,8 @@ use crate::zoom_canvas::{self, CanvasInput, upload};
 pub const GRAPHICS_COLUMNS: usize = 32;
 pub const MAP16_COLUMNS: usize = 16;
 
-pub const SLOT_NAMES: [(u8, &str); 3] = [(0, "shared"), (1, "level"), (2, "sub-unit")];
+pub const SLOT_NAMES: [(u8, &str); 3] =
+    [(0, key!("tileset_editor.slot.shared")), (1, key!("tileset_editor.slot.level")), (2, key!("tileset_editor.slot.sub_unit"))];
 /// A bitmap the Graphics tab lists: one of the tilesets' graphics, or the background's (0) or foreground's (1).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Sheet {
@@ -53,7 +55,17 @@ fn rounded([r, g, b]: [u8; 3]) -> Bgr555Color {
     Bgr555Color::new(r, g, b, false)
 }
 
-pub const QUADRANTS: [&str; 4] = ["Top left", "Top right", "Bottom left", "Bottom right"];
+pub const QUADRANTS: [&str; 4] = [
+    key!("tileset_editor.quadrant.top_left"),
+    key!("tileset_editor.quadrant.top_right"),
+    key!("tileset_editor.quadrant.bottom_left"),
+    key!("tileset_editor.quadrant.bottom_right"),
+];
+
+/// The slots' names, as the interface words them.
+fn slot_names() -> [(u8, &'static str); 3] {
+    SLOT_NAMES.map(|(slot, name)| (slot, i18n::text(name)))
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tab {
@@ -68,13 +80,13 @@ pub enum Tab {
 }
 
 pub const TABS: [(Tab, &str); 7] = [
-    (Tab::Slots, "Slots"),
-    (Tab::Graphics, "Graphics"),
-    (Tab::Map16, "Map16"),
-    (Tab::Objects, "Objects"),
-    (Tab::Behaviors, "Behaviors"),
-    (Tab::Background, "Background"),
-    (Tab::Foreground, "Foreground"),
+    (Tab::Slots, key!("tileset_editor.tab.slots")),
+    (Tab::Graphics, key!("tileset_editor.tab.graphics")),
+    (Tab::Map16, key!("tileset_editor.tab.map16")),
+    (Tab::Objects, key!("tileset_editor.tab.objects")),
+    (Tab::Behaviors, key!("tileset_editor.tab.behaviors")),
+    (Tab::Background, key!("tileset_editor.tab.background")),
+    (Tab::Foreground, key!("tileset_editor.tab.foreground")),
 ];
 
 fn resource(slot: &TilesetSlot) -> TilesetResourceData {
@@ -157,7 +169,7 @@ impl TilesetDoc {
             tilesets.push(parsed);
         }
         if tilesets.len() != 3 {
-            return Err("the level does not name three tilesets".to_owned());
+            return Err(tr!("tileset_editor.error.not_three_tilesets").to_owned());
         }
         let background =
             parse_tilemap(&map_resource(&resources.background), 0, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET).map_err(|e| e.message)?;
@@ -245,15 +257,15 @@ impl TilesetDoc {
         let tilesets = self.tilesets.iter().enumerate().filter(|(_, t)| !t.graphics.is_empty()).map(|(i, _)| {
             (
                 Sheet::Tileset(i),
-                format!("Tileset {}", SLOT_NAMES.get(i).map(|(n, name)| controls::numbered(i64::from(*n), name, false)).unwrap_or_default()),
+                tr!(
+                    "tileset_editor.sheet.tileset",
+                    slot = SLOT_NAMES.get(i).map(|(n, name)| controls::numbered(i64::from(*n), i18n::text(name), false)).unwrap_or_default()
+                ),
             )
         });
-        let layers = self
-            .tilemaps
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| !m.graphics.is_empty())
-            .map(|(i, _)| (Sheet::Layer(i), if i == 0 { "Background".to_owned() } else { "Foreground".to_owned() }));
+        let layers = self.tilemaps.iter().enumerate().filter(|(_, m)| !m.graphics.is_empty()).map(|(i, _)| {
+            (Sheet::Layer(i), if i == 0 { tr!("tileset_editor.tab.background").to_owned() } else { tr!("tileset_editor.tab.foreground").to_owned() })
+        });
         tilesets.chain(layers).collect()
     }
 
@@ -293,7 +305,7 @@ impl TilesetDoc {
 
     /// `sheet`'s graphics drawn in palette `palette`, `GRAPHICS_COLUMNS` tiles across.
     pub fn sheet_image(&self, sheet: Sheet, palette: usize) -> Result<RgbaImage, String> {
-        let (tiles, colours) = self.sheet_parts(sheet).ok_or("no graphics")?;
+        let (tiles, colours) = self.sheet_parts(sheet).ok_or(tr!("tileset_editor.error.no_graphics"))?;
         let mut tiles = tiles.to_vec();
         let bitmap = Bitmap::read(&TileSheet { width_tiles: GRAPHICS_COLUMNS.min(tiles.len().max(1)), tiles: &mut tiles });
         let palette: Vec<[u8; 3]> = colours.iter().skip(palette * 256).take(256).map(|c| [c.red, c.green, c.blue]).collect();
@@ -303,7 +315,7 @@ impl TilesetDoc {
     /// The sheet the Map16 and Behaviours tabs both draw. Composed, an entry naming another tileset's graphics
     /// resolves instead of coming out clear; with 3D on, blocks the game draws as quads show those.
     pub fn map16_sheet(&self) -> Result<RgbaImage, String> {
-        let tileset = self.tileset().ok_or("no tileset")?;
+        let tileset = self.tileset().ok_or(tr!("tileset_editor.error.no_tileset"))?;
         let mut sheet = if self.composed {
             render_composed_map16_sheet(tileset, &compose_tileset_memory(&self.tilesets), MAP16_COLUMNS)
         } else {
@@ -318,7 +330,7 @@ impl TilesetDoc {
     }
 
     pub fn tilemap_image(&self, which: usize) -> Result<RgbaImage, String> {
-        let map = self.tilemaps.get(which).ok_or("no tilemap")?;
+        let map = self.tilemaps.get(which).ok_or(tr!("tileset_editor.error.no_tilemap"))?;
         render_tilemap(map).map_err(|e| e.message)
     }
 
@@ -366,7 +378,7 @@ impl TilesetDoc {
         if self.sheet_parts(sheet).and_then(|(_, p)| p.get(index)).is_some_and(|c| Bgr555Color { transparent: false, ..*c } == changed) {
             return;
         }
-        self.edit("Change colour", |doc| {
+        self.edit(tr!("tileset_editor.step.change_colour"), |doc| {
             if let Some(colour) = doc.sheet_parts_mut(sheet).and_then(|(_, p)| p.get_mut(index)) {
                 *colour = Bgr555Color { transparent: colour.transparent, ..changed };
             }
@@ -376,7 +388,7 @@ impl TilesetDoc {
     /// The level's tile memory with every tileset at its offsets, as the Map16 tab's picker shows it, drawn in
     /// palette block `palette` (counted from this tileset's own), `GRAPHICS_COLUMNS` tiles across.
     pub fn composed_tiles(&self, palette: i16) -> Result<(RgbaImage, usize), String> {
-        let tileset = self.tileset().ok_or("no tileset")?;
+        let tileset = self.tileset().ok_or(tr!("tileset_editor.error.no_tileset"))?;
         let memory = compose_tileset_memory(&self.tilesets);
         let count = memory.graphics.len();
         let block = palette + i16::from(tileset.palette_offset);
@@ -395,7 +407,7 @@ impl TilesetDoc {
 
     /// A tilemap's own tiles, `GRAPHICS_COLUMNS` across in palette block `palette`, for its picker.
     pub fn tilemap_tiles(&self, which: usize, palette: i16) -> Result<(RgbaImage, usize), String> {
-        let map = self.tilemaps.get(which).ok_or("no tilemap")?;
+        let map = self.tilemaps.get(which).ok_or(tr!("tileset_editor.error.no_tilemap"))?;
         let count = map.graphics.len();
         let mut entries: Vec<ScreenMapEntry> = (0..count).map(|i| ScreenMapEntry::new(i as i32, palette, false, false)).collect();
         entries.resize(count.div_ceil(GRAPHICS_COLUMNS).max(1) * GRAPHICS_COLUMNS, ScreenMapEntry::new(-1, 0, false, false));
@@ -436,7 +448,11 @@ impl TilesetDoc {
     pub fn object_table(&self) -> Vec<(&'static str, Vec<ObjectLayoutTile>)> {
         let Some(layout) = self.objects().get(self.object) else { return Vec::new() };
         let blocks: &[(&'static str, &[Vec<ObjectLayoutTile>])] = if layout.slope {
-            &[("Step", &layout.rows), ("Behind", &layout.slope_behind), ("Fill", &layout.slope_fill)]
+            &[
+                (tr!("tileset_editor.object.step"), &layout.rows),
+                (tr!("tileset_editor.object.behind"), &layout.slope_behind),
+                (tr!("tileset_editor.object.fill"), &layout.slope_fill),
+            ]
         } else {
             &[("", &layout.rows)]
         };
@@ -615,7 +631,7 @@ impl TilesetDoc {
     pub fn behavior_meaning(parts: TileBehaviorParts) -> String {
         let kind = tile_behavior_parameter_kind(parts);
         let name = tile_behavior_parameter_name(kind, parts.parameter);
-        let mut meaning = if name.is_empty() { format!("Unknown {}", parts.parameter) } else { name.to_owned() };
+        let mut meaning = if name.is_empty() { tr!("tileset_editor.unknown_parameter", parameter = parts.parameter) } else { name.to_owned() };
         if kind == TileBehaviorParameterKind::PipeDoor
             && let Some(main) = TILE_BEHAVIOR_PIPE_MAIN_NAMES.get(usize::from(parts.parameter >> 5))
         {
@@ -643,13 +659,13 @@ impl TilesetDoc {
 
     pub fn import_tilemap(&mut self, which: usize, image: &RgbaImage) -> Result<(), String> {
         self.touched();
-        let map = self.tilemaps.get_mut(which).ok_or("no tilemap")?;
+        let map = self.tilemaps.get_mut(which).ok_or(tr!("tileset_editor.error.no_tilemap"))?;
         import_tilemap_image(map, image).map_err(|e| e.message)
     }
 
     /// The chosen tileset as a `.bstileset` bundle.
     pub fn export_bundle(&self) -> Result<Vec<u8>, String> {
-        let tileset = self.tileset().ok_or("no tileset")?;
+        let tileset = self.tileset().ok_or(tr!("tileset_editor.error.no_tileset"))?;
         let data = write_tileset(tileset).map_err(|e| e.message)?;
         write_tileset_bundle(&data).map_err(|e| e.message)
     }
@@ -657,7 +673,7 @@ impl TilesetDoc {
     /// Replaces the chosen tileset with a bundle's, read at this slot's offsets.
     pub fn import_bundle(&mut self, bytes: &[u8]) -> Result<(), String> {
         let data = parse_tileset_bundle(bytes).map_err(|e| e.message)?;
-        let tileset = self.tileset_mut().ok_or("no tileset")?;
+        let tileset = self.tileset_mut().ok_or(tr!("tileset_editor.error.no_tileset"))?;
         let value = parse_tileset(&data, tileset.tile_offset, tileset.palette_offset, tileset.tile_page_offset).map_err(|e| e.message)?;
         *tileset = value;
         self.map16_entry = 0;
@@ -670,12 +686,12 @@ impl TilesetDoc {
     // --- Saving ---
 
     pub fn tileset_data(&self, slot: usize) -> Result<TilesetResourceData, String> {
-        let tileset = self.tilesets.get(slot).ok_or("tileset slot is outside the editor")?;
+        let tileset = self.tilesets.get(slot).ok_or(tr!("tileset_editor.error.slot_outside_editor"))?;
         write_tileset(tileset).map_err(|e| e.message)
     }
 
     pub fn tilemap_data(&self, which: usize) -> Result<TilemapResourceData, String> {
-        let map = self.tilemaps.get(which).ok_or("no tilemap")?;
+        let map = self.tilemaps.get(which).ok_or(tr!("tileset_editor.error.no_tilemap"))?;
         write_tilemap(map).map_err(|e| e.message)
     }
 
@@ -687,7 +703,7 @@ impl TilesetDoc {
                 return Ok(());
             }
             if file.rom_path.is_empty() {
-                return Err("edited resource has no ROM file target".to_owned());
+                return Err(tr!("tileset_editor.error.no_rom_target").to_owned());
             }
             writes.push(FileWrite { path: file.rom_path.clone(), bytes: after });
             Ok(())
@@ -768,27 +784,21 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     // A header line as every document has, the title cut short before it reaches Save and Cancel; the tools under it.
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if Button::new("Cancel").show(ui).clicked() {
+            if Button::new(tr!("common.cancel")).show(ui).clicked() {
                 action = Some(TilesetAction::Close);
             }
-            if Button::new("Save")
-                .with_icon(icons::SAVE)
-                .primary()
-                .show(ui)
-                .on_hover_text("Writes the files the edits changed into their modules")
-                .clicked()
-            {
+            if Button::new(tr!("common.save")).with_icon(icons::SAVE).primary().show(ui).on_hover_text(tr!("tileset_editor.save_tip")).clicked() {
                 action = Some(TilesetAction::Save);
             }
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                controls::one_line(ui, RichText::new(format!("Tilesets and backgrounds — {}", doc.title)).strong(), 0.0);
+                controls::one_line(ui, RichText::new(tr!("tileset_editor.title", title = doc.title)).strong(), 0.0);
             });
         });
     });
     ui.horizontal_wrapped(|ui| {
-        ui.label("Tileset slot");
+        ui.label(tr!("tileset_editor.tileset_slot"));
         let mut slot = doc.slot;
-        if let Some(picked) = controls::numbered_choice("tileset-slot", &SLOT_NAMES).show(ui, i64::try_from(slot).ok()) {
+        if let Some(picked) = controls::numbered_choice("tileset-slot", &slot_names()).show(ui, i64::try_from(slot).ok()) {
             slot = usize::from(picked);
         }
         if slot != doc.slot {
@@ -800,19 +810,21 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             Some(HistoryButton::Redo) => doc.redo(),
             None => {}
         }
-        if Button::new("Import tileset…").show(ui).clicked() {
-            match services.open_file("Import tileset", &["bstileset"]) {
-                Some(Ok((_, bytes))) => view.notice = doc.edit("Import tileset", |doc| doc.import_bundle(&bytes)).err(),
+        if Button::new(tr!("tileset_editor.import_tileset_ellipsis")).show(ui).clicked() {
+            match services.open_file(tr!("tileset_editor.import_tileset"), &["bstileset"]) {
+                Some(Ok((_, bytes))) => view.notice = doc.edit(tr!("tileset_editor.import_tileset"), |doc| doc.import_bundle(&bytes)).err(),
                 Some(Err(error)) => view.notice = Some(error),
                 None => {}
             }
         }
-        if Button::new("Export tileset…").show(ui).clicked() {
-            let written = doc.export_bundle().and_then(|bytes| services.save_file("Export tileset", "tileset.bstileset", "bstileset", &bytes));
+        if Button::new(tr!("tileset_editor.export_tileset_ellipsis")).show(ui).clicked() {
+            let written = doc
+                .export_bundle()
+                .and_then(|bytes| services.save_file(tr!("tileset_editor.export_tileset"), "tileset.bstileset", "bstileset", &bytes));
             view.notice = written.err();
         }
     });
-    controls::tabs(ui, "tileset", &mut doc.tab, &TABS);
+    controls::tabs(ui, "tileset", &mut doc.tab, &TABS.map(|(tab, name)| (tab, i18n::text(name))));
     controls::notice_line(ui, &mut view.notice, true);
     ui.add_space(2.0);
     match doc.tab {
@@ -831,19 +843,20 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
     let before = doc.references;
     egui::Grid::new("tileset-references").num_columns(2).show(ui, |ui| {
         let references = &mut doc.references;
-        for (label, value) in [
-            ("Background graphics", &mut references.background_graphics_id),
-            ("Level tileset", &mut references.tileset_id),
-            ("Foreground graphics", &mut references.foreground_graphics_id),
-            ("Background screen", &mut references.background_screen_id),
-            ("Background palette", &mut references.background_palette_id),
-            ("Level tileset palette", &mut references.tileset_palette_id),
-            ("Foreground screen", &mut references.foreground_screen_id),
-            ("Foreground palette", &mut references.foreground_palette_id),
+        // Each row's id is its English name, so a widget keeps its state whatever the language.
+        for (id, label, value) in [
+            ("Background graphics", key!("tileset_editor.slots.background_graphics"), &mut references.background_graphics_id),
+            ("Level tileset", key!("tileset_editor.slots.level_tileset"), &mut references.tileset_id),
+            ("Foreground graphics", key!("tileset_editor.slots.foreground_graphics"), &mut references.foreground_graphics_id),
+            ("Background screen", key!("tileset_editor.slots.background_screen"), &mut references.background_screen_id),
+            ("Background palette", key!("tileset_editor.slots.background_palette"), &mut references.background_palette_id),
+            ("Level tileset palette", key!("tileset_editor.slots.level_tileset_palette"), &mut references.tileset_palette_id),
+            ("Foreground screen", key!("tileset_editor.slots.foreground_screen"), &mut references.foreground_screen_id),
+            ("Foreground palette", key!("tileset_editor.slots.foreground_palette"), &mut references.foreground_palette_id),
         ] {
-            ui.label(label);
-            if label.starts_with("Level tileset") {
-                tileset_choice(ui, label, value);
+            ui.label(i18n::text(label));
+            if id.starts_with("Level tileset") {
+                tileset_choice(ui, id, value);
             } else {
                 ui.add(controls::number(value).range(0..=255));
             }
@@ -851,20 +864,16 @@ fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
         }
     });
     crate::properties::follow_tileset(&mut doc.references, before);
-    ui.add(
-        egui::Label::new(
-            "These IDs choose the level's graphics. Edits below change the graphics loaded now; a changed ID takes effect once the level is saved and opened again.",
-        )
-        .wrap(),
-    );
+    ui.add(egui::Label::new(tr!("tileset_editor.slots.ids_note")).wrap());
 }
 
 /// The level tileset, picked by name. A number the game's tables have no room for stays as it is until another is
 /// picked.
 fn tileset_choice(ui: &mut Ui, id: &str, value: &mut u16) {
     let choices: Vec<(u16, &str)> = (0u16..).zip(TILESET_NAMES).collect();
-    if let Some(picked) =
-        controls::filtered_choice(("tileset-choice", id), &choices, "Filter tilesets…").width(260.0).show(ui, Some(i64::from(*value)))
+    if let Some(picked) = controls::filtered_choice(("tileset-choice", id), &choices, tr!("tileset_editor.filter_tilesets"))
+        .width(260.0)
+        .show(ui, Some(i64::from(*value)))
     {
         *value = picked;
     }
@@ -878,16 +887,16 @@ fn entry_fields(
 ) -> Option<ScreenMapEntry> {
     let mut edited = value;
     egui::Grid::new(ui.next_auto_id()).num_columns(2).show(ui, |ui| {
-        ui.label("Tile");
+        ui.label(tr!("tileset_editor.entry.tile"));
         ui.add(controls::number(&mut edited.tile).range(tiles));
         ui.end_row();
-        ui.label("Palette");
+        ui.label(tr!("tileset_editor.entry.palette"));
         ui.add(controls::number(&mut edited.palette).range(palettes));
         ui.end_row();
-        ui.label("Horizontal flip");
+        ui.label(tr!("tileset_editor.entry.horizontal_flip"));
         controls::checkbox(ui, &mut edited.horizontal_flip, "");
         ui.end_row();
-        ui.label("Vertical flip");
+        ui.label(tr!("tileset_editor.entry.vertical_flip"));
         controls::checkbox(ui, &mut edited.vertical_flip, "");
         ui.end_row();
     });
@@ -954,7 +963,7 @@ impl Images for SheetImages<'_> {
     }
 
     fn set_bitmap(&mut self, _: usize, pixels: Vec<u8>) -> Result<(), String> {
-        let read = self.bitmap(0).ok_or("no graphics")?;
+        let read = self.bitmap(0).ok_or(tr!("tileset_editor.error.no_graphics"))?;
         self.doc.with_sheet(self.sheet, |grid| Bitmap { pixels, ..read }.write(grid));
         Ok(())
     }
@@ -975,7 +984,7 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     let shown = doc.resolve(view.sheet);
     view.graphics.bitmap = sheets.iter().position(|(s, _)| *s == shown).unwrap_or(0);
     let palettes = doc.sheet_palettes(shown);
-    let palette_names: Vec<String> = (0..palettes).map(|i| format!("Palette {i}")).collect();
+    let palette_names: Vec<String> = (0..palettes).map(|i| tr!("tileset_editor.palette_n", index = i)).collect();
     controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-graphics-images")), 240.0).show(ui, |ui| {
         // Scrolls sideways too: what does not fit a narrow panel is scrolled to, not drawn over the canvas beside it.
         egui::ScrollArea::both().show(ui, |ui| {
@@ -995,9 +1004,9 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             }
             if let Some(action) = action {
                 let sheet = doc.resolve(view.sheet);
-                let name = sheets.iter().find(|(s, _)| *s == sheet).map_or("graphics".to_owned(), |(_, n)| n.clone());
+                let name = sheets.iter().find(|(s, _)| *s == sheet).map_or(tr!("tileset_editor.graphics_fallback").to_owned(), |(_, n)| n.clone());
                 let palettes: Vec<usize> = (0..doc.sheet_palettes(sheet)).collect();
-                doc.begin_edit("Import graphics");
+                doc.begin_edit(tr!("tileset_editor.step.import_graphics"));
                 let result = image_manager::run(action, &view.graphics, &mut SheetImages { doc, sheet }, &[0], &palettes, services, &name);
                 doc.end_edit();
                 view.notice = result.err();
@@ -1008,7 +1017,7 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     let palette = view.graphics.palette.min(doc.sheet_palettes(sheet).saturating_sub(1));
     let colours: Vec<[u8; 4]> = doc.sheet_palette(sheet, palette).unwrap_or_default().iter().map(|&[r, g, b]| [r, g, b, 255]).collect();
     controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-graphics-palette")), 300.0).show(ui, |ui| {
-        ui.strong(format!("Palette {palette}"));
+        ui.strong(tr!("tileset_editor.palette_n", index = palette));
         let edited = egui::ScrollArea::both().show(ui, |ui| palette_panel::show(ui, &colours, &mut view.pixels.colours, 256, true)).inner;
         if let Some((index, rgb)) = edited {
             doc.set_sheet_colour(sheet, palette * 256 + index, rgb);
@@ -1062,8 +1071,8 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     view.map16.palette = view.map16.palette.clamp(0, palettes as i16 - 1);
     let (version, sheet) = map16_sheet(doc, view);
     controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-map16-side")), 340.0).show(ui, |ui| {
-        ui.strong("Tiles");
-        ui.weak("Drag to choose the tiles to paint with. All three tilesets are here, at the place the level loads them.");
+        ui.strong(tr!("tileset_editor.tiles"));
+        ui.weak(tr!("tileset_editor.tiles_note"));
         let palette = view.map16.palette;
         let key = doc.version * 32 + palette.max(0) as u64;
         let first = doc.tileset().map_or(0, |t| i32::from(t.tile_offset));
@@ -1094,12 +1103,9 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         let mut commands = Vec::new();
         view.map16.toolbar(ui, None, palettes, &mut commands);
         ui.horizontal_wrapped(|ui| {
-            controls::checkbox(ui, &mut doc.composed, "Show the other tilesets’ graphics").on_hover_text(
-                "A Map16 entry can use tiles from another tileset. When checked, those tiles are drawn the way the game loads them; when unchecked, only this tileset's own tiles are shown.",
-            );
-            controls::checkbox(ui, &mut doc.solid3d, "Show 3D tiles").on_hover_text(
-                "The game draws some blocks with its 3D engine instead of from their Map16. When checked, they show the texture the game shows; when unchecked, they show what the file holds, which is what you want when editing them.",
-            );
+            controls::checkbox(ui, &mut doc.composed, tr!("tileset_editor.show_other_tilesets"))
+                .on_hover_text(tr!("tileset_editor.show_other_tilesets_tip"));
+            controls::checkbox(ui, &mut doc.solid3d, tr!("tileset_editor.show_3d_tiles")).on_hover_text(tr!("tileset_editor.show_3d_tiles_tip"));
         });
         let image = match &sheet {
             Ok((image, _)) => image.clone(),
@@ -1119,7 +1125,9 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
             Some((block, entry))
         });
         ui.weak(match hovered {
-            Some((block, entry)) => format!("Block {block} (0x{block:03x}) · {}", entry_text(view.map16.hover(), Some(entry))),
+            Some((block, entry)) => {
+                tr!("tileset_editor.block_hover", block, hex = format!("0x{block:03x}"), entry = entry_text(view.map16.hover(), Some(entry)))
+            }
             None => String::new(),
         });
         let (begins, ends) = edits(&input, &commands);
@@ -1147,7 +1155,7 @@ fn map16(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
 /// Below it, the chosen quadrant as numbers and the block's behaviour.
 fn block_inspector(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, sheet: &RgbaImage, version: u64) {
     let entry = doc.map16_entry;
-    ui.strong(format!("Block {entry} (0x{entry:03x})"));
+    ui.strong(tr!("tileset_editor.block_title", block = entry, hex = format!("0x{entry:03x}")));
     let id = texture(ui, &mut view.textures, "map16-block", sheet, version);
     let size = 128.0;
     let (rect, _) = ui.allocate_exact_size(Vec2::splat(size), egui::Sense::hover());
@@ -1158,14 +1166,12 @@ fn block_inspector(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, sh
         let chosen = doc.quadrant == quadrant;
         let stroke = if chosen { Stroke::new(2.0, zoom_canvas::SELECTION) } else { Stroke::new(1.0, ui.visuals().weak_text_color()) };
         ui.painter().rect_stroke(at, 0.0, stroke, StrokeKind::Inside);
-        let response = response.on_hover_text(format!(
-            "{}: click paints the brush's tile here, right-click picks this tile",
-            QUADRANTS.get(quadrant).copied().unwrap_or_default()
-        ));
+        let response =
+            response.on_hover_text(tr!("tileset_editor.quadrant_tip", quadrant = i18n::text(QUADRANTS.get(quadrant).copied().unwrap_or_default())));
         if response.clicked() {
             doc.quadrant = quadrant;
             if let Some(&tile) = view.map16.effective_brush().cells.first() {
-                doc.edit("Draw tiles", |doc| doc.set_map16_value(tile));
+                doc.edit(tr!("tilemap_editor.step.draw_tiles"), |doc| doc.set_map16_value(tile));
             }
         }
         if response.secondary_clicked() {
@@ -1176,19 +1182,19 @@ fn block_inspector(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, sh
             }
         }
     }
-    ui.label(QUADRANTS.get(doc.quadrant).copied().unwrap_or_default());
+    ui.label(i18n::text(QUADRANTS.get(doc.quadrant).copied().unwrap_or_default()));
     if let Some(value) = doc.map16_value()
         && let Some(edited) = entry_fields(ui, value, -1023..=1023, -15..=15)
     {
-        doc.edit("Edit quadrant", |doc| doc.set_map16_value(edited));
+        doc.edit(tr!("tileset_editor.step.edit_quadrant"), |doc| doc.set_map16_value(edited));
     }
     let behavior = doc.tileset().and_then(|t| t.behaviors.get(entry)).copied().unwrap_or(0);
     let parts = decode_tile_behavior(behavior);
     let flags: Vec<&str> = TILE_BEHAVIOR_FLAG_NAMES.iter().enumerate().filter(|(i, _)| parts.flags & (1 << i) != 0).map(|(_, name)| *name).collect();
     ui.horizontal_wrapped(|ui| {
-        ui.label("Behaviour");
-        ui.weak(if flags.is_empty() { "none".to_owned() } else { flags.join(", ") });
-        if Button::new("Edit…").small().show(ui).clicked() {
+        ui.label(tr!("tileset_editor.behaviour"));
+        ui.weak(if flags.is_empty() { tr!("tileset_editor.none").to_owned() } else { flags.join(", ") });
+        if Button::new(tr!("tileset_editor.edit_ellipsis")).small().show(ui).clicked() {
             doc.tab = Tab::Behaviors;
             doc.behavior_entry = entry;
             view.behavior_blocks.select(entry, MAP16_COLUMNS);
@@ -1213,31 +1219,31 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
 
     controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-object-list")), 200.0).show(ui, |ui| {
         ui.horizontal(|ui| {
-            if Button::new("Add").small().show(ui).clicked() {
-                doc.edit("Add object", TilesetDoc::add_object);
+            if Button::new(tr!("common.add")).small().show(ui).clicked() {
+                doc.edit(tr!("tileset_editor.step.add_object"), TilesetDoc::add_object);
             }
-            if Button::new("Duplicate").small().show(ui).clicked() {
-                doc.edit("Duplicate object", TilesetDoc::duplicate_object);
+            if Button::new(tr!("tileset_editor.duplicate")).small().show(ui).clicked() {
+                doc.edit(tr!("tileset_editor.step.duplicate_object"), TilesetDoc::duplicate_object);
             }
-            if Button::new("Delete").small().show(ui).clicked() {
-                doc.edit("Delete object", TilesetDoc::delete_object);
+            if Button::new(tr!("common.delete")).small().show(ui).clicked() {
+                doc.edit(tr!("tileset_editor.step.delete_object"), TilesetDoc::delete_object);
             }
         });
         ui.horizontal(|ui| {
-            if Button::new("Copy").small().show(ui).clicked() {
+            if Button::new(tr!("common.copy")).small().show(ui).clicked() {
                 view.object_clipboard = doc.objects().get(doc.object).cloned();
             }
-            if Button::new("Paste").small().enabled(view.object_clipboard.is_some()).show(ui).clicked()
+            if Button::new(tr!("common.paste")).small().enabled(view.object_clipboard.is_some()).show(ui).clicked()
                 && let Some(layout) = view.object_clipboard.clone()
             {
-                doc.edit("Paste object", |doc| doc.paste_object(layout));
+                doc.edit(tr!("tileset_editor.step.paste_object"), |doc| doc.paste_object(layout));
             }
-            let renumbers = "Objects are placed in levels by number, so this renumbers them";
-            if Button::new("Up").small().show(ui).on_hover_text(renumbers).clicked() {
-                doc.edit("Move object", |doc| doc.move_object(-1));
+            let renumbers = tr!("tileset_editor.renumbers_tip");
+            if Button::new(tr!("tileset_editor.up")).small().show(ui).on_hover_text(renumbers).clicked() {
+                doc.edit(tr!("tileset_editor.step.move_object"), |doc| doc.move_object(-1));
             }
-            if Button::new("Down").small().show(ui).on_hover_text(renumbers).clicked() {
-                doc.edit("Move object", |doc| doc.move_object(1));
+            if Button::new(tr!("tileset_editor.down")).small().show(ui).on_hover_text(renumbers).clicked() {
+                doc.edit(tr!("tileset_editor.step.move_object"), |doc| doc.move_object(1));
             }
         });
         ui.separator();
@@ -1254,7 +1260,7 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                 ui.painter().text(
                     Pos2::new(icon.right() + 8.0, rect.center().y),
                     egui::Align2::LEFT_CENTER,
-                    format!("Object {index}"),
+                    tr!("tileset_editor.object_n", index),
                     egui::FontId::proportional(13.0),
                     ui.visuals().text_color(),
                 );
@@ -1267,13 +1273,15 @@ fn objects(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     });
 
     controls::side_panel(ui, egui::Panel::right(doc.panel_id("tileset-object-blocks")), 300.0).show(ui, |ui| {
-        ui.strong("Map16 blocks");
-        ui.weak("Click a block to put it in the chosen cell; Shift+click inserts it instead. Drag to place several.");
+        ui.strong(tr!("tileset_editor.map16_blocks"));
+        ui.weak(tr!("tileset_editor.blocks_note"));
         let picked = tile_picker::show(ui, "object-blocks", &sheet, version, &mut view.object_blocks, 16, MAP16_COLUMNS, ui.available_height());
         if picked.finished {
             let insert = ui.input(|i| i.modifiers.shift);
             let blocks = view.object_blocks.indices(MAP16_COLUMNS, count);
-            doc.edit(if insert { "Insert blocks" } else { "Place blocks" }, |doc| doc.place_blocks(&blocks, insert));
+            doc.edit(if insert { tr!("tileset_editor.step.insert_blocks") } else { tr!("tileset_editor.step.place_blocks") }, |doc| {
+                doc.place_blocks(&blocks, insert)
+            });
             view.row_chosen = false;
         }
     });
@@ -1319,16 +1327,16 @@ fn draw_object(
 /// The object's own settings: which it is, and whether it is a slope and which way that runs.
 fn object_settings(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     ui.horizontal_wrapped(|ui| {
-        ui.strong(format!("Object {} of {}", doc.object, doc.objects().len()));
+        ui.strong(tr!("tileset_editor.object_of", index = doc.object, count = doc.objects().len()));
         if let Some(layout) = doc.objects().get(doc.object).cloned() {
             let mut edited = layout.clone();
-            controls::checkbox(ui, &mut edited.slope, "Slope").on_hover_text("Laid corner to corner along a diagonal instead of in rows");
+            controls::checkbox(ui, &mut edited.slope, tr!("tileset_editor.slope")).on_hover_text(tr!("tileset_editor.slope_tip"));
             if edited.slope {
-                controls::checkbox(ui, &mut edited.slope_left, "Runs left");
-                controls::checkbox(ui, &mut edited.slope_down, "Runs down");
+                controls::checkbox(ui, &mut edited.slope_left, tr!("tileset_editor.runs_left"));
+                controls::checkbox(ui, &mut edited.slope_down, tr!("tileset_editor.runs_down"));
             }
             if edited != layout {
-                doc.edit("Edit slope", |doc| {
+                doc.edit(tr!("tileset_editor.step.edit_slope"), |doc| {
                     if let Some(layout) = doc.object_mut() {
                         *layout = edited;
                     }
@@ -1351,7 +1359,7 @@ fn object_table(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: e
     let rows = doc.object_table();
     let slope = doc.objects().get(doc.object).is_some_and(|o| o.slope);
     let accent = zoom_canvas::SELECTION;
-    let tip = "Click to choose · Ctrl+click deletes · Alt+click repeats across · Shift+click repeats down";
+    let tip = tr!("tileset_editor.object.cell_hint");
     ui.spacing_mut().item_spacing = Vec2::splat(1.0);
     for (y, (block, row)) in rows.iter().enumerate() {
         ui.horizontal(|ui| {
@@ -1362,10 +1370,10 @@ fn object_table(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: e
                 ui.painter().rect_filled(rect, 2.0, ui.visuals().selection.bg_fill);
             }
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, header, egui::FontId::proportional(11.0), ui.visuals().text_color());
-            let response = response.on_hover_text("Click to choose the row · Ctrl+click deletes it");
+            let response = response.on_hover_text(tr!("tileset_editor.object.row_tip"));
             if response.clicked() {
                 if ui.input(|i| i.modifiers.command) {
-                    doc.edit("Delete row", |doc| doc.delete_object_row(y));
+                    doc.edit(tr!("tileset_editor.step.delete_row"), |doc| doc.delete_object_row(y));
                 } else {
                     doc.object_cell = Some((y, 0));
                     view.row_chosen = true;
@@ -1411,8 +1419,13 @@ fn object_table(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: e
                     painter.rect_stroke(rect, 0.0, Stroke::new(2.0, accent), StrokeKind::Outside);
                 }
                 let response = match row.get(x) {
-                    Some(cell) => response.on_hover_text(format!("Block {} · control 0x{:02x}\n{tip}", cell.tile, cell.control)),
-                    None => response.on_hover_text("Click, then a block on the right, to add to this row"),
+                    Some(cell) => response.on_hover_text(tr!(
+                        "tileset_editor.object.cell_tip",
+                        tile = cell.tile,
+                        control = format!("0x{:02x}", cell.control),
+                        tip
+                    )),
+                    None => response.on_hover_text(tr!("tileset_editor.object.add_cell_tip")),
                 };
                 if !response.clicked() {
                     continue;
@@ -1422,10 +1435,10 @@ fn object_table(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: e
                 view.row_chosen = false;
                 let Some(cell) = row.get(x) else { continue };
                 if modifiers.command {
-                    doc.edit("Delete tile", TilesetDoc::remove_object_tile);
+                    doc.edit(tr!("tileset_editor.step.delete_tile"), TilesetDoc::remove_object_tile);
                 } else if modifiers.alt || modifiers.shift {
                     let bit = if modifiers.alt { 1 } else { 2 };
-                    doc.edit("Change repeat", |doc| doc.set_object_control(cell.control ^ bit));
+                    doc.edit(tr!("tileset_editor.step.change_repeat"), |doc| doc.set_object_control(cell.control ^ bit));
                     doc.object_cell = Some((y, x));
                 }
             }
@@ -1438,20 +1451,19 @@ fn cell_settings(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, coun
     let chosen = doc.object_cell.and_then(|(y, x)| doc.object_table().get(y).and_then(|(_, row)| row.get(x)).copied());
     ui.horizontal_wrapped(|ui| {
         if let (Some(cell), Some((y, x))) = (chosen, doc.object_cell) {
-            ui.label("Block");
+            ui.label(tr!("tileset_editor.block"));
             let mut tile = cell.tile;
-            ui.add(controls::number(&mut tile).range(-1..=count as i32 - 1)).on_hover_text("-1 leaves the cell empty");
+            ui.add(controls::number(&mut tile).range(-1..=count as i32 - 1)).on_hover_text(tr!("tileset_editor.empty_cell_tip"));
             let mut across = cell.control & 1 != 0;
             let mut down = cell.control & 2 != 0;
-            controls::checkbox(ui, &mut across, "Repeat across").on_hover_text("The tiles marked repeat fill the object's width (Alt+click)");
-            controls::checkbox(ui, &mut down, "Repeat down")
-                .on_hover_text("Marked on a row's first tile, the row repeats to fill the object's height (Shift+click)");
-            ui.label("Control");
+            controls::checkbox(ui, &mut across, tr!("tileset_editor.repeat_across")).on_hover_text(tr!("tileset_editor.repeat_across_tip"));
+            controls::checkbox(ui, &mut down, tr!("tileset_editor.repeat_down")).on_hover_text(tr!("tileset_editor.repeat_down_tip"));
+            ui.label(tr!("tileset_editor.control"));
             let mut control = (cell.control & !3) | u8::from(across) | (u8::from(down) << 1);
             ui.add(controls::number(&mut control).range(0..=127).hexadecimal(2, false, true));
             let edited = ObjectLayoutTile::new(tile, control);
             if edited != cell {
-                doc.edit("Edit tile", |doc| {
+                doc.edit(tr!("tileset_editor.step.edit_tile"), |doc| {
                     if let Some(slot) = doc.cell_mut(y, x) {
                         *slot = edited;
                     }
@@ -1459,26 +1471,26 @@ fn cell_settings(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, coun
             }
             ui.separator();
         }
-        if Button::new("Empty tile").small().show(ui).on_hover_text("Puts a cell that draws nothing in the chosen place").clicked() {
-            doc.edit("Place blocks", |doc| doc.place_blocks(&Pattern::single(None), ui.input(|i| i.modifiers.shift)));
+        if Button::new(tr!("tileset_editor.empty_tile")).small().show(ui).on_hover_text(tr!("tileset_editor.empty_tile_tip")).clicked() {
+            doc.edit(tr!("tileset_editor.step.place_blocks"), |doc| doc.place_blocks(&Pattern::single(None), ui.input(|i| i.modifiers.shift)));
         }
-        if Button::new("New row").small().show(ui).on_hover_text("Adds a row after the chosen one").clicked() {
+        if Button::new(tr!("tileset_editor.new_row")).small().show(ui).on_hover_text(tr!("tileset_editor.new_row_tip")).clicked() {
             let row = doc.object_cell.map_or(doc.object_table().len().saturating_sub(1), |(row, _)| row);
-            doc.edit("Add row", |doc| doc.insert_object_row(row));
+            doc.edit(tr!("tileset_editor.step.add_row"), |doc| doc.insert_object_row(row));
             view.row_chosen = false;
         }
-        let delete = Button::new("Delete")
+        let delete = Button::new(tr!("common.delete"))
             .small()
             .enabled(doc.object_cell.is_some())
             .show(ui)
-            .on_hover_text("Removes the chosen tile, or row (Delete)")
+            .on_hover_text(tr!("tileset_editor.delete_cell_tip"))
             .clicked()
             || (!ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::Delete)));
         if delete && let Some((row, _)) = doc.object_cell {
             if view.row_chosen {
-                doc.edit("Delete row", |doc| doc.delete_object_row(row));
+                doc.edit(tr!("tileset_editor.step.delete_row"), |doc| doc.delete_object_row(row));
             } else {
-                doc.edit("Delete tile", TilesetDoc::remove_object_tile);
+                doc.edit(tr!("tileset_editor.step.delete_tile"), TilesetDoc::remove_object_tile);
             }
         }
     });
@@ -1488,11 +1500,11 @@ fn cell_settings(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, coun
 fn object_preview(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, id: egui::TextureId, sheet: &RgbaImage, count: usize) {
     let (mut width, mut height) = view.preview;
     ui.horizontal_wrapped(|ui| {
-        ui.label("Preview");
+        ui.label(tr!("tileset_editor.preview"));
         ui.add(controls::number(&mut width).range(1..=64));
         ui.label("×");
         ui.add(controls::number(&mut height).range(1..=64));
-        ui.weak("Drag on the preview to size it.");
+        ui.weak(tr!("tileset_editor.preview_tip"));
     });
     let cell = 16.0 * view.object_zoom.min(2.0);
     let (area, response) = ui.allocate_exact_size(ui.available_size().max(Vec2::splat(32.0)), egui::Sense::click_and_drag());
@@ -1516,8 +1528,8 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
     let (version, sheet) = map16_sheet(doc, view);
     let count = doc.map16_count();
     controls::side_panel(ui, egui::Panel::left(doc.panel_id("tileset-behavior-blocks")), 320.0).show(ui, |ui| {
-        ui.strong("Map16 blocks");
-        ui.weak("Drag to choose several blocks: an edit sets them all.");
+        ui.strong(tr!("tileset_editor.map16_blocks"));
+        ui.weak(tr!("tileset_editor.behaviour_blocks_note"));
         match &sheet {
             Ok((image, _)) => {
                 if tile_picker::show(ui, "behavior-blocks", image, version, &mut view.behavior_blocks, 16, MAP16_COLUMNS, ui.available_height())
@@ -1540,7 +1552,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         let parts = decode_tile_behavior(raw);
         let mut edited = parts;
         ui.horizontal(|ui| {
-            ui.label("Map16 block");
+            ui.label(tr!("tileset_editor.map16_block"));
             let last = count.saturating_sub(1);
             let before = doc.behavior_entry;
             ui.add(controls::number(&mut doc.behavior_entry).range(0..=last));
@@ -1548,12 +1560,12 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                 view.behavior_blocks.select(doc.behavior_entry, MAP16_COLUMNS);
             }
             if chosen.len() > 1 {
-                ui.weak(format!("and {} more chosen", chosen.len() - 1));
+                ui.weak(tr!("tileset_editor.and_more_chosen", count = chosen.len() - 1));
             }
         });
         ui.columns(2, |columns| {
             let [left, right] = columns else { return };
-            left.label("Flags");
+            left.label(tr!("tileset_editor.flags"));
             egui::ScrollArea::vertical().id_salt("behavior-flags").show(left, |ui| {
                 for (i, name) in TILE_BEHAVIOR_FLAG_NAMES.iter().enumerate() {
                     let bit = 1u32 << i;
@@ -1565,7 +1577,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
             });
             let ui = right;
             ui.horizontal(|ui| {
-                ui.label("Subtype");
+                ui.label(tr!("tileset_editor.subtype"));
                 controls::drop_down("behavior-subtype")
                     .selected_text(TILE_BEHAVIOR_SUBTYPE_NAMES.get(usize::from(edited.subtype)).copied().unwrap_or_default())
                     .show_ui(ui, |ui| {
@@ -1575,7 +1587,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                     });
             });
             ui.horizontal(|ui| {
-                ui.label("Parameter");
+                ui.label(tr!("tileset_editor.parameter"));
                 ui.add(controls::number(&mut edited.parameter));
                 ui.weak(TilesetDoc::behavior_meaning(parts));
             });
@@ -1584,7 +1596,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
             let named: Vec<(u8, &str)> =
                 (0..=255u8).map(|v| (v, tile_behavior_parameter_name(kind, v))).filter(|(_, name)| !name.is_empty()).collect();
             if !named.is_empty() {
-                controls::search(ui, &mut view.behavior_search, "Find a value", Width::Fill);
+                controls::search(ui, &mut view.behavior_search, tr!("tileset_editor.find_a_value"), Width::Fill);
                 let filter = view.behavior_search.to_lowercase();
                 egui::ScrollArea::vertical().id_salt("behavior-values").max_height(220.0).show(ui, |ui| {
                     for (value, name) in named.iter().filter(|(_, name)| name.to_lowercase().contains(&filter)) {
@@ -1595,7 +1607,7 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
                 });
             }
             ui.horizontal(|ui| {
-                ui.label("Raw hex");
+                ui.label(tr!("tileset_editor.raw_hex"));
                 let id = egui::Id::new(("behavior-raw", doc.slot, doc.behavior_entry));
                 let mut text = ui.data(|d| d.get_temp::<String>(id)).unwrap_or_else(|| format!("{raw:08x}"));
                 let response = ui.add(TextField::new(&mut text).width(Width::Px(90.0)).code());
@@ -1612,13 +1624,13 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
         if edited != parts && count > 0 {
             let value = encode_tile_behavior(edited);
             let entries = if chosen.contains(&doc.behavior_entry) { chosen.clone() } else { vec![doc.behavior_entry] };
-            doc.edit("Edit behaviour", |doc| doc.set_behaviors(&entries, value));
+            doc.edit(tr!("tileset_editor.step.edit_behaviour"), |doc| doc.set_behaviors(&entries, value));
         }
     });
 }
 
 fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: &dyn Services, which: usize) {
-    let name = if which == 0 { "Background" } else { "Foreground" };
+    let name = if which == 0 { tr!("tileset_editor.tab.background") } else { tr!("tileset_editor.tab.foreground") };
     let (key, tiles_key): (&'static str, &'static str) =
         if which == 0 { ("background", "background-tiles") } else { ("foreground", "foreground-tiles") };
     let palettes = doc.tilemaps.get(which).map_or(1, |m| (m.palette.len() / 256).max(1));
@@ -1626,8 +1638,8 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
     editor.palette = editor.palette.clamp(0, palettes as i16 - 1);
     let palette = editor.palette;
     controls::side_panel(ui, egui::Panel::right(doc.panel_id("tilemap-side").with(which)), 320.0).show(ui, |ui| {
-        ui.strong("Tiles");
-        ui.weak("Drag to choose the tiles to paint with.");
+        ui.strong(tr!("tileset_editor.tiles"));
+        ui.weak(tr!("tileset_editor.tilemap_tiles_note"));
         let version = doc.version * 32 + palette.max(0) as u64;
         match cached(&mut view.images, tiles_key, version, || doc.tilemap_tiles(which, palette).map(|(image, count)| (Arc::new(image), count))) {
             Ok((image, count)) => {
@@ -1648,11 +1660,11 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
         ui.separator();
         egui::ScrollArea::vertical().id_salt("tilemap-inspector").show(ui, |ui| {
             let entry = doc.map_entries.get(which).copied().unwrap_or(0);
-            ui.strong(format!("Entry {entry}"));
+            ui.strong(tr!("tileset_editor.entry_n", entry));
             if let Some(value) = doc.map_value(which)
                 && let Some(edited) = entry_fields(ui, value, 0..=1023, 0..=15)
             {
-                doc.edit("Edit entry", |doc| doc.set_map_value(which, edited));
+                doc.edit(tr!("tileset_editor.step.edit_entry"), |doc| doc.set_map_value(which, edited));
             }
         });
     });
@@ -1661,20 +1673,22 @@ fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: 
         let mut commands = Vec::new();
         editor.toolbar(ui, None, palettes, &mut commands);
         ui.horizontal(|ui| {
-            if Button::new("Import PNG…").show(ui).clicked() {
-                match services.open_file(&format!("Import {name}"), &["png"]) {
+            if Button::new(tr!("tileset_editor.import_png")).show(ui).clicked() {
+                match services.open_file(&tr!("tileset_editor.import_layer", name), &["png"]) {
                     Some(Ok((_, bytes))) => {
-                        view.notice = decode_png(&bytes).and_then(|image| doc.edit("Import image", |doc| doc.import_tilemap(which, &image))).err();
+                        view.notice = decode_png(&bytes)
+                            .and_then(|image| doc.edit(tr!("tileset_editor.step.import_image"), |doc| doc.import_tilemap(which, &image)))
+                            .err();
                     }
                     Some(Err(error)) => view.notice = Some(error),
                     None => {}
                 }
             }
-            if Button::new("Export PNG…").show(ui).clicked() {
+            if Button::new(tr!("tileset_editor.export_png")).show(ui).clicked() {
                 let written = doc
                     .tilemap_image(which)
                     .and_then(|image| encode_png(&image))
-                    .and_then(|bytes| services.save_file(&format!("Export {name}"), &format!("{}.png", name.to_lowercase()), "png", &bytes));
+                    .and_then(|bytes| services.save_file(&tr!("tileset_editor.export_layer", name), &format!("{key}.png"), "png", &bytes));
                 view.notice = written.err();
             }
         });

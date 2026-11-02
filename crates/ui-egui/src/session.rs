@@ -13,6 +13,7 @@ use bigstar_protocol::{
 };
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
+use crate::i18n::tr;
 use crate::level_view::{ActorIndex, ActorKey, CanvasOptions, LevelView};
 
 /// What a request in flight was for, so its response lands in the right place.
@@ -80,13 +81,13 @@ impl BuildState {
     pub fn finished_status(outcome: &BuildOutcome) -> String {
         if outcome.cancelled {
             // Not a failure: it did what it was asked to do.
-            "Cancelled".to_owned()
+            tr!("session.build.cancelled").to_owned()
         } else if outcome.ok && outcome.warnings > 0 {
-            format!("Succeeded with {} warning(s)", outcome.warnings)
+            tr!("session.build.succeeded_with_warnings", warnings = outcome.warnings)
         } else if outcome.ok {
-            "Succeeded".to_owned()
+            tr!("session.build.succeeded").to_owned()
         } else {
-            format!("Failed: {}", outcome.stage)
+            tr!("session.build.failed", reason = outcome.stage)
         }
     }
 }
@@ -602,14 +603,14 @@ impl Session {
 
     /// Starts a build; `Event::Build` reports it into `build`.
     pub fn start_build(&mut self, verbose: bool) {
-        self.build = BuildState { running: true, status: "Starting NCPatcher...".to_owned(), ..BuildState::default() };
+        self.build = BuildState { running: true, status: tr!("session.build.starting_ncpatcher").to_owned(), ..BuildState::default() };
         self.request(Request::Build { verbose }, Pending::Build);
     }
 
     pub fn cancel_build(&mut self) {
         if self.build.running {
             self.build.cancelling = true;
-            self.build.status = "Cancelling...".to_owned();
+            self.build.status = tr!("session.build.cancelling").to_owned();
             self.request(Request::CancelBuild, Pending::Quiet);
         }
     }
@@ -696,7 +697,7 @@ impl Session {
         let response = match result {
             Ok(response) => response,
             Err(error) if kind.graphics() => {
-                self.log_line(LogLevel::Warning, format!("Graphics: {}", error.message));
+                self.log_line(LogLevel::Warning, tr!("session.log.graphics", message = error.message));
                 // Sprites whose draw lists will not come are drawn as markers rather than left blank.
                 if let Pending::ActorDraws(level, keys) = kind
                     && let Some(view) = self.levels.get_mut(&level)
@@ -716,7 +717,7 @@ impl Session {
                 // A build the host refused never started.
                 if kind == Pending::Build {
                     self.build.running = false;
-                    self.build.status = format!("Failed: {}", error.message);
+                    self.build.status = tr!("session.build.failed", reason = error.message);
                 }
                 if kind == Pending::Download {
                     self.downloading = None;
@@ -757,7 +758,7 @@ impl Session {
             (Pending::Download, Response::RomChunk { name, total, offset, bytes }) => {
                 let Some(mut arrived) = self.downloading.take() else { return };
                 if offset != arrived.len() as u64 {
-                    self.report("The download arrived out of order; try again.".to_owned());
+                    self.report(tr!("session.the_download_arrived_out_of_order_try_again").to_owned());
                     return;
                 }
                 arrived.extend_from_slice(&bytes);
@@ -863,11 +864,14 @@ impl Session {
                     return;
                 }
                 if let Some(error) = &graphics.error {
-                    self.log_line(LogLevel::Warning, format!("Level graphics: {error}"));
+                    self.log_line(LogLevel::Warning, tr!("session.log.level_graphics", error));
                 }
-                let slots =
-                    graphics.tilesets.iter().enumerate().filter_map(|(slot, t)| t.error.as_ref().map(|e| format!("Tileset slot {slot}: {e}")));
-                let images = [("Background", &graphics.background), ("Foreground", &graphics.foreground)]
+                let slots = graphics
+                    .tilesets
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, t)| t.error.as_ref().map(|e| tr!("session.log.tileset_slot", slot, error = e)));
+                let images = [(tr!("session.log.background"), &graphics.background), (tr!("session.log.foreground"), &graphics.foreground)]
                     .into_iter()
                     .filter_map(|(name, image)| image.error.as_ref().map(|e| format!("{name}: {e}")));
                 let warnings: Vec<String> = slots.chain(images).collect();
@@ -1031,7 +1035,8 @@ impl Session {
         match event {
             BuildEvent::Started { variant } => {
                 self.build = BuildState { running: true, ..BuildState::default() };
-                self.build.status = if variant.is_empty() { "Building...".to_owned() } else { format!("Building {variant}...") };
+                self.build.status =
+                    if variant.is_empty() { tr!("session.build.building").to_owned() } else { tr!("session.build.building_variant", variant) };
             }
             BuildEvent::Progress { phase, current, total, item } => {
                 // An indeterminate phase should look like work, not like a bar stuck at zero.
@@ -1057,15 +1062,18 @@ impl Session {
                 if !outcome.cancelled {
                     self.notice = Some(if outcome.ok {
                         let text = if outcome.warnings > 0 {
-                            format!("NCPatcher completed with {} warning(s).", outcome.warnings)
+                            tr!("session.build.ncpatcher_completed_with_warnings", warnings = outcome.warnings)
                         } else {
-                            "NCPatcher completed successfully.".to_owned()
+                            tr!("session.build.ncpatcher_completed_successfully").to_owned()
                         };
                         Notice { error: false, text }
                     } else {
-                        let text = format!(
-                            "NCPatcher did not finish: {} (exit code {}, {} error(s), {} warning(s)). See the Output panel for the diagnostics.",
-                            outcome.stage, outcome.exit_code, outcome.errors, outcome.warnings
+                        let text = tr!(
+                            "session.build.ncpatcher_did_not_finish",
+                            stage = outcome.stage,
+                            exit_code = outcome.exit_code,
+                            errors = outcome.errors,
+                            warnings = outcome.warnings
                         );
                         Notice { error: true, text }
                     });

@@ -1,9 +1,9 @@
 # The level list: groups of levels, and each level's areas by their ROM path without `.bin`. The course file is
 # `<path>.bin` and its background `<path>_bgdat.bin`; inside an archive, the path goes on past the `.narc`.
-# `${world}` reads as the word for "World" in the editor's language.
+# A group named "World <number>" or "World <number> (secret)" reads in the editor's language, as do the other names it knows.
 levels:
   - group:
-      name: "${world} 1"
+      name: "World 1"
       levels:
         - level:
             name: "1-1"
@@ -55,7 +55,7 @@ levels:
               - course/A09_1
 
   - group:
-      name: "${world} 2"
+      name: "World 2"
       levels:
         - level:
             name: "2-1"
@@ -112,7 +112,7 @@ levels:
               - course/B10_1
 
   - group:
-      name: "${world} 3"
+      name: "World 3"
       levels:
         - level:
             name: "3-1"
@@ -168,7 +168,7 @@ levels:
               - course/C10_1
 
   - group:
-      name: "${world} 4 (secret)"
+      name: "World 4 (secret)"
       levels:
         - level:
             name: "4-1"
@@ -227,7 +227,7 @@ levels:
               - course/D11_1
 
   - group:
-      name: "${world} 5"
+      name: "World 5"
       levels:
         - level:
             name: "5-1"
@@ -283,7 +283,7 @@ levels:
               - course/E11_1
 
   - group:
-      name: "${world} 6"
+      name: "World 6"
       levels:
         - level:
             name: "6-1"
@@ -346,7 +346,7 @@ levels:
               - course/F12_1
 
   - group:
-      name: "${world} 7 (secret)"
+      name: "World 7 (secret)"
       levels:
         - level:
             name: "7-1"
@@ -405,7 +405,7 @@ levels:
               - course/G11_2
 
   - group:
-      name: "${world} 8"
+      name: "World 8"
       levels:
         - level:
             name: "8-1"

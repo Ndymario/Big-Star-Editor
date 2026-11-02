@@ -182,7 +182,7 @@ fn a_project_is_a_directory_ncpatcher_configures() {
 fn level_catalog_lists_worlds_and_download_play_levels() {
     let catalog = builtin_level_catalog(Some("A2DE"));
     let world = &catalog.root.groups[0];
-    assert_eq!(world.name, "${world} 1");
+    assert_eq!(world.name, "World 1");
     assert_eq!(world.levels[0].display_name, "1-1");
     assert_eq!(world.levels[0].areas.len(), 3);
     assert_eq!(world.levels[0].areas[0].display_name, "Area 1");
