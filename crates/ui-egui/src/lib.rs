@@ -7,6 +7,7 @@ mod builds;
 mod canvas;
 mod clipboard;
 mod controls;
+mod corner_tab;
 pub mod demo;
 mod dialogs;
 mod editors;

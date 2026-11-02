@@ -17,6 +17,7 @@ use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutco
 use egui::{Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
+use crate::corner_tab::{Anchor, CornerTab};
 use crate::i18n::tr;
 use crate::properties::{PanelState, Tab, item_count};
 
@@ -503,9 +504,6 @@ fn entrance_rect(entrance: &NsmbLevelEntrance) -> Rect {
     rect(f32::from(entrance.x), f32::from(entrance.y), TILE, TILE)
 }
 
-/// The size of the label on a view's or a zone's tab, in screen points.
-pub const TAB_TEXT: f32 = 11.0;
-
 fn view_rect(view: &NsmbLevelView) -> Rect {
     rect(f32::from(view.x), f32::from(view.y), f32::from(view.width.max(1)), f32::from(view.height.max(1)))
 }
@@ -747,30 +745,21 @@ impl LevelView {
         entities
     }
 
-    /// The tab a view or a zone `index` is picked up by, in screen points, with the container at `rect` (level
-    /// pixels): a box at its top-left corner for a view and its top-right for a zone, so the two do not cover each
-    /// other where they share an origin. It keeps to the canvas's edges while any of the container is on the canvas.
-    /// `None` when none of it is, or for any other kind.
-    pub fn tab(&self, kind: Kind, index: usize, rect: Rect) -> Option<Rect> {
-        let label = self.tab_label(kind, index)?;
-        let shown = self.screen_rect(rect).intersect(self.canvas);
-        if !shown.is_positive() {
-            return None;
-        }
-        // The label is set in the monospace face, whose letters are all 0.6 of its size across.
-        let size = Vec2::new(label.chars().count() as f32 * TAB_TEXT * 0.6 + 10.0, TAB_TEXT + 6.0);
-        let left = if kind == Kind::Zone { (shown.max.x - size.x).max(shown.min.x) } else { shown.min.x };
-        Some(Rect::from_min_size(Pos2::new(left, shown.min.y), size))
-    }
-
-    /// What the tab of view or zone `index` says.
-    pub fn tab_label(&self, kind: Kind, index: usize) -> Option<String> {
+    /// The tab view or zone `index` is picked up by: a view hangs it from its top-left corner and a zone from its
+    /// top-right, so the two do not cover each other where they share an origin. `None` for any other kind.
+    pub fn corner_tab(&self, kind: Kind, index: usize) -> Option<CornerTab> {
         let course = &self.snapshot.course;
         match kind {
-            Kind::View => course.views.get(index).map(|v| tr!("level_view.view_tab", id = v.id)),
-            Kind::Zone => course.zones.get(index).map(|z| tr!("level_view.zone_tab", id = z.id)),
+            Kind::View => course.views.get(index).map(|v| CornerTab::new(Anchor::Left, tr!("level_view.view_tab", id = v.id))),
+            Kind::Zone => course.zones.get(index).map(|z| CornerTab::new(Anchor::Right, tr!("level_view.zone_tab", id = z.id))),
             _ => None,
         }
+    }
+
+    /// The box of that tab on the screen, with the container at `rect` (level pixels). `None` when none of the
+    /// container is on the canvas, or it has no tab.
+    pub fn tab(&self, kind: Kind, index: usize, rect: Rect) -> Option<Rect> {
+        self.corner_tab(kind, index)?.place(self.screen_rect(rect).intersect(self.canvas))
     }
 
     /// What a click or a marquee can take, back to front: every entity's own box, except that a view or a zone is
