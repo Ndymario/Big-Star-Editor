@@ -615,10 +615,9 @@ fn containers_yield_the_click_to_what_they_enclose() {
     assert_eq!(tab.min, screen(&harness, Pos2::ZERO));
     click(&mut harness, tab.center(), PointerButton::Primary, Modifiers::NONE);
     assert_eq!(view(&harness).selection, [Item::new(Kind::View, 0)]);
-    // A zone's is at its top-right, clear of the view's.
+    // A zone's is at the same corner, so it slides over to clear the view's.
     let zone_tab = view(&harness).tab(Kind::Zone, 0, area).unwrap();
-    assert_eq!(zone_tab.right_top(), screen(&harness, Pos2::new(1024.0, 0.0)));
-    assert!(!zone_tab.intersects(tab));
+    assert_eq!(zone_tab.left_top(), tab.right_top());
     click(&mut harness, zone_tab.center(), PointerButton::Primary, Modifiers::NONE);
     assert_eq!(view(&harness).selection, [Item::new(Kind::Zone, 0)]);
     // Scrolled away from those corners, the tabs keep to the canvas's edges for as long as the container is on it.

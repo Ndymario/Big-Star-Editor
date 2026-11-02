@@ -745,21 +745,34 @@ impl LevelView {
         entities
     }
 
-    /// The tab view or zone `index` is picked up by: a view hangs it from its top-left corner and a zone from its
-    /// top-right, so the two do not cover each other where they share an origin. `None` for any other kind.
+    /// The tab view or zone `index` is picked up by, hung from the container's top-left corner. `None` for any other
+    /// kind.
     pub fn corner_tab(&self, kind: Kind, index: usize) -> Option<CornerTab> {
         let course = &self.snapshot.course;
         match kind {
             Kind::View => course.views.get(index).map(|v| CornerTab::new(Anchor::Left, tr!("level_view.view_tab", id = v.id))),
-            Kind::Zone => course.zones.get(index).map(|z| CornerTab::new(Anchor::Right, tr!("level_view.zone_tab", id = z.id))),
+            Kind::Zone => course.zones.get(index).map(|z| CornerTab::new(Anchor::Left, tr!("level_view.zone_tab", id = z.id))),
             _ => None,
         }
     }
 
     /// The box of that tab on the screen, with the container at `rect` (level pixels). `None` when none of the
-    /// container is on the canvas, or it has no tab.
+    /// container is on the canvas, or it has no tab. A zone's tab slides right past any view's it would cover, as the
+    /// two usually share an origin, so neither hides the other.
     pub fn tab(&self, kind: Kind, index: usize, rect: Rect) -> Option<Rect> {
-        self.corner_tab(kind, index)?.place(self.screen_rect(rect).intersect(self.canvas))
+        let mut tab = self.corner_tab(kind, index)?.place(self.screen_rect(rect).intersect(self.canvas))?;
+        if kind == Kind::Zone {
+            let mut views: Vec<Rect> = (0..self.snapshot.course.views.len())
+                .filter_map(|view| self.tab(Kind::View, view, view_rect(self.snapshot.course.views.get(view)?)))
+                .collect();
+            views.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+            for other in views {
+                if other.intersects(tab) {
+                    tab = tab.translate(Vec2::new(other.max.x - tab.min.x, 0.0));
+                }
+            }
+        }
+        Some(tab)
     }
 
     /// What a click or a marquee can take, back to front: every entity's own box, except that a view or a zone is
