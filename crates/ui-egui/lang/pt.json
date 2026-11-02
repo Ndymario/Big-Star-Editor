@@ -494,6 +494,7 @@
   "level_view.kind.view": "Vista",
   "level_view.kind.zone": "Zona",
   "level_view.view_tab": "Vista {id}",
+  "level_view.zone_tab": "Zona {id}",
   "message_editor.attributes": "Atributos",
   "message_editor.duplicate": "Duplicar",
   "message_editor.empty": "(vazia)",

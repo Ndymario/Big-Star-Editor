@@ -20,7 +20,7 @@ use crate::block_icons;
 use crate::clipboard;
 use crate::controls::{self, Button, Choice as _};
 use crate::i18n::tr;
-use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, VIEW_TAB_TEXT, fit_zoom, handle_centres, node_rect};
+use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TAB_TEXT, TILE, fit_zoom, handle_centres, node_rect};
 use crate::properties::Tab;
 
 /// The textures the host has sent, uploaded the first time something draws them.
@@ -1111,13 +1111,12 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
             } else {
                 painter.rect_stroke(rect, 0.0, hairline(color), StrokeKind::Middle);
             }
-            // A view is picked up by its tab, which follows it through a drag.
-            if live
-                && kind == Kind::View
-                && let (Some(tab), Some(label)) = (view.view_tab(index, placed(kind, index)), view.view_tab_label(index))
-            {
-                painter.rect_filled(tab, CornerRadius { se: 3, ..CornerRadius::ZERO }, if chosen { accent } else { color });
-                painter.text(tab.center(), Align2::CENTER_CENTER, label, FontId::monospace(VIEW_TAB_TEXT), Color32::WHITE);
+            // A view or a zone is picked up by its tab, which follows it through a drag.
+            if live && let (Some(tab), Some(label)) = (view.tab(kind, index, placed(kind, index)), view.tab_label(kind, index)) {
+                let corner =
+                    if kind == Kind::Zone { CornerRadius { sw: 3, ..CornerRadius::ZERO } } else { CornerRadius { se: 3, ..CornerRadius::ZERO } };
+                painter.rect_filled(tab, corner, if chosen { accent } else { color });
+                painter.text(tab.center(), Align2::CENTER_CENTER, label, FontId::monospace(TAB_TEXT), Color32::WHITE);
             }
         }
     }

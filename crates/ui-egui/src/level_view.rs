@@ -503,8 +503,8 @@ fn entrance_rect(entrance: &NsmbLevelEntrance) -> Rect {
     rect(f32::from(entrance.x), f32::from(entrance.y), TILE, TILE)
 }
 
-/// The size of the label on a view's tab, in screen points.
-pub const VIEW_TAB_TEXT: f32 = 11.0;
+/// The size of the label on a view's or a zone's tab, in screen points.
+pub const TAB_TEXT: f32 = 11.0;
 
 fn view_rect(view: &NsmbLevelView) -> Rect {
     rect(f32::from(view.x), f32::from(view.y), f32::from(view.width.max(1)), f32::from(view.height.max(1)))
@@ -747,33 +747,48 @@ impl LevelView {
         entities
     }
 
-    /// The tab view `index` is picked up by, in screen points, with the view at `rect` (level pixels): a box at the
-    /// view's top-left corner that keeps to the canvas's top and left edges while any of the view is on the canvas.
-    /// `None` when none of it is.
-    pub fn view_tab(&self, index: usize, rect: Rect) -> Option<Rect> {
-        let label = self.view_tab_label(index)?;
+    /// The tab a view or a zone `index` is picked up by, in screen points, with the container at `rect` (level
+    /// pixels): a box at its top-left corner for a view and its top-right for a zone, so the two do not cover each
+    /// other where they share an origin. It keeps to the canvas's edges while any of the container is on the canvas.
+    /// `None` when none of it is, or for any other kind.
+    pub fn tab(&self, kind: Kind, index: usize, rect: Rect) -> Option<Rect> {
+        let label = self.tab_label(kind, index)?;
         let shown = self.screen_rect(rect).intersect(self.canvas);
         if !shown.is_positive() {
             return None;
         }
         // The label is set in the monospace face, whose letters are all 0.6 of its size across.
-        let size = Vec2::new(label.chars().count() as f32 * VIEW_TAB_TEXT * 0.6 + 10.0, VIEW_TAB_TEXT + 6.0);
-        Some(Rect::from_min_size(shown.min, size))
+        let size = Vec2::new(label.chars().count() as f32 * TAB_TEXT * 0.6 + 10.0, TAB_TEXT + 6.0);
+        let left = if kind == Kind::Zone { (shown.max.x - size.x).max(shown.min.x) } else { shown.min.x };
+        Some(Rect::from_min_size(Pos2::new(left, shown.min.y), size))
     }
 
-    /// What view `index`'s tab says.
-    pub fn view_tab_label(&self, index: usize) -> Option<String> {
-        self.snapshot.course.views.get(index).map(|v| tr!("level_view.view_tab", id = v.id))
+    /// What the tab of view or zone `index` says.
+    pub fn tab_label(&self, kind: Kind, index: usize) -> Option<String> {
+        let course = &self.snapshot.course;
+        match kind {
+            Kind::View => course.views.get(index).map(|v| tr!("level_view.view_tab", id = v.id)),
+            Kind::Zone => course.zones.get(index).map(|z| tr!("level_view.zone_tab", id = z.id)),
+            _ => None,
+        }
     }
 
-    /// What a click or a marquee can take, back to front: every entity's own box, except that a view is taken only by
-    /// its tab, which is drawn over everything else. A view's area is where the rest of the level is edited, so it
-    /// would otherwise be in the way of every click that misses.
+    /// What a click or a marquee can take, back to front: every entity's own box, except that a view or a zone is
+    /// taken only by its tab, which is drawn over everything else. Their areas are where the rest of the level is
+    /// edited, so they would otherwise be in the way of every click that misses.
     fn pick_rects(&self) -> Vec<(Item, Rect)> {
-        let mut rects: Vec<(Item, Rect)> = self.entity_rects().into_iter().filter(|(item, _)| item.kind != Kind::View).collect();
-        for (index, v) in self.snapshot.course.views.iter().enumerate() {
-            if let Some(tab) = self.view_tab(index, view_rect(v)) {
-                rects.push((Item::new(Kind::View, index), Rect::from_min_max(self.to_world(tab.min), self.to_world(tab.max))));
+        let course = &self.snapshot.course;
+        let mut rects: Vec<(Item, Rect)> =
+            self.entity_rects().into_iter().filter(|(item, _)| !matches!(item.kind, Kind::View | Kind::Zone)).collect();
+        let containers = course
+            .zones
+            .iter()
+            .enumerate()
+            .map(|(i, z)| (Item::new(Kind::Zone, i), zone_rect(z)))
+            .chain(course.views.iter().enumerate().map(|(i, v)| (Item::new(Kind::View, i), view_rect(v))));
+        for (item, area) in containers {
+            if let Some(tab) = self.tab(item.kind, item.index, area) {
+                rects.push((item, Rect::from_min_max(self.to_world(tab.min), self.to_world(tab.max))));
             }
         }
         rects
@@ -1752,8 +1767,8 @@ mod tests {
         assert_eq!(view.hit_test(Pos2::new(104.0, 72.0)), Some(Item::new(Kind::Sprite, 0)));
         assert_eq!(view.hit_test(Pos2::new(40.0, 56.0)), Some(Item::new(Kind::Object, 0)));
         assert_eq!(view.hit_test(Pos2::new(308.0, 108.0)), Some(Item::node(Kind::Path, 0, 0)));
-        // Where nothing else is, the zone that encloses it takes the click; outside it, nothing does.
-        assert_eq!(view.hit_test(Pos2::new(200.0, 150.0)), Some(Item::new(Kind::Zone, 0)));
+        // A zone is taken by its tab, not its area, so where nothing else is nothing takes the click.
+        assert_eq!(view.hit_test(Pos2::new(200.0, 150.0)), None);
         assert_eq!(view.hit_test(Pos2::new(500.0, 150.0)), None);
     }
 

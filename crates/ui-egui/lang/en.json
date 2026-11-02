@@ -494,6 +494,7 @@
   "level_view.kind.view": "View",
   "level_view.kind.zone": "Zone",
   "level_view.view_tab": "View {id}",
+  "level_view.zone_tab": "Zone {id}",
   "message_editor.attributes": "Attributes",
   "message_editor.duplicate": "Duplicate",
   "message_editor.empty": "(empty)",
