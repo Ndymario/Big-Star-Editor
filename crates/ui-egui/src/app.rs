@@ -1526,7 +1526,11 @@ impl BigStarApp {
                     }
                 });
                 if preferences.importing {
-                    TextField::multiline(&mut preferences.import_text).code().hint("Paste a theme's JSON here.").name("Theme JSON").show(ui);
+                    // A whole theme is far taller than the window has room for, so it scrolls in a box of its own.
+                    let height = controls::code_field_height(ui, 4);
+                    egui::ScrollArea::vertical().id_salt("theme-json").max_height(height).min_scrolled_height(height).show(ui, |ui| {
+                        TextField::multiline(&mut preferences.import_text).code().hint("Paste a theme's JSON here.").name("Theme JSON").show(ui);
+                    });
                     ui.horizontal(|ui| {
                         if Button::new("Import theme").enabled(!preferences.import_text.trim().is_empty()).show(ui).clicked() {
                             action = Some(ThemeAction::ImportPasted);

@@ -2472,6 +2472,23 @@ fn a_paste_that_is_no_theme_says_why_and_stays_to_be_corrected() {
 }
 
 #[test]
+fn a_long_paste_scrolls_in_its_box_and_leaves_the_window_as_it_was() {
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Import").click();
+    harness.run();
+    let window = |harness: &Harness<'static, BigStarApp>| crate::dialogs::window_rect(&harness.ctx, "Preferences").unwrap();
+    let empty = window(&harness);
+    let file = crate::theme::theme_file(crate::theme::all_themes(&[]).next().unwrap()).unwrap();
+    harness.state_mut().preferences.as_mut().unwrap().import_text = file;
+    harness.run();
+    for _ in 0..6 {
+        harness.step();
+    }
+    assert_eq!(window(&harness), empty);
+    assert!(harness.ctx.content_rect().contains_rect(window(&harness)));
+}
+
+#[test]
 fn deleting_the_theme_in_use_asks_first_and_falls_back_on_the_default() {
     use crate::theme::{Theme, Tokens};
     let services = MemoryServices::default();

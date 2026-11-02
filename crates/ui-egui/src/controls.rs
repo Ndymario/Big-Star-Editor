@@ -636,6 +636,11 @@ impl egui::Widget for TextField<'_> {
     }
 }
 
+/// How tall a [`TextField::code`] field of `rows` lines is.
+pub fn code_field_height(ui: &Ui, rows: usize) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Monospace) * rows as f32 + f32::from(FIELD_MARGIN.top + FIELD_MARGIN.bottom)
+}
+
 /// A search field with a clear button. Returns the field's response; `changed()` also when it was cleared.
 pub fn search(ui: &mut Ui, text: &mut String, hint: &str, width: Width) -> Response {
     /// The room the clear button takes after the field.
