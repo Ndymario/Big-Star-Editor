@@ -18,6 +18,7 @@ use egui::{
 
 use crate::block_icons;
 use crate::clipboard;
+use crate::container::{Container, Palette};
 use crate::controls::{self, Button, Choice as _};
 use crate::i18n::tr;
 use crate::level_view::{Backgrounds, DsScreens, Gesture, Handle, Item, Kind, LevelView, TILE, fit_zoom, handle_centres, node_rect};
@@ -138,8 +139,18 @@ fn object_color(slot: u8) -> Color32 {
     }
 }
 
-const ZONE_COLOR: Color32 = Color32::from_rgb(84, 154, 110);
-const VIEW_COLOR: Color32 = Color32::from_rgb(65, 122, 180);
+const ZONE_PALETTE: Palette = Palette { color: Color32::from_rgb(84, 154, 110), accent: Color32::from_rgb(24, 111, 58), tint: 34 };
+const VIEW_PALETTE: Palette = Palette { color: Color32::from_rgb(65, 122, 180), accent: Color32::from_rgb(35, 88, 145), tint: 25 };
+
+/// The container that zone or view `index` is drawn as.
+fn container(view: &LevelView, kind: Kind, index: usize) -> Option<Container> {
+    let palette = match kind {
+        Kind::Zone => ZONE_PALETTE,
+        Kind::View => VIEW_PALETTE,
+        _ => return None,
+    };
+    view.corner_tab(kind, index).map(|tab| Container::new(tab, palette))
+}
 /// Over a sprite the level's object banks leave out of the game.
 const MISSING_BANK_TINT: Color32 = Color32::from_rgba_premultiplied(120, 10, 10, 120);
 const MISSING_BANK_EDGE: Color32 = Color32::from_rgb(230, 40, 40);
@@ -983,11 +994,9 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
 
     // Zones and views are containers: the tint goes underneath, where it cannot wash out what they hold, and the
     // boundary goes over everything at the end.
-    for (kind, count, tint) in
-        [(Kind::Zone, course.zones.len(), with_alpha(ZONE_COLOR, 34)), (Kind::View, course.views.len(), with_alpha(VIEW_COLOR, 25))]
-    {
-        for index in 0..count {
-            painter.rect_filled(frame.rect(placed(kind, index)), 0.0, tint);
+    for (kind, count) in [(Kind::Zone, course.zones.len()), (Kind::View, course.views.len())] {
+        for (index, container) in (0..count).filter_map(|index| container(view, kind, index).map(|c| (index, c))) {
+            container.paint_tint(painter, frame.rect(placed(kind, index)));
         }
     }
 
@@ -1098,22 +1107,17 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
     }
 
     // Last, so nothing dims the edges a zone or a view is sized against.
-    for (kind, count, color, accent) in [
-        (Kind::Zone, course.zones.len(), ZONE_COLOR, Color32::from_rgb(24, 111, 58)),
-        (Kind::View, course.views.len(), VIEW_COLOR, Color32::from_rgb(35, 88, 145)),
-    ] {
-        for index in 0..count {
+    for (kind, count) in [(Kind::Zone, course.zones.len()), (Kind::View, course.views.len())] {
+        for (index, container) in (0..count).filter_map(|index| container(view, kind, index).map(|c| (index, c))) {
             let rect = frame.rect(placed(kind, index));
             let chosen = selected(kind, index, None);
+            container.paint_boundary(painter, rect, chosen);
             if chosen {
-                painter.rect_stroke(rect, 0.0, Stroke::new(3.0, accent), StrokeKind::Middle);
                 knobs(painter, rect, colors);
-            } else {
-                painter.rect_stroke(rect, 0.0, hairline(color), StrokeKind::Middle);
             }
-            // A view or a zone is picked up by its tab, which follows it through a drag.
-            if live && let (Some(tab), Some(at)) = (view.corner_tab(kind, index), view.tab(kind, index, placed(kind, index))) {
-                tab.paint(painter, at, if chosen { accent } else { color });
+            // A container is picked up by its tab, which follows it through a drag.
+            if live && let Some(at) = view.tab(kind, index, placed(kind, index)) {
+                container.paint_tab(painter, at, chosen);
             }
         }
     }

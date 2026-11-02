@@ -17,7 +17,7 @@ use bigstar_protocol::{ActorCatalog, ActorDraw, ActorInfo, ActorInput, EditOutco
 use egui::{Pos2, Rect, Vec2};
 use serde::{Deserialize, Serialize};
 
-use crate::corner_tab::{Anchor, CornerTab};
+use crate::container::{Anchor, CornerTab};
 use crate::i18n::tr;
 use crate::properties::{PanelState, Tab, item_count};
 

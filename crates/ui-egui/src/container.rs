@@ -1,8 +1,10 @@
-//! A small labelled tab hung from the top corner of a rectangle, which picks the rectangle up where its area cannot
-//! (a big container would be in the way of every click that misses). Where it sits and how it looks are the tab's
-//! own: the owner says which corner, what it says and what colour it is, and gets back a box to draw and to hit-test.
+//! A container: a big labelled rectangle drawn under and over what it holds, such as a zone or a view in a level. It
+//! is a faint tint beneath its contents, a boundary over them (heavier, with the resize knobs the owner adds, while
+//! it is selected) and a small tab hung from one top corner. The tab picks the container up where its area cannot,
+//! since a big container would otherwise be in the way of every click that misses. The owner says what the tab says,
+//! which corner it hangs from and what colours the container wears, and gets back a box to hit-test.
 
-use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Vec2};
+use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, StrokeKind, Vec2};
 
 /// The size of a tab's label, in screen points.
 pub const TEXT: f32 = 11.0;
@@ -17,6 +19,46 @@ const ROUNDING: u8 = 3;
 pub enum Anchor {
     Left,
     Right,
+}
+
+/// The colours a container wears.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Palette {
+    /// The boundary and tab while it is not selected.
+    pub color: Color32,
+    /// The boundary and tab while it is selected.
+    pub accent: Color32,
+    /// How opaque the tint under its contents is, out of 255.
+    pub tint: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Container {
+    pub tab: CornerTab,
+    pub palette: Palette,
+}
+
+impl Container {
+    pub fn new(tab: CornerTab, palette: Palette) -> Self {
+        Self { tab, palette }
+    }
+
+    /// The tint over the container's area at `rect` (screen points), to be drawn before what it holds.
+    pub fn paint_tint(&self, painter: &Painter, rect: Rect) {
+        let color = self.palette.color;
+        painter.rect_filled(rect, 0.0, Color32::from_rgba_unmultiplied(color.r(), color.g(), color.b(), self.palette.tint));
+    }
+
+    /// The boundary at `rect`, to be drawn after what it holds so nothing dims the edges it is sized against.
+    pub fn paint_boundary(&self, painter: &Painter, rect: Rect, selected: bool) {
+        let stroke = if selected { Stroke::new(3.0, self.palette.accent) } else { Stroke::new(1.0, self.palette.color) };
+        painter.rect_stroke(rect, 0.0, stroke, StrokeKind::Middle);
+    }
+
+    /// The tab at `at` (from `CornerTab::place`).
+    pub fn paint_tab(&self, painter: &Painter, at: Rect, selected: bool) {
+        self.tab.paint(painter, at, if selected { self.palette.accent } else { self.palette.color });
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
