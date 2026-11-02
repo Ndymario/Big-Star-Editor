@@ -747,7 +747,7 @@
   "properties.note.camera_scroll_height": "15 significa nenhuma. Qualquer outro valor faz o jogo registar uma altura de câmara com este número de blocos acima de onde ela assenta no chão da vista; o que a lê ainda não foi identificado.",
   "properties.note.camera_shared": "As vistas com os mesmos valores de câmara partilham uma só entrada de definições de câmara, que é criada e removida à medida que mudam.",
   "properties.note.camera_top_offset": "O jogo só move a câmara para cima ou para baixo o suficiente para manter o jogador entre duas linhas ao longo do ecrã. A superior fica 64 píxeis abaixo, mais este valor.",
-  "properties.note.camera_top_offset_special": "A linha superior no segundo modo de câmara do jogo. Os movimentos do jogador que passam para ele ainda não foram identificados.",
+  "properties.note.camera_top_offset_special": "A linha superior no segundo modo de câmara do jogo, usado enquanto o jogador está numa rede de arame, como na Torre M4.",
   "properties.note.camera_zoom": "Em dezasseis avos: 16 é o zoom normal, e 0 também. O jogo mantém-no entre 8 e 24; 255 deixa o zoom como está.",
   "properties.note.closed_to_player_1": "O primeiro jogador não pode entrar por esta entrada.",
   "properties.note.closed_to_player_2": "O segundo jogador não pode entrar por esta entrada.",

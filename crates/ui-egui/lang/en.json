@@ -747,7 +747,7 @@
   "properties.note.camera_scroll_height": "15 is none. Anything else has the game note a camera height this many tiles above where it rests on the view's floor; what reads it has not been traced.",
   "properties.note.camera_shared": "Views with the same camera values share one camera settings entry, which is made and removed as they change.",
   "properties.note.camera_top_offset": "The game moves the camera up or down only as far as keeps the player between two lines down the screen. The upper is 64 pixels down plus this.",
-  "properties.note.camera_top_offset_special": "The upper line in the game's second camera mode. Which of the player's moves switch to it has not been traced.",
+  "properties.note.camera_top_offset_special": "The upper line in the game's second camera mode, which is used while the player is on a chainlink fence, as in W4 Tower.",
   "properties.note.camera_zoom": "In sixteenths: 16 is the normal zoom, and so is 0. The game keeps it between 8 and 24; 255 leaves the zoom as it is.",
   "properties.note.closed_to_player_1": "The first player cannot enter this entrance.",
   "properties.note.closed_to_player_2": "The second player cannot enter this entrance.",
