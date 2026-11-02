@@ -76,7 +76,7 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
    NCPatcher projects (each has an `ncpatcher.yaml`).
 3. Open a level from the **Levels** tab and start editing.
 
-To build a project you also need [NCPatcher](docs/ncpatcher-integration.md) on your `PATH` (or set in Preferences).
+To build a project you also need [NCPatcher](docs/ncpatcher-integration.md) on your `PATH`.
 
 ## For developers
 

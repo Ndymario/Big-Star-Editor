@@ -272,6 +272,11 @@ fn main() -> Result<(), String> {
         }
         harness.run();
     }
+    shot(&mut harness, &dir, "preferences-general.png")?;
+    if let Some(node) = harness.query_by_label("Appearance") {
+        node.click();
+    }
+    harness.run();
     shot(&mut harness, &dir, "preferences.png")?;
     // The system's accent is on from the start; here the theme's own is asked for.
     for label in ["Midnight", "Use the system's accent colour"] {

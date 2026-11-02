@@ -2202,6 +2202,8 @@ fn preferences_open(services: MemoryServices) -> (Harness<'static, BigStarApp>, 
     harness.run();
     harness.get_by_label("Preferences…").click();
     harness.run();
+    harness.get_by_label("Appearance").click();
+    harness.run();
     (harness, stored)
 }
 
@@ -2422,6 +2424,144 @@ fn the_other_modes_colours_can_be_edited_and_preferences_returns_to_its_own() {
 }
 
 #[test]
+fn going_from_one_tab_of_preferences_to_the_other_moves_nothing() {
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    let window = |harness: &Harness<'static, BigStarApp>| crate::dialogs::window_rect(&harness.ctx, "Preferences").unwrap();
+    let appearance = window(&harness);
+    harness.get_by_label("General").click();
+    harness.run();
+    assert_eq!(window(&harness), appearance);
+    harness.get_by_label("This project: Demo");
+}
+
+#[test]
+fn on_a_small_screen_preferences_keeps_its_buttons_with_the_import_box_open() {
+    let app = BigStarApp::with_connection(Box::new(MemoryServices::default()), Box::new(DemoConnection::new()));
+    let mut harness =
+        Harness::builder().with_size(Vec2::new(1000.0, 600.0)).with_max_steps(16).build_ui_state(|ui, app: &mut BigStarApp| app.ui(ui), app);
+    harness.run();
+    harness.state_mut().session_mut().unwrap().open_project("demo");
+    harness.run();
+    for label in ["File", "Preferences…", "Appearance", "Import"] {
+        harness.get_by_label(label).click();
+        harness.run();
+    }
+    let screen = harness.ctx.content_rect();
+    let window = crate::dialogs::window_rect(&harness.ctx, "Preferences").unwrap();
+    assert!(screen.contains_rect(window), "{window:?} in {screen:?}");
+    let cancel = harness.get_by_label("Cancel");
+    let bounds = egui_kittest::kittest::NodeT::accesskit_node(&cancel).bounding_box().unwrap();
+    assert!(bounds.y1 as f32 <= screen.bottom() && bounds.y1 as f32 <= window.bottom(), "{bounds:?} in {window:?}");
+}
+
+#[test]
+fn preferences_can_be_saved_only_with_something_to_save() {
+    let disabled = |harness: &Harness<'static, BigStarApp>| {
+        egui_kittest::kittest::NodeT::accesskit_node(&harness.get_all_by_label("Save").last().unwrap()).is_disabled()
+    };
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    assert!(disabled(&harness));
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    assert!(!disabled(&harness));
+    harness.get_by_label("Default").click();
+    harness.run();
+    assert!(disabled(&harness));
+}
+
+#[test]
+fn escape_cancels_preferences_or_only_the_theme_being_edited() {
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.state().preferences.as_ref().is_some_and(|preferences| preferences.draft.is_none()));
+    assert!(stored_themes(&stored).is_empty());
+
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.state().preferences.is_none());
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), None);
+}
+
+#[test]
+fn escape_leaves_a_field_or_a_list_before_it_cancels_preferences() {
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Import").click();
+    harness.run();
+    harness.get_by_label("Theme JSON").click();
+    harness.run();
+    assert!(harness.ctx.text_edit_focused());
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.state().preferences.is_some());
+    assert!(!harness.ctx.text_edit_focused());
+
+    harness.get_by_label("General").click();
+    harness.run();
+    harness
+        .get_all_by_role(egui::accesskit::Role::ComboBox)
+        .find(|node| egui_kittest::kittest::NodeT::accesskit_node(node).value().as_deref() == Some("English"))
+        .expect("the language list")
+        .click();
+    harness.run();
+    assert!(harness.query_by_label("Nederlands").is_some());
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.query_by_label("Nederlands").is_none());
+    assert!(harness.state().preferences.is_some());
+    harness.key_press(egui::Key::Escape);
+    harness.run();
+    assert!(harness.state().preferences.is_none());
+}
+
+#[test]
+fn closing_preferences_waits_while_a_theme_is_being_edited() {
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    draft(&mut harness).name = "Mine".to_owned();
+    let window = crate::dialogs::window_rect(&harness.ctx, "Preferences").unwrap();
+    harness
+        .get_all_by_label("Close")
+        .find(|node| {
+            let bounds = egui_kittest::kittest::NodeT::accesskit_node(node).bounding_box().unwrap();
+            window.contains(egui::pos2(bounds.x0 as f32, bounds.y0 as f32))
+        })
+        .expect("the window's close button")
+        .click();
+    harness.run();
+    assert_eq!(draft(&mut harness).name, "Mine");
+}
+
+#[test]
+fn a_custom_theme_can_be_edited_duplicated_and_deleted_and_a_built_in_one_only_customized() {
+    let services = MemoryServices::default();
+    let mine = r#"[{"id":"custom-1","name":"Mine","darkTokens":{"base":"1 2 3"}}]"#;
+    crate::Services::store(&services, crate::CUSTOM_THEMES_KEY, mine);
+    crate::Services::store(&services, crate::THEME_KEY, "dark light:custom-1 dark:custom-1 own-accent");
+    let (mut harness, _) = preferences_open(services);
+    assert!(harness.query_by_label("Customize this theme").is_none());
+    harness.get_by_label("Edit theme");
+    harness.get_by_label("Delete theme");
+    harness.get_by_label("Duplicate theme").click();
+    harness.run();
+    assert_eq!(draft(&mut harness).name, "Mine (Copy)");
+    assert_eq!(draft(&mut harness).editing, None);
+    cancel_draft(&mut harness);
+
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    harness.get_by_label("Customize this theme");
+    for absent in ["Edit theme", "Duplicate theme", "Delete theme"] {
+        assert!(harness.query_by_label(absent).is_none(), "{absent}");
+    }
+}
+
+#[test]
 fn a_theme_is_exported_to_a_file_and_imported_from_one() {
     use crate::theme::Tokens;
     let services = MemoryServices::default();
@@ -2429,7 +2569,9 @@ fn a_theme_is_exported_to_a_file_and_imported_from_one() {
     let (mut harness, stored) = preferences_open(services);
     harness.get_by_label("Midnight").click();
     harness.run();
-    harness.get_by_label("Export…").click();
+    harness.get_by_label("Export").click();
+    harness.run();
+    harness.get_by_label("Save as file…").click();
     harness.run();
     let (name, bytes) = shelf.lock().unwrap().saved.pop().unwrap();
     assert_eq!(name, "bigstar-theme-midnight.json");

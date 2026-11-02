@@ -60,9 +60,9 @@ impl Language {
         match self {
             Language::English => "English",
             Language::Dutch => "Nederlands",
-            Language::Portuguese => "Portugues",
-            Language::Spanish => "Espanol",
-            Language::French => "Francais",
+            Language::Portuguese => "Português",
+            Language::Spanish => "Español",
+            Language::French => "Français",
         }
     }
 
