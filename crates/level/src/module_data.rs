@@ -174,11 +174,7 @@ pub fn parse_stage_object_catalog(json: &str) -> Result<(u16, Vec<StageObjectDec
     let mut out = Vec::new();
     for node in entries(&root, "stageObjects", "stage-object catalog")? {
         let node = node.as_object().ok_or_else(|| parse_error("stage-object entry is not an object"))?;
-        only(
-            node,
-            &["name", "hash", "module", "component", "object", "variant", "objectId", "info", "header", "runtime"],
-            "stage-object entry",
-        )?;
+        only(node, &["name", "hash", "module", "component", "object", "variant", "objectId", "info", "header", "runtime"], "stage-object entry")?;
         let name = required_string(node, "name", "stage-object entry")?;
         let hash = hash_value(node.get("hash"), &name)?;
         if hash != fnv1a_32(&name) {
