@@ -1211,8 +1211,14 @@ pub fn theme_card(ui: &mut Ui, name: &str, palette: &Tokens, selected: bool) -> 
     let stroke = Stroke::new(if selected { 2.0 } else { 1.0 }, edge);
     painter.rect_stroke(picture, radius, stroke, egui::StrokeKind::Inside);
     let color = if selected { t.primary_text } else { t.foreground };
-    painter.text(egui::pos2(rect.center().x, rect.max.y - 11.0), egui::Align2::CENTER_CENTER, name, crate::theme::body(12.5), color);
-    response
+    let mut job = egui::text::LayoutJob::simple_singleline(name.to_owned(), crate::theme::body(12.5), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width());
+    let galley = painter.layout_job(job);
+    let elided = galley.elided;
+    let at = egui::pos2(rect.center().x, rect.max.y - 11.0) - galley.size() / 2.0;
+    painter.galley(at, galley, color);
+    // A name made here can be longer than a card.
+    if elided { response.on_hover_text(name) } else { response }
 }
 
 /// The title of a dialog or of a screen's part.
@@ -1359,7 +1365,7 @@ mod tests {
     /// Overcast's controls are dark on a light panel, so their white text must not reach what is beside them.
     #[test]
     fn the_control_colours_stay_on_the_control() {
-        let palette = crate::theme::Theme { light: "overcast", ..Default::default() }.tokens(false, None);
+        let palette = crate::theme::Theme { light: "overcast".to_owned(), ..Default::default() }.tokens(&[], false, None);
         let _harness = egui_kittest::Harness::new_ui(|ui| {
             crate::theme::apply(ui.ctx(), &palette);
             let before = ui.style().clone();
@@ -1382,7 +1388,7 @@ mod tests {
     #[test]
     fn an_open_list_is_not_in_the_control_colours() {
         use egui_kittest::kittest::Queryable as _;
-        let palette = crate::theme::Theme { light: "overcast", ..Default::default() }.tokens(false, None);
+        let palette = crate::theme::Theme { light: "overcast".to_owned(), ..Default::default() }.tokens(&[], false, None);
         let mut harness = egui_kittest::Harness::new_ui_state(
             |ui, text: &mut Option<Option<Color32>>| {
                 crate::theme::apply(ui.ctx(), &palette);

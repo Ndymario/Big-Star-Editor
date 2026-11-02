@@ -16,7 +16,8 @@ use crate::motion;
 use crate::picker::{self, PickerState};
 use crate::services::{ROM_EXTENSIONS, Services, is_rom_name, rom_extension};
 use crate::session::Session;
-use crate::theme::{Mode, Theme, Tokens};
+use crate::theme::{self, CustomTheme, Mode, Theme, Tokens};
+use crate::theme_editor::{self, ThemeDraft};
 use crate::tools::{self, Tools};
 use crate::workspace::Workspace;
 use crate::zoom_canvas::Grids;
@@ -105,6 +106,8 @@ pub struct BigStarApp {
     pub(crate) language: Language,
     /// The theme, kept with them.
     theme: Theme,
+    /// The themes made or imported here, kept as soon as they are saved.
+    custom_themes: Vec<CustomTheme>,
     /// The system's accent colour, as of this frame.
     accent: Option<Color32>,
     /// The system's light or dark mode, as of this frame, where it says.
@@ -135,6 +138,8 @@ pub struct BigStarApp {
     local_rom: bool,
     /// A ROM to upload has been asked for from a picker that answers later.
     awaiting_upload: bool,
+    /// A theme to import has been asked for from a picker that answers later.
+    awaiting_theme: bool,
     /// Level-data value cells being typed in.
     data_drafts: level_data::Drafts,
 }
@@ -150,6 +155,8 @@ struct Fade {
 pub const LANGUAGE_KEY: &str = "language";
 /// Where the choice of theme is kept, as [`Theme::stored`] writes it.
 pub const THEME_KEY: &str = "theme";
+/// Where the themes made or imported are kept, as [`theme::stored_themes`] writes them.
+pub const CUSTOM_THEMES_KEY: &str = "custom_themes";
 /// Where the canvas toolbar's switches are kept.
 pub const CANVAS_OPTIONS_KEY: &str = "canvas_options";
 /// Where the graphics canvases' grid switches are kept.
@@ -157,7 +164,7 @@ pub const GRIDS_KEY: &str = "graphics_grids";
 
 /// The Preferences window: the language is this machine's; the autosave interval and the backups kept are the open
 /// project's, kept by its host.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Preferences {
     pub(crate) language: Language,
     pub(crate) theme: Theme,
@@ -165,6 +172,35 @@ pub(crate) struct Preferences {
     pub(crate) showing_dark: bool,
     pub(crate) autosave_minutes: u32,
     pub(crate) backups_kept: u32,
+    /// The theme being edited, which the interface shows meanwhile.
+    pub(crate) draft: Option<ThemeDraft>,
+    /// Asking whether to delete the chosen theme.
+    deleting: bool,
+    /// The import box is open, with what has been pasted into it.
+    importing: bool,
+    pub(crate) import_text: String,
+    /// What the last thing done to a theme came to, and whether it is a failure.
+    notice: Option<String>,
+    notice_failed: bool,
+}
+
+impl Preferences {
+    fn tell(&mut self, text: String, failed: bool) {
+        self.notice = Some(text);
+        self.notice_failed = failed;
+    }
+}
+
+/// What the buttons under the themes ask for, done once the window is drawn.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ThemeAction {
+    Customize,
+    Edit,
+    Delete,
+    Export,
+    CopyJson,
+    ImportPasted,
+    ChooseFile,
 }
 
 fn waker(ctx: &egui::Context) -> Waker {
@@ -190,12 +226,14 @@ impl BigStarApp {
     pub fn new(services: Box<dyn Services>) -> Self {
         let language = services.load(LANGUAGE_KEY).map_or_else(Language::default, |code| Language::from_code(&code));
         let theme = services.load(THEME_KEY).map_or_else(Theme::default, |stored| Theme::parse(&stored));
+        let custom_themes = services.load(CUSTOM_THEMES_KEY).map_or_else(Vec::new, |stored| theme::parse_stored_themes(&stored));
         let canvas_options = services.load(CANVAS_OPTIONS_KEY).and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default();
         let grids = services.load(GRIDS_KEY).and_then(|stored| serde_json::from_str(&stored).ok()).unwrap_or_default();
         Self {
             services,
             language,
             theme,
+            custom_themes,
             accent: None,
             system: None,
             styled: None,
@@ -222,6 +260,7 @@ impl BigStarApp {
             data_drafts: level_data::Drafts::new(),
             local_rom: false,
             awaiting_upload: false,
+            awaiting_theme: false,
         }
     }
 
@@ -265,13 +304,127 @@ impl BigStarApp {
 
     /// Chooses the dark or the light mode of the theme, as Preferences would.
     pub fn set_dark(&mut self, dark: bool) {
-        self.set_theme(Theme { mode: if dark { Mode::Dark } else { Mode::Light }, ..self.theme });
+        self.set_theme(Theme { mode: if dark { Mode::Dark } else { Mode::Light }, ..self.theme.clone() });
     }
 
     /// Chooses the theme, as Preferences would.
     pub fn set_theme(&mut self, theme: Theme) {
-        self.theme = theme;
         self.services.store(THEME_KEY, &theme.stored());
+        self.theme = theme;
+    }
+
+    fn store_custom_themes(&self) {
+        if let Some(stored) = theme::stored_themes(&self.custom_themes) {
+            self.services.store(CUSTOM_THEMES_KEY, &stored);
+        }
+    }
+
+    /// Does what a button under the themes in Preferences asked for.
+    fn theme_action(&mut self, ctx: &egui::Context, action: ThemeAction) {
+        let Some(preferences) = &mut self.preferences else { return };
+        let dark = preferences.showing_dark;
+        let chosen = preferences.theme.family(&self.custom_themes, dark);
+        match action {
+            ThemeAction::Customize => preferences.draft = Some(ThemeDraft::copy_of(chosen, &preferences.theme, self.accent, dark)),
+            ThemeAction::Edit => preferences.draft = Some(ThemeDraft::of(chosen, dark)),
+            ThemeAction::Delete => {
+                let id = chosen.id.to_owned();
+                preferences.deleting = false;
+                preferences.tell(format!("Deleted “{}”.", chosen.name), false);
+                preferences.theme.forget(&id);
+                self.custom_themes.retain(|theme| theme.id != id);
+                self.store_custom_themes();
+                let mut saved = self.theme.clone();
+                if saved.forget(&id) {
+                    self.set_theme(saved);
+                }
+            }
+            ThemeAction::Export => {
+                let suggested = theme::theme_file_name(chosen.name);
+                let written = theme::theme_file(chosen).and_then(|file| self.services.save_file("Export theme", &suggested, "json", file.as_bytes()));
+                match written {
+                    Ok(true) => preferences.tell(format!("Exported “{}”.", chosen.name), false),
+                    Ok(false) => {}
+                    Err(error) => preferences.tell(format!("Export failed: {error}"), true),
+                }
+            }
+            ThemeAction::CopyJson => match theme::theme_file(chosen) {
+                Ok(file) => {
+                    ctx.copy_text(file);
+                    preferences.tell("Theme copied.".to_owned(), false);
+                }
+                Err(error) => preferences.tell(format!("Export failed: {error}"), true),
+            },
+            ThemeAction::ImportPasted => {
+                let pasted = preferences.import_text.clone();
+                self.import_theme(&pasted);
+            }
+            ThemeAction::ChooseFile => match self.services.open_file("Import theme", &["json"]) {
+                Some(Ok((_, bytes))) => self.import_theme_file(&bytes),
+                Some(Err(error)) => preferences.tell(format!("Import failed: {error}"), true),
+                None => {
+                    self.awaiting_theme = self.services.pick_file_later(&["json"]);
+                    // A picker that was backed out of never answers; this answer is not for it.
+                    self.awaiting_upload &= !self.awaiting_theme;
+                }
+            },
+        }
+    }
+
+    fn import_theme_file(&mut self, bytes: &[u8]) {
+        match std::str::from_utf8(bytes) {
+            Ok(text) => self.import_theme(text),
+            Err(_) => self.report_theme_import("This is not a theme file: it is not text.".to_owned()),
+        }
+    }
+
+    /// Keeps the theme `text` holds and chooses it, to be seen as it is, without the system's accent colour; what is
+    /// pasted stays in its box if it is no theme, to be corrected.
+    fn import_theme(&mut self, text: &str) {
+        let mut imported = match theme::parse_theme_file(text) {
+            Ok(imported) => imported,
+            Err(error) => return self.report_theme_import(error),
+        };
+        imported.id = theme::new_theme_id(&self.custom_themes);
+        imported.name = theme::distinct_name(&self.custom_themes, &imported.name, None);
+        let (id, name) = (imported.id.clone(), imported.name.clone());
+        self.custom_themes.push(imported);
+        self.store_custom_themes();
+        if let Some(preferences) = &mut self.preferences {
+            preferences.theme.set_family(preferences.showing_dark, &id);
+            preferences.theme.system_accent = false;
+            preferences.importing = false;
+            preferences.import_text.clear();
+            preferences.tell(format!("Imported “{name}”."), false);
+        }
+    }
+
+    fn report_theme_import(&mut self, error: String) {
+        let message = format!("Import failed: {error}");
+        match (&mut self.preferences, &mut self.session) {
+            (Some(preferences), _) => preferences.tell(message, true),
+            // The window closed while a browser's picker was open.
+            (None, Some(session)) => session.report(message),
+            (None, None) => {}
+        }
+    }
+
+    /// Keeps the theme being edited and chooses it, without the system's accent colour, which would hide its own.
+    fn save_draft(&mut self) {
+        let Some(preferences) = &mut self.preferences else { return };
+        let Some(draft) = preferences.draft.take() else { return };
+        let id = draft.editing.clone().unwrap_or_else(|| theme::new_theme_id(&self.custom_themes));
+        let name = theme::distinct_name(&self.custom_themes, &draft.name, draft.editing.as_deref());
+        preferences.showing_dark = draft.shown_dark;
+        preferences.theme.set_family(draft.shown_dark, &id);
+        preferences.theme.system_accent = false;
+        preferences.tell(format!("Saved “{name}”."), false);
+        let saved = CustomTheme { id, name, light: draft.light, dark: draft.dark };
+        match self.custom_themes.iter_mut().find(|theme| theme.id == saved.id) {
+            Some(existing) => *existing = saved,
+            None => self.custom_themes.push(saved),
+        }
+        self.store_custom_themes();
     }
 
     /// The fonts once, and the style whenever the palette changes: as the system's mode changes, when the theme follows
@@ -282,14 +435,20 @@ impl BigStarApp {
         }
         self.accent = self.services.accent_color().map(|[r, g, b]| Color32::from_rgb(r, g, b));
         self.system = self.services.dark_mode().map(|dark| if dark { egui::Theme::Dark } else { egui::Theme::Light }).or_else(|| ctx.system_theme());
-        let tokens = match &self.preferences {
-            Some(preferences) => preferences.theme.tokens(preferences.showing_dark, self.accent),
-            None => self.theme.tokens(self.theme.is_dark(self.system), self.accent),
+        let draft = self.preferences.as_ref().and_then(|preferences| Some((preferences.draft.as_ref()?, preferences.showing_dark)));
+        let tokens = match (&self.preferences, draft) {
+            // Without the system's accent colour, which would hide the theme's own being edited.
+            (_, Some((draft, dark))) => draft.palette(dark).clone(),
+            (Some(preferences), None) => preferences.theme.tokens(&self.custom_themes, preferences.showing_dark, self.accent),
+            (None, None) => self.theme.tokens(&self.custom_themes, self.theme.is_dark(self.system), self.accent),
         };
+        let editing = draft.is_some();
         // The first palette is taken at once; a later one fades in from what is on screen, even halfway through a fade.
         let now = ctx.input(|i| i.time);
         let fade = match self.fade.take() {
             Some(fade) if fade.to == tokens => fade,
+            // A colour being dragged in the theme editor keeps up with the pointer.
+            Some(fade) if editing && fade.to.dark == tokens.dark => Fade { from: tokens.clone(), to: tokens, start: now - f64::from(motion::SLOW) },
             _ => Fade { from: self.styled.clone().unwrap_or_else(|| tokens.clone()), to: tokens, start: now },
         };
         let t = ((now - fade.start) as f32 / motion::SLOW).clamp(0.0, 1.0);
@@ -416,7 +575,11 @@ impl BigStarApp {
         match self.services.open_file("Upload ROM", ROM_EXTENSIONS) {
             Some(Ok((name, bytes))) => session.upload_rom(&name, &bytes),
             Some(Err(error)) => session.report(error),
-            None => self.awaiting_upload = self.services.pick_file_later(ROM_EXTENSIONS),
+            None => {
+                self.awaiting_upload = self.services.pick_file_later(ROM_EXTENSIONS);
+                // A picker that was backed out of never answers; this answer is not for it.
+                self.awaiting_theme &= !self.awaiting_upload;
+            }
         }
     }
 
@@ -455,6 +618,15 @@ impl BigStarApp {
             && session.poll()
         {
             ctx.request_repaint();
+        }
+        if self.awaiting_theme
+            && let Some(picked) = self.services.take_picked_file()
+        {
+            self.awaiting_theme = false;
+            match picked {
+                Ok((_, bytes)) => self.import_theme_file(&bytes),
+                Err(error) => self.report_theme_import(error),
+            }
         }
         if let Some(reason) = self.session.as_ref().and_then(|s| s.ended.clone()) {
             self.form.error = Some(format!("Disconnected: {reason}"));
@@ -671,7 +843,7 @@ impl BigStarApp {
         let workspace = &mut self.workspace;
         let builds = &mut self.builds;
         let language = self.language;
-        let theme = self.theme;
+        let theme = self.theme.clone();
         let system = self.system;
         let preferences = &mut self.preferences;
         let about = &mut self.about;
@@ -731,10 +903,16 @@ impl BigStarApp {
                         let settings = session.settings.as_ref();
                         *preferences = Some(Preferences {
                             language,
-                            theme,
+                            theme: theme.clone(),
                             showing_dark: theme.is_dark(system),
                             autosave_minutes: settings.map_or(1, |s| s.autosave_minutes.max(1)),
                             backups_kept: settings.map_or(10, |s| s.backups_kept.max(1)),
+                            draft: None,
+                            deleting: false,
+                            importing: false,
+                            import_text: String::new(),
+                            notice: None,
+                            notice_failed: false,
                         });
                         ui.close();
                     }
@@ -1238,80 +1416,154 @@ impl BigStarApp {
         let project = self.session.as_ref().is_some_and(|session| session.project.is_some());
         let mut open = true;
         let mut answer = None;
+        let mut action = None;
         let accent = self.accent;
         let system = self.system;
+        let custom = &self.custom_themes;
+        // While a theme is being edited this window waits, so that nothing here can lose the edit.
+        let idle = preferences.draft.is_none();
         dialogs::window("Preferences").open(&mut open).resizable(false).show(ctx, |ui| {
-            egui::Grid::new("preferences").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label(preferences.language.tr("Language"));
-                controls::drop_down("preference-language").selected_text(preferences.language.name()).show_ui(ui, |ui| {
-                    for language in Language::ALL {
-                        ui.choice_value(&mut preferences.language, language, language.name());
-                    }
-                });
-                ui.end_row();
-                ui.label("Recovery snapshots");
-                ui.add_enabled(project, controls::number(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
-                    .on_hover_text("How often unsaved level edits are backed up, in case the editor closes unexpectedly.");
-                ui.end_row();
-                ui.label("Backups kept");
-                ui.add_enabled(project, controls::number(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
-                    "How many backups of level saves are kept. Older ones are deleted when a project opens and when a new backup is made.",
-                );
-                ui.end_row();
-            });
-            if !project {
-                ui.weak("These settings are kept per project. Open a project to change them.");
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Theme").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    for mode in Mode::ALL.into_iter().rev() {
-                        if ui.choice_value(&mut preferences.theme.mode, mode, mode.name()).changed() {
-                            preferences.showing_dark = preferences.theme.is_dark(system);
+            ui.add_enabled_ui(idle, |ui| {
+                egui::Grid::new("preferences").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label(preferences.language.tr("Language"));
+                    controls::drop_down("preference-language").selected_text(preferences.language.name()).show_ui(ui, |ui| {
+                        for language in Language::ALL {
+                            ui.choice_value(&mut preferences.language, language, language.name());
                         }
-                    }
+                    });
+                    ui.end_row();
+                    ui.label("Recovery snapshots");
+                    ui.add_enabled(project, controls::number(&mut preferences.autosave_minutes).range(1..=60).suffix(" min"))
+                        .on_hover_text("How often unsaved level edits are backed up, in case the editor closes unexpectedly.");
+                    ui.end_row();
+                    ui.label("Backups kept");
+                    ui.add_enabled(project, controls::number(&mut preferences.backups_kept).range(1..=100)).on_hover_text(
+                        "How many backups of level saves are kept. Older ones are deleted when a project opens and when a new backup is made.",
+                    );
+                    ui.end_row();
                 });
-            });
-            // Following the system, which may turn dark on a schedule, each mode has its own theme to choose.
-            if preferences.theme.mode == Mode::System {
+                if !project {
+                    ui.weak("These settings are kept per project. Open a project to change them.");
+                }
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    ui.weak("Theme used in");
-                    ui.choice_value(&mut preferences.showing_dark, false, "Light mode");
-                    ui.choice_value(&mut preferences.showing_dark, true, "Dark mode");
+                    ui.label(egui::RichText::new("Theme").strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for mode in Mode::ALL.into_iter().rev() {
+                            if ui.choice_value(&mut preferences.theme.mode, mode, mode.name()).changed() {
+                                preferences.showing_dark = preferences.theme.is_dark(system);
+                            }
+                        }
+                    });
                 });
-            }
-            let dark = preferences.showing_dark;
-            egui::Grid::new("preference-themes").num_columns(3).spacing([8.0, 8.0]).show(ui, |ui| {
-                for (index, family) in crate::theme::FAMILIES.iter().enumerate() {
-                    let mut candidate = preferences.theme;
-                    candidate.set_family(dark, family.id);
-                    let palette = candidate.tokens(dark, accent);
-                    if controls::theme_card(ui, family.name, &palette, preferences.theme.family(dark).id == family.id).clicked() {
-                        preferences.theme.set_family(dark, family.id);
+                // Following the system, which may turn dark on a schedule, each mode has its own theme to choose.
+                if preferences.theme.mode == Mode::System {
+                    ui.horizontal(|ui| {
+                        ui.weak("Theme used in");
+                        ui.choice_value(&mut preferences.showing_dark, false, "Light mode");
+                        ui.choice_value(&mut preferences.showing_dark, true, "Dark mode");
+                    });
+                }
+                let dark = preferences.showing_dark;
+                let chosen = preferences.theme.family(custom, dark);
+                // The cards give way on a small screen, so that the buttons under them stay on it.
+                let around = if preferences.importing { 500.0 } else { 370.0 };
+                let cards = (ctx.content_rect().height() - around).clamp(180.0, 290.0);
+                egui::ScrollArea::vertical().id_salt("preference-themes").max_height(cards).min_scrolled_height(cards).show(ui, |ui| {
+                    egui::Grid::new("preference-themes").num_columns(3).spacing([8.0, 8.0]).show(ui, |ui| {
+                        for (index, family) in theme::all_themes(custom).enumerate() {
+                            let palette = preferences.theme.accented(family.variant(dark).clone(), accent);
+                            if controls::theme_card(ui, family.name, &palette, chosen.id == family.id).clicked() {
+                                preferences.theme.set_family(dark, family.id);
+                                preferences.deleting = false;
+                            }
+                            if index % 3 == 2 {
+                                ui.end_row();
+                            }
+                        }
+                    });
+                });
+                ui.add_enabled_ui(accent.is_some(), |ui| {
+                    controls::checkbox(ui, &mut preferences.theme.system_accent, "Use the system's accent colour")
+                        .on_disabled_hover_text("This system does not say what its accent colour is.");
+                });
+                // The buttons act on the theme as it stands, which a card clicked above may just have changed.
+                let chosen = preferences.theme.family(custom, dark);
+                if preferences.deleting {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Delete “{}”?", chosen.name));
+                        if Button::new("Delete").danger().show(ui).clicked() {
+                            action = Some(ThemeAction::Delete);
+                        }
+                        if Button::new("Keep").show(ui).clicked() {
+                            preferences.deleting = false;
+                        }
+                    });
+                } else {
+                    ui.horizontal(|ui| {
+                        if Button::new("Customize this theme").show(ui).clicked() {
+                            action = Some(ThemeAction::Customize);
+                        }
+                        if !chosen.built_in {
+                            if Button::new("Edit theme").show(ui).clicked() {
+                                action = Some(ThemeAction::Edit);
+                            }
+                            if Button::new("Delete theme").show(ui).clicked() {
+                                preferences.deleting = true;
+                            }
+                        }
+                    });
+                }
+                ui.horizontal(|ui| {
+                    if Button::new("Export…").show(ui).on_hover_text("Save this theme as a file").clicked() {
+                        action = Some(ThemeAction::Export);
                     }
-                    if index % 3 == 2 {
-                        ui.end_row();
+                    if Button::new("Copy as JSON").show(ui).clicked() {
+                        action = Some(ThemeAction::CopyJson);
                     }
+                    if Button::new("Import").selected(preferences.importing).show(ui).clicked() {
+                        preferences.importing = !preferences.importing;
+                    }
+                });
+                if preferences.importing {
+                    TextField::multiline(&mut preferences.import_text).code().hint("Paste a theme's JSON here.").name("Theme JSON").show(ui);
+                    ui.horizontal(|ui| {
+                        if Button::new("Import theme").enabled(!preferences.import_text.trim().is_empty()).show(ui).clicked() {
+                            action = Some(ThemeAction::ImportPasted);
+                        }
+                        if Button::new("Choose file…").show(ui).clicked() {
+                            action = Some(ThemeAction::ChooseFile);
+                        }
+                    });
                 }
-            });
-            ui.add_enabled_ui(accent.is_some(), |ui| {
-                controls::checkbox(ui, &mut preferences.theme.system_accent, "Use the system's accent colour")
-                    .on_disabled_hover_text("This system does not say what its accent colour is.");
-            });
-            dialogs::actions(ui, |ui| {
-                if Button::new("Save").primary().show(ui).clicked() {
-                    answer = Some(true);
-                }
-                if Button::new("Cancel").show(ui).clicked() {
-                    answer = Some(false);
-                }
+                let failed = preferences.notice_failed;
+                controls::notice_line(ui, &mut preferences.notice, failed);
+                dialogs::actions(ui, |ui| {
+                    if Button::new("Save").primary().show(ui).clicked() {
+                        answer = Some(true);
+                    }
+                    if Button::new("Cancel").show(ui).clicked() {
+                        answer = Some(false);
+                    }
+                });
             });
         });
+        if let Some(draft) = &mut preferences.draft {
+            match theme_editor::window(ctx, draft, &mut preferences.showing_dark, dialogs::window_rect(ctx, "Preferences")) {
+                Some(true) => self.save_draft(),
+                Some(false) => {
+                    preferences.showing_dark = draft.shown_dark;
+                    preferences.draft = None;
+                }
+                None => {}
+            }
+        }
+        if let Some(action) = action {
+            self.theme_action(ctx, action);
+        }
         match answer {
             Some(true) => {
-                let chosen = preferences.clone();
-                self.preferences = None;
+                let Some(chosen) = self.preferences.take() else { return };
                 self.language = chosen.language;
                 self.services.store(LANGUAGE_KEY, chosen.language.code());
                 self.set_theme(chosen.theme);

@@ -33,6 +33,7 @@ mod resource_editor;
 mod services;
 mod session;
 mod theme;
+mod theme_editor;
 mod tile_picker;
 mod tilemap_editor;
 mod tileset_editor;
@@ -40,7 +41,7 @@ mod tools;
 mod workspace;
 mod zoom_canvas;
 
-pub use app::{BigStarApp, CANVAS_OPTIONS_KEY, EMBEDDED_ROOT_KEY, LANGUAGE_KEY, RECENT_HOSTS_KEY, THEME_KEY};
+pub use app::{BigStarApp, CANVAS_OPTIONS_KEY, CUSTOM_THEMES_KEY, EMBEDDED_ROOT_KEY, LANGUAGE_KEY, RECENT_HOSTS_KEY, THEME_KEY};
 pub use i18n::{KEYS as TRANSLATED_STRINGS, Language};
 pub use level_view::{DsScreens, Item, Kind, LevelView};
 pub use services::{FileShelf, MemoryServices, ROM_EXTENSIONS, Services, is_rom_name, rom_extension};

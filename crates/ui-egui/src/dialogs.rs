@@ -31,11 +31,22 @@ pub fn fit_width(ui: &mut Ui, width: f32) {
     ui.set_width(width.min(ui.ctx().content_rect().width() - 48.0));
 }
 
+/// Between a window and the one that opens [`Window::beside`] it.
+const GAP: f32 = 12.0;
+/// What a window's frame adds to the width of what is in it.
+const FRAME: f32 = 30.0;
+
 /// A floating window titled `title`: a tool that stays open beside the documents. Finish it with `.open(..)` and
 /// `.show(ctx, |ui| ..)`.
 pub fn window<'open>(title: impl Into<String>) -> Window<'open> {
     let title = title.into();
-    Window { window: egui::Window::new(title.as_str()).title_bar(false).collapsible(false), title, open: None }
+    Window { window: egui::Window::new(title.as_str()).title_bar(false).collapsible(false), title, open: None, beside: None }
+}
+
+/// Where the [`window`] titled `title` is, once it has been drawn. egui names a window's area after its title, which it
+/// holds as an `Option`.
+pub fn window_rect(ctx: &egui::Context, title: &str) -> Option<egui::Rect> {
+    ctx.memory(|memory| memory.area_rect(egui::Id::new(Some(title))))
 }
 
 /// What [`window`] makes. Its heading is drawn like a [`modal`]'s, in place of egui's title bar; it is dragged by any
@@ -44,6 +55,7 @@ pub struct Window<'open> {
     window: egui::Window<'open>,
     title: String,
     open: Option<&'open mut bool>,
+    beside: Option<(egui::Rect, f32)>,
 }
 
 impl<'open> Window<'open> {
@@ -68,8 +80,17 @@ impl<'open> Window<'open> {
         self
     }
 
+    /// Opens next to `rect` rather than in the middle of the screen: to its right if a window `width` points wide fits
+    /// there, or else to its left.
+    pub fn beside(mut self, rect: egui::Rect, width: f32) -> Self {
+        self.beside = Some((rect, width));
+        // egui fits a new window on the screen at the width it is told, so a wider guess would push this one back over `rect`.
+        self.window = self.window.default_width(width + FRAME);
+        self
+    }
+
     pub fn show<R>(self, ctx: &egui::Context, body: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-        let Self { window, title, open } = self;
+        let Self { window, title, open, beside } = self;
         if open.as_deref() == Some(&false) {
             return None;
         }
@@ -77,7 +98,13 @@ impl<'open> Window<'open> {
         // The editor's own background, so the fields and cards in it stand out as they do in a panel.
         let frame = egui::Frame::window(&ctx.global_style()).fill(t.base).inner_margin(egui::Margin::same(14));
         // Opens in the middle of the screen, and stays wherever it is then dragged.
-        let window = window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center());
+        let window = match beside {
+            Some((rect, width)) if rect.right() + GAP + width + FRAME <= ctx.content_rect().right() => {
+                window.pivot(egui::Align2::LEFT_TOP).default_pos(rect.right_top() + egui::vec2(GAP, 0.0))
+            }
+            Some((rect, _)) => window.pivot(egui::Align2::RIGHT_TOP).default_pos(rect.left_top() - egui::vec2(GAP, 0.0)),
+            None => window.pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()),
+        };
         let mut closed = false;
         let shown = window.frame(frame).show(ctx, |ui| {
             ui.horizontal(|ui| {

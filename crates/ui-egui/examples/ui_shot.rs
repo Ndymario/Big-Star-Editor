@@ -296,6 +296,19 @@ fn main() -> Result<(), String> {
         harness.run();
     }
     shot(&mut harness, &dir, "preferences-system.png")?;
+    // A theme being customized, beside Preferences, and the buttons of a custom theme once it is saved.
+    if let Some(node) = harness.query_by_label("Customize this theme") {
+        node.click();
+    }
+    harness.run();
+    shot(&mut harness, &dir, "theme-editor.png")?;
+    for label in ["Save theme", "Import"] {
+        if let Some(node) = harness.query_by_label(label) {
+            node.click();
+        }
+        harness.run();
+    }
+    shot(&mut harness, &dir, "preferences-custom-theme.png")?;
     if let Some(node) = harness.query_by_label("Cancel") {
         node.click();
     }

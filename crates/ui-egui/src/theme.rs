@@ -59,12 +59,6 @@ pub struct Family {
     pub dark: Tokens,
 }
 
-impl Family {
-    pub fn variant(&self, dark: bool) -> &Tokens {
-        if dark { &self.dark } else { &self.light }
-    }
-}
-
 /// The themes, the default one first.
 pub static FAMILIES: [Family; 7] = [
     Family {
@@ -570,6 +564,232 @@ fn readable(color: Color32, on: Color32) -> Color32 {
     (0..=10).map(|step| crate::motion::mix(color, away, step as f32 / 10.0)).find(|&mixed| contrast(mixed, on) >= 4.5).unwrap_or(away)
 }
 
+/// A theme someone made or imported: a palette in each mode, like a [`Family`], kept in the settings.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CustomTheme {
+    /// What a stored choice names it by: `custom-` and a number, so it has no spaces and is no family's.
+    pub id: String,
+    pub name: String,
+    pub light: Tokens,
+    pub dark: Tokens,
+}
+
+/// A theme of either sort.
+#[derive(Debug, Clone, Copy)]
+pub struct AnyTheme<'a> {
+    pub id: &'a str,
+    pub name: &'a str,
+    pub light: &'a Tokens,
+    pub dark: &'a Tokens,
+    pub built_in: bool,
+}
+
+impl<'a> AnyTheme<'a> {
+    pub fn variant(&self, dark: bool) -> &'a Tokens {
+        if dark { self.dark } else { self.light }
+    }
+}
+
+/// Every theme to choose from: the families, then the custom ones.
+pub fn all_themes(custom: &[CustomTheme]) -> impl Iterator<Item = AnyTheme<'_>> {
+    let families =
+        FAMILIES.iter().map(|family| AnyTheme { id: family.id, name: family.name, light: &family.light, dark: &family.dark, built_in: true });
+    families.chain(custom.iter().map(|theme| AnyTheme { id: &theme.id, name: &theme.name, light: &theme.light, dark: &theme.dark, built_in: false }))
+}
+
+/// One colour of a palette: what a theme file calls it, what the theme editor calls it, and where it is.
+pub struct Token {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub color: fn(&mut Tokens) -> &mut Color32,
+}
+
+const fn token(key: &'static str, label: &'static str, color: fn(&mut Tokens) -> &mut Color32) -> Token {
+    Token { key, label, color }
+}
+
+/// Every colour of a palette, in the order the theme editor shows them and a theme file lists them.
+pub const TOKEN_GROUPS: [(&str, &[Token]); 6] = [
+    (
+        "Backgrounds",
+        &[
+            token("base", "Window", |t| &mut t.base),
+            token("surface", "Card and panel", |t| &mut t.surface),
+            token("surfaceRaised", "Raised card", |t| &mut t.surface_raised),
+            token("well", "Canvas", |t| &mut t.well),
+            token("overlay", "Dialog and menu", |t| &mut t.overlay),
+        ],
+    ),
+    (
+        "Controls",
+        &[
+            token("control", "Button", |t| &mut t.control),
+            token("controlHover", "Button under the pointer", |t| &mut t.control_hover),
+            token("controlText", "Button text", |t| &mut t.control_text),
+            token("field", "Text field", |t| &mut t.field),
+        ],
+    ),
+    (
+        "Text",
+        &[
+            token("foreground", "Text", |t| &mut t.foreground),
+            token("muted", "Muted text", |t| &mut t.muted),
+            token("subtle", "Placeholder text", |t| &mut t.subtle),
+            token("inverted", "Text on the accent", |t| &mut t.inverted),
+        ],
+    ),
+    (
+        "Accent",
+        &[
+            token("primary", "Accent", |t| &mut t.primary),
+            token("primaryHover", "Accent under the pointer", |t| &mut t.primary_hover),
+            token("primarySubtle", "Accent tint", |t| &mut t.primary_subtle),
+            token("primaryText", "Accent text", |t| &mut t.primary_text),
+            token("ring", "Focus ring", |t| &mut t.ring),
+        ],
+    ),
+    ("Borders", &[token("border", "Border", |t| &mut t.border), token("borderStrong", "Strong border", |t| &mut t.border_strong)]),
+    (
+        "Status",
+        &[
+            token("success", "Success", |t| &mut t.success),
+            token("warning", "Warning", |t| &mut t.warning),
+            token("warningSubtle", "Warning tint", |t| &mut t.warning_subtle),
+            token("danger", "Danger", |t| &mut t.danger),
+            token("dangerSubtle", "Danger tint", |t| &mut t.danger_subtle),
+        ],
+    ),
+];
+
+/// A colour as a theme file writes it: `"234 88 12"`.
+pub fn channels(color: Color32) -> String {
+    format!("{} {} {}", color.r(), color.g(), color.b())
+}
+
+fn parse_channels(text: &str) -> Option<Color32> {
+    let mut parts = text.split_whitespace().map(|part| part.parse::<u8>().ok());
+    match (parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some(Some(r)), Some(Some(g)), Some(Some(b)), None) => Some(rgb(r, g, b)),
+        _ => None,
+    }
+}
+
+fn tokens_json(tokens: &Tokens) -> serde_json::Value {
+    let mut tokens = tokens.clone();
+    let colors = TOKEN_GROUPS.iter().flat_map(|(_, group)| group.iter());
+    serde_json::Value::Object(colors.map(|token| (token.key.to_owned(), channels(*(token.color)(&mut tokens)).into())).collect())
+}
+
+/// The colours a theme file lists under `key`, over those of `over`, and whether it listed any this editor knows.
+fn tokens_from_json(file: &serde_json::Value, key: &str, over: &Tokens) -> Result<(Tokens, bool), String> {
+    let mut tokens = over.clone();
+    let Some(listed) = file.get(key) else { return Ok((tokens, false)) };
+    let listed = listed.as_object().ok_or_else(|| format!("This is not a theme file: {key} is not a list of colours."))?;
+    let mut any = false;
+    for token in TOKEN_GROUPS.iter().flat_map(|(_, group)| group.iter()) {
+        if let Some(value) = listed.get(token.key) {
+            let color = value.as_str().and_then(parse_channels);
+            *(token.color)(&mut tokens) = color.ok_or_else(|| format!("{} in {key} is not three numbers from 0 to 255.", token.key))?;
+            any = true;
+        }
+    }
+    Ok((tokens, any))
+}
+
+fn theme_json(name: &str, light: &Tokens, dark: &Tokens) -> serde_json::Map<String, serde_json::Value> {
+    let mut json = serde_json::Map::new();
+    json.insert("name".to_owned(), name.into());
+    json.insert("lightTokens".to_owned(), tokens_json(light));
+    json.insert("darkTokens".to_owned(), tokens_json(dark));
+    json
+}
+
+/// A theme as a file to share. The system's accent colour is not part of it: that is this machine's.
+pub fn theme_file(theme: AnyTheme<'_>) -> Result<String, String> {
+    serde_json::to_string_pretty(&theme_json(theme.name, theme.light, theme.dark)).map_err(|error| error.to_string())
+}
+
+/// What a theme is exported as: a file name that holds only what every system allows.
+pub fn theme_file_name(name: &str) -> String {
+    let words: Vec<_> = name.split(|c: char| !c.is_alphanumeric()).filter(|word| !word.is_empty()).collect();
+    format!("bigstar-theme-{}.json", words.join("-").to_lowercase())
+}
+
+fn theme_from_json(file: &serde_json::Value) -> Result<CustomTheme, String> {
+    if !file.is_object() {
+        return Err("This is not a theme file: it holds no theme.".to_owned());
+    }
+    let name = match file.get("name") {
+        None => "",
+        Some(name) => name.as_str().ok_or("This is not a theme file: its name is not text.")?,
+    };
+    if name.trim().is_empty() {
+        return Err("This theme has no name.".to_owned());
+    }
+    // What a file leaves out is the default theme's, in each mode.
+    let (light, any_light) = tokens_from_json(file, "lightTokens", &default_family().light)?;
+    let (dark, any_dark) = tokens_from_json(file, "darkTokens", &default_family().dark)?;
+    if !any_light && !any_dark {
+        return Err("This theme has no colours.".to_owned());
+    }
+    Ok(CustomTheme { id: String::new(), name: tidy_name(name), light, dark })
+}
+
+/// The theme a file holds, with no id yet. Anything else in the file is ignored, a colour this editor cannot read is not.
+pub fn parse_theme_file(text: &str) -> Result<CustomTheme, String> {
+    let file = serde_json::from_str(text).map_err(|error| format!("This is not a theme file: {error}"))?;
+    theme_from_json(&file)
+}
+
+/// The custom themes as the settings keep them.
+pub fn stored_themes(custom: &[CustomTheme]) -> Option<String> {
+    let stored: Vec<_> = custom
+        .iter()
+        .map(|theme| {
+            let mut json = serde_json::Map::new();
+            json.insert("id".to_owned(), theme.id.clone().into());
+            json.extend(theme_json(&theme.name, &theme.light, &theme.dark));
+            json
+        })
+        .collect();
+    serde_json::to_string(&stored).ok()
+}
+
+/// The custom themes [`stored_themes`] wrote, each on its own, so a damaged one costs only itself.
+pub fn parse_stored_themes(text: &str) -> Vec<CustomTheme> {
+    let entries: Vec<serde_json::Value> = serde_json::from_str(text).unwrap_or_default();
+    let mut themes: Vec<CustomTheme> = Vec::new();
+    for entry in &entries {
+        let Ok(mut theme) = theme_from_json(entry) else { continue };
+        theme.id = entry
+            .get("id")
+            .and_then(serde_json::Value::as_str)
+            .filter(|id| id.starts_with("custom-") && !id.contains(char::is_whitespace) && !themes.iter().any(|theme| theme.id == *id))
+            .map_or_else(|| new_theme_id(&themes), str::to_owned);
+        themes.push(theme);
+    }
+    themes
+}
+
+/// The lowest id no custom theme has.
+pub fn new_theme_id(custom: &[CustomTheme]) -> String {
+    (1u32..).map(|number| format!("custom-{number}")).find(|id| custom.iter().all(|theme| theme.id != *id)).unwrap_or_default()
+}
+
+fn tidy_name(name: &str) -> String {
+    name.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// `name`, numbered if a theme other than `except` already goes by it.
+pub fn distinct_name(custom: &[CustomTheme], name: &str, except: Option<&str>) -> String {
+    let name = tidy_name(name);
+    let taken = |candidate: &str| all_themes(custom).any(|theme| theme.name == candidate && Some(theme.id) != except);
+    if !taken(&name) {
+        return name;
+    }
+    (2u32..).map(|number| format!("{name} ({number})")).find(|candidate| !taken(candidate)).unwrap_or(name)
+}
+
 /// Whether the interface is light, dark, or as the system is, which may change on a schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -599,19 +819,20 @@ impl Mode {
 }
 
 /// Which theme the interface is drawn in: what Preferences chooses and a run remembers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Theme {
     pub mode: Mode,
-    /// The [`Family`] ids drawn in the light mode and in the dark, which may differ.
-    pub light: &'static str,
-    pub dark: &'static str,
-    /// The system's accent colour in place of the family's, where the system has one.
+    /// The ids of the themes drawn in the light mode and in the dark, which may differ. One that names no theme is the
+    /// default.
+    pub light: String,
+    pub dark: String,
+    /// The system's accent colour in place of the theme's, where the system has one.
     pub system_accent: bool,
 }
 
 impl Default for Theme {
     fn default() -> Self {
-        Self { mode: Mode::Dark, light: default_family().id, dark: default_family().id, system_accent: true }
+        Self { mode: Mode::Dark, light: default_family().id.to_owned(), dark: default_family().id.to_owned(), system_accent: true }
     }
 }
 
@@ -620,8 +841,8 @@ fn family_id(id: &str) -> Option<&'static str> {
 }
 
 impl Theme {
-    /// A choice as [`Theme::stored`] wrote it; what it does not say, or says wrongly, is the default. A family named on
-    /// its own, as an earlier version stored it, is both modes'.
+    /// A choice as [`Theme::stored`] wrote it; what it does not say is the default. A family named on its own, as an
+    /// earlier version stored it, is both modes'.
     pub fn parse(text: &str) -> Self {
         let mut theme = Self::default();
         for word in text.split_whitespace() {
@@ -631,12 +852,12 @@ impl Theme {
                 word => {
                     if let Some(mode) = Mode::ALL.into_iter().find(|mode| mode.word() == word) {
                         theme.mode = mode;
-                    } else if let Some(id) = word.strip_prefix("light:").and_then(family_id) {
-                        theme.light = id;
-                    } else if let Some(id) = word.strip_prefix("dark:").and_then(family_id) {
-                        theme.dark = id;
+                    } else if let Some(id) = word.strip_prefix("light:") {
+                        theme.light = id.to_owned();
+                    } else if let Some(id) = word.strip_prefix("dark:") {
+                        theme.dark = id.to_owned();
                     } else if let Some(id) = family_id(word) {
-                        (theme.light, theme.dark) = (id, id);
+                        (theme.light, theme.dark) = (id.to_owned(), id.to_owned());
                     }
                 }
             }
@@ -658,24 +879,42 @@ impl Theme {
         }
     }
 
-    /// The family drawn in the dark or the light mode.
-    pub fn family(&self, dark: bool) -> &'static Family {
-        let id = if dark { self.dark } else { self.light };
-        FAMILIES.iter().find(|family| family.id == id).unwrap_or_else(default_family)
+    /// The theme drawn in the dark or the light mode, among the families and `custom`.
+    pub fn family<'a>(&self, custom: &'a [CustomTheme], dark: bool) -> AnyTheme<'a> {
+        let id = if dark { &self.dark } else { &self.light };
+        let family = default_family();
+        let default = AnyTheme { id: family.id, name: family.name, light: &family.light, dark: &family.dark, built_in: true };
+        all_themes(custom).find(|theme| theme.id == id).unwrap_or(default)
     }
 
-    /// Chooses the family drawn in the dark or the light mode.
-    pub fn set_family(&mut self, dark: bool, id: &'static str) {
-        *(if dark { &mut self.dark } else { &mut self.light }) = id;
+    /// Chooses the theme drawn in the dark or the light mode.
+    pub fn set_family(&mut self, dark: bool, id: &str) {
+        id.clone_into(if dark { &mut self.dark } else { &mut self.light });
     }
 
-    /// The palette of the dark or the light mode; `accent` is the system's accent colour, if it has one.
-    pub fn tokens(&self, dark: bool, accent: Option<Color32>) -> Tokens {
-        let tokens = self.family(dark).variant(dark).clone();
+    /// Stops choosing a theme that is gone, for the default; whether it was chosen.
+    pub fn forget(&mut self, id: &str) -> bool {
+        let default = default_family().id;
+        let chosen = self.light == id || self.dark == id;
+        for slot in [&mut self.light, &mut self.dark] {
+            if slot == id {
+                default.clone_into(slot);
+            }
+        }
+        chosen
+    }
+
+    /// `tokens` with the system's accent colour, if it has one and it is wanted.
+    pub fn accented(&self, tokens: Tokens, accent: Option<Color32>) -> Tokens {
         match accent.filter(|_| self.system_accent) {
             Some(accent) => tokens.with_accent(accent),
             None => tokens,
         }
+    }
+
+    /// The palette of the dark or the light mode; `accent` is the system's accent colour, if it has one.
+    pub fn tokens(&self, custom: &[CustomTheme], dark: bool, accent: Option<Color32>) -> Tokens {
+        self.accented(self.family(custom, dark).variant(dark).clone(), accent)
     }
 }
 
@@ -815,19 +1054,19 @@ mod tests {
     fn applying_a_palette_makes_it_the_one_in_effect() {
         let ctx = egui::Context::default();
         assert!(Tokens::get(&ctx).dark);
-        let light = Theme::default().tokens(false, None);
+        let light = Theme::default().tokens(&[], false, None);
         apply(&ctx, &light);
         assert_eq!(*Tokens::get(&ctx), light);
         assert_eq!(ctx.global_style().visuals.panel_fill, light.base);
-        let ocean = Theme { dark: "ocean", ..Theme::default() }.tokens(true, None);
+        let ocean = Theme { dark: "ocean".to_owned(), ..Theme::default() }.tokens(&[], true, None);
         apply(&ctx, &ocean);
         assert_eq!(ctx.global_style().visuals.panel_fill, ocean.base);
-        assert_ne!(ocean.base, Theme::default().tokens(true, None).base);
+        assert_ne!(ocean.base, Theme::default().tokens(&[], true, None).base);
     }
 
     #[test]
     fn palettes_mix_from_one_to_the_other() {
-        let (dark, light) = (Theme::default().tokens(true, None), Theme::default().tokens(false, None));
+        let (dark, light) = (Theme::default().tokens(&[], true, None), Theme::default().tokens(&[], false, None));
         assert_eq!(dark.mix(&light, 0.0), dark);
         assert_eq!(dark.mix(&light, 1.0), light);
         let halfway = dark.mix(&light, 0.5);
@@ -840,25 +1079,28 @@ mod tests {
     fn a_choice_is_stored_and_read_back() {
         for (light, dark) in FAMILIES.iter().zip(FAMILIES.iter().rev()) {
             for (mode, system_accent) in [(Mode::Dark, false), (Mode::Light, true), (Mode::System, false)] {
-                let theme = Theme { mode, light: light.id, dark: dark.id, system_accent };
+                let theme = Theme { mode, light: light.id.to_owned(), dark: dark.id.to_owned(), system_accent };
                 assert_eq!(Theme::parse(&theme.stored()), theme);
             }
         }
         // What an earlier version stored, and what nothing stored.
         assert_eq!(Theme::parse("light"), Theme { mode: Mode::Light, ..Theme::default() });
-        assert_eq!(Theme::parse("ocean dark own-accent"), Theme { light: "ocean", dark: "ocean", system_accent: false, ..Theme::default() });
+        assert_eq!(
+            Theme::parse("ocean dark own-accent"),
+            Theme { light: "ocean".to_owned(), dark: "ocean".to_owned(), system_accent: false, ..Theme::default() }
+        );
         assert_eq!(Theme::parse("no-such-theme"), Theme::default());
     }
 
     #[test]
     fn the_system_mode_follows_the_system_and_each_mode_has_its_own_family() {
-        let theme = Theme { mode: Mode::System, light: "sunset", dark: "midnight", ..Theme::default() };
+        let theme = Theme { mode: Mode::System, light: "sunset".to_owned(), dark: "midnight".to_owned(), ..Theme::default() };
         assert!(!theme.is_dark(Some(egui::Theme::Light)));
         assert!(theme.is_dark(Some(egui::Theme::Dark)));
         assert!(theme.is_dark(None));
-        assert_eq!(theme.family(false).id, "sunset");
-        assert_eq!(theme.family(true).id, "midnight");
-        assert!(!Theme { mode: Mode::Light, ..theme }.is_dark(Some(egui::Theme::Dark)));
+        assert_eq!(theme.family(&[], false).id, "sunset");
+        assert_eq!(theme.family(&[], true).id, "midnight");
+        assert!(!Theme { mode: Mode::Light, ..theme.clone() }.is_dark(Some(egui::Theme::Dark)));
     }
 
     #[test]
@@ -877,12 +1119,12 @@ mod tests {
 
     #[test]
     fn overcast_is_between_a_light_and_a_dark_window_and_readable_in_both() {
-        let overcast = Theme { light: "overcast", dark: "overcast", system_accent: false, ..Theme::default() };
+        let overcast = Theme { light: "overcast".to_owned(), dark: "overcast".to_owned(), system_accent: false, ..Theme::default() };
         let default = Theme { system_accent: false, ..Theme::default() };
-        assert!(luminance(overcast.tokens(false, None).base) < luminance(default.tokens(false, None).base) * 0.5);
-        assert!(luminance(overcast.tokens(true, None).base) > luminance(default.tokens(true, None).base) * 3.0);
+        assert!(luminance(overcast.tokens(&[], false, None).base) < luminance(default.tokens(&[], false, None).base) * 0.5);
+        assert!(luminance(overcast.tokens(&[], true, None).base) > luminance(default.tokens(&[], true, None).base) * 3.0);
         for dark in [false, true] {
-            let t = overcast.tokens(dark, None);
+            let t = overcast.tokens(&[], dark, None);
             for background in [t.base, t.surface, t.surface_raised, t.well, t.overlay, t.primary_subtle, t.warning_subtle, t.danger_subtle] {
                 assert!(contrast(t.foreground, background) >= 4.5, "dark {dark}: foreground on {background:?}");
             }
@@ -891,10 +1133,10 @@ mod tests {
             }
             assert!(contrast(t.inverted, t.primary) >= 4.5, "dark {dark}: on the primary");
             // A system's accent keeps its soft fill as dim as the window, not a bright pastel on grey.
-            let subtle = overcast.tokens(dark, Some(Color32::from_rgb(230, 60, 120))).primary_subtle;
+            let subtle = overcast.tokens(&[], dark, Some(Color32::from_rgb(230, 60, 120))).primary_subtle;
             assert!(contrast(subtle, t.base) < 1.5, "dark {dark}: {subtle:?}");
             // On a mid grey, black is the way to go for text, though the grey is under half as bright as white.
-            let accented = overcast.tokens(dark, Some(Color32::from_rgb(111, 86, 168)));
+            let accented = overcast.tokens(&[], dark, Some(Color32::from_rgb(111, 86, 168)));
             assert!(contrast(accented.primary_text, accented.base) >= 4.5, "dark {dark}: {:?}", accented.primary_text);
         }
     }
@@ -903,17 +1145,120 @@ mod tests {
     fn the_system_accent_is_used_only_when_chosen_and_stays_readable() {
         let navy = Color32::from_rgb(10, 20, 90);
         let plain = Theme { system_accent: false, ..Theme::default() };
-        assert_eq!(plain.tokens(true, Some(navy)), plain.tokens(true, None));
+        assert_eq!(plain.tokens(&[], true, Some(navy)), plain.tokens(&[], true, None));
         let chosen = Theme::default();
         // A system without an accent colour leaves the theme's own.
-        assert_eq!(chosen.tokens(true, None), plain.tokens(true, None));
+        assert_eq!(chosen.tokens(&[], true, None), plain.tokens(&[], true, None));
         for dark in [true, false] {
             for accent in [navy, Color32::from_rgb(255, 235, 60)] {
-                let tokens = chosen.tokens(dark, Some(accent));
+                let tokens = chosen.tokens(&[], dark, Some(accent));
                 assert_eq!(tokens.primary, accent);
                 assert!(contrast(tokens.primary_text, tokens.base) >= 4.5);
                 assert!(contrast(tokens.inverted, tokens.primary) >= 4.5);
             }
         }
+    }
+
+    fn custom(id: &str, name: &str) -> CustomTheme {
+        let mut theme = parse_theme_file(&format!(r#"{{"name":"{name}","lightTokens":{{"base":"1 2 3"}}}}"#)).unwrap();
+        theme.id = id.to_owned();
+        theme
+    }
+
+    #[test]
+    fn every_colour_of_every_family_survives_a_theme_file() {
+        assert_eq!(TOKEN_GROUPS.iter().map(|(_, group)| group.len()).sum::<usize>(), 25);
+        for theme in all_themes(&[]) {
+            let read = parse_theme_file(&theme_file(theme).unwrap()).unwrap();
+            assert_eq!(read.name, theme.name);
+            assert_eq!(&read.light, theme.light, "{} light", theme.id);
+            assert_eq!(&read.dark, theme.dark, "{} dark", theme.id);
+        }
+    }
+
+    #[test]
+    fn a_token_reaches_a_colour_of_its_own() {
+        for token in TOKEN_GROUPS.iter().flat_map(|(_, group)| group.iter()) {
+            let mut changed = default_family().dark.clone();
+            *(token.color)(&mut changed) = rgb(1, 2, 3);
+            assert_ne!(changed, default_family().dark, "{}", token.key);
+            let others = TOKEN_GROUPS.iter().flat_map(|(_, group)| group.iter()).filter(|other| other.key != token.key);
+            for other in others {
+                assert_ne!(*(other.color)(&mut changed), rgb(1, 2, 3), "{} and {}", token.key, other.key);
+            }
+        }
+    }
+
+    #[test]
+    fn a_theme_file_that_cannot_be_read_says_why() {
+        let error = |text: &str| parse_theme_file(text).unwrap_err();
+        assert!(error("not json").starts_with("This is not a theme file:"));
+        assert!(error("[]").starts_with("This is not a theme file:"));
+        assert!(error(r#"{"name":7,"lightTokens":{"base":"1 2 3"}}"#).starts_with("This is not a theme file:"));
+        assert!(error(r#"{"name":"x","lightTokens":[]}"#).starts_with("This is not a theme file:"));
+        assert_eq!(error(r#"{"lightTokens":{"base":"1 2 3"}}"#), "This theme has no name.");
+        assert_eq!(error(r#"{"name":"  ","lightTokens":{"base":"1 2 3"}}"#), "This theme has no name.");
+        assert_eq!(error(r#"{"name":"x"}"#), "This theme has no colours.");
+        assert_eq!(error(r#"{"name":"x","lightTokens":{},"darkTokens":{"unknown":"1 2 3"}}"#), "This theme has no colours.");
+        for bad in [r#""red""#, "7", r##""#ff0000""##, r#""300 0 0""#, r#""1 2""#, r#""1 2 3 4""#] {
+            let file = format!(r#"{{"name":"x","darkTokens":{{"primary":{bad}}}}}"#);
+            assert_eq!(error(&file), "primary in darkTokens is not three numbers from 0 to 255.", "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_theme_file_may_leave_things_out_and_hold_what_is_not_known_here() {
+        let file = r#"{"id":"custom-9","builtIn":false,"name":"  A   name ","createdAt":"x","lightTokens":{"base":"1 2 3","generic1Bg":"not read"}}"#;
+        let theme = parse_theme_file(file).unwrap();
+        assert_eq!((theme.id.as_str(), theme.name.as_str()), ("", "A name"));
+        assert_eq!(theme.light.base, rgb(1, 2, 3));
+        assert_eq!(theme.light.surface, default_family().light.surface);
+        assert_eq!(theme.dark, default_family().dark);
+        assert!(!theme.light.dark && theme.dark.dark);
+    }
+
+    #[test]
+    fn a_damaged_stored_theme_costs_only_itself() {
+        let themes = [custom("custom-1", "One"), custom("custom-4", "Four")];
+        let stored = stored_themes(&themes).unwrap();
+        assert_eq!(parse_stored_themes(&stored), themes);
+        let mut entries: Vec<serde_json::Value> = serde_json::from_str(&stored).unwrap();
+        entries.insert(1, serde_json::json!({"id": "custom-2", "lightTokens": {"base": "1 2 3"}}));
+        entries.push(serde_json::json!(7));
+        // An id that could be mistaken for another's, or break the stored choice, is replaced.
+        entries.push(serde_json::json!({"id": "custom-1", "name": "Again", "lightTokens": {"base": "1 2 3"}}));
+        entries.push(serde_json::json!({"id": "two words", "name": "Spaced", "lightTokens": {"base": "1 2 3"}}));
+        let read = parse_stored_themes(&serde_json::to_string(&entries).unwrap());
+        let ids: Vec<_> = read.iter().map(|theme| (theme.id.as_str(), theme.name.as_str())).collect();
+        assert_eq!(ids, [("custom-1", "One"), ("custom-4", "Four"), ("custom-2", "Again"), ("custom-3", "Spaced")]);
+        assert_eq!(parse_stored_themes("not json"), []);
+    }
+
+    #[test]
+    fn a_custom_theme_is_chosen_like_a_family_until_it_is_gone() {
+        let themes = [custom("custom-1", "Mine")];
+        let theme = Theme { light: "custom-1".to_owned(), dark: "ocean".to_owned(), ..Theme::default() };
+        assert_eq!(Theme::parse(&theme.stored()), theme);
+        assert_eq!(theme.family(&themes, false).name, "Mine");
+        assert!(!theme.family(&themes, false).built_in);
+        assert_eq!(theme.tokens(&themes, false, None).base, rgb(1, 2, 3));
+        // A choice that names no theme is the default's.
+        assert_eq!(theme.family(&[], false).id, "default");
+        let mut forgetting = theme.clone();
+        assert!(!forgetting.forget("custom-2"));
+        assert!(forgetting.forget("custom-1"));
+        assert_eq!((forgetting.light.as_str(), forgetting.dark.as_str()), ("default", "ocean"));
+    }
+
+    #[test]
+    fn a_new_theme_gets_an_id_and_a_name_of_its_own() {
+        let themes = [custom("custom-1", "Mine"), custom("custom-3", "Mine (2)")];
+        assert_eq!(new_theme_id(&themes), "custom-2");
+        assert_eq!(distinct_name(&themes, "Other", None), "Other");
+        assert_eq!(distinct_name(&themes, "Mine", None), "Mine (3)");
+        assert_eq!(distinct_name(&themes, "Ocean", None), "Ocean (2)");
+        // Saving a theme under its own name leaves it alone.
+        assert_eq!(distinct_name(&themes, "Mine", Some("custom-1")), "Mine");
+        assert_eq!(theme_file_name("Mine: a/b (2)"), "bigstar-theme-mine-a-b-2.json");
     }
 }

@@ -2218,8 +2218,8 @@ fn a_floating_window_opens_in_the_middle_of_the_screen() {
 fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     use crate::theme::{Mode, Theme, Tokens};
     let (mut harness, stored) = preferences_open(MemoryServices::default());
-    let default = Theme::default().tokens(true, None);
-    let ocean = Theme { dark: "ocean", ..Theme::default() }.tokens(true, None);
+    let default = Theme::default().tokens(&[], true, None);
+    let ocean = Theme { dark: "ocean".to_owned(), ..Theme::default() }.tokens(&[], true, None);
     assert_eq!(*Tokens::get(&harness.ctx), default);
     harness.get_by_label("Ocean").click();
     harness.run();
@@ -2239,8 +2239,8 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     // The light mode has a theme of its own, so Ocean stays the dark mode's.
-    let chosen = Theme { mode: Mode::Light, dark: "ocean", ..Theme::default() };
-    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(false, None));
+    let chosen = Theme { mode: Mode::Light, dark: "ocean".to_owned(), ..Theme::default() };
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(&[], false, None));
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
 }
 
@@ -2248,7 +2248,7 @@ fn a_theme_chosen_in_preferences_shows_at_once_and_is_kept_only_when_saved() {
 fn a_new_palette_fades_in_rather_than_jumping() {
     use crate::theme::{Theme, Tokens};
     let (mut harness, _) = preferences_open(MemoryServices::default());
-    let (dark, light) = (Theme::default().tokens(true, None), Theme::default().tokens(false, None));
+    let (dark, light) = (Theme::default().tokens(&[], true, None), Theme::default().tokens(&[], false, None));
     harness.get_by_label("Light").click();
     // The first frame that shows a change shows neither palette.
     let mut between = dark.base;
@@ -2275,23 +2275,23 @@ fn following_the_system_each_mode_keeps_the_theme_chosen_for_it() {
     harness.get_by_label("Sunset").click();
     harness.run();
     // What is being chosen shows, whatever mode the system is in.
-    assert_eq!(*Tokens::get(&harness.ctx), Theme { light: "sunset", ..Theme::default() }.tokens(false, None));
+    assert_eq!(*Tokens::get(&harness.ctx), Theme { light: "sunset".to_owned(), ..Theme::default() }.tokens(&[], false, None));
     harness.get_by_label("Dark mode").click();
     harness.run();
     harness.get_by_label("Midnight").click();
     harness.run();
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
-    let chosen = Theme { mode: Mode::System, light: "sunset", dark: "midnight", ..Theme::default() };
+    let chosen = Theme { mode: Mode::System, light: "sunset".to_owned(), dark: "midnight".to_owned(), ..Theme::default() };
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(chosen.stored()));
     // A system that does not say its mode is taken to be dark.
-    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(true, None));
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(&[], true, None));
 
     // One that says it is light, as the desktop portal does on Linux, where winit cannot tell, is drawn light.
     let light = MemoryServices::with_dark_mode(false);
     crate::Services::store(&light, crate::THEME_KEY, &chosen.stored());
     let (harness, _) = preferences_open(light);
-    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(false, None));
+    assert_eq!(*Tokens::get(&harness.ctx), chosen.tokens(&[], false, None));
 }
 
 #[test]
@@ -2312,6 +2312,207 @@ fn the_systems_accent_colour_can_stand_in_for_the_themes() {
     harness.run();
     assert_ne!(Tokens::get(&harness.ctx).primary, egui::Color32::from_rgb(111, 86, 168));
     assert_eq!(crate::Services::load(&stored, crate::THEME_KEY).as_deref(), Some("dark light:default dark:default own-accent"));
+}
+
+/// The frontend with Preferences open, on the theme being edited.
+fn draft<'a>(harness: &'a mut Harness<'static, BigStarApp>) -> &'a mut crate::theme_editor::ThemeDraft {
+    harness.state_mut().preferences.as_mut().unwrap().draft.as_mut().unwrap()
+}
+
+/// Cancels the theme being edited: the button that is not waiting with the rest of Preferences.
+fn cancel_draft(harness: &mut Harness<'static, BigStarApp>) {
+    let cancels = harness.get_all_by_label("Cancel").collect::<Vec<_>>();
+    let cancel = cancels.into_iter().find(|node| !egui_kittest::kittest::NodeT::accesskit_node(node).is_disabled()).unwrap();
+    cancel.click();
+    harness.run();
+}
+
+fn stored_themes(stored: &MemoryServices) -> Vec<crate::theme::CustomTheme> {
+    crate::theme::parse_stored_themes(&crate::Services::load(stored, crate::CUSTOM_THEMES_KEY).unwrap_or_default())
+}
+
+#[test]
+fn a_customized_theme_is_kept_and_chosen_and_a_later_run_finds_it() {
+    use crate::theme::Tokens;
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    assert_eq!(draft(&mut harness).name, "Ocean (Custom)");
+    draft(&mut harness).name = "Mine".to_owned();
+    draft(&mut harness).dark.base = egui::Color32::from_rgb(1, 2, 3);
+    harness.run();
+    harness.get_by_label("Save theme").click();
+    harness.run();
+    assert_eq!(stored_themes(&stored)[0].name, "Mine");
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    assert_eq!(Tokens::get(&harness.ctx).base, egui::Color32::from_rgb(1, 2, 3));
+
+    let (harness, _) = preferences_open(stored.sharing_values());
+    assert_eq!(Tokens::get(&harness.ctx).base, egui::Color32::from_rgb(1, 2, 3));
+    harness.get_by_label("Mine");
+    harness.get_by_label("Edit theme");
+}
+
+#[test]
+fn a_colour_being_edited_shows_at_once_over_the_systems_accent_until_cancelled() {
+    use crate::theme::Tokens;
+    let purple = egui::Color32::from_rgb(111, 86, 168);
+    let (mut harness, stored) = preferences_open(MemoryServices::with_accent([111, 86, 168]));
+    assert_eq!(Tokens::get(&harness.ctx).primary, purple);
+    let before = (*Tokens::get(&harness.ctx)).clone();
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    // It starts from what is on screen.
+    assert_eq!(draft(&mut harness).dark, before);
+    let red = egui::Color32::from_rgb(200, 0, 0);
+    draft(&mut harness).dark.primary = red;
+    harness.step();
+    assert_eq!(Tokens::get(&harness.ctx).primary, red);
+    cancel_draft(&mut harness);
+    assert_eq!(*Tokens::get(&harness.ctx), before);
+    assert!(stored_themes(&stored).is_empty());
+}
+
+#[test]
+fn saving_a_theme_sets_the_systems_accent_aside_so_its_own_shows() {
+    use crate::theme::Tokens;
+    let (mut harness, _) = preferences_open(MemoryServices::with_accent([111, 86, 168]));
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    let red = egui::Color32::from_rgb(200, 0, 0);
+    draft(&mut harness).dark.primary = red;
+    harness.run();
+    harness.get_by_label("Save theme").click();
+    harness.run();
+    assert!(harness.state_mut().preferences.as_ref().unwrap().draft.is_none());
+    assert_eq!(Tokens::get(&harness.ctx).primary, red);
+}
+
+#[test]
+fn the_theme_editor_opens_at_its_full_size() {
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    let save =
+        |harness: &Harness<'static, BigStarApp>| egui_kittest::kittest::NodeT::accesskit_node(&harness.get_by_label("Save theme")).bounding_box();
+    let opened = save(&harness);
+    for _ in 0..6 {
+        harness.step();
+    }
+    assert_eq!(save(&harness), opened);
+    let rect = |title| crate::dialogs::window_rect(&harness.ctx, title).unwrap();
+    assert!(!rect("Edit theme").intersects(rect("Preferences")), "{:?} on {:?}", rect("Edit theme"), rect("Preferences"));
+}
+
+#[test]
+fn the_other_modes_colours_can_be_edited_and_preferences_returns_to_its_own() {
+    use crate::theme::Tokens;
+    let (mut harness, _) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    harness.get_by_label("Light colours").click();
+    harness.run();
+    assert!(!Tokens::get(&harness.ctx).dark);
+    harness.get_by_label("Save theme").click();
+    harness.run();
+    assert!(Tokens::get(&harness.ctx).dark);
+}
+
+#[test]
+fn a_theme_is_exported_to_a_file_and_imported_from_one() {
+    use crate::theme::Tokens;
+    let services = MemoryServices::default();
+    let shelf = services.shelf.clone();
+    let (mut harness, stored) = preferences_open(services);
+    harness.get_by_label("Midnight").click();
+    harness.run();
+    harness.get_by_label("Export…").click();
+    harness.run();
+    let (name, bytes) = shelf.lock().unwrap().saved.pop().unwrap();
+    assert_eq!(name, "bigstar-theme-midnight.json");
+    let midnight = (*Tokens::get(&harness.ctx)).clone();
+
+    harness.get_by_label("Ocean").click();
+    harness.run();
+    shelf.lock().unwrap().to_open.push_back((name, bytes));
+    harness.get_by_label("Import").click();
+    harness.run();
+    harness.get_by_label("Choose file…").click();
+    harness.run();
+    // It goes by another name than the family it came from, and is what is now chosen.
+    assert_eq!(stored_themes(&stored)[0].name, "Midnight (2)");
+    harness.get_by_label("Midnight (2)");
+    harness.get_by_label("Imported “Midnight (2)”.");
+    assert_eq!(*Tokens::get(&harness.ctx), midnight);
+}
+
+#[test]
+fn a_paste_that_is_no_theme_says_why_and_stays_to_be_corrected() {
+    use crate::theme::Tokens;
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Import").click();
+    harness.run();
+    harness.state_mut().preferences.as_mut().unwrap().import_text = r#"{"name":"Mine"}"#.to_owned();
+    harness.run();
+    harness.get_by_label("Import theme").click();
+    harness.run();
+    harness.get_by_label("Import failed: This theme has no colours.");
+    assert_eq!(harness.state_mut().preferences.as_ref().unwrap().import_text, r#"{"name":"Mine"}"#);
+    assert!(stored_themes(&stored).is_empty());
+
+    harness.state_mut().preferences.as_mut().unwrap().import_text = r#"{"name":"Mine","darkTokens":{"base":"1 2 3"}}"#.to_owned();
+    harness.run();
+    harness.get_by_label("Import theme").click();
+    harness.run();
+    assert_eq!(Tokens::get(&harness.ctx).base, egui::Color32::from_rgb(1, 2, 3));
+    assert_eq!(harness.state_mut().preferences.as_ref().unwrap().import_text, "");
+}
+
+#[test]
+fn deleting_the_theme_in_use_asks_first_and_falls_back_on_the_default() {
+    use crate::theme::{Theme, Tokens};
+    let services = MemoryServices::default();
+    let mine = r#"[{"id":"custom-1","name":"Mine","darkTokens":{"base":"1 2 3"}}]"#;
+    crate::Services::store(&services, crate::CUSTOM_THEMES_KEY, mine);
+    crate::Services::store(&services, crate::THEME_KEY, "dark light:custom-1 dark:custom-1 own-accent");
+    let (mut harness, stored) = preferences_open(services);
+    assert_eq!(Tokens::get(&harness.ctx).base, egui::Color32::from_rgb(1, 2, 3));
+    harness.get_by_label("Delete theme").click();
+    harness.run();
+    harness.get_by_label("Keep").click();
+    harness.run();
+    assert_eq!(stored_themes(&stored).len(), 1);
+    harness.get_by_label("Delete theme").click();
+    harness.run();
+    harness.get_by_label("Delete").click();
+    harness.run();
+    assert!(stored_themes(&stored).is_empty());
+    let fallen_back = Theme { system_accent: false, ..Theme::default() };
+    assert_eq!(*Tokens::get(&harness.ctx), fallen_back.tokens(&[], true, None));
+    // The saved choice no longer names it, even if Preferences is cancelled.
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), Some(fallen_back.stored()));
+    assert!(harness.query_by_label("Edit theme").is_none());
+}
+
+#[test]
+fn cancelling_preferences_keeps_a_saved_theme_but_not_the_choice_of_it() {
+    use crate::theme::{Theme, Tokens};
+    let (mut harness, stored) = preferences_open(MemoryServices::default());
+    harness.get_by_label("Customize this theme").click();
+    harness.run();
+    draft(&mut harness).name = "Mine".to_owned();
+    draft(&mut harness).dark.base = egui::Color32::from_rgb(1, 2, 3);
+    harness.run();
+    harness.get_by_label("Save theme").click();
+    harness.run();
+    harness.get_by_label("Cancel").click();
+    harness.run();
+    assert_eq!(*Tokens::get(&harness.ctx), Theme::default().tokens(&[], true, None));
+    assert_eq!(crate::Services::load(&stored, crate::THEME_KEY), None);
+    assert_eq!(stored_themes(&stored)[0].name, "Mine");
 }
 
 #[test]
