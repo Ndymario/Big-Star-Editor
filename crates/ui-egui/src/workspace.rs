@@ -832,7 +832,7 @@ impl TabViewer for Viewer<'_, '_> {
                 None => "…".into(),
             },
             DocTab::Tileset(key) => match self.tilesets.get(key) {
-                Some((doc, _)) => format!("{} — {}", tr!("workspace.tab.tilesets"), doc.title).into(),
+                Some((doc, _)) => format!("{} — {}", tr!("workspace.tab.layer"), doc.title).into(),
                 None => "…".into(),
             },
         }
