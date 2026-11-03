@@ -134,7 +134,7 @@ return {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Every shipped script loads, and none names its layer: the tileset list does that.
+/// Every shipped script loads, and none names its layer: the layer list does that.
 #[test]
 fn every_shipped_background_script_loads() {
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/backgrounds");

@@ -372,7 +372,7 @@ fn paths(snapshot: &LevelSnapshot, kind: Kind) -> &Vec<NsmbLevelPath> {
     if kind == Kind::ProgressPath { &snapshot.course.progress_paths } else { &snapshot.course.paths }
 }
 
-/// The tileset IDs a level can choose, each by the name the project's tileset list gives it, after none at 65535,
+/// The tileset IDs a level can choose, each by the name the project's layer list gives it, after none at 65535,
 /// which every load of a tileset's files skips.
 pub(crate) fn tileset_choices(view: &LevelView) -> Option<Vec<(i64, String)>> {
     let names = view.art.graphics.as_ref().map(|graphics| graphics.tileset_names.as_slice()).unwrap_or_default();
@@ -728,7 +728,7 @@ fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -
 /// A tileset record's screen when the views naming it turn with the stage (`setupBgParallax`).
 pub const ROTATING_TILESET: u16 = 0xff00;
 
-/// A background or foreground's numbers by the names the project's tileset list gives them, after none at 65535.
+/// A background or foreground's numbers by the names the project's layer list gives them, after none at 65535.
 fn layer_choices(view: &LevelView, layer: BackgroundLayer) -> Option<Vec<(i64, String)>> {
     let named = view.art.graphics.as_ref().map(|graphics| graphics.backgrounds.layer(layer)).unwrap_or_default();
     if named.is_empty() {
@@ -954,7 +954,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 ("FG graphics", h.foreground_theme, Some(BackgroundLayer::Foreground)),
             ];
             // The game's tables hold a background's graphics, palette and screen at the same number, so the name the
-            // project's tileset list gives that number names all three.
+            // project's layer list gives that number names all three.
             let choices = layers.map(|(_, _, layer)| match layer {
                 None => tileset_choices(view),
                 Some(layer) => layer_choices(view, layer),
@@ -2506,7 +2506,7 @@ mod tests {
         assert_eq!(header.sound_group, 3);
         view.snapshot.course.header.tileset_theme[0] = 9;
         view.snapshot.course.tilesets = vec![NsmbLevelScreen { palette_id: 9, ..Default::default() }];
-        // The tilesets go by the names the project's tileset list gives them, which come with the level's graphics.
+        // The tilesets go by the names the project's layer list gives them, which come with the level's graphics.
         let tileset_names = (0..76).map(|id| if id == 1 { "Castle".to_owned() } else { format!("Tileset {id}") }).collect();
         view.art.set_graphics(bigstar_protocol::LevelGraphics { tileset_names, ..Default::default() });
         let shown_rows = rows(&view, &view.panel, None);

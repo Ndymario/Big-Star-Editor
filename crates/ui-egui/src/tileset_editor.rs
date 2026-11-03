@@ -1,5 +1,5 @@
 //! The tileset workspace: a level's three tilesets (graphics, Map16, objects, behaviours) and its background and
-//! foreground, or one entry of the tileset list, edited together and saved as only the files that changed. A port of `TilesetEditorDialog` and of
+//! foreground, or one entry of the layer list, edited together and saved as only the files that changed. A port of `TilesetEditorDialog` and of
 //! `MainWindow::openTilesetEditor`'s saving; the document is pure and `show` draws it as a tab.
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
@@ -118,7 +118,7 @@ fn map_resource(slot: &TilemapSlot) -> TilemapResourceData {
     TilemapResourceData { graphics: slot.graphics.bytes.clone(), palette: slot.palette.bytes.clone(), screen: slot.screen.bytes.clone() }
 }
 
-/// One level's tilesets and backgrounds, or one entry of the tileset list, being edited.
+/// One level's tilesets and backgrounds, or one entry of the layer list, being edited.
 pub struct TilesetDoc {
     pub subject: GraphicsSubject,
     pub title: String,

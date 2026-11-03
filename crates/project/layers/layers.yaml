@@ -1,9 +1,9 @@
 # The tilesets, backgrounds and foregrounds the Tilesets tab lists, and the scenes the game builds outside a level.
 #
 # An entry with an `id` is that slot of the game's tables in overlay 0, which say what files it loads; the game has
-# 76 of each. An entry without one names its files by ROM path. A project's own `tilesets.yaml` merges into this
+# 76 of each. An entry without one names its files by ROM path. A project's own `layers.yaml` merges into this
 # list: an `id` it names takes that name, and an entry or scene named as one here takes its place. See
-# docs/tilesets-list.md.
+# docs/layers-list.md.
 tilesets:
   - id: 0
     name: "Grassland"

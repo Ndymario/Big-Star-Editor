@@ -674,13 +674,13 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
 }
 
 #[test]
-fn a_real_rom_serves_each_entry_of_the_tileset_list_alone() {
+fn a_real_rom_serves_each_entry_of_the_layer_list_alone() {
     let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
-    let fixture = Fixture::new("host-real-tileset-list");
+    let fixture = Fixture::new("host-real-layer-list");
     make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
     let mut session = fixture.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    let Response::Layers(list) = session.handle(Request::ListLayers).unwrap() else { panic!() };
     assert_eq!((list.tilesets.len(), list.backgrounds.len(), list.foregrounds.len()), (2 + 76, 76 + 1, 76));
     assert_eq!(list.slot_name(None, 23), Some("Ghost house"));
     // Some slots of the retail tables hold no file, which the list marks rather than leaves out.
@@ -710,21 +710,21 @@ fn a_real_rom_serves_each_entry_of_the_tileset_list_alone() {
     assert!(session.handle(Request::TilesetResources { subject: GraphicsSubject::Scene("Nowhere".into()) }).is_err());
 }
 
-/// A project's `tilesets.yaml` is laid over the editor's list rather than taking its place. One that will not read
+/// A project's `layers.yaml` is laid over the editor's list rather than taking its place. One that will not read
 /// leaves the editor's in force, and says why.
 #[test]
-fn a_projects_tileset_list_merges_into_the_editors() {
-    let (fixture, mut session) = Fixture::with_project("host-project-tilesets");
-    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+fn a_projects_layer_list_merges_into_the_editors() {
+    let (fixture, mut session) = Fixture::with_project("host-project-layers");
+    let Response::Layers(list) = session.handle(Request::ListLayers).unwrap() else { panic!() };
     assert_eq!(list.problem, None);
     assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Ghost house"));
     assert_eq!(list.scenes[0].subject, GraphicsSubject::Scene("Title screen".into()));
 
-    let file = fixture.root.path().join("proj/tilesets.yaml");
+    let file = fixture.root.path().join("proj/layers.yaml");
     write_bytes(&file, b"backgrounds:\n  - id: 23\n    name: Haunted mansion\n");
     session.handle(Request::CloseProject).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    let Response::Layers(list) = session.handle(Request::ListLayers).unwrap() else { panic!() };
     assert_eq!(list.problem, None);
     assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Haunted mansion"));
     assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 22).map(str::is_empty), Some(false));
@@ -733,8 +733,8 @@ fn a_projects_tileset_list_merges_into_the_editors() {
     write_bytes(&file, b"backgrounds:\n  - { id: 23 }\n");
     session.handle(Request::CloseProject).unwrap();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
-    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
-    assert!(list.problem.as_deref().is_some_and(|problem| problem.starts_with("tilesets.yaml was not used")), "{:?}", list.problem);
+    let Response::Layers(list) = session.handle(Request::ListLayers).unwrap() else { panic!() };
+    assert!(list.problem.as_deref().is_some_and(|problem| problem.starts_with("layers.yaml was not used")), "{:?}", list.problem);
     assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Ghost house"));
 }
 

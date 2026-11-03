@@ -159,7 +159,7 @@ fn graphics_messages_survive_the_wire() {
         Request::TilesetResources { subject: crate::GraphicsSubject::Level(3) },
         Request::TilesetResources { subject: crate::GraphicsSubject::Background(crate::EntryKey::File("Sky".into())) },
         Request::TilesetResources { subject: crate::GraphicsSubject::Scene("Title screen".into()) },
-        Request::ListTilesets,
+        Request::ListLayers,
         Request::BuildConfig,
         Request::SetPreferences { autosave_minutes: 5, backups_kept: 20 },
         Request::MigrateConfig,

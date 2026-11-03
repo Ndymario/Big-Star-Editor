@@ -34,7 +34,7 @@ pub enum DocTab {
     /// A file opened from the Filesystem dock, by its key in `Workspace::files`.
     File(u64),
     /// A tileset workspace, by its key in `Workspace::tilesets`: a level's tilesets and backgrounds, or an entry of the
-    /// tileset list.
+    /// layer list.
     Tileset(u64),
 }
 
@@ -507,7 +507,7 @@ impl Workspace {
         for area in session.take_recovered() {
             session.open_level(&area);
         }
-        // Documents whose levels are gone: the project closed, or the host refused them. An entry of the tileset list
+        // Documents whose levels are gone: the project closed, or the host refused them. An entry of the layer list
         // goes with its project.
         let levels = &session.levels;
         let project = session.project.is_some();

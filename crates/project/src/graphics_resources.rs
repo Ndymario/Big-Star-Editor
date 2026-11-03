@@ -14,8 +14,8 @@ use bigstar_level::{BackgroundLayer, BackgroundPaletteAnimation, BackgroundTileA
 use serde::{Deserialize, Serialize};
 
 use crate::EffectiveFilesystem;
+use crate::layer_catalog::{CatalogKind, LayerFiles, TABLE_SLOTS, TilesetFiles};
 use crate::tile_overlays::{TileOverlayCatalog, overlay_map16_images};
-use crate::tileset_catalog::{CatalogKind, LayerFiles, TABLE_SLOTS, TilesetFiles};
 
 /// Where one release of the game keeps its resource tables in overlay 0, and the id its NitroFS numbering starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

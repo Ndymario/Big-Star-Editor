@@ -336,7 +336,7 @@ impl Shared {
             Request::DownloadRom { offset } => self.download_rom(offset),
             Request::CloseProject => self.close_project(),
             Request::ListLevels => self.list_levels(),
-            Request::ListTilesets => self.list_tilesets(),
+            Request::ListLayers => self.list_tilesets(),
             Request::OpenLevel { area } => self.open_level(&area),
             Request::EditLevel { level, base_revision, edit } => self.edit_level(level, base_revision, edit),
             Request::UndoLevel { level } => self.step_history(level, true),
@@ -1234,7 +1234,7 @@ impl Shared {
     fn list_tilesets(&self) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
-        Ok(Response::Tilesets(self.ensure_graphics(open)?.tileset_listing()))
+        Ok(Response::Layers(self.ensure_graphics(open)?.layer_listing()))
     }
 
     fn file_targets(&self, path: &str) -> Result<Response> {

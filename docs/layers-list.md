@@ -1,4 +1,4 @@
-# The tileset list
+# The layer list
 
 The **Layers** tab, beside Levels, lists everything the tileset workspace can edit without a level open:
 
@@ -12,8 +12,8 @@ Objects and Behaviors, a background or foreground gets Graphics and its layer, a
 layers. Saving writes the files that changed into their modules, as it does for a level's workspace, and edits no
 level. A slot whose tables hold no file is listed as empty and cannot be opened.
 
-What each entry is called comes from a YAML list. The editor ships one, `crates/project/tilesets/tilesets.yaml`, and a
-project can lay its own `tilesets.yaml`, in the project's root, over it. The same names are what the Course tab offers
+What each entry is called comes from a YAML list. The editor ships one, `crates/project/layers/layers.yaml`, and a
+project can lay its own `layers.yaml`, in the project's root, over it. The same names are what the Course tab offers
 when a level picks its tileset, background and foreground.
 
 ## The file
@@ -60,7 +60,7 @@ them has offsets to give: the background's screens number tiles from 576 and pal
 
 ## How a project's list merges
 
-A project's `tilesets.yaml` holds only what it changes:
+A project's `layers.yaml` holds only what it changes:
 
 - a slot it names takes the name it gives;
 - an entry or a scene with the name of one in the editor's list takes that one's place, files and all;

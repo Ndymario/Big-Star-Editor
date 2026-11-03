@@ -65,7 +65,7 @@ pub struct LevelGraphics {
     /// What the project's background scripts say of every background and foreground: their names, and how the bands of
     /// each drift. See `docs/lua-backgrounds.md`.
     pub backgrounds: BackgroundCatalog,
-    /// What the project's tileset list calls each of the game's tileset slots, by slot.
+    /// What the project's layer list calls each of the game's tileset slots, by slot.
     pub tileset_names: Vec<String>,
     /// Set when the level's resources could not be found at all; nothing else is filled then.
     pub error: Option<String>,

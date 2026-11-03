@@ -239,8 +239,8 @@ levels:
 }
 
 #[test]
-fn the_tileset_list_names_every_slot_and_the_title_screen() {
-    let catalog = builtin_tileset_catalog();
+fn the_layer_list_names_every_slot_and_the_title_screen() {
+    let catalog = builtin_layer_catalog();
     for (kind, entries) in [(CatalogKind::Tileset, catalog.tilesets.len()), (CatalogKind::Background, catalog.backgrounds.len())] {
         assert!(entries >= usize::from(TABLE_SLOTS), "{kind:?}");
         for id in 0..TABLE_SLOTS {
@@ -259,8 +259,8 @@ fn the_tileset_list_names_every_slot_and_the_title_screen() {
 }
 
 #[test]
-fn a_projects_tileset_list_renames_slots_and_adds_entries_over_the_shipped_one() {
-    let project = parse_tileset_catalog(
+fn a_projects_layer_list_renames_slots_and_adds_entries_over_the_shipped_one() {
+    let project = parse_layer_catalog(
         r#"
 backgrounds:
   - id: 23
@@ -282,7 +282,7 @@ scenes:
 "#,
     )
     .unwrap();
-    let mut catalog = builtin_tileset_catalog().clone();
+    let mut catalog = builtin_layer_catalog().clone();
     let before = catalog.backgrounds.len();
     catalog.merge(project);
     assert_eq!(catalog.table_name(CatalogKind::Background, 23), Some("Haunted mansion"));
@@ -310,7 +310,7 @@ scenes:
         "levels: []",
         "backgrounds: [",
     ] {
-        assert_eq!(parse_tileset_catalog(bad).unwrap_err().code, bigstar_core::ErrorCode::ParseError, "{bad}");
+        assert_eq!(parse_layer_catalog(bad).unwrap_err().code, bigstar_core::ErrorCode::ParseError, "{bad}");
     }
 }
 

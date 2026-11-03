@@ -2015,7 +2015,7 @@ fn search_left(harness: &mut Harness<'static, BigStarApp>, text: &str) {
     harness.run();
 }
 
-/// The Layers tab lists every entry of the tileset list, filters them, and opens each in a workspace of its own
+/// The Layers tab lists every entry of the layer list, filters them, and opens each in a workspace of its own
 /// that shows only what it has. Saving one writes its files and edits no level.
 #[test]
 fn the_layers_tab_opens_each_entry_on_its_own() {

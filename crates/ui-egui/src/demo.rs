@@ -18,9 +18,9 @@ use bigstar_level::{
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, DrawCommand,
     DrawKind, EditOutcome, EntryKey, Event, FileEntry, FileIcon, FileStatus, FilesystemListing, FoundEntity, GraphicsSubject, ImageGraphics,
-    LevelBytes, LevelEdit, LevelGraphics, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData,
-    ProjectInfo, ProjectMode, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
-    TilesetListEntry, TilesetListing,
+    LayerListEntry, LayerListing, LevelBytes, LevelEdit, LevelGraphics, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel,
+    ModuleChoice, ProjectData, ProjectInfo, ProjectMode, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData,
+    TilesetGraphics,
 };
 
 const AREA: &str = "A01_1";
@@ -1032,9 +1032,9 @@ impl DemoConnection {
                 }
                 _ => Err(Error::new(ErrorCode::InvalidArgument, "only a file a module supplies can be removed")),
             },
-            Request::ListTilesets => {
-                let entry = |subject: GraphicsSubject, name: &str, available: bool| TilesetListEntry { subject, name: name.to_owned(), available };
-                Ok(Response::Tilesets(TilesetListing {
+            Request::ListLayers => {
+                let entry = |subject: GraphicsSubject, name: &str, available: bool| LayerListEntry { subject, name: name.to_owned(), available };
+                Ok(Response::Layers(LayerListing {
                     tilesets: vec![
                         entry(GraphicsSubject::Tileset(EntryKey::Shared), "Shared", true),
                         entry(GraphicsSubject::Tileset(EntryKey::SubUnit), "Sub-unit", true),

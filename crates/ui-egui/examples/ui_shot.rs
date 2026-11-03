@@ -165,7 +165,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     tileset_tabs(&mut harness, dir, "remote-tilesets")?;
-    tileset_list(&mut harness, dir, "remote")?;
+    layer_list(&mut harness, dir, "remote")?;
     // Run Patcher on a project without NCPatcher's configuration says why there is nothing to build.
     if let Some(button) = harness.query_by_label("Run Patcher") {
         button.click();
@@ -358,7 +358,7 @@ fn main() -> Result<(), String> {
 }
 
 /// The Layers tab with every group open, and the title screen opened from it, a shot of each of its layers.
-fn tileset_list(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
+fn layer_list(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
     let press = |harness: &mut Harness<'_, BigStarApp>, rect: egui::Rect| {
         for pressed in [true, false] {
             let button = egui::PointerButton::Primary;
@@ -368,7 +368,7 @@ fn tileset_list(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, pr
         }
         harness.run_ok();
     };
-    harness.state_mut().tileset_list_for_screenshot();
+    harness.state_mut().layer_list_for_screenshot();
     harness.run_ok();
     for group in ["Tilesets (", "Backgrounds (", "Scenes ("] {
         let rect = harness.query_all(egui_kittest::kittest::by().label_contains(group)).next().map(|node| node.rect());

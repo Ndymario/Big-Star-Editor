@@ -48,7 +48,7 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
 - **Tilesets and backgrounds**: paint Map16 blocks and background layers from a tile picker beside them, build objects
   by clicking blocks, set behaviours on many blocks at once, and share tilesets as files. Open a level's from the Tools
   menu, or any tileset, background, foreground or the title screen from the **Layers** tab, named by a list a project
-  can rename entries in and add its own to. See [the tileset list](docs/tilesets-list.md).
+  can rename entries in and add its own to. See [the layer list](docs/layers-list.md).
 - **Text**: edit the game's messages, with their special codes, and export or import them as text.
 - **Menus and the ROM banner**: the layout pages of the menu screens, the ROM's icon and title, and its user metadata.
 - **Anything else** in a hex editor that works like HxD.

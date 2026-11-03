@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 pub type RequestId = u64;
 
@@ -85,8 +85,8 @@ pub enum Request {
     CloseProject,
     /// The vanilla level list of the open project, with which areas its ROM holds.
     ListLevels,
-    /// The tilesets, backgrounds, foregrounds and scenes the project can edit, named by its tileset list.
-    ListTilesets,
+    /// The tilesets, backgrounds, foregrounds and scenes the project can edit, named by its layer list.
+    ListLayers,
     /// Opens (or rejoins) the session of one area, named by its catalog source token such as `A01_1`.
     OpenLevel {
         area: String,
@@ -201,7 +201,7 @@ pub enum Request {
         bytes: Vec<u8>,
     },
     /// The files behind what the tileset workspace edits: the tilesets and backgrounds a level loads, or one entry of
-    /// the tileset list.
+    /// the layer list.
     TilesetResources {
         subject: GraphicsSubject,
     },
@@ -329,7 +329,7 @@ pub struct Map16Overlay {
     pub replaces: bool,
 }
 
-/// One entry of a list in the tileset list.
+/// One entry of a list in the layer list.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum EntryKey {
     /// A slot of the game's tables in overlay 0.
@@ -361,7 +361,7 @@ impl Default for GraphicsSubject {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TilesetListEntry {
+pub struct LayerListEntry {
     pub subject: GraphicsSubject,
     pub name: String,
     /// Whether the game has files for it: a slot of the tables can hold none.
@@ -369,16 +369,16 @@ pub struct TilesetListEntry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TilesetListing {
-    pub tilesets: Vec<TilesetListEntry>,
-    pub backgrounds: Vec<TilesetListEntry>,
-    pub foregrounds: Vec<TilesetListEntry>,
-    pub scenes: Vec<TilesetListEntry>,
-    /// Why the project's own `tilesets.yaml` was not used, when it was not; the editor's own list stands in for it.
+pub struct LayerListing {
+    pub tilesets: Vec<LayerListEntry>,
+    pub backgrounds: Vec<LayerListEntry>,
+    pub foregrounds: Vec<LayerListEntry>,
+    pub scenes: Vec<LayerListEntry>,
+    /// Why the project's own `layers.yaml` was not used, when it was not; the editor's own list stands in for it.
     pub problem: Option<String>,
 }
 
-impl TilesetListing {
+impl LayerListing {
     /// What the list calls slot `id` of the tilesets (`None`), backgrounds or foregrounds.
     pub fn slot_name(&self, layer: Option<BackgroundLayer>, id: u16) -> Option<&str> {
         let entries = match layer {
@@ -503,7 +503,7 @@ pub enum Response {
     Directory(DirectoryListing),
     Project(ProjectInfo),
     Levels(LevelListing),
-    Tilesets(TilesetListing),
+    Layers(LayerListing),
     Level(Box<LevelSnapshot>),
     Edited {
         snapshot: Box<LevelSnapshot>,

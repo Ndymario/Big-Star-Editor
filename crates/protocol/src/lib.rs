@@ -17,9 +17,9 @@ pub use graphics::{
 pub use message::{
     AreaSummary, BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, ClientFrame, DiagnosticLevel, DirectoryEntry, DirectoryEntryKind,
     DirectoryListing, EditOutcome, EntryKey, Event, FileEntry, FileIcon, FileStatus, FileWrite, FilesystemListing, FoundEntity, GraphicsSubject,
-    LevelBytes, LevelEdit, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, Map16Overlay, ModuleChoice, ObjectBankOverlays,
-    PROTOCOL_VERSION, ProjectData, ProjectInfo, ProjectMode, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request, RequestId, ResourceBytes,
-    Response, ResponseResult, ServerFrame, TilemapSlot, TilesetListEntry, TilesetListing, TilesetResources, TilesetSlot,
+    LayerListEntry, LayerListing, LevelBytes, LevelEdit, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, Map16Overlay,
+    ModuleChoice, ObjectBankOverlays, PROTOCOL_VERSION, ProjectData, ProjectInfo, ProjectMode, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel,
+    Request, RequestId, ResourceBytes, Response, ResponseResult, ServerFrame, TilemapSlot, TilesetResources, TilesetSlot,
 };
 pub use service::Service;
 pub use wire::{decode_client_frame, decode_server_frame, encode_client_frame, encode_server_frame};

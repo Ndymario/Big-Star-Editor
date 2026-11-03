@@ -132,7 +132,7 @@ pub struct BigStarApp {
     pub(crate) tools: Tools,
     pub(crate) files: FilesDock,
     left: Left,
-    tileset_list: crate::tileset_list::TilesetListState,
+    layer_list: crate::layer_list::LayerListState,
     side: Side,
     /// The canvas toolbar's switches, the same on every canvas.
     canvas_options: CanvasOptions,
@@ -437,7 +437,7 @@ impl BigStarApp {
             tools: Tools::default(),
             files: FilesDock::default(),
             left: Left::default(),
-            tileset_list: Default::default(),
+            layer_list: Default::default(),
             side: Side::default(),
             canvas_options,
             grids,
@@ -681,7 +681,7 @@ impl BigStarApp {
     }
 
     /// Shows the Layers tab of the left panel (screenshots).
-    pub fn tileset_list_for_screenshot(&mut self) {
+    pub fn layer_list_for_screenshot(&mut self) {
         self.left = Left::Layers;
     }
 
@@ -855,7 +855,7 @@ impl BigStarApp {
             self.workspace.open_banner(&bytes, &target);
         }
         if let Some(resources) = session.tileset_resources.take() {
-            let title = crate::tileset_list::title(session, &resources.subject);
+            let title = crate::layer_list::title(session, &resources.subject);
             match crate::tileset_editor::TilesetDoc::open(resources, &title) {
                 Ok(doc) => self.workspace.open_tileset(doc),
                 Err(error) => session.report(error),
@@ -1322,7 +1322,7 @@ impl BigStarApp {
             ui.add_space(2.0);
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
-                Left::Layers => crate::tileset_list::show(ui, session, &mut self.tileset_list),
+                Left::Layers => crate::layer_list::show(ui, session, &mut self.layer_list),
                 Left::Levels => {
                     if let Some(path) = level_list::show(ui, session, self.workspace.previewed()) {
                         // A level row hands the person over to its file.

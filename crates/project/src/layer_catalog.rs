@@ -1,6 +1,6 @@
-//! The tileset list: what the Layers tab offers to edit and what each is called. The editor ships one
-//! (`tilesets/tilesets.yaml`); a project's own `tilesets.yaml` merges into it rather than taking its place, so a hack
-//! that renames two backgrounds writes two entries. See `docs/tilesets-list.md`.
+//! The layer list: what the Layers tab offers to edit and what each is called. The editor ships one
+//! (`layers/layers.yaml`); a project's own `layers.yaml` merges into it rather than taking its place, so a hack
+//! that renames two backgrounds writes two entries. See `docs/layers-list.md`.
 
 use std::sync::OnceLock;
 
@@ -8,12 +8,12 @@ use bigstar_core::{Error, ErrorCode, Result};
 use serde::Deserialize;
 
 /// The name a project's own list goes by, in the project's root.
-pub const PROJECT_TILESET_LIST: &str = "tilesets.yaml";
+pub const PROJECT_LAYER_LIST: &str = "layers.yaml";
 
 /// How many slots each of the game's resource tables in overlay 0 has.
 pub const TABLE_SLOTS: u16 = 76;
 
-const TILESETS: &str = include_str!("../tilesets/tilesets.yaml");
+const TILESETS: &str = include_str!("../layers/layers.yaml");
 
 /// A background, foreground or a scene's tileset layer, named by ROM path.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -69,7 +69,7 @@ pub struct SceneEntry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct TilesetCatalog {
+pub struct LayerCatalog {
     pub tilesets: Vec<CatalogEntry<TilesetFiles>>,
     pub backgrounds: Vec<CatalogEntry<LayerFiles>>,
     pub foregrounds: Vec<CatalogEntry<LayerFiles>>,
@@ -84,7 +84,7 @@ pub enum CatalogKind {
     Foreground,
 }
 
-impl TilesetCatalog {
+impl LayerCatalog {
     /// The name the list gives table slot `id` of `kind`.
     pub fn table_name(&self, kind: CatalogKind, id: u16) -> Option<&str> {
         match kind {
@@ -122,7 +122,7 @@ impl TilesetCatalog {
 
     /// `project` laid over this list: a slot it names takes its name, and an entry or scene it names as one here
     /// takes that one's place. The rest it has are added after.
-    pub fn merge(&mut self, project: TilesetCatalog) {
+    pub fn merge(&mut self, project: LayerCatalog) {
         merge_entries(&mut self.tilesets, project.tilesets);
         merge_entries(&mut self.backgrounds, project.backgrounds);
         merge_entries(&mut self.foregrounds, project.foregrounds);
@@ -305,10 +305,10 @@ fn unique<F>(entries: &[CatalogEntry<F>], what: &str) -> Result<()> {
     Ok(())
 }
 
-/// A tileset list as `tilesets.yaml` writes it.
-pub fn parse_tileset_catalog(yaml: &str) -> Result<TilesetCatalog> {
+/// A layer list as `layers.yaml` writes it.
+pub fn parse_layer_catalog(yaml: &str) -> Result<LayerCatalog> {
     let raw: RawList = serde_norway::from_str(yaml).map_err(|e| parse_error(e.to_string()))?;
-    let catalog = TilesetCatalog {
+    let catalog = LayerCatalog {
         tilesets: raw.tilesets.into_iter().map(tileset).collect::<Result<_>>()?,
         backgrounds: raw.backgrounds.into_iter().map(|raw| layer(raw, "background")).collect::<Result<_>>()?,
         foregrounds: raw.foregrounds.into_iter().map(|raw| layer(raw, "foreground")).collect::<Result<_>>()?,
@@ -326,7 +326,7 @@ pub fn parse_tileset_catalog(yaml: &str) -> Result<TilesetCatalog> {
 }
 
 /// The list the editor ships. One serves every release, as it names slots and paths rather than file IDs.
-pub fn builtin_tileset_catalog() -> &'static TilesetCatalog {
-    static LIST: OnceLock<TilesetCatalog> = OnceLock::new();
-    LIST.get_or_init(|| parse_tileset_catalog(TILESETS).unwrap_or_default())
+pub fn builtin_layer_catalog() -> &'static LayerCatalog {
+    static LIST: OnceLock<LayerCatalog> = OnceLock::new();
+    LIST.get_or_init(|| parse_layer_catalog(TILESETS).unwrap_or_default())
 }

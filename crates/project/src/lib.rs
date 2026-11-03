@@ -5,6 +5,7 @@
 mod effective_filesystem;
 mod filesystem_view;
 mod graphics_resources;
+mod layer_catalog;
 mod level_catalog;
 mod lua_actors;
 mod lua_backgrounds;
@@ -17,7 +18,6 @@ mod paths;
 mod rom_edit;
 mod rom_reader;
 mod tile_overlays;
-mod tileset_catalog;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -32,6 +32,10 @@ pub use graphics_resources::{
     LevelTilesets, NsmbGraphicsProfile, ObjectBankOverlayTable, ResourceFile, TilesetResourceFiles, background_palette_animator,
     background_tile_animator, filled_table_slots, find_object_bank_overlays, load_background_frames, load_background_graphics, load_level_tilesets,
     nsmb_graphics_profile, resolve_file_layer, resolve_file_tileset, resolve_level_graphics,
+};
+pub use layer_catalog::{
+    CatalogEntry, CatalogKind, EntrySource, LayerCatalog, LayerFiles, PROJECT_LAYER_LIST, SceneEntry, TABLE_SLOTS, TilesetFiles,
+    builtin_layer_catalog, parse_layer_catalog,
 };
 pub use level_catalog::{
     AreaLocation, LevelCatalog, LevelCatalogArea, LevelCatalogGroup, LevelCatalogLevel, PROJECT_LEVEL_LIST, builtin_level_catalog,
@@ -54,10 +58,6 @@ pub use paths::lexically_normal;
 pub use rom_edit::write_edited_rom;
 pub use rom_reader::{ArchiveMember, RomReader};
 pub use tile_overlays::{TileOverlay, TileOverlayCatalog, TileOverlayScript, overlay_map16_images, overlay_map16_sheet};
-pub use tileset_catalog::{
-    CatalogEntry, CatalogKind, EntrySource, LayerFiles, PROJECT_TILESET_LIST, SceneEntry, TABLE_SLOTS, TilesetCatalog, TilesetFiles,
-    builtin_tileset_catalog, parse_tileset_catalog,
-};
 
 #[cfg(test)]
 mod tests;

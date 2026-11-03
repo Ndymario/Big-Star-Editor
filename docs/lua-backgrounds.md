@@ -8,7 +8,7 @@ lava, cycle a few colours -- is decided by tables and functions in overlay 0
 indexed by its number.
 
 A background script says what the game does with one of those numbers. What
-each is called is in the [tileset list](tilesets-list.md), which names every
+each is called is in the [layer list](layers-list.md), which names every
 slot; a layer no script describes is drawn as it is. Big Star loads background
 directories in this order, with the first script for a layer and id winning:
 
@@ -37,7 +37,7 @@ return {
 | --- | --- |
 | `layer` | `"background"` or `"foreground"`. Required. |
 | `id` | the screen id, 0-255. Required. The game's tables stop at 75. |
-| `name` | what the editor calls it, where the tileset list has no name for it. |
+| `name` | what the editor calls it, where the layer list has no name for it. |
 | `strips` | how bands of its rows move sideways. |
 | `tiles` | tiles the game overwrites as it runs. |
 | `palette` | colours the game overwrites as it runs. |
@@ -139,7 +139,7 @@ return { layer = "background", id = 12, strips = { { throughRow = 300, drift = 0
 
 A definition replaces the whole of the one it shadows, so restate anything else
 the shipped script said that should stay. To rename a background, name it in
-the project's `tilesets.yaml` instead; see [the tileset list](tilesets-list.md).
+the project's `layers.yaml` instead; see [the layer list](layers-list.md).
 A hack that adds a 77th background gives it a script with `id = 76`, and the
 script's `name` is what it is called, since the list stops at 75.
 
