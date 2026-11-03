@@ -339,6 +339,12 @@ pub fn context_menu<R>(response: &Response, body: impl FnOnce(&mut Ui) -> R) -> 
     egui::Popup::context_menu(response).style(menu_style).show(body).map(|inner| inner.inner)
 }
 
+/// The panel a click on `response` opens under it, which stays open while what it holds is changed and closes on a
+/// click outside it or another click on `response`.
+pub fn popover<R>(response: &Response, body: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui::Popup::menu(response).style(menu_style).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(body).map(|inner| inner.inner)
+}
+
 /// egui's look for a menu, with room either side of each line's text: egui's leaves it against the edges.
 fn menu_style(style: &mut egui::Style) {
     egui::containers::menu::menu_style(style);

@@ -99,10 +99,10 @@ pub struct SpriteEntry {
 
 /// The category no actor speaks for files under. It is the group's identity, so it stays the same in every language;
 /// [`category_name`] is what is shown.
-const OTHER_ACTORS: &str = "Other actors";
+pub(crate) const OTHER_ACTORS: &str = "Other actors";
 
 /// A category as it is shown.
-fn category_name(category: &str) -> String {
+pub(crate) fn category_name(category: &str) -> String {
     if category == OTHER_ACTORS { tr!("picker.other_actors").to_owned() } else { category.to_owned() }
 }
 

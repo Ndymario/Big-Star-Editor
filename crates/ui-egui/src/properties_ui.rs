@@ -1,16 +1,19 @@
 //! Draws the properties panel from `properties`' rows and turns what the person does into edits.
 
+use std::collections::BTreeSet;
+
 use bigstar_level::ModuleDataCatalog;
 use bigstar_protocol::{LevelEdit, ObjectBankOverlays};
 use egui::{RichText, Ui};
 
-use crate::controls::{self, Button, Choice as _};
+use crate::controls::{self, Button, Choice as _, Width};
 use crate::i18n::{self, tr, tr_n};
 use crate::level_view::{Item, Kind, LevelView};
+use crate::picker::category_name;
 use crate::properties::{
-    Editor, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings, block_name,
-    common_settings, delete_edit, delete_node_edit, delete_record_edit, format_value, item_count, line_label, list_lines, parse_value, record_lines,
-    rows, sprite_types,
+    Editor, ListFilter, PanelState, Row, Rows, Span, TABS, Tab, add_camera_edit, add_edit, add_node_edit, add_screen_edit, apply, apply_settings,
+    block_name, common_settings, delete_edit, delete_node_edit, delete_record_edit, format_value, item_count, line_label, list_lines, parse_value,
+    record_lines, rows, sprite_category, sprite_types,
 };
 use crate::{dialogs, icons, level_data};
 use bigstar_level::ScreenBlock;
@@ -284,12 +287,18 @@ pub fn show(
 /// What adds to the list and takes from it sits under it. Returns the edit one of those buttons made.
 fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal: bool, busy: bool) -> Option<LevelEdit> {
     let tab = Tab::Entity(kind);
-    let lines = list_lines(view, kind);
+    let total = item_count(&view.snapshot, tab);
     let mut edit = None;
-    let line_of = |wanted: Item| lines.iter().position(|line| *line == wanted);
-    let target = view.selection.first().filter(|_| reveal).and_then(|first| line_of(*first).or_else(|| line_of(Item::new(first.kind, first.index))));
     let mut picked = None;
     controls::section(ui, kind_title(kind), |ui| {
+        if total != 0 {
+            list_search(ui, view, kind);
+        }
+        let lines = list_lines(view, kind);
+        let filtered = view.panel.filters.get(&kind).is_some_and(ListFilter::active);
+        let line_of = |wanted: Item| lines.iter().position(|line| *line == wanted);
+        let target =
+            view.selection.first().filter(|_| reveal).and_then(|first| line_of(*first).or_else(|| line_of(Item::new(first.kind, first.index))));
         let step = controls::HEIGHT_SM + ui.spacing().item_spacing.y;
         // The lines sit in a well of their own, as a list box does: its edges line up with the title above and the
         // buttons below, and the lines keep their padding inside it.
@@ -302,7 +311,7 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if lines.is_empty() {
-                    ui.weak(tr!("properties_ui.none_in_level"));
+                    ui.weak(if total == 0 { tr!("properties_ui.none_in_level") } else { tr!("properties_ui.no_matches") });
                     return;
                 }
                 egui::ScrollArea::vertical().id_salt("item-list").max_height(LIST_ROWS * step).auto_shrink([false, true]).show_rows(
@@ -328,6 +337,10 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
                     },
                 );
             });
+        if filtered && total != 0 {
+            let showing = lines.iter().filter(|line| line.node.is_none()).count();
+            ui.weak(tr!("properties_ui.showing_of", shown = showing, total));
+        }
         ui.add_enabled_ui(!busy, |ui| {
             // Each pair shares the line evenly, whatever the panel's width.
             let half = egui::vec2(((ui.available_width() - ui.spacing().item_spacing.x) / 2.0).max(0.0), controls::HEIGHT);
@@ -336,11 +349,11 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
                     view.expect_placement();
                     edit = add_edit(&view.snapshot, tab);
                 }
-                if ui.add_sized(half, Button::new(tr!("common.delete")).enabled(!lines.is_empty())).clicked() {
+                if ui.add_sized(half, Button::new(tr!("common.delete")).enabled(total != 0)).clicked() {
                     edit = delete_edit(tab, shown);
                 }
             });
-            if kind.path() && !shown.multi() && !lines.is_empty() {
+            if kind.path() && !shown.multi() && total != 0 {
                 ui.horizontal_top(|ui| {
                     let nodes = shown.indices.first().and_then(|&i| view.path(kind, i)).map_or(0, Vec::len);
                     if ui.add_sized(half, Button::new(tr!("properties_ui.add_node"))).clicked() {
@@ -358,6 +371,56 @@ fn item_list(ui: &mut Ui, view: &mut LevelView, kind: Kind, shown: &Rows, reveal
         view.pick(item, add);
     }
     edit
+}
+
+/// The field that narrows the list to the lines that say what is typed, and for sprites the button beside it that
+/// leaves out categories of actor, or what lies outside a view.
+fn list_search(ui: &mut Ui, view: &mut LevelView, kind: Kind) {
+    let view_ids: Vec<u8> = view.snapshot.course.views.iter().map(|v| v.id).collect();
+    let categories: BTreeSet<String> = if kind == Kind::Sprite {
+        (0..view.snapshot.course.sprites.len()).map(|index| sprite_category(view, index)).collect()
+    } else {
+        BTreeSet::new()
+    };
+    let filter = view.panel.filters.entry(kind).or_default();
+    // A view deleted since it was picked, or a category no sprite has any more, no longer narrows anything.
+    filter.view = filter.view.filter(|id| view_ids.contains(id));
+    filter.hidden_categories.retain(|category| categories.contains(category));
+    let narrowable = kind == Kind::Sprite;
+    ui.horizontal(|ui| {
+        let width = if narrowable { Width::Rest(controls::HEIGHT + ui.spacing().item_spacing.x) } else { Width::Fill };
+        controls::search(ui, &mut filter.search, tr!("properties_ui.search_list"), width);
+        if narrowable {
+            let name = tr!("properties_ui.filter");
+            let response = Button::icon(icons::FILTER).ghost().selected(filter.narrows()).name(name).show(ui).on_hover_text(name);
+            controls::popover(&response, |ui| sprite_filter(ui, filter, &categories, &view_ids));
+        }
+    });
+}
+
+/// What the filter button opens: which categories of actor to list, and which view to list them in.
+fn sprite_filter(ui: &mut Ui, filter: &mut ListFilter, categories: &BTreeSet<String>, view_ids: &[u8]) {
+    ui.label(RichText::new(tr!("properties_ui.filter_categories")).strong());
+    for category in categories {
+        let mut shown = !filter.hidden_categories.contains(category);
+        if controls::checkbox(ui, &mut shown, category_name(category)).changed() {
+            if shown {
+                filter.hidden_categories.remove(category);
+            } else {
+                filter.hidden_categories.insert(category.clone());
+            }
+        }
+    }
+    ui.separator();
+    ui.label(RichText::new(tr!("properties_ui.filter_view")).strong());
+    ui.choice_value(&mut filter.view, None, tr!("properties_ui.any_view"));
+    for &id in view_ids {
+        ui.choice_value(&mut filter.view, Some(id), tr!("properties_ui.view_n", id));
+    }
+    ui.separator();
+    if ui.add_enabled(filter.narrows(), Button::new(tr!("properties_ui.clear_filters"))).clicked() {
+        filter.clear_choices();
+    }
 }
 
 /// The records of the Layers or Cameras tab, one line each, with what adds to them and takes from them. They are

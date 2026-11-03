@@ -2,6 +2,8 @@
 //! about itself, and what turning one writes back. A port of `LevelPropertiesWidget`'s `refresh` and `applyFields`;
 //! `properties_ui` only draws these rows.
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use bigstar_core::Fx32;
 use bigstar_formats::{
     NsmbLevelCamera, NsmbLevelCourse, NsmbLevelEntrance, NsmbLevelObject, NsmbLevelPath, NsmbLevelPathNode, NsmbLevelScreen, NsmbLevelSprite,
@@ -174,6 +176,35 @@ pub struct PanelState {
     pub show_actor_info: bool,
     /// The selection changed somewhere other than the list, which has yet to scroll to it.
     pub reveal: bool,
+    /// What each kind's list leaves out. A kind kept here keeps its search across tabs.
+    pub filters: BTreeMap<Kind, ListFilter>,
+}
+
+/// What the panel's list of a kind leaves out. As it starts, it leaves out nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ListFilter {
+    /// Only the lines that say this, whatever the case.
+    pub search: String,
+    /// Sprites whose actors are of these categories are left out, by [`sprite_category`].
+    pub hidden_categories: BTreeSet<String>,
+    /// Only what overlaps the view of this ID.
+    pub view: Option<u8>,
+}
+
+impl ListFilter {
+    /// Whether the filter button's choices leave anything out. The search shows in a field of its own.
+    pub fn narrows(&self) -> bool {
+        !self.hidden_categories.is_empty() || self.view.is_some()
+    }
+
+    /// Leaves out nothing the filter button chooses, keeping the search.
+    pub fn clear_choices(&mut self) {
+        *self = Self { search: std::mem::take(&mut self.search), ..Self::default() };
+    }
+
+    pub fn active(&self) -> bool {
+        !self.search.trim().is_empty() || self.narrows()
+    }
 }
 
 impl Default for PanelState {
@@ -189,6 +220,7 @@ impl Default for PanelState {
             dragging: None,
             show_actor_info: false,
             reveal: false,
+            filters: BTreeMap::new(),
         }
     }
 }
@@ -631,9 +663,9 @@ const ENTRANCE_FLAGS: [(&str, &str); 8] = [
     ("Exit only", key!("properties.note.exit_only")),
 ];
 
-/// The lines of the panel's list for `kind`: every item of it, and under each selected path its nodes. Kinds the
-/// level refers to by ID are listed by it, as Miyamoto lists them, since that is the number the person is looking
-/// for; objects and sprites have none and keep the order the level holds them in.
+/// The lines of the panel's list for `kind`: every item of it the kind's [`ListFilter`] keeps, and under each selected
+/// path its nodes. Kinds the level refers to by ID are listed by it, as Miyamoto lists them, since that is the number
+/// the person is looking for; objects and sprites have none and keep the order the level holds them in.
 pub fn list_lines(view: &LevelView, kind: Kind) -> Vec<Item> {
     let course = &view.snapshot.course;
     let ids: Vec<u8> = match kind {
@@ -645,6 +677,9 @@ pub fn list_lines(view: &LevelView, kind: Kind) -> Vec<Item> {
     };
     let mut order: Vec<usize> = (0..item_count(&view.snapshot, Tab::Entity(kind))).collect();
     order.sort_by_key(|&index| ids.get(index).copied());
+    if let Some(filter) = view.panel.filters.get(&kind).filter(|f| f.active()) {
+        order.retain(|&index| keeps(view, filter, Item::new(kind, index)));
+    }
     let mut lines = Vec::with_capacity(order.len());
     for index in order {
         lines.push(Item::new(kind, index));
@@ -654,6 +689,30 @@ pub fn list_lines(view: &LevelView, kind: Kind) -> Vec<Item> {
         }
     }
     lines
+}
+
+/// The category of the actor sprite `index` resolved to, as the palette files it: one no actor speaks for, or that
+/// names none, is under "Other actors".
+pub fn sprite_category(view: &LevelView, index: usize) -> String {
+    let sprite = view.snapshot.course.sprites.get(index);
+    let actor = sprite.and_then(|s| view.art.actors.actor(s.id, view.sprite_hash(index)));
+    actor.map(|a| a.definition.category.clone()).filter(|c| !c.is_empty()).unwrap_or_else(|| crate::picker::OTHER_ACTORS.to_owned())
+}
+
+/// Whether `filter` keeps `item` in the list. A path's nodes go with it, so only its own line is asked about.
+fn keeps(view: &LevelView, filter: &ListFilter, item: Item) -> bool {
+    if item.kind == Kind::Sprite && !filter.hidden_categories.is_empty() && filter.hidden_categories.contains(&sprite_category(view, item.index)) {
+        return false;
+    }
+    if let Some(id) = filter.view {
+        // A view named after it was deleted holds nothing.
+        let area = view.snapshot.course.views.iter().position(|v| v.id == id).and_then(|index| view.bounds(Item::new(Kind::View, index)));
+        if !area.zip(view.bounds(item)).is_some_and(|(area, bounds)| area.intersect(bounds).is_positive()) {
+            return false;
+        }
+    }
+    let search = filter.search.trim().to_lowercase();
+    search.is_empty() || line_label(view, item).to_lowercase().contains(&search)
 }
 
 /// What a line of the list says: enough to tell the item from its neighbours without looking at the canvas.
@@ -2624,6 +2683,54 @@ mod tests {
         assert_eq!(line_label(&view, Item::new(Kind::Object, 0)), "Object 0:1 (2, 3) 4×1");
         assert_eq!(line_label(&view, Item::new(Kind::Sprite, 0)), "Actor 1 (6, 4)");
         assert_eq!(line_label(&view, Item::new(Kind::Zone, 0)), "Zone 0 (0, 0) 400×200");
+    }
+
+    #[test]
+    fn the_list_keeps_what_the_search_lets_through() {
+        let mut level = snapshot();
+        let object = |tileset_slot, object_id, x| NsmbLevelObject { object_id, tileset_slot, x, y: 0, width: 1, height: 1 };
+        level.objects = vec![object(0, 1, 2), object(1, 12, 40), object(2, 5, 100), object(1, 3, 2)];
+        let mut view = LevelView::new(level);
+        let listed = |view: &LevelView| list_lines(view, Kind::Object).iter().map(|line| line.index).collect::<Vec<_>>();
+        assert_eq!(listed(&view), [0, 1, 2, 3]);
+
+        view.panel.filters.entry(Kind::Object).or_default().search = " 1:12 ".to_owned();
+        assert_eq!(listed(&view), [1]);
+        // The search is the line's text, so a capital matches as well as a small letter does.
+        view.panel.filters.entry(Kind::Object).or_default().search = "OBJECT 1:".to_owned();
+        assert_eq!(listed(&view), [1, 3]);
+        // Each kind keeps its own.
+        assert_eq!(list_lines(&view, Kind::Zone).len(), 1);
+    }
+
+    #[test]
+    fn the_sprite_list_leaves_out_the_categories_the_filter_hides() {
+        let mut view = sprite_view(0, Vec::new());
+        view.snapshot.course.sprites.push(NsmbLevelStageObject { id: 9, x: 20, ..Default::default() });
+        view.snapshot.course.sprites.push(NsmbLevelStageObject { id: 3, x: 30, ..Default::default() });
+        // Types 7 and 9 are both enemies; type 3 has no actor, so it is filed with the other actors.
+        assert_eq!([0, 1, 2].map(|index| sprite_category(&view, index)), ["Enemies", "Enemies", crate::picker::OTHER_ACTORS]);
+        let listed = |view: &LevelView| list_lines(view, Kind::Sprite).iter().map(|line| line.index).collect::<Vec<_>>();
+        let hidden = |category: &str| ListFilter { hidden_categories: BTreeSet::from([category.to_owned()]), ..Default::default() };
+        view.panel.filters.insert(Kind::Sprite, hidden("Enemies"));
+        assert_eq!(listed(&view), [2]);
+        view.panel.filters.insert(Kind::Sprite, hidden(crate::picker::OTHER_ACTORS));
+        assert_eq!(listed(&view), [0, 1]);
+        // The search goes by the actor's name, as the line shows it.
+        view.panel.filters.insert(Kind::Sprite, ListFilter { search: "another".to_owned(), ..Default::default() });
+        assert_eq!(listed(&view), [1]);
+        // The sprites stand at tiles 10, 20 and 30 across, and view 3 ends at tile 25.
+        view.snapshot.course.views = vec![NsmbLevelView { id: 3, x: 0, y: 0, width: 25 * 16, height: 400, ..Default::default() }];
+        view.panel.filters.insert(Kind::Sprite, ListFilter { view: Some(3), ..Default::default() });
+        assert_eq!(listed(&view), [0, 1]);
+        // A view that is gone holds nothing.
+        view.panel.filters.insert(Kind::Sprite, ListFilter { view: Some(9), ..Default::default() });
+        assert!(listed(&view).is_empty());
+        view.panel.filters.insert(Kind::Sprite, ListFilter { search: "another".to_owned(), ..Default::default() });
+        let filter = view.panel.filters.entry(Kind::Sprite).or_default();
+        filter.hidden_categories.insert("Enemies".to_owned());
+        filter.clear_choices();
+        assert_eq!(*filter, ListFilter { search: "another".to_owned(), ..Default::default() });
     }
 
     #[test]
