@@ -10,7 +10,7 @@ use bigstar_formats::RgbaImage;
 use bigstar_level::SpriteBounds;
 use bigstar_project::{
     ActorResource, ActorResourceKind, LuaActorDefinition, LuaActorDrawCommand, LuaActorDrawKind, LuaActorLayer, LuaActorRender, LuaActorRenderInput,
-    has_lua_renderer, load_lua_actor_layers, lua_actor_bounds, render_lua_actor,
+    LuaActorWave, has_lua_renderer, load_lua_actor_layers, lua_actor_bounds, render_lua_actor,
 };
 
 /// The repository root, where `data/actors` and the C++ test fixtures live.
@@ -2186,6 +2186,62 @@ return {objectId=7, name="Late", init=init, render=function() saved.loadImage("s
         }
     }
     assert!(with_renderer > 190);
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+fn lua_liquids() {
+    let root = std::env::temp_dir().join(format!("big-star-lua-liquid-tests-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    write(&root.join("liquid/a.png"), RED_PNG);
+    write(&root.join("liquid/b.png"), RED_PNG);
+    write(
+        &root.join("liquid/liquid.lua"),
+        r#"local frames = {}
+local function init(ctx)
+ frames[1] = ctx.loadImage("a.png")
+ frames[2] = ctx.loadImage("b.png")
+ frames.missing = ctx.loadImage("missing.png")
+end
+local function render(actor, renderer)
+ if actor.settings == 1 then return renderer:drawLiquid({frames.missing}, {}) end
+ if actor.settings == 2 then return renderer:drawLiquid(frames[1], {waves={1}}) end
+ renderer:drawLiquid(frames, {y=actor.pixelY-2, frameTicks=4, columnWidth=2, depthScale=0.75, opacity=0.5,
+  waves={{amplitude=0x0d00/4096, step=0x0444, speed=-0x09ce}}})
+ return false
+end
+return {objectId=278, name="Liquid", init=init, render=render}"#,
+    );
+    let rom = root.join("rom");
+    let resolve = |_: ActorResourceKind, name: &str| resource_at(&rom.join(name), name);
+    let catalog = load_lua_actor_layers(&[layer("liquid", root.join("liquid"))], &resolve, Some(&decode_image), None).unwrap();
+    let liquid = catalog.by_object_id(278).unwrap();
+    assert!(liquid.init_error.is_empty(), "{}", liquid.init_error);
+
+    let mut input = LuaActorRenderInput::new();
+    input.object_id = 278;
+    input.pixel_x = 160.0;
+    input.pixel_y = 320.0;
+    let drawn = render(liquid, &input);
+    assert!(drawn.ok(), "{:?}", drawn.0.as_ref().err());
+    let c = drawn.value();
+    assert!(c.len() == 1 && c[0].kind == LuaActorDrawKind::Liquid);
+    assert!(c[0].y == 318.0 && c[0].opacity == 0.5);
+    let surface = c[0].liquid.as_ref().unwrap();
+    assert!(surface.frames.len() == 2 && surface.frame_ticks == 4 && surface.column_width == 2 && surface.depth_scale == 0.75);
+    assert_eq!(surface.waves, vec![LuaActorWave { amplitude: 0x0d00 as f64 / 4096.0, step: 0x0444, speed: -0x09ce }]);
+    // The script asks for the stock marker to stay over it.
+    let mut custom_rendered = true;
+    assert!(render_flag(liquid, &input, &mut custom_rendered).ok() && !custom_rendered);
+
+    // A frame whose file is missing draws nothing rather than a liquid that stutters.
+    input.settings = 1;
+    let missing = render(liquid, &input);
+    assert!(missing.ok() && missing.value().is_empty());
+    // A single handle is a one-frame liquid, and a wave that is not a table is an error.
+    input.settings = 2;
+    assert!(!render(liquid, &input).ok());
 
     let _ = std::fs::remove_dir_all(&root);
 }

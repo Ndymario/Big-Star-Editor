@@ -276,6 +276,56 @@ exist because a handful of actors outline their reach rather than draw a still:
 - `renderer:fillEllipse(opts)`
 - `renderer:drawLine(opts)` — `x`, `y` to `x2`, `y2`
 
+### Liquids
+
+`renderer:drawLiquid(frames, opts)` draws water, lava and poison the way
+`LiquidRenderer::render` does. The game draws a liquid as a strip of quads
+across the camera. The strip's top follows a waving surface. It is textured from
+that surface down, and the texture's bottom row carries on below it. The
+editor draws it across **the view the actor stands in**, from the surface to the
+view's bottom, and nowhere else. NSMB Editor instead draws it across the whole
+level. The view is found when the canvas is painted, so the liquid follows the
+view and the actor while either is dragged. Liquids are drawn over every actor.
+A liquid moves while the background menu's
+**Animate backgrounds and liquids** is on.
+
+`frames` is a list of handles, played in order, or a single handle. Each frame
+repeats across from scene x 0 and is drawn from the surface down. `opts` takes:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `y` | `actor.pixelY` | the surface at rest, in scene pixels |
+| `frameTicks` | `1` | game frames each frame is shown for |
+| `columnWidth` | `1` | pixels between the points the surface's height is worked out at, joined by straight lines |
+| `depthScale` | `1` | texture rows per pixel of depth |
+| `opacity` | `1` | multiplies the texture's own alpha |
+| `waves` | none | a list of `{ amplitude, step, speed }` sines |
+
+A wave is in the game's units. Angles are 1/65536 of a turn, and the
+surface at scene x `x` stands
+`amplitude * sin(step * x - speed * t)` pixels above `y` after `t` game frames.
+The sum of the waves is rounded to the pixel, as the game rounds it.
+
+```lua
+renderer:drawLiquid(frames, {
+    y = actor.pixelY - 2,
+    frameTicks = 4,
+    columnWidth = 2,
+    waves = {
+        { amplitude = 0x0d00 / 4096, step = 0x0444, speed = 0x06ee },
+        { amplitude = 0x0d00 / 4096, step = 0x0842, speed = -0x09ce },
+    },
+})
+```
+
+`278 Water`, `279 Lava` and `281 Poisoned Water` take every number from the
+game. The textures are the eight frames of `enemy/suimen_texanim1.nsbtx`,
+`enemy/yogan_texanim1.nsbtx` and `enemy/doku_texanim1.nsbtx`, as
+`Liquid::onHeapCreated` loads them. The waves, frame lengths and texture
+stretches come from the `LiquidAttributes` table at `0216c3b4`. The 2-pixel lift
+is `Liquid::renderStateCommon`'s. The splashes players and enemies make are not
+drawn.
+
 ## The `gfx` helpers
 
 Two patterns come up in almost every actor: an image whose transform is decided
@@ -340,18 +390,20 @@ so an actor given nonsense settings still shows the part that fits.
 are imported from NSMB Editor 5's `stageobjsettings.xml`; bounds and drawing are
 ported from `NSMBStageObj.GetGrabBounds()` and `NSMBStageObj.Render()`.
 
-Every upstream case that can be expressed against this API is ported: 204 actors
+Every upstream case that can be expressed against this API is ported: 207 actors
 have a `render`. The 89 actors that draw nothing upstream keep a bounds function
 and the numbered marker, which is exactly what the old editor shows for them.
+The three liquids are drawn from the game rather than from NSMB Editor; see
+[Liquids](#liquids).
 
-Ten are not ported, because their drawing needs context an actor script does not
-get:
+Seven are not ported, because their drawing needs context an actor script does
+not get:
 
 | Actors | Needs |
 | --- | --- |
 | 206, 243, 245, 247 | tiles out of the level's own tileset |
 | 274 | the positions of other actors in the level |
-| 277, 278, 279, 281 | gradients and level-wide liquid fills |
+| 277 | gradients |
 | 228, 230 | arc strokes and arbitrary-angle image rotation |
 
 `data/actors/images` holds NSMBe's sprite stills, copied under GPL-3.0; see

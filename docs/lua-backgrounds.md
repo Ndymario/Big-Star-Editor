@@ -250,7 +250,7 @@ camera was not already framing the player: arriving through a warp inside one
 area, the camera stays where it was if the player is already between the two
 lines, and puts them on the upper line if it comes from below.
 
-In the canvas toolbar's background menu, **Animate backgrounds** plays the
+In the canvas toolbar's background menu, **Animate backgrounds and liquids** plays the
 strips, tiles and palettes; with it off the layers are drawn as the files hold
 them. The Course tab of the properties panel names each layer's graphics,
 screen and palette from these scripts, and a view's Background and Foreground

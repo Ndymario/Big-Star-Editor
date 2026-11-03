@@ -175,7 +175,7 @@
   "canvas.preview.counts": "Objects {objects}   Sprites {sprites}   Entrances {entrances}   Views {views}   Zones {zones}",
   "canvas.preview.references": "Tileset {tileset}   BG graphics {bg_graphics}   BG screen {bg_screen}   FG graphics {fg_graphics}   FG screen {fg_screen}",
   "canvas.spawn_camera": "Spawn camera {x}, {y}",
-  "canvas.toolbar.animate_backgrounds": "Animate backgrounds",
+  "canvas.toolbar.animate_backgrounds": "Animate backgrounds and liquids",
   "canvas.toolbar.backgrounds_tip": "Where the background layers are drawn: nowhere, only inside the views as the game shows them, or over the whole level; and whether they move as the game moves them",
   "canvas.toolbar.create": "Create",
   "canvas.toolbar.ds_screens_tip": "The DS screen (256×192), with its backgrounds scrolled as the game scrolls them: under the cursor, at each selected entrance, or both",

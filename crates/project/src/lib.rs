@@ -38,8 +38,8 @@ pub use level_catalog::{
 };
 pub use lua_actors::{
     ActorImageDecoder, ActorResource, ActorResourceKind, ActorResourceResolver, LuaActorCatalog, LuaActorDefinition, LuaActorDrawCommand,
-    LuaActorDrawKind, LuaActorLayer, LuaActorProgram, LuaActorRender, LuaActorRenderInput, StageObjectIdentity, StageObjectNameResolver,
-    has_lua_renderer, load_lua_actor_layers, lua_actor_bounds, render_lua_actor,
+    LuaActorDrawKind, LuaActorLayer, LuaActorLiquid, LuaActorProgram, LuaActorRender, LuaActorRenderInput, LuaActorWave, StageObjectIdentity,
+    StageObjectNameResolver, has_lua_renderer, load_lua_actor_layers, lua_actor_bounds, render_lua_actor,
 };
 pub use lua_backgrounds::{LuaBackgroundCatalog, LuaBackgroundLayer, load_lua_background_layers};
 pub use lua_tiles::{LuaTileLayer, load_lua_tile_layers};

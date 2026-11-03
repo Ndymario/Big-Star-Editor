@@ -115,6 +115,26 @@ pub enum DrawKind {
     StrokeRect,
     FillEllipse,
     Line,
+    Liquid,
+}
+
+/// `LuaActorWave`: one sine of a liquid's surface, in the game's units.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct SurfaceWave {
+    pub amplitude: f64,
+    pub step: i32,
+    pub speed: i32,
+}
+
+/// `LuaActorLiquid` with its frames replaced by texture ids. The frontend draws it across the view the actor stands
+/// in, from the command's `y` down.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiquidSurface {
+    pub frames: Vec<TextureId>,
+    pub frame_ticks: u32,
+    pub column_width: u32,
+    pub depth_scale: f64,
+    pub waves: Vec<SurfaceWave>,
 }
 
 /// `LuaActorDrawCommand` with its image replaced by a texture id.
@@ -138,6 +158,15 @@ pub struct DrawCommand {
     pub color: u32,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// For `Liquid`.
+    pub liquid: Option<LiquidSurface>,
+}
+
+impl DrawCommand {
+    /// Every texture the command draws from: its image, or each frame of its liquid.
+    pub fn textures(&self) -> impl Iterator<Item = &TextureId> {
+        self.texture.iter().chain(self.liquid.iter().flat_map(|liquid| &liquid.frames))
+    }
 }
 
 /// What one sprite draws and where it can be grabbed. `found` is false when no actor speaks for the sprite, in which

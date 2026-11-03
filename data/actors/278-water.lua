@@ -3,6 +3,39 @@ local function grabBounds(actor)
     return { x = actor.pixelX, y = actor.pixelY, width = 16, height = 16 }
 end
 
+-- Drawn as Liquid::renderStateCommon draws it: LiquidHandler's strip, its
+-- texture the eight frames of enemy/suimen_texanim1.nsbtx, and its surface the
+-- two sines of the water entry in the LiquidAttributes table (0216c3b4).
+-- Amplitudes there are fx32, so 0x0d00 is 0x0d00 / 4096 pixels.
+local frames = {}
+local icon
+
+local function init(ctx)
+    icon = ctx.loadImage("images/LiquidWater.png")
+    for i = 0, 7 do
+        frames[#frames + 1] = ctx.loadTexture("enemy/suimen_texanim1.nsbtx", { texture = i })
+    end
+end
+
+local function render(actor, renderer)
+    -- Water::onCreate keeps the opacity byte only to skip drawing at 0.
+    if actor.fields.opacity ~= 0 then
+        renderer:drawLiquid(frames, {
+            -- renderStateCommon raises the strip 2 pixels over the actor.
+            y = actor.pixelY - 2,
+            frameTicks = 4,
+            columnWidth = 2,
+            depthScale = 0x1000 / 0x1000,
+            waves = {
+                { amplitude = 0x0d00 / 4096, step = 0x0444, speed = 0x06ee },
+                { amplitude = 0x0d00 / 4096, step = 0x0842, speed = -0x09ce },
+            },
+        })
+    end
+    -- The canvas draws this over the liquid, so the actor can still be found and grabbed.
+    return renderer:draw(icon, grabBounds(actor))
+end
+
 
 return {
     objectId = 278,
@@ -44,6 +77,8 @@ return {
             notes = "Modulo 128. If lower than 128 then the water will rise, if greater or equal than 128 the water will lower. Lowering water does not work properly. If you want lowering water, rise it with a enter-view event, then \"unrise\" it or get the code hack that fixes the problem.",
         },
     },
+    init = init,
+    render = render,
     grabBounds = grabBounds,
     renderBounds = grabBounds,
 }

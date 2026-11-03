@@ -309,6 +309,7 @@ fn draw_kind(kind: LuaActorDrawKind) -> &'static str {
         LuaActorDrawKind::StrokeRect => "strokeRect",
         LuaActorDrawKind::FillEllipse => "fillEllipse",
         LuaActorDrawKind::Line => "line",
+        LuaActorDrawKind::Liquid => "liquid",
     }
 }
 
@@ -459,6 +460,19 @@ pub fn oracle(rom: &Path, data_dir: &Path, out: &mut dyn Write, err: &mut dyn Wr
                 c.text,
                 c.image.as_ref().map_or("-".to_owned(), |image| format!("{}x{}", image.width, image.height))
             );
+            if let Some(liquid) = &c.liquid {
+                let frames: Vec<String> = liquid.frames.iter().map(|image| format!("{}x{}", image.width, image.height)).collect();
+                let waves: Vec<String> = liquid.waves.iter().map(|wave| format!("{}/{}/{}", number(wave.amplitude), wave.step, wave.speed)).collect();
+                let _ = writeln!(
+                    out,
+                    "      liquid frames={} ticks={} column={} depth={} waves={}",
+                    frames.join(","),
+                    liquid.frame_ticks,
+                    liquid.column_width,
+                    number(liquid.depth_scale),
+                    waves.join(",")
+                );
+            }
         }
     }
     0

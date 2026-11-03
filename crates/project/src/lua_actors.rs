@@ -64,6 +64,32 @@ pub enum LuaActorDrawKind {
     StrokeRect,
     FillEllipse,
     Line,
+    Liquid,
+}
+
+/// One sine the surface of a liquid rises and falls by, in the game's own units: angles are 1/65536 of a turn, so
+/// the height at scene pixel `x` and game frame `t` is `amplitude * sin(step * x - speed * t)`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+pub struct LuaActorWave {
+    /// Pixels, upwards.
+    pub amplitude: f64,
+    pub step: i32,
+    pub speed: i32,
+}
+
+/// A liquid filling the view its actor stands in, from a waving surface at the command's `y` down to the view's
+/// bottom. The frames are textures as wide as they repeat across and as tall as the surface they draw, played
+/// `frame_ticks` game frames each; below them the bottom row carries on, the way the game clamps its texture.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LuaActorLiquid {
+    pub frames: Vec<Arc<RgbaImage>>,
+    pub frame_ticks: u32,
+    /// The surface's height is worked out this many pixels apart and joined by straight lines, as the game's strip
+    /// of quads joins its vertices.
+    pub column_width: u32,
+    /// Texture rows per pixel of depth.
+    pub depth_scale: f64,
+    pub waves: Vec<LuaActorWave>,
 }
 
 /// Every command shares the destination rectangle so the painter treats them uniformly; `image`, `text`, `color` and
@@ -92,6 +118,8 @@ pub struct LuaActorDrawCommand {
     pub color: u32,
     pub flip_x: bool,
     pub flip_y: bool,
+    /// For `Liquid`.
+    pub liquid: Option<LuaActorLiquid>,
 }
 
 impl Default for LuaActorDrawCommand {
@@ -116,6 +144,7 @@ impl Default for LuaActorDrawCommand {
             color: 0xFFFF_FFFF,
             flip_x: false,
             flip_y: false,
+            liquid: None,
         }
     }
 }
@@ -390,7 +419,11 @@ fn option_boolean(table: &Table, key: &str, fallback: bool) -> mlua::Result<bool
 fn actor_resource_bytes(bytes: &[u8]) -> Result<Vec<u8>> {
     match bytes.first() {
         Some(0x10 | 0x11) => decompress_nitro_lz(bytes),
-        _ => Ok(bytes.to_vec()),
+        // The liquids' texture animations, among others, put an `LZ77` tag in front of the stream.
+        _ => match bytes.strip_prefix(b"LZ77") {
+            Some(stream) => decompress_nitro_lz(stream),
+            None => Ok(bytes.to_vec()),
+        },
     }
 }
 
@@ -892,6 +925,62 @@ impl CallContext<'_> {
         self.commands.borrow_mut().push(command);
         Ok(true)
     }
+
+    /// A liquid is drawn by the canvas rather than here: how far it reaches is the view the actor stands in, which
+    /// follows the view and the actor while they are dragged, and its surface moves every frame. So the script hands
+    /// over its textures and the game's wave constants, and gets the drawing done to them.
+    fn draw_liquid(&self, lua: &Lua, args: &MultiValue) -> mlua::Result<bool> {
+        const WHAT: &str = "drawLiquid needs a handle from loadImage, loadBitmap or loadTexture, or a list of them";
+        let handles: Vec<Value> = match arg(args, 2) {
+            Value::Table(list) => list.sequence_values::<Value>().collect::<mlua::Result<_>>()?,
+            single => vec![single],
+        };
+        if handles.is_empty() {
+            return Err(runtime(WHAT));
+        }
+        let mut frames = Vec::with_capacity(handles.len());
+        for handle in &handles {
+            match handle_of(handle, ResourceType::Drawable, self.resources, WHAT)?.image.clone() {
+                Some(image) if image.width > 0 && image.height > 0 => frames.push(image),
+                // One missing frame would make the animation stutter; drawing nothing says the asset is missing.
+                _ => return Ok(false),
+            }
+        }
+        let Value::Table(table) = arg(args, 3) else { return Err(runtime("bad argument #3 (table expected)")) };
+        if self.commands.borrow().len() >= MAX_DRAW_COMMANDS {
+            return Ok(false);
+        }
+        let mut waves = Vec::new();
+        if let Some(list) = table.get::<Option<Table>>("waves")? {
+            for wave in list.sequence_values::<Table>() {
+                let wave = wave.map_err(|_| runtime("drawLiquid waves must be a list of tables"))?;
+                waves.push(LuaActorWave {
+                    amplitude: option_number(lua, &wave, "amplitude", 0.0, -4096.0, 4096.0)?,
+                    step: option_integer(&wave, "step", 0, -65535, 65535)? as i32,
+                    speed: option_integer(&wave, "speed", 0, -65535, 65535)? as i32,
+                });
+            }
+        }
+        let liquid = LuaActorLiquid {
+            frames,
+            frame_ticks: option_integer(&table, "frameTicks", 1, 1, 65535)? as u32,
+            column_width: option_integer(&table, "columnWidth", 1, 1, 256)? as u32,
+            depth_scale: option_number(lua, &table, "depthScale", 1.0, 0.001, 4096.0)?,
+            waves,
+        };
+        let command = LuaActorDrawCommand {
+            kind: LuaActorDrawKind::Liquid,
+            x: self.input.pixel_x,
+            y: option_number(lua, &table, "y", self.input.pixel_y, -COORDINATE_LIMIT, COORDINATE_LIMIT)?,
+            width: 16.0,
+            height: 16.0,
+            opacity: option_number(lua, &table, "opacity", 1.0, 0.0, 1.0)?,
+            liquid: Some(liquid),
+            ..LuaActorDrawCommand::default()
+        };
+        self.commands.borrow_mut().push(command);
+        Ok(true)
+    }
 }
 
 /// `#rgb`, `#rrggbb` and `#rrggbbaa` all land as 0xRRGGBBAA.
@@ -931,6 +1020,7 @@ fn renderer<'scope>(lua: &Lua, scope: &'scope Scope<'scope, '_>, call: &'scope C
     table.set("drawTile", scope.create_function(move |lua, args: MultiValue| call.draw_tile(lua, &args))?)?;
     table.set("drawFrame", scope.create_function(move |lua, args: MultiValue| call.draw_frame(lua, &args))?)?;
     table.set("drawText", scope.create_function(move |lua, args: MultiValue| call.draw_text(lua, &args))?)?;
+    table.set("drawLiquid", scope.create_function(move |lua, args: MultiValue| call.draw_liquid(lua, &args))?)?;
     for (name, kind) in [
         ("fillRect", LuaActorDrawKind::FillRect),
         ("strokeRect", LuaActorDrawKind::StrokeRect),

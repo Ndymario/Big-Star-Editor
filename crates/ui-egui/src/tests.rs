@@ -250,6 +250,37 @@ fn an_edit_that_changes_what_the_level_draws_from_asks_for_its_graphics_again() 
     assert_ne!(last_request(&script, |r| matches!(r, Request::LevelGraphics { .. })), first);
 }
 
+#[test]
+fn a_liquids_frames_are_fetched_with_its_draw_list() {
+    let script = std::sync::Arc::new(std::sync::Mutex::new(Scripted::default()));
+    let mut session = Session::new(Box::new(Shared(script.clone())));
+    session.open_level("A01_1");
+    let open = last_request(&script, |r| matches!(r, Request::OpenLevel { .. }));
+    answer(&script, open, Ok(Response::Level(Box::new(demo_snapshot()))));
+    session.poll();
+    let draws = last_request(&script, |r| matches!(r, Request::RenderActors { .. }));
+    let liquid = bigstar_protocol::DrawCommand {
+        kind: bigstar_protocol::DrawKind::Liquid,
+        liquid: Some(bigstar_protocol::LiquidSurface { frames: vec!["water-0".to_owned(), "water-1".to_owned()], ..Default::default() }),
+        ..Default::default()
+    };
+    let draw = bigstar_protocol::ActorDraw { found: true, commands: vec![liquid], ..Default::default() };
+    answer(&script, draws, Ok(Response::ActorDraws { generation: 0, draws: vec![draw; 4] }));
+    session.poll();
+    let asked: Vec<String> = script
+        .lock()
+        .unwrap()
+        .sent
+        .iter()
+        .filter_map(|(_, r)| match r {
+            Request::GetTextures { ids } => Some(ids.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert!(asked.contains(&"water-0".to_owned()) && asked.contains(&"water-1".to_owned()), "{asked:?}");
+}
+
 fn demo_snapshot() -> LevelSnapshot {
     let mut demo = DemoConnection::new();
     demo.send(Request::OpenLevel { area: "A01_1".to_owned() });

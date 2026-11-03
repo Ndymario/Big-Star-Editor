@@ -10,7 +10,7 @@ use bigstar_level::{
     BackgroundLayer, BackgroundMotion, BackgroundSwap, LEVEL_CHUNK_CELLS, LayerRepeat, LayerScroll, LevelTilemap, layer_placement, still_quarter,
     strip_offsets,
 };
-use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, ImageGraphics, LevelEdit, TextureData, TextureId};
+use bigstar_protocol::{ATLAS_COLUMNS, DrawCommand, DrawKind, ImageGraphics, LevelEdit, LiquidSurface, SurfaceWave, TextureData, TextureId};
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, Event, FontId, Key, Mesh, MouseWheelUnit, Painter, PointerButton, Pos2, Rect, Sense, Shape, Stroke,
     StrokeKind, Ui, Vec2, ViewportCommand,
@@ -1018,14 +1018,45 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
         painter.rect_stroke(frame.rect(rect), 0.0, marker_stroke(colors), StrokeKind::Middle);
     }
 
-    for (index, sprite) in course.sprites.iter().enumerate() {
+    // Where sprite `index` is drawn, moved by the gesture in progress: how far, where it is grabbed and what it covers.
+    let sprite_place = |index: usize| {
+        let offset = if selected(Kind::Sprite, index, None) { view.move_delta() } else { Vec2::ZERO };
+        let rect = |render| view.sprite_rect(index, render).unwrap_or(Rect::NOTHING).translate(offset);
+        (offset, rect(false), rect(true))
+    };
+    // Liquids go over every actor but the ones drawing them, whose icons go over the liquids so they stay in sight.
+    let mut liquids = Vec::new();
+    let mut liquid_actors = Vec::new();
+    for index in 0..course.sprites.len() {
+        let Some((draw, moved)) = view.actor_draw(index) else { continue };
+        let (offset, grab, _) = sprite_place(index);
+        for command in &draw.commands {
+            let Some(liquid) = command.liquid.as_ref().filter(|_| command.kind == DrawKind::Liquid) else { continue };
+            // A liquid fills the view its actor stands in and nothing else, wherever either has been dragged.
+            let at = grab.center();
+            if let Some(area) = (0..course.views.len()).map(|index| placed(Kind::View, index)).find(|rect| rect.contains(at)) {
+                liquids.push((command, liquid, moved + offset, area.intersect(visible)));
+            }
+            if liquid_actors.last() != Some(&index) {
+                liquid_actors.push(index);
+            }
+        }
+    }
+    let others = (0..course.sprites.len()).filter(|index| !liquid_actors.contains(index));
+    // `None` is the moment the liquids are painted.
+    for index in others.map(Some).chain([None]).chain(liquid_actors.iter().copied().map(Some)) {
+        let Some(index) = index else {
+            for &(command, liquid, offset, area) in &liquids {
+                paint_liquid(painter, frame, command, liquid, offset, area, ticks, art);
+            }
+            continue;
+        };
+        let Some(sprite) = course.sprites.get(index) else { continue };
         let moving = selected(Kind::Sprite, index, None);
-        let offset = if moving { view.move_delta() } else { Vec2::ZERO };
-        let grab = view.sprite_rect(index, false).unwrap_or(Rect::NOTHING).translate(offset);
-        let render = view.sprite_rect(index, true).unwrap_or(Rect::NOTHING).translate(offset);
+        let (offset, grab, render) = sprite_place(index);
         let mut rendered = false;
         if let Some((draw, moved)) = view.actor_draw(index) {
-            for command in &draw.commands {
+            for command in draw.commands.iter().filter(|command| command.kind != DrawKind::Liquid) {
                 paint_command(painter, frame, command, moved + offset, art);
             }
             rendered = draw.custom_rendered;
@@ -1056,6 +1087,11 @@ fn draw_map(painter: &Painter, view: &LevelView, tilemap: &LevelTilemap, frame: 
         if moving {
             painter.rect_stroke(frame.rect(grab.expand(3.0)), 0.0, marker_stroke(colors), StrokeKind::Middle);
         }
+    }
+
+    // Liquids move with the backgrounds: the same toggle starts and stops both.
+    if animate && !liquids.is_empty() {
+        art.ctx.request_repaint_after(std::time::Duration::from_millis(16));
     }
 
     let sheet = art.pool.entrance_sheet(art.ctx);
@@ -1220,7 +1256,8 @@ pub(crate) fn paint_command(painter: &Painter, frame: Frame, command: &DrawComma
             let end = Pos2::new(command.x2 as f32, command.y2 as f32) + offset;
             painter.line_segment([place(destination.min), place(end)], Stroke::new(width, color));
         }
-        DrawKind::Text | DrawKind::Image => {}
+        // A liquid needs the view it fills, which only the level canvas knows; see `paint_liquid`.
+        DrawKind::Text | DrawKind::Image | DrawKind::Liquid => {}
     }
     if !command.text.is_empty() {
         if let Some(font) = scaled_font(frame.zoom, 10.0) {
@@ -1240,6 +1277,100 @@ pub(crate) fn paint_command(painter: &Painter, frame: Frame, command: &DrawComma
         mesh.add_triangle(0, 2, 3);
         painter.add(Shape::mesh(mesh));
     }
+}
+
+/// How far a liquid's surface stands above its rest line at scene pixel `x`, `ticks` game frames in: the sum of its
+/// sines, each read from a 4096-entry table as `FX_SinCosTable_` is, rounded to the pixel as `LiquidRenderer::render`
+/// rounds it.
+fn surface_height(waves: &[SurfaceWave], x: i64, ticks: u64) -> f32 {
+    let ticks = (ticks % 65536) as i64;
+    let height: f64 = waves
+        .iter()
+        .map(|wave| {
+            let angle = (i64::from(wave.step) * x - i64::from(wave.speed) * ticks).rem_euclid(65536) >> 4;
+            (angle as f64 / 4096.0 * std::f64::consts::TAU).sin() * wave.amplitude
+        })
+        .sum();
+    (height + 0.5).floor() as f32
+}
+
+/// A liquid as `LiquidRenderer::render` draws it: a strip of columns whose tops follow the surface, each textured from
+/// the surface down and carried on by the texture's bottom row, here as far as the bottom of `area`. The texture
+/// repeats across from scene x 0, as the game's does from a 16-pixel boundary.
+#[allow(clippy::too_many_arguments)]
+fn paint_liquid(
+    painter: &Painter,
+    frame: Frame,
+    command: &DrawCommand,
+    liquid: &LiquidSurface,
+    offset: Vec2,
+    area: Rect,
+    ticks: u64,
+    art: &mut Art<'_>,
+) {
+    if !area.is_positive() || liquid.frames.is_empty() {
+        return;
+    }
+    let shown = (ticks / u64::from(liquid.frame_ticks.max(1))) as usize % liquid.frames.len();
+    let Some((texture, size)) = art.texture(liquid.frames.get(shown)) else { return };
+    if size.x < 1.0 || size.y < 1.0 {
+        return;
+    }
+    let rest = command.y as f32 + offset.y;
+    let depth = size.y / liquid.depth_scale.max(0.001) as f32;
+    // Only the surface's own reach, so a wave cresting over the view's top is cut there.
+    let painter = painter.with_clip_rect(painter.clip_rect().intersect(frame.rect(area)));
+    let crest: f64 = liquid.waves.iter().map(|wave| wave.amplitude.abs()).sum();
+    if rest - (crest as f32 + 1.0) > area.bottom() {
+        return;
+    }
+    let column = liquid.column_width.max(1) as i64;
+    let tint = Color32::WHITE.gamma_multiply(command.opacity.clamp(0.0, 1.0) as f32);
+    // The bottom row's middle, so the fill below reads one texel however the texture is sampled.
+    let clamp = (size.y - 0.5) / size.y;
+    let mut mesh = Mesh::with_texture(texture);
+    let mut quad = |corners: [Pos2; 4], uvs: [Pos2; 4]| {
+        let first = mesh.vertices.len() as u32;
+        for (pos, uv) in corners.into_iter().zip(uvs) {
+            mesh.vertices.push(egui::epaint::Vertex { pos: frame.screen(pos), uv, color: tint });
+        }
+        mesh.add_triangle(first, first + 1, first + 2);
+        mesh.add_triangle(first, first + 2, first + 3);
+    };
+    let width = size.x as i64;
+    let mut x = (area.left().floor() as i64).div_euclid(column) * column;
+    let mut top = rest - surface_height(&liquid.waves, x, ticks);
+    while (x as f32) < area.right() {
+        let next = x + column;
+        let next_top = rest - surface_height(&liquid.waves, next, ticks);
+        // Split where the texture wraps, so no column samples across its seam.
+        let mut from = x;
+        while from < next {
+            let to = next.min((from.div_euclid(width) + 1) * width);
+            let along = |at: i64| (at - x) as f32 / column as f32;
+            let (left_top, right_top) = (top + (next_top - top) * along(from), top + (next_top - top) * along(to));
+            let (u0, u1) = (from.rem_euclid(width) as f32 / size.x, (to - from.div_euclid(width) * width) as f32 / size.x);
+            let (left, right) = (from as f32, to as f32);
+            quad(
+                [Pos2::new(left, left_top), Pos2::new(right, right_top), Pos2::new(right, right_top + depth), Pos2::new(left, left_top + depth)],
+                [Pos2::new(u0, 0.0), Pos2::new(u1, 0.0), Pos2::new(u1, 1.0), Pos2::new(u0, 1.0)],
+            );
+            if left_top.min(right_top) + depth < area.bottom() {
+                quad(
+                    [
+                        Pos2::new(left, left_top + depth),
+                        Pos2::new(right, right_top + depth),
+                        Pos2::new(right, area.bottom()),
+                        Pos2::new(left, area.bottom()),
+                    ],
+                    [Pos2::new(u0, clamp), Pos2::new(u1, clamp), Pos2::new(u1, clamp), Pos2::new(u0, clamp)],
+                );
+            }
+            from = to;
+        }
+        (x, top) = (next, next_top);
+    }
+    painter.add(Shape::mesh(mesh));
 }
 
 /// The fine grid, the DS screens and the marquee: drawn over the level, never part of it.
@@ -1385,5 +1516,25 @@ mod tests {
         let nested: Vec<Rect> = disjoint([rect(0.0, 0.0, 100.0, 100.0), rect(10.0, 10.0, 20.0, 20.0)]).into_iter().map(|(piece, _)| piece).collect();
         assert_eq!(area(&nested), 10_000.0);
         assert_eq!(subtract(rect(0.0, 0.0, 10.0, 10.0), rect(50.0, 50.0, 5.0, 5.0)), [rect(0.0, 0.0, 10.0, 10.0)]);
+    }
+
+    #[test]
+    fn a_liquid_surface_is_the_rounded_sum_of_its_sines() {
+        // The water entry of the game's LiquidAttributes table.
+        let water = [
+            SurfaceWave { amplitude: 0x0d00 as f64 / 4096.0, step: 0x0444, speed: 0x06ee },
+            SurfaceWave { amplitude: 0x0d00 as f64 / 4096.0, step: 0x0842, speed: -0x09ce },
+        ];
+        assert_eq!(surface_height(&water, 0, 0), 0.0, "both sines start at zero");
+        assert_eq!(surface_height(&[], 123, 456), 0.0);
+        let heights: Vec<f32> = (0..256).step_by(2).map(|x| surface_height(&water, x, 17)).collect();
+        assert!(heights.iter().all(|h| h.abs() <= 2.0 && h.fract() == 0.0), "{heights:?}");
+        assert!(heights.iter().any(|&h| h != heights[0]), "the surface waves");
+        // A quarter turn along is the whole amplitude, and three quarters the whole of it downwards.
+        let alone = [SurfaceWave { amplitude: 3.0, step: 0x4000, speed: 0 }];
+        assert_eq!((surface_height(&alone, 1, 0), surface_height(&alone, 3, 0)), (3.0, -3.0));
+        // Time runs the other way to distance, as the game counts its timer down.
+        let drifting = [SurfaceWave { amplitude: 3.0, step: 0x4000, speed: 0x4000 }];
+        assert_eq!(surface_height(&drifting, 2, 1), surface_height(&drifting, 1, 0));
     }
 }

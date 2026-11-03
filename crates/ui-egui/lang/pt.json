@@ -175,7 +175,7 @@
   "canvas.preview.counts": "Objetos {objects}   Sprites {sprites}   Entradas {entrances}   Vistas {views}   Zonas {zones}",
   "canvas.preview.references": "Conjunto de blocos {tileset}   Gráficos BG {bg_graphics}   Ecrã BG {bg_screen}   Gráficos FG {fg_graphics}   Ecrã FG {fg_screen}",
   "canvas.spawn_camera": "Câmara de início {x}, {y}",
-  "canvas.toolbar.animate_backgrounds": "Animar fundos",
+  "canvas.toolbar.animate_backgrounds": "Animar fundos e líquidos",
   "canvas.toolbar.backgrounds_tip": "Onde as camadas de fundo são desenhadas: em lado nenhum, só dentro das vistas como o jogo as mostra, ou por todo o nível; e se se movem como o jogo as move",
   "canvas.toolbar.create": "Criar",
   "canvas.toolbar.ds_screens_tip": "O ecrã da DS (256×192), com os fundos deslocados como o jogo os desloca: sob o cursor, em cada entrada selecionada, ou ambos",

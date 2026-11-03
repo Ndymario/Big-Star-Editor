@@ -17,7 +17,7 @@ use bigstar_project::{
 };
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LayerFrame, LevelGraphics, LevelId,
-    Map16Overlay, ResourceBytes, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
+    LiquidSurface, Map16Overlay, ResourceBytes, SurfaceWave, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -107,6 +107,7 @@ fn draw_kind(kind: LuaActorDrawKind) -> DrawKind {
         LuaActorDrawKind::StrokeRect => DrawKind::StrokeRect,
         LuaActorDrawKind::FillEllipse => DrawKind::FillEllipse,
         LuaActorDrawKind::Line => DrawKind::Line,
+        LuaActorDrawKind::Liquid => DrawKind::Liquid,
     }
 }
 
@@ -531,6 +532,17 @@ impl ProjectGraphics {
                             color: c.color,
                             flip_x: c.flip_x,
                             flip_y: c.flip_y,
+                            liquid: c.liquid.map(|liquid| LiquidSurface {
+                                frames: liquid.frames.into_iter().map(|image| self.textures.add(image)).collect(),
+                                frame_ticks: liquid.frame_ticks,
+                                column_width: liquid.column_width,
+                                depth_scale: liquid.depth_scale,
+                                waves: liquid
+                                    .waves
+                                    .into_iter()
+                                    .map(|wave| SurfaceWave { amplitude: wave.amplitude, step: wave.step, speed: wave.speed })
+                                    .collect(),
+                            }),
                         })
                         .collect();
                 }

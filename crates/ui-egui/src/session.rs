@@ -7,9 +7,9 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelListing, LevelSnapshot,
-    LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request, RequestId,
-    Response, ResponseResult, TextureData, TextureId, TilesetResources,
+    ActorCatalog, DirectoryListing, DrawCommand, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelListing,
+    LevelSnapshot, LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request,
+    RequestId, Response, ResponseResult, TextureData, TextureId, TilesetResources,
 };
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
@@ -903,7 +903,7 @@ impl Session {
                     self.request_actor_draws();
                     return;
                 }
-                let ids: Vec<TextureId> = draws.iter().flat_map(|d| d.commands.iter().filter_map(|c| c.texture.clone())).collect();
+                let ids: Vec<TextureId> = draws.iter().flat_map(|d| d.commands.iter().flat_map(DrawCommand::textures).cloned()).collect();
                 view.art.draws.extend(keys.into_iter().zip(draws));
                 self.request_textures(ids);
             }
