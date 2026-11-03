@@ -1375,6 +1375,8 @@ impl BigStarApp {
                 ui.weak(tr!("app.properties_empty"));
                 return;
             };
+            // Whichever tab is in front, a selection made on the canvas is what a right-click places next.
+            view.sync_panel();
             match self.side {
                 Side::Properties => {
                     let overlays = session.project_data.as_ref().and_then(|d| d.object_bank_overlays.as_ref());

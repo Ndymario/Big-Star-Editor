@@ -157,7 +157,6 @@ pub fn show(
     modules: Option<&ModuleDataCatalog>,
     busy: bool,
 ) -> Option<LevelEdit> {
-    view.sync_panel();
     // Outside the advanced mode views hold their camera values themselves, so there is no Cameras tab.
     if view.panel.tab == Tab::Cameras && !view.panel.advanced {
         view.panel_tab(Tab::Course);

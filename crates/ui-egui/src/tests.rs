@@ -1223,6 +1223,18 @@ fn level_data_flags_are_set_from_the_tab() {
 }
 
 #[test]
+fn a_selection_points_the_placement_at_it_behind_the_level_data_tab() {
+    let mut harness = walker_selected();
+    harness.get_by_label("Level Data").click();
+    harness.run();
+    select(&mut harness, &[Item::new(Kind::Sprite, 1)]);
+    let placement = &view(&harness).placement;
+    assert_eq!((placement.kind, placement.sprite_type), (Kind::Sprite, 55));
+    select(&mut harness, &[Item::new(Kind::Entrance, 0)]);
+    assert_eq!(view(&harness).placement.kind, Kind::Entrance);
+}
+
+#[test]
 fn the_picker_chooses_what_a_right_click_places() {
     let mut harness = walker_selected();
     harness.get_by_label("Palette").click();
