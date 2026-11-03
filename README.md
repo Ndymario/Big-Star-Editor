@@ -45,10 +45,10 @@ It does **not** include ROM data, Nintendo SDK files or game assets. You bring y
   recreating it, and export or import every bitmap with every palette at once. Any palettes go with any graphics:
   drag palette files from the Filesystem dock onto an open editor, or open one and choose which editor to attach it
   to, and switch between them in the Palettes list. A file opened for the first time comes with the palette, and a screen or cells with the graphics, of its name.
-- **Tilesets and backgrounds**: paint Map16 blocks and background layers from a tile picker beside them, build objects
-  by clicking blocks, set behaviours on many blocks at once, and share tilesets as files. Open a level's from the Tools
-  menu, or any tileset, background, foreground or the title screen from the **Layers** tab, named by a list a project
-  can rename entries in and add its own to. See [the layer list](docs/layers-list.md).
+- **Level Layers**: paint Map16 blocks and background layers from a tile picker beside them, build objects
+  by clicking blocks, set behaviours on many blocks at once, and share tilesets as files. Open a level's from
+  **Tools > Level Layers**, or any tileset, background, foreground or the title screen from the **Layers** tab, named
+  by a list a project can rename entries in and add its own to. See [the layer list](docs/layers-list.md).
 - **Text**: edit the game's messages, with their special codes, and export or import them as text.
 - **Menus and the ROM banner**: the layout pages of the menu screens, the ROM's icon and title, and its user metadata.
 - **Anything else** in a hex editor that works like HxD.
