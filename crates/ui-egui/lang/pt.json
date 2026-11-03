@@ -1151,7 +1151,7 @@
   "tileset_editor.tiles": "Tiles",
   "tileset_editor.tiles_note": "Arraste para escolher os tiles com que pintar. Os três conjuntos de blocos estão aqui, no sítio onde o nível os carrega.",
   "tileset_editor.tileset_slot": "Ranhura do conjunto de blocos",
-  "tileset_editor.title": "Conjuntos de blocos e fundos — {title}",
+  "tileset_editor.title": "Camadas do nível — {title}",
   "tileset_editor.unknown_parameter": "Desconhecido {parameter}",
   "tileset_editor.up": "Subir",
   "tools.actor_n": "Ator {id}",

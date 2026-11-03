@@ -1151,7 +1151,7 @@
   "tileset_editor.tiles": "Tiles",
   "tileset_editor.tiles_note": "Drag to choose the tiles to paint with. All three tilesets are here, at the place the level loads them.",
   "tileset_editor.tileset_slot": "Tileset slot",
-  "tileset_editor.title": "Tilesets and backgrounds — {title}",
+  "tileset_editor.title": "Level Layers — {title}",
   "tileset_editor.unknown_parameter": "Unknown {parameter}",
   "tileset_editor.up": "Up",
   "tools.actor_n": "Actor {id}",
