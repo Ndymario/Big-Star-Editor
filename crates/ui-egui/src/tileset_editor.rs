@@ -246,6 +246,12 @@ impl TilesetDoc {
             .collect()
     }
 
+    /// Whether the workspace edits one tileset of the list, in its own slot. The other two are loaded with it, since
+    /// its blocks may draw their tiles, but are not offered to edit.
+    pub fn slot_fixed(&self) -> bool {
+        matches!(self.subject, GraphicsSubject::Tileset(_))
+    }
+
     /// The level whose references this edits, when it edits a level's.
     pub fn level(&self) -> Option<bigstar_protocol::LevelId> {
         match self.subject {
@@ -284,7 +290,7 @@ impl TilesetDoc {
     }
 
     pub fn set_slot(&mut self, slot: usize) {
-        if slot < self.tilesets.len() {
+        if slot < self.tilesets.len() && !self.slot_fixed() {
             self.slot = slot;
             self.map16_entry = 0;
             self.object = 0;
@@ -304,7 +310,8 @@ impl TilesetDoc {
 
     /// The bitmaps the Graphics tab lists: every tileset that has graphics, then the background and foreground's.
     pub fn sheets(&self) -> Vec<(Sheet, String)> {
-        let tilesets = self.tilesets.iter().enumerate().filter(|(_, t)| !t.graphics.is_empty()).map(|(i, _)| {
+        let fixed = self.slot_fixed();
+        let tilesets = self.tilesets.iter().enumerate().filter(|(i, t)| !t.graphics.is_empty() && (!fixed || *i == self.slot)).map(|(i, _)| {
             (
                 Sheet::Tileset(i),
                 tr!(
@@ -846,7 +853,7 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     });
     let has_tilesets = !doc.tilesets.is_empty();
     ui.horizontal_wrapped(|ui| {
-        if has_tilesets {
+        if has_tilesets && !doc.slot_fixed() {
             ui.label(tr!("tileset_editor.tileset_slot"));
             let mut slot = doc.slot;
             if let Some(picked) = controls::numbered_choice("tileset-slot", &slot_names()).show(ui, i64::try_from(slot).ok()) {

@@ -1998,6 +1998,7 @@ fn the_rom_banner_opens_from_the_tools_menu_and_saves_to_the_configured_file() {
 }
 
 const CLEAR_SEARCH: &str = "Clear search";
+const TILESET_SLOT: &str = "Tileset slot";
 
 /// Types `text` into the left panel's search field.
 fn search_left(harness: &mut Harness<'static, BigStarApp>, text: &str) {
@@ -2054,6 +2055,17 @@ fn the_tilesets_tab_opens_each_entry_on_its_own() {
     let (doc, _) = harness.state().workspace.tileset(&tileset).expect("the tileset opens");
     assert_eq!(doc.tabs(), [TilesetTab::Graphics, TilesetTab::Map16, TilesetTab::Objects, TilesetTab::Behaviors]);
     assert_eq!(doc.title, "0 – Grassland");
+    // One tileset of the list is edited in its own slot alone: no slot to choose, and only its graphics listed.
+    assert_eq!((doc.slot, doc.sheets().len()), (1, 1));
+    assert!(harness.query_by_label(TILESET_SLOT).is_none());
+
+    edit(&mut harness, "jyotyu", "Shared (jyotyu)");
+    let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Tileset(EntryKey::Shared)).expect("the shared tileset opens");
+    assert_eq!((doc.slot, doc.sheets().len()), (0, 1));
+    doc.set_slot(1);
+    assert_eq!(doc.slot, 0, "its slot stays");
+    harness.run();
+    assert!(harness.query_by_label(TILESET_SLOT).is_none());
 
     edit(&mut harness, "orange", "0 – Grassland (orange hills and clouds)");
     let background = GraphicsSubject::Background(EntryKey::Table(0));
@@ -2065,7 +2077,7 @@ fn the_tilesets_tab_opens_each_entry_on_its_own() {
     let scene = GraphicsSubject::Scene("Title screen".to_owned());
     let (doc, _) = harness.state().workspace.tileset(&scene).expect("the scene opens");
     assert_eq!(doc.tabs(), [TilesetTab::Graphics, TilesetTab::Background, TilesetTab::Foreground, TilesetTab::TilesetLayer]);
-    assert_eq!(harness.state().workspace.tilesets.len(), 3, "one workspace for each");
+    assert_eq!(harness.state().workspace.tilesets.len(), 4, "one workspace for each");
 
     // The tileset layer is painted like the other two, and saving writes its own files alone.
     {
@@ -2101,6 +2113,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     for tab in ["Graphics", "Map16", "Objects", "Behaviors", "Background", "Foreground"] {
         harness.get_all_by_label(tab).next().unwrap();
     }
+    harness.get_by_label(TILESET_SLOT);
     harness.get_by_label("Map16").click();
     harness.run();
     harness.get_by_label("Show 3D tiles");
