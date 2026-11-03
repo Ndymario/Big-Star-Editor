@@ -2,7 +2,6 @@
 return {
     layer = "foreground",
     id = 24,
-    name = "Mountains with clouds",
     strips = {
         { throughRow = 328, drift = 0.25 },
         { scroll = 1.0 },

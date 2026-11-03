@@ -2,7 +2,6 @@
 return {
     layer = "foreground",
     id = 40,
-    name = "Ghost house exit",
     strips = {
         { throughRow = 319, drift = 0.25 },
         { scroll = 1.0 },

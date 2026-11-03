@@ -7,9 +7,10 @@ and what it does with one beyond drawing it -- drift its clouds, turn over its
 lava, cycle a few colours -- is decided by tables and functions in overlay 0
 indexed by its number.
 
-A background script says what one of those numbers is called and what the game
-does with it. Big Star loads background directories in this order, with the
-first script for a layer and id winning:
+A background script says what the game does with one of those numbers. What
+each is called is in the [tileset list](tilesets-list.md), which names every
+slot; a layer no script describes is drawn as it is. Big Star loads background
+directories in this order, with the first script for a layer and id winning:
 
 1. `<project>/bigstar/backgrounds`
 2. `bigstar/backgrounds` in each enabled module, in module order
@@ -25,7 +26,6 @@ may still build its tables with a loop.
 return {
     layer = "background",
     id = 0,
-    name = "Grassland (orange hills and clouds)",
     strips = {
         { throughRow = 344, drift = 0.125 },
         { scroll = 1.0 },
@@ -37,15 +37,14 @@ return {
 | --- | --- |
 | `layer` | `"background"` or `"foreground"`. Required. |
 | `id` | the screen id, 0-255. Required. The game's tables stop at 75. |
-| `name` | what the editor calls it. Required. |
+| `name` | what the editor calls it, where the tileset list has no name for it. |
 | `strips` | how bands of its rows move sideways. |
 | `tiles` | tiles the game overwrites as it runs. |
 | `palette` | colours the game overwrites as it runs. |
 | `swaps` | quarters of the image the game replaces once the layer has scrolled far enough. |
 
-A script that sets only the first three names a background and nothing more,
-which is all most of them need. The filename is free; the shipped ones are
-`bg-NNN-name.lua` and `fg-NNN-name.lua` so they sort.
+A layer that only scrolls needs no script. The filename is free; the shipped
+ones are `bg-NNN-name.lua` and `fg-NNN-name.lua` so they sort.
 
 ### `strips`
 
@@ -131,15 +130,18 @@ what it is swapped for in every repeat of the image beyond.
 
 ## Overriding
 
-A later layer never has to restate the rest. To rename one background:
+A later layer never has to restate the rest. To make background 12's clouds
+drift faster:
 
 ```lua
-return { layer = "background", id = 12, name = "Mushroom plains" }
+return { layer = "background", id = 12, strips = { { throughRow = 300, drift = 0.5 }, { scroll = 1.0 } } }
 ```
 
-A definition replaces the whole of the one it shadows, so that script also
-stops background 12's clouds: restate `strips` to keep them. A hack that adds a
-77th background gives it a script with `id = 76`.
+A definition replaces the whole of the one it shadows, so restate anything else
+the shipped script said that should stay. To rename a background, name it in
+the project's `tilesets.yaml` instead; see [the tileset list](tilesets-list.md).
+A hack that adds a 77th background gives it a script with `id = 76`, and the
+script's `name` is what it is called, since the list stops at 75.
 
 ## What a level shows
 

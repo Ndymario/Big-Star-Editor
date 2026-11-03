@@ -1,8 +1,10 @@
 use bigstar_core::{ErrorCode, Fx32};
 use bigstar_formats::{NSMB_LEVEL_BLOCK_COUNT, NsmbLevelObject};
-use bigstar_level::{EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates};
+use bigstar_level::{BackgroundLayer, EditableLevel, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates};
 use bigstar_project::test_support::{RomFile, TempDir, make_narc, make_rom, write_bytes};
-use bigstar_protocol::{DirectoryEntryKind, EditOutcome, Event, FileIcon, FileStatus, LevelEdit, LevelSnapshot, Request, Response, Service};
+use bigstar_protocol::{
+    DirectoryEntryKind, EditOutcome, EntryKey, Event, FileIcon, FileStatus, GraphicsSubject, LevelEdit, LevelSnapshot, Request, Response, Service,
+};
 
 use crate::{Host, HostSession, Workspace};
 
@@ -638,7 +640,11 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     let mut session = fixture.session();
     session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
     let snapshot = open_level(&mut session, "course/A01_1");
-    let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
+    let Response::TilesetResources(resources) =
+        session.handle(Request::TilesetResources { subject: GraphicsSubject::Level(snapshot.level) }).unwrap()
+    else {
+        panic!()
+    };
     assert_eq!(resources.tilesets.len(), 3);
     // Slot 0 is jyotyu, shared by every level; the level's own is in slot 1.
     assert_eq!(resources.tilesets[0].graphics.rom_path, "BG_ncg/d_2d_A_J_jyotyu_ncg.bin");
@@ -657,10 +663,79 @@ fn a_real_level_serves_its_tilesets_and_backgrounds_as_files() {
     (references.tileset_id, references.background_graphics_id, references.background_screen_id, references.background_palette_id) = (23, 23, 23, 23);
     let edit = LevelEdit::SetTilesetReferences { references };
     edited(session.handle(Request::EditLevel { level: snapshot.level, base_revision: snapshot.revision, edit }).unwrap());
-    let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { level: snapshot.level }).unwrap() else { panic!() };
+    let Response::TilesetResources(resources) =
+        session.handle(Request::TilesetResources { subject: GraphicsSubject::Level(snapshot.level) }).unwrap()
+    else {
+        panic!()
+    };
     assert_eq!(resources.tilesets[0].palette.rom_path, "BG_ncl/d_2d_A_J_jyotyu_W_ncl.bin");
     assert_eq!(resources.tilesets[1].palette.rom_path, grassland_colours);
     assert_ne!(resources.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_nohara.bin");
+}
+
+#[test]
+fn a_real_rom_serves_each_entry_of_the_tileset_list_alone() {
+    let Some(rom) = std::env::var_os("BIGSTAR_NSMB_ROM") else { return };
+    let fixture = Fixture::new("host-real-tileset-list");
+    make_project(fixture.root.path(), "proj", &std::fs::read(rom).unwrap());
+    let mut session = fixture.session();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    assert_eq!((list.tilesets.len(), list.backgrounds.len(), list.foregrounds.len()), (2 + 76, 76 + 1, 76));
+    assert_eq!(list.slot_name(None, 23), Some("Ghost house"));
+    // Some slots of the retail tables hold no file, which the list marks rather than leaves out.
+    assert!(list.foregrounds.iter().any(|entry| !entry.available));
+    assert!(list.tilesets.iter().take(2 + 76).filter(|entry| entry.available).count() > 70);
+
+    let resources = |session: &mut HostSession, subject: GraphicsSubject| {
+        let Response::TilesetResources(resources) = session.handle(Request::TilesetResources { subject }).unwrap() else { panic!() };
+        resources
+    };
+    let tileset = resources(&mut session, GraphicsSubject::Tileset(EntryKey::Table(8)));
+    assert_eq!(tileset.tilesets[1].map16.rom_path, "BG_pnl/d_2d_PA_I_M_nohara.bin");
+    assert!(tileset.background.screen.rom_path.is_empty() && tileset.foreground.screen.rom_path.is_empty());
+    assert_eq!(tileset.references.tileset_id, 8);
+    let shared = resources(&mut session, GraphicsSubject::Tileset(EntryKey::Shared));
+    assert!(shared.tilesets[1].graphics.rom_path.is_empty(), "no level tileset beside the shared one");
+    let background = resources(&mut session, GraphicsSubject::Background(EntryKey::Table(23)));
+    assert!(background.tilesets.is_empty() && background.foreground.screen.rom_path.is_empty());
+    assert!(!background.background.screen.bytes.is_empty());
+    let jungle = resources(&mut session, GraphicsSubject::Background(EntryKey::File("Jungle 2 [unused]".into())));
+    assert_eq!(jungle.background.graphics.rom_path, "BG_ncg/d_2d_W_M_back_jungle2_ncg.bin");
+    let title = resources(&mut session, GraphicsSubject::Scene("Title screen".into()));
+    assert!(title.tilesets.is_empty());
+    for layer in [&title.background, &title.tileset_layer, &title.foreground] {
+        assert!(!layer.graphics.bytes.is_empty() && !layer.palette.bytes.is_empty() && !layer.screen.bytes.is_empty());
+    }
+    assert!(session.handle(Request::TilesetResources { subject: GraphicsSubject::Scene("Nowhere".into()) }).is_err());
+}
+
+/// A project's `tilesets.yaml` is laid over the editor's list rather than taking its place. One that will not read
+/// leaves the editor's in force, and says why.
+#[test]
+fn a_projects_tileset_list_merges_into_the_editors() {
+    let (fixture, mut session) = Fixture::with_project("host-project-tilesets");
+    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    assert_eq!(list.problem, None);
+    assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Ghost house"));
+    assert_eq!(list.scenes[0].subject, GraphicsSubject::Scene("Title screen".into()));
+
+    let file = fixture.root.path().join("proj/tilesets.yaml");
+    write_bytes(&file, b"backgrounds:\n  - id: 23\n    name: Haunted mansion\n");
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    assert_eq!(list.problem, None);
+    assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Haunted mansion"));
+    assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 22).map(str::is_empty), Some(false));
+    assert_eq!(list.backgrounds.len(), 77);
+
+    write_bytes(&file, b"backgrounds:\n  - { id: 23 }\n");
+    session.handle(Request::CloseProject).unwrap();
+    session.handle(Request::OpenProject { path: "proj".into() }).unwrap();
+    let Response::Tilesets(list) = session.handle(Request::ListTilesets).unwrap() else { panic!() };
+    assert!(list.problem.as_deref().is_some_and(|problem| problem.starts_with("tilesets.yaml was not used")), "{:?}", list.problem);
+    assert_eq!(list.slot_name(Some(BackgroundLayer::Background), 23), Some("Ghost house"));
 }
 
 #[test]

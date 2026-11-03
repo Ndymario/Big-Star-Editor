@@ -7,17 +7,20 @@ use std::sync::Arc;
 
 use bigstar_core::{Error, ErrorCode, Result};
 use bigstar_formats::{BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET, FOREGROUND_TILE_OFFSET, RgbaImage};
-use bigstar_level::{BackgroundCatalog, BackgroundLayer, LevelTilesetReferences, ModuleDataCatalog, SpriteDefinition};
+use bigstar_level::{BackgroundCatalog, BackgroundDefinition, BackgroundLayer, LevelTilesetReferences, ModuleDataCatalog, SpriteDefinition};
 use bigstar_patching::{FileManifest, ModuleGraph};
 use bigstar_project::{
-    ActorResource, ActorResourceKind, BackgroundAnimator, BackgroundResourceFiles, EffectiveFilesystem, LuaActorCatalog, LuaActorDrawKind,
-    LuaActorLayer, LuaActorRenderInput, LuaBackgroundLayer, LuaTileLayer, RomReader, StageObjectIdentity, TileOverlayCatalog,
-    background_palette_animator, background_tile_animator, has_lua_renderer, load_background_frames, load_background_graphics, load_level_tilesets,
-    load_lua_actor_layers, load_lua_background_layers, load_lua_tile_layers, lua_actor_bounds, render_lua_actor, resolve_level_graphics,
+    ActorResource, ActorResourceKind, BackgroundAnimator, BackgroundResourceFiles, CatalogEntry, CatalogKind, EffectiveFilesystem, LuaActorCatalog,
+    LuaActorDrawKind, LuaActorLayer, LuaActorRenderInput, LuaBackgroundLayer, LuaTileLayer, PROJECT_TILESET_LIST, RomReader, StageObjectIdentity,
+    TileOverlayCatalog, TilesetCatalog, TilesetResourceFiles, background_palette_animator, background_tile_animator, builtin_tileset_catalog,
+    filled_table_slots, has_lua_renderer, load_background_frames, load_background_graphics, load_level_tilesets, load_lua_actor_layers,
+    load_lua_background_layers, load_lua_tile_layers, lua_actor_bounds, parse_tileset_catalog, render_lua_actor, resolve_file_layer,
+    resolve_file_tileset, resolve_level_graphics,
 };
 use bigstar_protocol::{
-    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, ImageGraphics, LayerFrame, LevelGraphics, LevelId,
-    LiquidSurface, Map16Overlay, ResourceBytes, SurfaceWave, TextureData, TextureId, TilemapSlot, TilesetGraphics, TilesetResources, TilesetSlot,
+    ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, DrawCommand, DrawKind, EntryKey, GraphicsSubject, ImageGraphics, LayerFrame,
+    LevelGraphics, LevelId, LiquidSurface, Map16Overlay, ResourceBytes, SurfaceWave, TextureData, TextureId, TilemapSlot, TilesetGraphics,
+    TilesetListEntry, TilesetListing, TilesetResources, TilesetSlot,
 };
 use sha2::{Digest, Sha256};
 
@@ -127,6 +130,8 @@ pub(crate) struct ProjectGraphics {
     catalog: ModuleDataCatalog,
     overlays: Option<TileOverlayCatalog>,
     backgrounds: Option<BackgroundCatalog>,
+    /// The tileset list in force, and why the project's own was passed over when it was.
+    tileset_list: Option<(Arc<TilesetCatalog>, Option<String>)>,
     actors: Option<LuaActorCatalog>,
     /// The class id and the object bank of each sprite type, read once.
     sprite_tables: Option<SpriteTables>,
@@ -157,6 +162,7 @@ impl ProjectGraphics {
             catalog,
             overlays: None,
             backgrounds: None,
+            tileset_list: None,
             actors: None,
             sprite_tables: None,
             textures: TextureStore::default(),
@@ -180,6 +186,7 @@ impl ProjectGraphics {
             catalog: ModuleDataCatalog::default(),
             overlays: None,
             backgrounds: None,
+            tileset_list: None,
             actors: None,
             sprite_tables: None,
             textures: TextureStore::default(),
@@ -243,9 +250,88 @@ impl ProjectGraphics {
                 log::warn!("background scripts: {error}");
             }
             self.watched.extend(loaded.sources);
-            self.backgrounds = Some(loaded.catalog);
+            // The tileset list names every layer; a script's own name stands only where the list has none. A slot the
+            // list names and no script describes is there by name alone, drawn as it is.
+            let list = self.tileset_list().0;
+            let mut catalog = loaded.catalog;
+            for definition in &mut catalog.definitions {
+                if let Some(name) = list.table_name(catalog_kind(definition.layer), definition.id) {
+                    definition.name = name.to_owned();
+                }
+            }
+            for layer in [BackgroundLayer::Background, BackgroundLayer::Foreground] {
+                for entry in list.layers(catalog_kind(layer)) {
+                    let Some(id) = entry.table_id() else { continue };
+                    if catalog.find(layer, id).is_none() {
+                        catalog.definitions.push(BackgroundDefinition { layer, id, name: entry.name.clone(), ..BackgroundDefinition::default() });
+                    }
+                }
+            }
+            self.backgrounds = Some(catalog);
         }
         self.backgrounds.get_or_insert_with(BackgroundCatalog::default)
+    }
+
+    /// The tileset list in force: the editor's own with the project's `tilesets.yaml` laid over it when it has one that
+    /// reads. Why the project's was passed over comes with it.
+    pub fn tileset_list(&mut self) -> (Arc<TilesetCatalog>, Option<String>) {
+        if let Some(list) = &self.tileset_list {
+            return list.clone();
+        }
+        let mut catalog = builtin_tileset_catalog().clone();
+        let file = self.directory.join(PROJECT_TILESET_LIST);
+        let mut problem = None;
+        if !self.directory.as_os_str().is_empty() && file.is_file() {
+            let read = std::fs::read(&file)
+                .map_err(|_| Error::new(ErrorCode::IoError, "it could not be read"))
+                .and_then(|bytes| String::from_utf8(bytes).map_err(|_| Error::new(ErrorCode::ParseError, "it is not UTF-8")))
+                .and_then(|text| parse_tileset_catalog(&text));
+            match read {
+                Ok(project) => catalog.merge(project),
+                Err(error) => problem = Some(format!("{PROJECT_TILESET_LIST} was not used: {}", error.message)),
+            }
+        }
+        let list = (Arc::new(catalog), problem);
+        self.tileset_list = Some(list.clone());
+        list
+    }
+
+    /// The tileset list as the Tilesets tab shows it, each slot marked with whether the game has files for it. A slot
+    /// list that cannot be read marks every slot there.
+    pub fn tileset_listing(&mut self) -> TilesetListing {
+        let (list, problem) = self.tileset_list();
+        let mut filled = |kind| filled_table_slots(&mut self.files, kind).unwrap_or_default();
+        let filled = [filled(CatalogKind::Tileset), filled(CatalogKind::Background), filled(CatalogKind::Foreground)];
+        let rows = |entries: Vec<(Option<u16>, &str)>, filled: &[bool], subject: fn(EntryKey) -> GraphicsSubject| -> Vec<TilesetListEntry> {
+            entries
+                .into_iter()
+                .map(|(id, name)| {
+                    let (key, available) = match id {
+                        Some(id) => (EntryKey::Table(id), filled.get(usize::from(id)).copied().unwrap_or(true)),
+                        None => (EntryKey::File(name.to_owned()), true),
+                    };
+                    TilesetListEntry { subject: subject(key), name: name.to_owned(), available }
+                })
+                .collect()
+        };
+        let fixed = [(EntryKey::Shared, "Shared"), (EntryKey::SubUnit, "Sub-unit")].map(|(key, name)| TilesetListEntry {
+            subject: GraphicsSubject::Tileset(key),
+            name: name.to_owned(),
+            available: true,
+        });
+        let mut tilesets = fixed.to_vec();
+        tilesets.extend(rows(pairs(&list.tilesets), &filled[0], GraphicsSubject::Tileset));
+        TilesetListing {
+            tilesets,
+            backgrounds: rows(pairs(&list.backgrounds), &filled[1], GraphicsSubject::Background),
+            foregrounds: rows(pairs(&list.foregrounds), &filled[2], GraphicsSubject::Foreground),
+            scenes: list
+                .scenes
+                .iter()
+                .map(|scene| TilesetListEntry { subject: GraphicsSubject::Scene(scene.name.clone()), name: scene.name.clone(), available: true })
+                .collect(),
+            problem,
+        }
     }
 
     /// Everything the scripts have animating one layer of a level: the tiles its own screen and the other layer's
@@ -331,50 +417,122 @@ impl ProjectGraphics {
         self.files.read(address)
     }
 
-    /// The files behind a level's three tilesets and its backgrounds, and what its tileset's tile scripts draw in place
-    /// of blocks, for the tileset workspace. A port of `MainWindow::openTilesetEditor`'s loading.
-    pub fn tileset_resources(&mut self, level: LevelId, references: LevelTilesetReferences) -> Result<TilesetResources> {
-        let resources = resolve_level_graphics(&mut self.files, references)?;
+    /// The files behind what a tileset workspace edits, and what the tile scripts draw in place of the level tileset's
+    /// blocks. A level's subject brings the `references` it loads by; an entry of the tileset list is loaded as a level
+    /// naming it alone would load it, and keeps only its own part. A port of `MainWindow::openTilesetEditor`'s loading.
+    pub fn tileset_resources(&mut self, subject: GraphicsSubject, references: Option<LevelTilesetReferences>) -> Result<TilesetResources> {
+        let none = LevelTilesetReferences {
+            tileset_id: u16::MAX,
+            background_graphics_id: u16::MAX,
+            background_screen_id: u16::MAX,
+            foreground_graphics_id: u16::MAX,
+            foreground_screen_id: u16::MAX,
+            background_palette_id: u16::MAX,
+            foreground_palette_id: u16::MAX,
+            tileset_palette_id: u16::MAX,
+        };
+        let not_listed = |what: &str, name: &str| Error::new(ErrorCode::NotFound, format!("the tileset list has no {what} named {name:?}"));
+        let list = self.tileset_list().0;
         let bytes = |file: &bigstar_project::ResourceFile| ResourceBytes { rom_path: file.rom_path.clone(), bytes: file.data.clone() };
-        let tilesets = resources
-            .tilesets
-            .iter()
-            .map(|files| TilesetSlot {
-                graphics: bytes(&files.graphics),
-                palette: bytes(&files.palette),
-                map16: bytes(&files.map16),
-                objects: bytes(&files.objects),
-                object_index: bytes(&files.object_index),
-                behaviors: bytes(&files.behaviors),
-                tile_offset: files.tile_offset,
-                palette_offset: files.palette_offset,
-                tile_page_offset: files.tile_page_offset,
-            })
-            .collect();
         let map = |files: &BackgroundResourceFiles| TilemapSlot {
             graphics: bytes(&files.graphics),
             palette: bytes(&files.palette),
             screen: bytes(&files.screen),
         };
-        let (background, foreground) = (map(&resources.background), map(&resources.foreground));
-        let overlays = self
-            .overlays()
-            .blocks(references.tileset_id)
-            .into_iter()
-            .map(|(block, overlay)| Map16Overlay {
-                block,
-                image: overlay.image.as_deref().cloned(),
-                remap: overlay.remap,
-                replaces: overlay.replaces,
-            })
-            .collect();
-        Ok(TilesetResources { level, tilesets, background, foreground, references, overlays })
+        let slot = |files: &TilesetResourceFiles| TilesetSlot {
+            graphics: bytes(&files.graphics),
+            palette: bytes(&files.palette),
+            map16: bytes(&files.map16),
+            objects: bytes(&files.objects),
+            object_index: bytes(&files.object_index),
+            behaviors: bytes(&files.behaviors),
+            tile_offset: files.tile_offset,
+            palette_offset: files.palette_offset,
+            tile_page_offset: files.tile_page_offset,
+        };
+        let mut result = TilesetResources { subject: subject.clone(), ..TilesetResources::default() };
+
+        // A layer named by its files needs nothing else loaded.
+        let layer = |kind: CatalogKind, key: &EntryKey| match key {
+            EntryKey::File(name) => list.file_layer(kind, name).ok_or_else(|| not_listed("layer", name)).cloned().map(Some),
+            _ => Ok(None),
+        };
+        match &subject {
+            GraphicsSubject::Background(key @ EntryKey::File(_)) => {
+                let files = layer(CatalogKind::Background, key)?.unwrap_or_default();
+                result.background = map(&resolve_file_layer(&mut self.files, &files)?);
+                return Ok(result);
+            }
+            GraphicsSubject::Foreground(key @ EntryKey::File(_)) => {
+                let files = layer(CatalogKind::Foreground, key)?.unwrap_or_default();
+                result.foreground = map(&resolve_file_layer(&mut self.files, &files)?);
+                return Ok(result);
+            }
+            GraphicsSubject::Scene(name) => {
+                let scene = list.scene(name).ok_or_else(|| not_listed("scene", name))?.clone();
+                for (files, target) in [
+                    (&scene.background, &mut result.background),
+                    (&scene.tileset, &mut result.tileset_layer),
+                    (&scene.foreground, &mut result.foreground),
+                ] {
+                    if let Some(files) = files {
+                        *target = map(&resolve_file_layer(&mut self.files, files)?);
+                    }
+                }
+                return Ok(result);
+            }
+            _ => {}
+        }
+
+        let references = match &subject {
+            GraphicsSubject::Level(_) => {
+                references.ok_or_else(|| Error::new(ErrorCode::InvalidArgument, "a level's tilesets need its references"))?
+            }
+            GraphicsSubject::Tileset(EntryKey::Table(id)) => LevelTilesetReferences { tileset_id: *id, tileset_palette_id: *id, ..none },
+            GraphicsSubject::Background(EntryKey::Table(id)) => {
+                LevelTilesetReferences { background_graphics_id: *id, background_screen_id: *id, background_palette_id: *id, ..none }
+            }
+            GraphicsSubject::Foreground(EntryKey::Table(id)) => {
+                LevelTilesetReferences { foreground_graphics_id: *id, foreground_screen_id: *id, foreground_palette_id: *id, ..none }
+            }
+            _ => none,
+        };
+        let mut resources = resolve_level_graphics(&mut self.files, references)?;
+        if let GraphicsSubject::Tileset(EntryKey::File(name)) = &subject {
+            let files = list.file_tileset(name).ok_or_else(|| not_listed("tileset", name))?.clone();
+            resources.tilesets[1] = resolve_file_tileset(&mut self.files, &files)?;
+        }
+        // A layer from the tables comes with the shared and sub-unit tilesets every level loads; they are not its own.
+        if !matches!(subject, GraphicsSubject::Background(_) | GraphicsSubject::Foreground(_)) {
+            result.tilesets = resources.tilesets.iter().map(slot).collect();
+        }
+        result.background = map(&resources.background);
+        result.foreground = map(&resources.foreground);
+        // Only a tileset from the tables has blocks the scripts know by number.
+        let scripted = matches!(subject, GraphicsSubject::Level(_) | GraphicsSubject::Tileset(EntryKey::Table(_)));
+        if scripted {
+            result.overlays = self
+                .overlays()
+                .blocks(references.tileset_id)
+                .into_iter()
+                .map(|(block, overlay)| Map16Overlay {
+                    block,
+                    image: overlay.image.as_deref().cloned(),
+                    remap: overlay.remap,
+                    replaces: overlay.replaces,
+                })
+                .collect();
+        }
+        result.references = references;
+        Ok(result)
     }
 
     pub fn level_graphics(&mut self, level: LevelId, generation: u64, references: LevelTilesetReferences) -> LevelGraphics {
         // The scripts' catalog is the same for every level, so a level whose files will not resolve still names its
         // backgrounds and fails on its own error alone.
-        let mut result = LevelGraphics { level, generation, backgrounds: self.backgrounds().clone(), ..LevelGraphics::default() };
+        let tileset_names =
+            self.tileset_list().0.tilesets.iter().filter(|entry| entry.table_id().is_some()).map(|entry| entry.name.clone()).collect();
+        let mut result = LevelGraphics { level, generation, backgrounds: self.backgrounds().clone(), tileset_names, ..LevelGraphics::default() };
         let resources = match resolve_level_graphics(&mut self.files, references) {
             Ok(resources) => resources,
             Err(error) => {
@@ -552,4 +710,16 @@ impl ProjectGraphics {
         }
         draws
     }
+}
+
+fn catalog_kind(layer: BackgroundLayer) -> CatalogKind {
+    match layer {
+        BackgroundLayer::Background => CatalogKind::Background,
+        BackgroundLayer::Foreground => CatalogKind::Foreground,
+    }
+}
+
+/// Each of `entries`' slot, when it names one, and name.
+fn pairs<F>(entries: &[CatalogEntry<F>]) -> Vec<(Option<u16>, &str)> {
+    entries.iter().map(|entry| (entry.table_id(), entry.name.as_str())).collect()
 }

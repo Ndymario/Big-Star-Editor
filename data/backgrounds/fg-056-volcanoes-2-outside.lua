@@ -9,7 +9,6 @@ frames[#frames + 1] = { 5 * 16, ticks = 48 }
 return {
     layer = "foreground",
     id = 56,
-    name = "Volcanoes 2 (outside)",
     strips = {
         { throughRow = 304, drift = 0.375 },
         { throughRow = 320, drift = 0.3125 },

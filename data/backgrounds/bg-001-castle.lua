@@ -3,7 +3,6 @@
 return {
     layer = "background",
     id = 1,
-    name = "Castle",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_yakata_ncg.bin",
         interval = 5,

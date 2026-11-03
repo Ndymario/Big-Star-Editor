@@ -3,7 +3,6 @@
 return {
     layer = "background",
     id = 49,
-    name = "Boss battle",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_yakata_boss_ncg.bin",
         interval = 5,

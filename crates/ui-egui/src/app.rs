@@ -80,6 +80,7 @@ enum Action {
 enum Left {
     #[default]
     Levels,
+    Tilesets,
     Palette,
     Filesystem,
 }
@@ -131,6 +132,7 @@ pub struct BigStarApp {
     pub(crate) tools: Tools,
     pub(crate) files: FilesDock,
     left: Left,
+    tileset_list: crate::tileset_list::TilesetListState,
     side: Side,
     /// The canvas toolbar's switches, the same on every canvas.
     canvas_options: CanvasOptions,
@@ -435,6 +437,7 @@ impl BigStarApp {
             tools: Tools::default(),
             files: FilesDock::default(),
             left: Left::default(),
+            tileset_list: Default::default(),
             side: Side::default(),
             canvas_options,
             grids,
@@ -673,11 +676,16 @@ impl BigStarApp {
         if let Some(session) = &mut self.session
             && let Some(level) = session.levels.values().find(|view| view.snapshot.area == area).map(|view| view.snapshot.level)
         {
-            session.request_tileset_resources(level);
+            session.request_tileset_resources(bigstar_protocol::GraphicsSubject::Level(level));
         }
     }
 
-    /// Brings a tab of every open tileset workspace forward: 0 Graphics … 5 Foreground (screenshots).
+    /// Shows the Tilesets tab of the left panel (screenshots).
+    pub fn tileset_list_for_screenshot(&mut self) {
+        self.left = Left::Tilesets;
+    }
+
+    /// Brings a tab of every open tileset workspace forward: 0 Graphics … 6 Tileset layer (screenshots).
     pub fn tileset_tab_for_screenshot(&mut self, index: usize) {
         for (doc, _) in self.workspace.tilesets.values_mut() {
             if let Some((tab, _)) = crate::tileset_editor::TABS.get(index) {
@@ -847,7 +855,7 @@ impl BigStarApp {
             self.workspace.open_banner(&bytes, &target);
         }
         if let Some(resources) = session.tileset_resources.take() {
-            let title = session.levels.get(&resources.level).map_or_else(String::new, |view| view.snapshot.title.clone());
+            let title = crate::tileset_list::title(session, &resources.subject);
             match crate::tileset_editor::TilesetDoc::open(resources, &title) {
                 Ok(doc) => self.workspace.open_tileset(doc),
                 Err(error) => session.report(error),
@@ -1304,11 +1312,17 @@ impl BigStarApp {
                 ui,
                 "left",
                 &mut self.left,
-                &[(Left::Levels, tr!("app.tab.levels")), (Left::Palette, tr!("app.tab.palette")), (Left::Filesystem, tr!("app.tab.filesystem"))],
+                &[
+                    (Left::Levels, tr!("app.tab.levels")),
+                    (Left::Tilesets, tr!("app.tab.tilesets")),
+                    (Left::Palette, tr!("app.tab.palette")),
+                    (Left::Filesystem, tr!("app.tab.filesystem")),
+                ],
             );
             ui.add_space(2.0);
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
+                Left::Tilesets => crate::tileset_list::show(ui, session, &mut self.tileset_list),
                 Left::Levels => {
                     if let Some(path) = level_list::show(ui, session, self.workspace.previewed()) {
                         // A level row hands the person over to its file.

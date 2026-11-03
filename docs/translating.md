@@ -46,4 +46,5 @@ language, with the numbers where it wants them, such as "Torre M{1}" ("M" for Mu
 `level_names.area_1`. A name with no key, such as a project's own level, is shown as written. When the catalog gains a
 name, add its key to every language file; a test lists the ones that are missing.
 
-Left in English on purpose: data names (tilesets, actors), file formats, and messages that come from the host.
+Left in English on purpose: data names (tilesets, backgrounds and actors, the first from
+`crates/project/tilesets/tilesets.yaml`), file formats, and messages that come from the host.

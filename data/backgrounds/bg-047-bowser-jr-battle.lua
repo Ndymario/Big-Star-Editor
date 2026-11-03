@@ -3,7 +3,6 @@
 return {
     layer = "background",
     id = 47,
-    name = "Bowser Jr battle",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_toride_boss_ncg.bin",
         interval = 5,

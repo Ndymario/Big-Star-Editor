@@ -5,7 +5,7 @@
 use crate::controls::{self, Button};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
-use bigstar_protocol::LevelId;
+use bigstar_protocol::{GraphicsSubject, LevelId};
 use egui::{Id, RichText, Ui, Vec2, ViewportBuilder, ViewportCommand, ViewportId, WidgetText};
 use egui_dock::tab_viewer::OnCloseResponse;
 use egui_dock::{DockArea, DockState, TabViewer};
@@ -33,8 +33,9 @@ pub enum DocTab {
     Level(LevelId),
     /// A file opened from the Filesystem dock, by its key in `Workspace::files`.
     File(u64),
-    /// A level's tilesets and backgrounds.
-    Tileset(LevelId),
+    /// A tileset workspace, by its key in `Workspace::tilesets`: a level's tilesets and backgrounds, or an entry of the
+    /// tileset list.
+    Tileset(u64),
 }
 
 /// A file open as a document, in the editor that understands it, or as hex.
@@ -169,8 +170,9 @@ pub struct Workspace {
     pub asking_attach: Option<AttachPrompt>,
     pub files: BTreeMap<u64, FileDoc>,
     next_file: u64,
-    /// Tileset workspaces, by the level they belong to.
-    pub tilesets: BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
+    /// Tileset workspaces, by key; at most one for each thing they edit.
+    pub tilesets: BTreeMap<u64, (TilesetDoc, TilesetView)>,
+    next_tileset: u64,
 }
 
 impl Default for Workspace {
@@ -192,6 +194,7 @@ impl Default for Workspace {
             files: BTreeMap::new(),
             next_file: 1,
             tilesets: BTreeMap::new(),
+            next_tileset: 1,
         }
     }
 }
@@ -368,12 +371,30 @@ impl Workspace {
         }
     }
 
-    /// Opens a level's tileset workspace, or brings forward the one already open; a fresh one replaces nothing that
-    /// is open, so unsaved edits there are kept.
+    /// The tileset workspace open on `subject` (tests).
+    #[cfg(test)]
+    pub fn tileset(&self, subject: &GraphicsSubject) -> Option<&(TilesetDoc, TilesetView)> {
+        self.tilesets.values().find(|(doc, _)| doc.subject == *subject)
+    }
+
+    #[cfg(test)]
+    pub fn tileset_mut(&mut self, subject: &GraphicsSubject) -> Option<&mut (TilesetDoc, TilesetView)> {
+        self.tilesets.values_mut().find(|(doc, _)| doc.subject == *subject)
+    }
+
+    /// Opens a tileset workspace, or brings forward the one already open on the same thing; a fresh one replaces
+    /// nothing that is open, so unsaved edits there are kept.
     pub fn open_tileset(&mut self, doc: TilesetDoc) {
-        let level = doc.level;
-        self.tilesets.entry(level).or_insert_with(|| (doc, TilesetView::default()));
-        let tab = DocTab::Tileset(level);
+        let key = match self.tilesets.iter().find(|(_, (open, _))| open.subject == doc.subject) {
+            Some((&key, _)) => key,
+            None => {
+                let key = self.next_tileset;
+                self.next_tileset += 1;
+                self.tilesets.insert(key, (doc, TilesetView::default()));
+                key
+            }
+        };
+        let tab = DocTab::Tileset(key);
         if self.dock.find_tab(&tab).is_none() {
             self.push_tab(tab);
         }
@@ -451,13 +472,11 @@ impl Workspace {
                 if *tab == DocTab::Level(old) {
                     *tab = DocTab::Level(new);
                 }
-                if *tab == DocTab::Tileset(old) {
-                    *tab = DocTab::Tileset(new);
-                }
             }
-            if let Some((mut doc, view)) = self.tilesets.remove(&old) {
-                doc.level = new;
-                self.tilesets.insert(new, (doc, view));
+            for (doc, _) in self.tilesets.values_mut() {
+                if doc.subject == GraphicsSubject::Level(old) {
+                    doc.subject = GraphicsSubject::Level(new);
+                }
             }
             if self.preview == Some(old) {
                 self.preview = Some(new);
@@ -488,15 +507,17 @@ impl Workspace {
         for area in session.take_recovered() {
             session.open_level(&area);
         }
-        // Documents whose levels are gone: the project closed, or the host refused them.
+        // Documents whose levels are gone: the project closed, or the host refused them. An entry of the tileset list
+        // goes with its project.
         let levels = &session.levels;
-        self.tilesets.retain(|level, _| levels.contains_key(level));
+        let project = session.project.is_some();
+        self.tilesets.retain(|_, (doc, _)| doc.level().map_or(project, |level| levels.contains_key(&level)));
         let files = &self.files;
         let tilesets = &self.tilesets;
         self.dock.retain_tabs(|tab| match tab {
             DocTab::Level(level) => levels.contains_key(level),
             DocTab::File(key) => files.contains_key(key),
-            DocTab::Tileset(level) => tilesets.contains_key(level),
+            DocTab::Tileset(key) => tilesets.contains_key(key),
             DocTab::Preview => true,
         });
         self.detached.retain(|level| levels.contains_key(level));
@@ -572,7 +593,7 @@ impl Workspace {
         self.mend_dock();
         let tab = *self.dock.find_active_focused()?.1;
         match tab {
-            DocTab::Tileset(level) => self.tilesets.get_mut(&level).map(|(doc, _)| doc as &mut dyn Undoable),
+            DocTab::Tileset(key) => self.tilesets.get_mut(&key).map(|(doc, _)| doc as &mut dyn Undoable),
             DocTab::File(key) => match &mut self.files.get_mut(&key)?.view {
                 FileView::Graphics(doc, _) => Some(doc.as_mut()),
                 FileView::Resource { doc, .. } => Some(doc.as_mut()),
@@ -692,9 +713,9 @@ impl Workspace {
             files.remove(&key);
         }
         self.files = files;
-        for level in closed_tilesets {
-            tilesets.remove(&level);
-            if let Some(path) = self.dock.find_tab(&DocTab::Tileset(level)) {
+        for key in closed_tilesets {
+            tilesets.remove(&key);
+            if let Some(path) = self.dock.find_tab(&DocTab::Tileset(key)) {
                 let _ = self.dock.remove_tab(path);
             }
         }
@@ -778,8 +799,8 @@ struct Viewer<'a, 'f> {
     preview: Option<LevelId>,
     files: &'f mut BTreeMap<u64, FileDoc>,
     closed_files: Vec<u64>,
-    tilesets: &'f mut BTreeMap<LevelId, (TilesetDoc, TilesetView)>,
-    closed_tilesets: Vec<LevelId>,
+    tilesets: &'f mut BTreeMap<u64, (TilesetDoc, TilesetView)>,
+    closed_tilesets: Vec<u64>,
     pool: &'a mut TexturePool,
     keyboard: bool,
     close: Vec<LevelId>,
@@ -810,7 +831,7 @@ impl TabViewer for Viewer<'_, '_> {
                 }
                 None => "…".into(),
             },
-            DocTab::Tileset(level) => match self.tilesets.get(level) {
+            DocTab::Tileset(key) => match self.tilesets.get(key) {
                 Some((doc, _)) => format!("{} — {}", tr!("workspace.tab.tilesets"), doc.title).into(),
                 None => "…".into(),
             },
@@ -829,15 +850,15 @@ impl TabViewer for Viewer<'_, '_> {
                     file_document(ui, self.session, self.services, doc);
                 }
             }
-            DocTab::Tileset(level) => {
-                let Some((doc, view)) = self.tilesets.get_mut(&level) else { return };
+            DocTab::Tileset(key) => {
+                let Some((doc, view)) = self.tilesets.get_mut(&key) else { return };
                 match crate::tileset_editor::show(ui, doc, view, self.services) {
                     Some(TilesetAction::Save) => {
                         if save_tilesets(self.session, doc) {
-                            self.closed_tilesets.push(level);
+                            self.closed_tilesets.push(key);
                         }
                     }
-                    Some(TilesetAction::Close) => self.closed_tilesets.push(level),
+                    Some(TilesetAction::Close) => self.closed_tilesets.push(key),
                     None => {}
                 }
             }
@@ -863,8 +884,8 @@ impl TabViewer for Viewer<'_, '_> {
                 self.closed_files.push(key);
                 OnCloseResponse::Close
             }
-            DocTab::Tileset(level) => {
-                self.closed_tilesets.push(level);
+            DocTab::Tileset(key) => {
+                self.closed_tilesets.push(key);
                 OnCloseResponse::Close
             }
         }
@@ -888,7 +909,7 @@ impl TabViewer for Viewer<'_, '_> {
     }
 }
 
-/// Writes the files the tileset workspace changed into their modules, and the level's new references as an edit.
+/// Writes the files the tileset workspace changed into their modules, and a level's new references as an edit.
 /// False, with the reason reported, when there is nothing it can save.
 fn save_tilesets(session: &mut Session, doc: &TilesetDoc) -> bool {
     let writes = match doc.writes() {
@@ -902,8 +923,8 @@ fn save_tilesets(session: &mut Session, doc: &TilesetDoc) -> bool {
     if !writes.is_empty() {
         session.write_files(writes);
     }
-    if doc.references_changed() {
-        session.edit_level(doc.level, bigstar_protocol::LevelEdit::SetTilesetReferences { references: doc.references });
+    if let Some(level) = doc.level().filter(|_| doc.references_changed()) {
+        session.edit_level(level, bigstar_protocol::LevelEdit::SetTilesetReferences { references: doc.references });
     }
     session.log.push(crate::session::LogLine { level: bigstar_protocol::LogLevel::Info, text: tr!("workspace.saved_graphics_files", count) });
     true

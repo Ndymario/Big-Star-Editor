@@ -1,0 +1,486 @@
+# The tilesets, backgrounds and foregrounds the Tilesets tab lists, and the scenes the game builds outside a level.
+#
+# An entry with an `id` is that slot of the game's tables in overlay 0, which say what files it loads; the game has
+# 76 of each. An entry without one names its files by ROM path. A project's own `tilesets.yaml` merges into this
+# list: an `id` it names takes that name, and an entry or scene named as one here takes its place. See
+# docs/tilesets-list.md.
+tilesets:
+  - id: 0
+    name: "Grassland"
+  - id: 1
+    name: "Castle"
+  - id: 2
+    name: "Desert"
+  - id: 3
+    name: "Underground (with ice)"
+  - id: 4
+    name: "Sky/mushrooms (World 7 style)"
+  - id: 5
+    name: "Underwater"
+  - id: 6
+    name: "Desert"
+  - id: 7
+    name: "Volcano (brown)"
+  - id: 8
+    name: "Grassland"
+  - id: 9
+    name: "Beach (blue)"
+  - id: 10
+    name: "Beach (blue)"
+  - id: 11
+    name: "Forest"
+  - id: 12
+    name: "Grassland"
+  - id: 13
+    name: "Sky/mushrooms (with flowers and bushes)"
+  - id: 14
+    name: "Sky/mushrooms (with flowers and bushes)"
+  - id: 15
+    name: "Volcano (black)"
+  - id: 16
+    name: "Volcano (black 2) [unused]"
+  - id: 17
+    name: "Snow (with ice)"
+  - id: 18
+    name: "Snow"
+  - id: 19
+    name: "Forest"
+  - id: 20
+    name: "Oasis in desert"
+  - id: 21
+    name: "Bonus room [unused]"
+  - id: 22
+    name: "Volcano (black 2) [unused]"
+  - id: 23
+    name: "Ghost house"
+  - id: 24
+    name: "Cliffs"
+  - id: 25
+    name: "Cliffs"
+  - id: 26
+    name: "Snow (with ice)"
+  - id: 27
+    name: "Grassland"
+  - id: 28
+    name: "Snow (with ice)"
+  - id: 29
+    name: "Factory (W7-A)"
+  - id: 30
+    name: "Sewer (W2-3)"
+  - id: 31
+    name: "Volcano (yellow)"
+  - id: 32
+    name: "Castle"
+  - id: 33
+    name: "Sky/mushrooms (with flowers and bushes)"
+  - id: 34
+    name: "Grassland"
+  - id: 35
+    name: "Underground"
+  - id: 36
+    name: "Underground (dark blue) [unused]"
+  - id: 37
+    name: "Dark world (purple)"
+  - id: 38
+    name: "Dark world (brown)"
+  - id: 39
+    name: "Tower"
+  - id: 40
+    name: "Ghost house exit"
+  - id: 41
+    name: "Final castle"
+  - id: 42
+    name: "Toad house 1"
+  - id: 43
+    name: "Toad house 2"
+  - id: 44
+    name: "Toad house 3"
+  - id: 45
+    name: "Final castle"
+  - id: 46
+    name: "Toad house 4"
+  - id: 47
+    name: "Bowser Jr. battle"
+  - id: 48
+    name: "Beach (blue)"
+  - id: 49
+    name: "Boss battle"
+  - id: 50
+    name: "Sky/mushrooms (with flowers and bushes)"
+  - id: 51
+    name: "Forest"
+  - id: 52
+    name: "Desert"
+  - id: 53
+    name: "Desert"
+  - id: 54
+    name: "Forest"
+  - id: 55
+    name: "Final boss battle"
+  - id: 56
+    name: "Volcano (black)"
+  - id: 57
+    name: "Underwater"
+  - id: 58
+    name: "Light grey castle (W8 castle 1)"
+  - id: 59
+    name: "Sky/mushrooms (yellowish)"
+  - id: 60
+    name: "Beach (turquoise, without moss)"
+  - id: 61
+    name: "Lakithunder and Monty Tank battles"
+  - id: 62
+    name: "Boss battle"
+  - id: 63
+    name: "Mummy-Pokey battle"
+  - id: 64
+    name: "Oasis in desert"
+  - id: 65
+    name: "Desert"
+  - id: 66
+    name: "Oasis in desert"
+  - id: 67
+    name: "Bonus room [unused]"
+  - id: 68
+    name: "Bonus room [unused]"
+  - id: 69
+    name: "Bonus room [unused]"
+  - id: 70
+    name: "Bonus room [unused]"
+  - id: 71
+    name: "Bonus room [unused]"
+  - id: 72
+    name: "Bonus room [unused]"
+  - id: 73
+    name: "Underground (gold) [unused]"
+  - id: 74
+    name: "Bonus room"
+  - id: 75
+    name: "Grassland"
+backgrounds:
+  - id: 0
+    name: "Grassland (orange hills and clouds)"
+  - id: 1
+    name: "Castle"
+  - id: 2
+    name: "Desert (blue sky, pyramids)"
+  - id: 3
+    name: "Underground"
+  - id: 4
+    name: "Clouds"
+  - id: 5
+    name: "Underwater"
+  - id: 6
+    name: "Desert (yellow sky, pyramids)"
+  - id: 7
+    name: "Volcanoes 1 (inside)"
+  - id: 8
+    name: "Grassland (pastel hills and clouds)"
+  - id: 9
+    name: "Background clouds"
+  - id: 10
+    name: "Background mountains"
+  - id: 11
+    name: "Forest"
+  - id: 12
+    name: "Grassland (green/white hills and clouds)"
+  - id: 13
+    name: "Background clouds 2 [Unused]"
+  - id: 14
+    name: "Background clouds 2 [Unused]"
+  - id: 15
+    name: "Volcanoes 2 (outside) [including raining debris]"
+  - id: 16
+    name: "Volcanoes 3 (outside) [Unused]"
+  - id: 17
+    name: "Snowy trees"
+  - id: 18
+    name: "Snowy hills"
+  - id: 19
+    name: "Background clouds"
+  - id: 20
+    name: "Desert (blue sky, pyramids, higher)"
+  - id: 21
+    name: "Bonus room (NES Mario and Luigi 1)"
+  - id: 22
+    name: "Volcanoes 3 (outside) [Unused]"
+  - id: 23
+    name: "Ghost house"
+  - id: 24
+    name: "Background mountains"
+  - id: 25
+    name: "Background mountains"
+  - id: 26
+    name: "Purple sky"
+  - id: 27
+    name: "Grassland (orange hills and clouds)"
+  - id: 28
+    name: "Snowy hills"
+  - id: 29
+    name: "Pipes"
+  - id: 30
+    name: "Empty (no screen)"
+  - id: 31
+    name: "Volcano tower"
+  - id: 32
+    name: "Castle 2"
+  - id: 33
+    name: "Clouds with orange hills at back"
+  - id: 34
+    name: "Snowy hills"
+  - id: 35
+    name: "Cave"
+  - id: 36
+    name: "Stalagmites (glitchy) [Unused]"
+  - id: 37
+    name: "Dark world 1 (dead trees, purple clouds)"
+  - id: 38
+    name: "Dark world 2 (rocks, purple clouds)"
+  - id: 39
+    name: "Tower"
+  - id: 40
+    name: "Ghost house exit"
+  - id: 41
+    name: "Final Castle (Gold Jyotyu)"
+  - id: 42
+    name: "Toad house 1"
+  - id: 43
+    name: "Toad house 2"
+  - id: 44
+    name: "Toad house 3"
+  - id: 45
+    name: "Final Castle (Blue Jyotyu)"
+  - id: 46
+    name: "Toad house 4"
+  - id: 47
+    name: "Bowser Jr battle"
+  - id: 48
+    name: "Background clouds (tall)"
+  - id: 49
+    name: "Boss battle"
+  - id: 50
+    name: "Background clouds"
+  - id: 51
+    name: "Background clouds"
+  - id: 52
+    name: "Desert (blue sky, pyramids)"
+  - id: 53
+    name: "Desert (yellow sky, higher)"
+  - id: 54
+    name: "Background mountains"
+  - id: 55
+    name: "Final boss battle"
+  - id: 56
+    name: "Volcanoes 2"
+  - id: 57
+    name: "Underwater cave"
+  - id: 58
+    name: "Light grey castle (W8 castle 1)"
+  - id: 59
+    name: "Yellow clouds (Desert)"
+  - id: 60
+    name: "Big mountains (higher)"
+  - id: 61
+    name: "Background clouds"
+  - id: 62
+    name: "Background mountains"
+  - id: 63
+    name: "Mummy-Pokey battle"
+  - id: 64
+    name: "Desert (yellow sky, pyramids)"
+  - id: 65
+    name: "Desert (pyramids)"
+  - id: 66
+    name: "Desert (blue sky, pyramids, higher)"
+  - id: 67
+    name: "Bonus room (NES Lakitu) [Unused]"
+  - id: 68
+    name: "Bonus room (NES Mario + Bowser) [Unused]"
+  - id: 69
+    name: "Bonus room (NES M/L swimming) [Unused]"
+  - id: 70
+    name: "Bonus room (NES Mario and Luigi 2) [Unused]"
+  - id: 71
+    name: "Bonus room (NES Mario on vine) [Unused]"
+  - id: 72
+    name: "Bonus room (NES Mario and Luigi 3) [Unused]"
+  - id: 73
+    name: "Underground cave (red)"
+  - id: 74
+    name: "Bonus room"
+  - id: 75
+    name: "Grassland (orange hills and clouds)"
+  # In none of the tables, and so used by no level: a background left over.
+  - name: "Jungle 2 [unused]"
+    graphics: BG_ncg/d_2d_W_M_back_jungle2_ncg.bin
+    palette: BG_ncl/d_2d_W_M_back_jungle2_ncl.bin
+    screen: BG_nsc/d_2d_W_M_back_jungle2_nsc.bin
+foregrounds:
+  - id: 0
+    name: "Grassland (hills and clouds)"
+  - id: 1
+    name: "Castle"
+  - id: 2
+    name: "Desert (pyramids)"
+  - id: 3
+    name: "Underground"
+  - id: 4
+    name: "Clouds"
+  - id: 5
+    name: "Underwater"
+  - id: 6
+    name: "Desert (pyramids)"
+  - id: 7
+    name: "Volcanoes 1 (inside)"
+  - id: 8
+    name: "Grassland (Peach Castle)"
+  - id: 9
+    name: "Beach (cliffs)"
+  - id: 10
+    name: "Beach (cliffs)"
+  - id: 11
+    name: "Forest"
+  - id: 12
+    name: "Grassland (green/white hills and clouds)"
+  - id: 13
+    name: "Bushes on mountain [Unused]"
+  - id: 14
+    name: "Bushes on mountain [Unused]"
+  - id: 15
+    name: "Volcanoes 2 (outside) [including raining debris]"
+  - id: 16
+    name: "Volcanoes 3 (outside) [Unused]"
+  - id: 17
+    name: "Snowy trees"
+  - id: 18
+    name: "Snowy hills"
+  - id: 19
+    name: "Bushes"
+  - id: 20
+    name: "Desert sand"
+  - id: 21
+    name: "Empty"
+  - id: 22
+    name: "Volcanoes 3 (outside) [Unused]"
+  - id: 23
+    name: "Ghost house"
+  - id: 24
+    name: "Mountains with clouds"
+  - id: 25
+    name: "Mountains with clouds"
+  - id: 26
+    name: "Snowy trees (darker)"
+  - id: 27
+    name: "Grassland (hills and clouds)"
+  - id: 28
+    name: "Snowy trees"
+  - id: 29
+    name: "Pipes"
+  - id: 30
+    name: "Sewer wall (W2-3)"
+  - id: 31
+    name: "Volcano tower"
+  - id: 32
+    name: "Empty"
+  - id: 33
+    name: "Low clouds"
+  - id: 34
+    name: "Grassland (hills and clouds, meant for W1 Cannon)"
+  - id: 35
+    name: "Empty (no screen)"
+  - id: 36
+    name: "Stalagmites (glitchy) [Unused]"
+  - id: 37
+    name: "Dark world 1 (dead trees, purple clouds)"
+  - id: 38
+    name: "Dark world 2 (rocks, purple clouds)"
+  - id: 39
+    name: "Tower"
+  - id: 40
+    name: "Ghost house exit"
+  - id: 41
+    name: "Final Castle"
+  - id: 42
+    name: "Toad house 1"
+  - id: 43
+    name: "Toad house 2"
+  - id: 44
+    name: "Toad house 3"
+  - id: 45
+    name: "Final Castle"
+  - id: 46
+    name: "Toad house 4"
+  - id: 47
+    name: "Bowser Jr battle"
+  - id: 48
+    name: "Beach (cliffs, tall)"
+  - id: 49
+    name: "Boss battle"
+  - id: 50
+    name: "Low clouds"
+  - id: 51
+    name: "Foggy forest"
+  - id: 52
+    name: "Desert (pyramids)"
+  - id: 53
+    name: "Desert (with underground bit)"
+  - id: 54
+    name: "Foggy forest"
+  - id: 55
+    name: "Final boss battle"
+  - id: 56
+    name: "Volcanoes 2 (outside)"
+  - id: 57
+    name: "Underwater cave"
+  - id: 58
+    name: "Light grey castle (W8 Castle 1)"
+  - id: 59
+    name: "Yellow clouds (Desert)"
+  - id: 60
+    name: "Beach (with bushes)"
+  - id: 61
+    name: "Medium clouds"
+  - id: 62
+    name: "Stone wall"
+  - id: 63
+    name: "Mummy-Pokey battle"
+  - id: 64
+    name: "Desert (pyramids)"
+  - id: 65
+    name: "Desert (pyramids)"
+  - id: 66
+    name: "Desert (pyramids, higher)"
+  - id: 67
+    name: "Empty"
+  - id: 68
+    name: "Empty"
+  - id: 69
+    name: "Empty"
+  - id: 70
+    name: "Empty"
+  - id: 71
+    name: "Empty"
+  - id: 72
+    name: "Empty"
+  - id: 73
+    name: "Empty"
+  - id: 74
+    name: "Empty"
+  - id: 75
+    name: "Grassland (hills and clouds)"
+scenes:
+  # `Titlescreen_LoadTilesetGraphics` loads all three layers by file; NSMB Editor called the tileset layer a
+  # "mapped tileset". It is the castle the opening cutscene plays in front of.
+  - name: "Title screen"
+    background:
+      graphics: BG_ncg/d_2d_I_M_back_demo_castle_ncg.bin
+      palette: BG_ncl/d_2d_I_M_back_demo_castle_ncl.bin
+      screen: BG_nsc/d_2d_I_M_back_demo_castle_nsc.bin
+    tileset:
+      graphics: BG_ncg/d_2d_I_M_tikei_demo_castle_ncg.bin
+      palette: BG_ncl/d_2d_I_M_tikei_demo_castle_ncl.bin
+      screen: BG_nsc/d_2d_I_M_tikei_demo_castle_nsc.bin
+    foreground:
+      graphics: BG_ncg/d_2d_I_M_free_demo_castle_ncg.bin
+      palette: BG_ncl/d_2d_I_M_free_demo_castle_ncl.bin
+      screen: BG_nsc/d_2d_I_M_free_demo_castle_nsc.bin

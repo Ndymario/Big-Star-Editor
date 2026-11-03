@@ -3,7 +3,6 @@
 return {
     layer = "foreground",
     id = 63,
-    name = "Mummy-Pokey battle",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_sabaku_boss_ncg.bin",
         interval = 5,

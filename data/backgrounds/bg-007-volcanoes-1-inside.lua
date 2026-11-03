@@ -3,6 +3,5 @@
 return {
     layer = "background",
     id = 7,
-    name = "Volcanoes 1 (inside)",
     palette = { file = "BG_ncl/d_2d_Bg1_TEN_W_yougan_ncl.bin", interval = 16, frames = 8, to = 80, count = 8, stride = 16 },
 }

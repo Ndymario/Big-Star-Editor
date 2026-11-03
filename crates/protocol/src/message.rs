@@ -1,14 +1,15 @@
 use bigstar_core::Error;
 use bigstar_formats::{GlueBlock, NsmbLevelCamera, NsmbLevelCourse, NsmbLevelHeader, NsmbLevelObject, NsmbLevelScreen, NsmbLevelView, RgbaImage};
 use bigstar_level::{
-    LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind, ScreenBlock,
+    BackgroundLayer, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ModuleDataCatalog, ReorderKind,
+    ScreenBlock,
 };
 use serde::{Deserialize, Serialize};
 
 use crate::graphics::{ActorCatalog, ActorDraw, ActorInput, LevelGraphics, ProjectSettings, TextureData, TextureId};
 
 /// Bumped whenever a message changes shape. The host refuses a frontend that disagrees.
-pub const PROTOCOL_VERSION: u32 = 23;
+pub const PROTOCOL_VERSION: u32 = 24;
 
 pub type RequestId = u64;
 
@@ -84,6 +85,8 @@ pub enum Request {
     CloseProject,
     /// The vanilla level list of the open project, with which areas its ROM holds.
     ListLevels,
+    /// The tilesets, backgrounds, foregrounds and scenes the project can edit, named by its tileset list.
+    ListTilesets,
     /// Opens (or rejoins) the session of one area, named by its catalog source token such as `A01_1`.
     OpenLevel {
         area: String,
@@ -197,9 +200,10 @@ pub enum Request {
         #[serde(with = "serde_bytes")]
         bytes: Vec<u8>,
     },
-    /// The tilesets and backgrounds a level loads, as the files that hold them, for the tileset workspace.
+    /// The files behind what the tileset workspace edits: the tilesets and backgrounds a level loads, or one entry of
+    /// the tileset list.
     TilesetResources {
-        level: LevelId,
+        subject: GraphicsSubject,
     },
     /// Writes several files into their modules at once, the way `WriteFile` writes one; the listing and graphics
     /// change once.
@@ -325,13 +329,86 @@ pub struct Map16Overlay {
     pub replaces: bool,
 }
 
+/// One entry of a list in the tileset list.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum EntryKey {
+    /// A slot of the game's tables in overlay 0.
+    Table(u16),
+    /// The tileset every level loads first (jyotyu).
+    Shared,
+    /// The tileset every level loads last (nohara).
+    SubUnit,
+    /// An entry that names its files, by its name.
+    File(String),
+}
+
+/// What a tileset workspace edits.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum GraphicsSubject {
+    /// Everything a level loads, and the references it loads them by.
+    Level(LevelId),
+    Tileset(EntryKey),
+    Background(EntryKey),
+    Foreground(EntryKey),
+    /// Layers the game puts together outside a level, by name.
+    Scene(String),
+}
+
+impl Default for GraphicsSubject {
+    fn default() -> Self {
+        Self::Level(0)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilesetListEntry {
+    pub subject: GraphicsSubject,
+    pub name: String,
+    /// Whether the game has files for it: a slot of the tables can hold none.
+    pub available: bool,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TilesetListing {
+    pub tilesets: Vec<TilesetListEntry>,
+    pub backgrounds: Vec<TilesetListEntry>,
+    pub foregrounds: Vec<TilesetListEntry>,
+    pub scenes: Vec<TilesetListEntry>,
+    /// Why the project's own `tilesets.yaml` was not used, when it was not; the editor's own list stands in for it.
+    pub problem: Option<String>,
+}
+
+impl TilesetListing {
+    /// What the list calls slot `id` of the tilesets (`None`), backgrounds or foregrounds.
+    pub fn slot_name(&self, layer: Option<BackgroundLayer>, id: u16) -> Option<&str> {
+        let entries = match layer {
+            None => &self.tilesets,
+            Some(BackgroundLayer::Background) => &self.backgrounds,
+            Some(BackgroundLayer::Foreground) => &self.foregrounds,
+        };
+        entries.iter().find(|entry| entry.subject.table_id() == Some(id)).map(|entry| entry.name.as_str())
+    }
+}
+
+impl GraphicsSubject {
+    /// The slot of the game's tables this names, when it names one.
+    pub fn table_id(&self) -> Option<u16> {
+        match self {
+            Self::Tileset(EntryKey::Table(id)) | Self::Background(EntryKey::Table(id)) | Self::Foreground(EntryKey::Table(id)) => Some(*id),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TilesetResources {
-    pub level: LevelId,
-    /// Slots 0 (shared), 1 (the level's) and 2 (sub-unit).
+    pub subject: GraphicsSubject,
+    /// Slots 0 (shared), 1 (the level's) and 2 (sub-unit), or none when the subject has no tilesets.
     pub tilesets: Vec<TilesetSlot>,
     pub background: TilemapSlot,
     pub foreground: TilemapSlot,
+    /// A scene's BG2: graphics where a level's tileset goes, drawn from a screen instead of from Map16.
+    pub tileset_layer: TilemapSlot,
     pub references: LevelTilesetReferences,
     pub overlays: Vec<Map16Overlay>,
 }
@@ -426,6 +503,7 @@ pub enum Response {
     Directory(DirectoryListing),
     Project(ProjectInfo),
     Levels(LevelListing),
+    Tilesets(TilesetListing),
     Level(Box<LevelSnapshot>),
     Edited {
         snapshot: Box<LevelSnapshot>,

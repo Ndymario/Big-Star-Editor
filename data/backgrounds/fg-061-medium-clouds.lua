@@ -2,7 +2,6 @@
 return {
     layer = "foreground",
     id = 61,
-    name = "Medium clouds",
     strips = {
         { throughRow = 359, drift = 0.25 },
         { drift = 0.4375 },

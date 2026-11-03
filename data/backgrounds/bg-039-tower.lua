@@ -3,7 +3,6 @@
 return {
     layer = "background",
     id = 39,
-    name = "Tower",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_toride_ncg.bin",
         interval = 5,

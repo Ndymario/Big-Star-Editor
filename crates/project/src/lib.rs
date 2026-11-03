@@ -1,5 +1,5 @@
 //! Big Star Editor `project` layer: recognising an NCPatcher project, the ROM read where it lies, the level
-//! catalog, the generated module data, the effective filesystem a plan and a ROM add up to, level graphics resolution
+//! and tileset catalogs, the generated module data, the effective filesystem a plan and a ROM add up to, level graphics resolution
 //! the transactional patch apply, and the Lua actor, tile and background scripts. Host-only: it touches the filesystem and runs Lua.
 
 mod effective_filesystem;
@@ -17,6 +17,7 @@ mod paths;
 mod rom_edit;
 mod rom_reader;
 mod tile_overlays;
+mod tileset_catalog;
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -29,8 +30,8 @@ pub use filesystem_view::{
 pub use graphics_resources::{
     ActorResourceFiles, BackgroundAnimationStep, BackgroundAnimator, BackgroundFrames, BackgroundResourceFiles, LevelGraphicsResources,
     LevelTilesets, NsmbGraphicsProfile, ObjectBankOverlayTable, ResourceFile, TilesetResourceFiles, background_palette_animator,
-    background_tile_animator, find_object_bank_overlays, load_background_frames, load_background_graphics, load_level_tilesets,
-    nsmb_graphics_profile, resolve_level_graphics,
+    background_tile_animator, filled_table_slots, find_object_bank_overlays, load_background_frames, load_background_graphics, load_level_tilesets,
+    nsmb_graphics_profile, resolve_file_layer, resolve_file_tileset, resolve_level_graphics,
 };
 pub use level_catalog::{
     AreaLocation, LevelCatalog, LevelCatalogArea, LevelCatalogGroup, LevelCatalogLevel, PROJECT_LEVEL_LIST, builtin_level_catalog,
@@ -53,6 +54,10 @@ pub use paths::lexically_normal;
 pub use rom_edit::write_edited_rom;
 pub use rom_reader::{ArchiveMember, RomReader};
 pub use tile_overlays::{TileOverlay, TileOverlayCatalog, TileOverlayScript, overlay_map16_images, overlay_map16_sheet};
+pub use tileset_catalog::{
+    CatalogEntry, CatalogKind, EntrySource, LayerFiles, PROJECT_TILESET_LIST, SceneEntry, TABLE_SLOTS, TilesetCatalog, TilesetFiles,
+    builtin_tileset_catalog, parse_tileset_catalog,
+};
 
 #[cfg(test)]
 mod tests;

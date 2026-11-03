@@ -17,8 +17,8 @@ use bigstar_project::{
 };
 use bigstar_protocol::{
     ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, EditOutcome, Event, FileEntry, FilesystemListing, FoundEntity,
-    LevelBytes, LevelEdit, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData, ProjectInfo,
-    ProjectSettings, ProjectSummary, RecoverableLevel, Request, Response, Service, TextureId,
+    GraphicsSubject, LevelBytes, LevelEdit, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData,
+    ProjectInfo, ProjectSettings, ProjectSummary, RecoverableLevel, Request, Response, Service, TextureId,
 };
 
 use crate::graphics::ProjectGraphics;
@@ -336,6 +336,7 @@ impl Shared {
             Request::DownloadRom { offset } => self.download_rom(offset),
             Request::CloseProject => self.close_project(),
             Request::ListLevels => self.list_levels(),
+            Request::ListTilesets => self.list_tilesets(),
             Request::OpenLevel { area } => self.open_level(&area),
             Request::EditLevel { level, base_revision, edit } => self.edit_level(level, base_revision, edit),
             Request::UndoLevel { level } => self.step_history(level, true),
@@ -365,7 +366,7 @@ impl Shared {
             Request::RemoveFile { path } => self.ncpatcher_only().and_then(|()| self.remove_file(&path)),
             Request::Banner => self.banner(),
             Request::WriteBanner { bytes } => self.write_banner(&bytes),
-            Request::TilesetResources { level } => self.tileset_resources(level),
+            Request::TilesetResources { subject } => self.tileset_resources(subject),
             Request::WriteFiles { files } => self.write_files(&files),
             Request::BuildConfig => self.ncpatcher_only().and_then(|()| self.build_config()),
             Request::SetPreferences { autosave_minutes, backups_kept } => {
@@ -1219,12 +1220,21 @@ impl Shared {
         Ok(Written::Wrote(module.key))
     }
 
-    fn tileset_resources(&self, level: LevelId) -> Result<Response> {
+    fn tileset_resources(&self, subject: GraphicsSubject) -> Result<Response> {
         let mut state = lock(&self.state);
         let open = state.open.as_mut().ok_or_else(no_project)?;
-        let references = open.levels.get(&level).ok_or_else(unknown_level)?.level.tileset_references();
-        let resources = self.ensure_graphics(open)?.tileset_resources(level, references)?;
+        let references = match &subject {
+            GraphicsSubject::Level(level) => Some(open.levels.get(level).ok_or_else(unknown_level)?.level.tileset_references()),
+            _ => None,
+        };
+        let resources = self.ensure_graphics(open)?.tileset_resources(subject, references)?;
         Ok(Response::TilesetResources(Box::new(resources)))
+    }
+
+    fn list_tilesets(&self) -> Result<Response> {
+        let mut state = lock(&self.state);
+        let open = state.open.as_mut().ok_or_else(no_project)?;
+        Ok(Response::Tilesets(self.ensure_graphics(open)?.tileset_listing()))
     }
 
     fn file_targets(&self, path: &str) -> Result<Response> {

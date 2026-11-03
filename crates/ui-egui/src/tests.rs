@@ -6,7 +6,10 @@ use bigstar_formats::{
     OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage,
 };
 use bigstar_level::{LevelEntityInsertions, SpriteInsertion};
-use bigstar_protocol::{Event, LevelEdit, LevelGraphics, LevelSnapshot, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics};
+use bigstar_protocol::{
+    EntryKey, Event, GraphicsSubject, LevelEdit, LevelGraphics, LevelSnapshot, Request, RequestId, Response, ResponseResult, TextureData,
+    TilesetGraphics,
+};
 use egui::{Key, Modifiers, PointerButton, Pos2, Rect, Vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
@@ -15,6 +18,7 @@ use crate::demo::{DemoConnection, DemoTileset};
 use crate::history::Undoable as _;
 use crate::level_view::{Backgrounds, Gesture, Handle, Item, Kind, LevelView, handle_centres};
 use crate::properties::Tab;
+use crate::tileset_editor::Tab as TilesetTab;
 use crate::{BigStarApp, MemoryServices, Session};
 
 fn settle(session: &mut Session) {
@@ -1993,6 +1997,97 @@ fn the_rom_banner_opens_from_the_tools_menu_and_saves_to_the_configured_file() {
     assert!(!doc.dirty);
 }
 
+const CLEAR_SEARCH: &str = "Clear search";
+
+/// Types `text` into the left panel's search field.
+fn search_left(harness: &mut Harness<'static, BigStarApp>, text: &str) {
+    let left = |node: &egui_kittest::Node<'_>| node.rect().left() < 300.0;
+    let field = harness
+        .query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::TextInput))
+        .find(left)
+        .map(|node| node.rect())
+        .expect("a search field in the left panel");
+    click(harness, field.center(), PointerButton::Primary, Modifiers::NONE);
+    harness.run();
+    harness.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::TextInput)).find(left).unwrap().type_text(text);
+    harness.run();
+    harness.run();
+}
+
+/// The Tilesets tab lists every entry of the tileset list, filters them, and opens each in a workspace of its own
+/// that shows only what it has. Saving one writes its files and edits no level.
+#[test]
+fn the_tilesets_tab_opens_each_entry_on_its_own() {
+    let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
+    let level = view(&harness).snapshot.level;
+    let references = view(&harness).snapshot.tileset_references;
+    harness.get_by_label("Tilesets").click();
+    harness.run();
+    for group in ["Tilesets (4)", "Backgrounds (1)", "Foregrounds (1)", "Scenes (1)"] {
+        harness.get_by_label(group).click();
+    }
+    harness.run();
+    harness.get_by_label("Shared (jyotyu)");
+    // A slot of the tables with no files is listed, and cannot be opened.
+    harness.get_by_label("1 – Castle (empty)");
+    search_left(&mut harness, "grass");
+    assert!(harness.query_by_label("Shared (jyotyu)").is_none());
+    assert!(harness.query_by_label("Title screen").is_none());
+    harness.get_by_label("0 – Grassland");
+    harness.get_by_label("0 – Grassland (orange hills and clouds)");
+
+    // Each row's Edit, beside its name, opens it.
+    let edit = |harness: &mut Harness<'static, BigStarApp>, filter: &str, label: &str| {
+        if harness.query_by_label(CLEAR_SEARCH).is_some() {
+            harness.get_by_label(CLEAR_SEARCH).click();
+            harness.run();
+        }
+        search_left(harness, filter);
+        let row = harness.get_by_label(label).rect();
+        let button = harness.get_all_by_label("Edit").map(|node| node.rect()).find(|rect| row.y_range().contains(rect.center().y));
+        click(harness, button.expect("an Edit beside the row").center(), PointerButton::Primary, Modifiers::NONE);
+        harness.run();
+        harness.run();
+    };
+    edit(&mut harness, "grass", "0 – Grassland");
+    let tileset = GraphicsSubject::Tileset(EntryKey::Table(0));
+    let (doc, _) = harness.state().workspace.tileset(&tileset).expect("the tileset opens");
+    assert_eq!(doc.tabs(), [TilesetTab::Graphics, TilesetTab::Map16, TilesetTab::Objects, TilesetTab::Behaviors]);
+    assert_eq!(doc.title, "0 – Grassland");
+
+    edit(&mut harness, "orange", "0 – Grassland (orange hills and clouds)");
+    let background = GraphicsSubject::Background(EntryKey::Table(0));
+    let (doc, _) = harness.state().workspace.tileset(&background).expect("the background opens");
+    assert_eq!(doc.tabs(), [TilesetTab::Graphics, TilesetTab::Background]);
+    assert_eq!(doc.tab, TilesetTab::Graphics);
+
+    edit(&mut harness, "title", "Title screen");
+    let scene = GraphicsSubject::Scene("Title screen".to_owned());
+    let (doc, _) = harness.state().workspace.tileset(&scene).expect("the scene opens");
+    assert_eq!(doc.tabs(), [TilesetTab::Graphics, TilesetTab::Background, TilesetTab::Foreground, TilesetTab::TilesetLayer]);
+    assert_eq!(harness.state().workspace.tilesets.len(), 3, "one workspace for each");
+
+    // The tileset layer is painted like the other two, and saving writes its own files alone.
+    {
+        let (doc, _) = harness.state_mut().workspace.tileset_mut(&scene).unwrap();
+        doc.tab = TilesetTab::TilesetLayer;
+        let mut value = doc.map_value(2).unwrap();
+        value.horizontal_flip = !value.horizontal_flip;
+        doc.edit("Flip", |doc| doc.set_map_value(2, value));
+        assert!(!doc.references_changed(), "a scene has no level references");
+    }
+    harness.run();
+    harness.get_all_by_label("Save").last().unwrap().click();
+    harness.run();
+    harness.run();
+    assert!(harness.state().workspace.tileset(&scene).is_none(), "a saved workspace closes");
+    let listing = harness.state().session().unwrap().filesystem.clone().expect("a write fetches the listing again");
+    assert!(listing.entries.iter().any(|e| e.path == "BG_nsc/demo_tl_nsc.bin" && e.from_module));
+    assert!(listing.entries.iter().all(|e| e.path != "BG_nsc/demo_bg_nsc.bin" || !e.from_module), "the other layers stay the ROM's");
+    let session = harness.state().session().unwrap();
+    assert_eq!(session.levels[&level].snapshot.tileset_references, references, "no level was edited");
+}
+
 #[test]
 fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
@@ -2002,7 +2097,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     harness.get_by_label("Tilesets and Backgrounds…").click();
     harness.run();
     harness.run();
-    assert!(harness.state().workspace.tilesets.contains_key(&level));
+    assert!(harness.state().workspace.tileset(&GraphicsSubject::Level(level)).is_some());
     for tab in ["Graphics", "Map16", "Objects", "Behaviors", "Background", "Foreground"] {
         harness.get_all_by_label(tab).next().unwrap();
     }
@@ -2013,7 +2108,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
 
     // A Map16 quadrant and the level tileset id change; Save writes the one file and edits the level.
     {
-        let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+        let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
         doc.map16_entry = 8;
         let mut value = doc.map16_value().unwrap();
         value.horizontal_flip = true;
@@ -2025,7 +2120,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     harness.get_all_by_label("Save").last().unwrap().click();
     harness.run();
     harness.run();
-    assert!(!harness.state().workspace.tilesets.contains_key(&level), "a saved workspace closes, as the dialog did");
+    assert!(!harness.state().workspace.tileset(&GraphicsSubject::Level(level)).is_some(), "a saved workspace closes, as the dialog did");
     assert_eq!(view(&harness).snapshot.tileset_references.tileset_id, 9);
     let listing = harness.state().session().unwrap().filesystem.clone().expect("a write fetches the listing again");
     assert!(listing.entries.iter().any(|e| e.path == "BG_pnl/demo_t1_pnl.bin" && e.from_module));
@@ -2063,7 +2158,7 @@ fn tileset_graphics_go_out_and_back_in_with_all_their_palettes() {
     harness.run();
     let (_, png) = shelf.lock().unwrap().saved.pop().expect("exported");
     let drawn = |harness: &mut Harness<'static, BigStarApp>| {
-        let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+        let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
         doc.sheet_image(crate::tileset_editor::Sheet::Current, 0).unwrap()
     };
     let before = drawn(&mut harness);
@@ -2074,7 +2169,7 @@ fn tileset_graphics_go_out_and_back_in_with_all_their_palettes() {
     harness.get_by_label("Import this bitmap with all palettes…").click();
     harness.run();
     assert_eq!(drawn(&mut harness), before);
-    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
     assert_eq!(doc.history_names().0.first().map(String::as_str), Some("Import graphics"));
 }
 
@@ -2140,7 +2235,7 @@ fn a_background_is_painted_with_tiles_from_the_picker_beside_it() {
     // The picker's second tile (it opens at twice the size, so 16 to 32 points across), painted at the map's first entry.
     click(&mut harness, picker.min + Vec2::new(20.0, 2.0), PointerButton::Primary, Modifiers::NONE);
     click(&mut harness, map.min + Vec2::splat(1.0), PointerButton::Primary, Modifiers::NONE);
-    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
     let painted = doc.map_value(0).unwrap();
     assert_ne!(painted.tile, 0, "the brush is the picked tile, not the first");
     let paths: Vec<String> = doc.writes().unwrap().into_iter().map(|w| w.path).collect();
@@ -2149,7 +2244,7 @@ fn a_background_is_painted_with_tiles_from_the_picker_beside_it() {
     // Undo takes the stroke back.
     harness.key_press_modifiers(Modifiers::COMMAND, Key::Z);
     harness.run();
-    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
     assert!(doc.writes().unwrap().is_empty());
 }
 
@@ -2168,7 +2263,7 @@ fn map16_blocks_are_painted_with_tiles_chosen_in_the_picker() {
     canvases.sort_by(|a, b| a.left().total_cmp(&b.left()));
     let [sheet, picker] = canvases[..] else { panic!("expected the sheet and its picker, got {canvases:?}") };
     let first = {
-        let (doc, _) = harness.state().workspace.tilesets.get(&level).unwrap();
+        let (doc, _) = harness.state().workspace.tileset(&GraphicsSubject::Level(level)).unwrap();
         doc.tileset().unwrap().tile_offset
     };
     // The picker opens on this tileset's first tile; the one after it is clicked, and stays chosen.
@@ -2179,7 +2274,7 @@ fn map16_blocks_are_painted_with_tiles_chosen_in_the_picker() {
     harness.run();
     // Painted at block 0's top-left quadrant.
     click(&mut harness, sheet.min + Vec2::splat(1.0), PointerButton::Primary, Modifiers::NONE);
-    let (doc, _) = harness.state_mut().workspace.tilesets.get_mut(&level).unwrap();
+    let (doc, _) = harness.state_mut().workspace.tileset_mut(&GraphicsSubject::Level(level)).unwrap();
     assert_eq!((doc.map16_entry, doc.quadrant), (0, 0));
     assert_eq!(doc.map16_value().unwrap().tile, 1, "the picked tile, in this tileset's own numbering");
 }

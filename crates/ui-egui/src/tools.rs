@@ -258,7 +258,7 @@ pub fn menu(ui: &mut Ui, tools: &mut Tools, session: &mut Session) {
     let project = session.project.is_some();
     if Button::menu(tr!("tools.tilesets_and_backgrounds")).enabled(editing).show(ui).clicked() {
         if let Some(level) = session.active {
-            session.request_tileset_resources(level);
+            session.request_tileset_resources(bigstar_protocol::GraphicsSubject::Level(level));
         }
         ui.close();
     }

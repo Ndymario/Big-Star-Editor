@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 0,
-    name = "Grassland (orange hills and clouds)",
     strips = {
         { throughRow = 344, drift = 0.125 },
         { scroll = 1.0 },

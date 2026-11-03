@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 13,
-    name = "Background clouds 2 [Unused]",
     strips = {
         { throughRow = 384, drift = 0.125 },
         { scroll = 1.0 },

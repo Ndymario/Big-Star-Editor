@@ -52,6 +52,10 @@ pub const BACKGROUND_PALETTE_OFFSET: u8 = 10;
 /// Where the game loads a level's foreground (`free`) layer: tiles from 256 and palette rows from 8.
 pub const FOREGROUND_TILE_OFFSET: u16 = 256;
 pub const FOREGROUND_PALETTE_OFFSET: u8 = 8;
+/// Where the title screen loads the screen it draws in a level tileset's place (`tikei`): the level tileset's tiles
+/// from 192 and palette rows from 2 (`Titlescreen_LoadTilesetGraphics`).
+pub const TILESET_LAYER_TILE_OFFSET: u16 = 192;
+pub const TILESET_LAYER_PALETTE_OFFSET: u8 = 2;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct EditableTilemap {

@@ -221,7 +221,8 @@ fn load_script(path: &Path) -> Result<BackgroundDefinition> {
     Ok(BackgroundDefinition {
         layer,
         id,
-        name: string_field(&table, "name", &what, true)?,
+        // The tileset list names every layer; a script names one only for a list that has no name for it.
+        name: string_field(&table, "name", &what, false)?,
         strips: read_strips(&table, &what)?,
         tiles: read_tiles(&table, &what, layer)?,
         palette: read_palette(&table, &what)?,

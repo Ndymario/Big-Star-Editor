@@ -1,5 +1,5 @@
 //! The tileset workspace: a level's three tilesets (graphics, Map16, objects, behaviours) and its background and
-//! foreground, edited together and saved as only the files that changed. A port of `TilesetEditorDialog` and of
+//! foreground, or one entry of the tileset list, edited together and saved as only the files that changed. A port of `TilesetEditorDialog` and of
 //! `MainWindow::openTilesetEditor`'s saving; the document is pure and `show` draws it as a tab.
 
 use crate::controls::{self, Button, Choice as _, TextField, Width};
@@ -11,14 +11,14 @@ use std::sync::Arc;
 use bigstar_formats::{
     BACKGROUND_PALETTE_OFFSET, BACKGROUND_TILE_OFFSET, Bgr555Color, EditableTilemap, EditableTileset, FOREGROUND_PALETTE_OFFSET,
     FOREGROUND_TILE_OFFSET, IndexedTile8Bpp, OBJECT_LAYOUT_EMPTY_TILE, ObjectLayout, ObjectLayoutTile, RgbaImage, ScreenMapEntry,
-    TILE_BEHAVIOR_FLAG_NAMES, TILE_BEHAVIOR_PIPE_MAIN_NAMES, TILE_BEHAVIOR_SUBTYPE_NAMES, TileBehaviorParameterKind, TileBehaviorParts, TileOverlay,
-    TilemapResourceData, TilesetResourceData, bgr555_to_rgb, compose_tileset_memory, decode_tile_behavior, encode_tile_behavior,
-    import_tilemap_image, overlay_map16_sheet, pack_bgr555, parse_tilemap, parse_tileset, parse_tileset_bundle, render_composed_map16_sheet,
-    render_map16_sheet, render_object_layout, render_screen_map, render_tilemap, tile_behavior_parameter_kind, tile_behavior_parameter_name,
-    write_tilemap, write_tileset, write_tileset_bundle,
+    TILE_BEHAVIOR_FLAG_NAMES, TILE_BEHAVIOR_PIPE_MAIN_NAMES, TILE_BEHAVIOR_SUBTYPE_NAMES, TILESET_LAYER_PALETTE_OFFSET, TILESET_LAYER_TILE_OFFSET,
+    TileBehaviorParameterKind, TileBehaviorParts, TileOverlay, TilemapResourceData, TilesetResourceData, bgr555_to_rgb, compose_tileset_memory,
+    decode_tile_behavior, encode_tile_behavior, import_tilemap_image, overlay_map16_sheet, pack_bgr555, parse_tilemap, parse_tileset,
+    parse_tileset_bundle, render_composed_map16_sheet, render_map16_sheet, render_object_layout, render_screen_map, render_tilemap,
+    tile_behavior_parameter_kind, tile_behavior_parameter_name, write_tilemap, write_tileset, write_tileset_bundle,
 };
 use bigstar_level::LevelTilesetReferences;
-use bigstar_protocol::{FileWrite, LevelId, ResourceBytes, TilemapSlot, TilesetResources, TilesetSlot};
+use bigstar_protocol::{EntryKey, FileWrite, GraphicsSubject, ResourceBytes, TilemapSlot, TilesetResources, TilesetSlot};
 use egui::{Color32, Pos2, Rect, RichText, Stroke, StrokeKind, Ui, Vec2};
 
 use crate::graphics_editor::entry_text;
@@ -38,7 +38,8 @@ pub const MAP16_COLUMNS: usize = 16;
 
 pub const SLOT_NAMES: [(u8, &str); 3] =
     [(0, key!("tileset_editor.slot.shared")), (1, key!("tileset_editor.slot.level")), (2, key!("tileset_editor.slot.sub_unit"))];
-/// A bitmap the Graphics tab lists: one of the tilesets' graphics, or the background's (0) or foreground's (1).
+/// A bitmap the Graphics tab lists: one of the tilesets' graphics, or a layer's: the background's (0), the foreground's
+/// (1) or a scene's tileset layer (2).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Sheet {
     /// The tileset in the chosen slot.
@@ -75,16 +76,32 @@ pub enum Tab {
     Behaviors,
     Background,
     Foreground,
+    TilesetLayer,
 }
 
-pub const TABS: [(Tab, &str); 6] = [
+pub const TABS: [(Tab, &str); 7] = [
     (Tab::Graphics, key!("tileset_editor.tab.graphics")),
     (Tab::Map16, key!("tileset_editor.tab.map16")),
     (Tab::Objects, key!("tileset_editor.tab.objects")),
     (Tab::Behaviors, key!("tileset_editor.tab.behaviors")),
     (Tab::Background, key!("tileset_editor.tab.background")),
     (Tab::Foreground, key!("tileset_editor.tab.foreground")),
+    (Tab::TilesetLayer, key!("tileset_editor.tab.tileset_layer")),
 ];
+
+/// The layers, in `TilesetDoc::tilemaps` order: each one's tab, the names its sheets are drawn under, and where the
+/// game loads it.
+const LAYERS: [(Tab, &str, &str, u16, u8); 3] = [
+    (Tab::Background, "background", "background-tiles", BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET),
+    (Tab::Foreground, "foreground", "foreground-tiles", FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET),
+    (Tab::TilesetLayer, "tileset-layer", "tileset-layer-tiles", TILESET_LAYER_TILE_OFFSET, TILESET_LAYER_PALETTE_OFFSET),
+];
+
+/// A layer's name, as its tab has it.
+fn layer_name(which: usize) -> &'static str {
+    let tab = LAYERS.get(which).map_or(Tab::Background, |layer| layer.0);
+    TABS.iter().find(|(t, _)| *t == tab).map_or("", |(_, name)| i18n::text(name))
+}
 
 fn resource(slot: &TilesetSlot) -> TilesetResourceData {
     TilesetResourceData {
@@ -101,15 +118,17 @@ fn map_resource(slot: &TilemapSlot) -> TilemapResourceData {
     TilemapResourceData { graphics: slot.graphics.bytes.clone(), palette: slot.palette.bytes.clone(), screen: slot.screen.bytes.clone() }
 }
 
-/// One level's tilesets and backgrounds being edited.
+/// One level's tilesets and backgrounds, or one entry of the tileset list, being edited.
 pub struct TilesetDoc {
-    pub level: LevelId,
+    pub subject: GraphicsSubject,
     pub title: String,
+    /// The three slots a level loads, or none for a subject without tilesets.
     pub tilesets: Vec<EditableTileset>,
-    pub tilemaps: [EditableTilemap; 2],
+    /// In `LAYERS` order. A layer the subject does not have is empty.
+    pub tilemaps: [EditableTilemap; 3],
     /// The files they came from, as read: what a save compares against and where it writes.
     sources: Vec<TilesetSlot>,
-    map_sources: [TilemapSlot; 2],
+    map_sources: [TilemapSlot; 3],
     /// The references the level had, and the ones the workspace holds now.
     initial: LevelTilesetReferences,
     pub references: LevelTilesetReferences,
@@ -125,14 +144,14 @@ pub struct TilesetDoc {
     pub object: usize,
     pub object_cell: Option<(usize, usize)>,
     pub behavior_entry: usize,
-    pub map_entries: [usize; 2],
+    pub map_entries: [usize; 3],
     /// Grows with every change, so drawn sheets are uploaded again.
     pub version: u64,
     history: History<Snapshot>,
 }
 
-/// What an edit can change, for undo: every tileset and both tilemaps.
-type Snapshot = (Vec<EditableTileset>, [EditableTilemap; 2]);
+/// What an edit can change, for undo: every tileset and every tilemap.
+type Snapshot = (Vec<EditableTileset>, [EditableTilemap; 3]);
 
 impl Snapshots for TilesetDoc {
     type State = Snapshot;
@@ -165,29 +184,36 @@ impl TilesetDoc {
             let parsed = parse_tileset(&resource(slot), slot.tile_offset, slot.palette_offset, slot.tile_page_offset).map_err(|e| e.message)?;
             tilesets.push(parsed);
         }
-        if tilesets.len() != 3 {
+        if !tilesets.is_empty() && tilesets.len() != 3 {
             return Err(tr!("tileset_editor.error.not_three_tilesets").to_owned());
         }
-        let background =
-            parse_tilemap(&map_resource(&resources.background), 0, BACKGROUND_TILE_OFFSET, BACKGROUND_PALETTE_OFFSET).map_err(|e| e.message)?;
-        let foreground =
-            parse_tilemap(&map_resource(&resources.foreground), 0, FOREGROUND_TILE_OFFSET, FOREGROUND_PALETTE_OFFSET).map_err(|e| e.message)?;
+        let map_sources = [resources.background, resources.foreground, resources.tileset_layer];
+        let mut tilemaps: [EditableTilemap; 3] = Default::default();
+        for ((map, source), (_, _, _, tile_offset, palette_offset)) in tilemaps.iter_mut().zip(&map_sources).zip(LAYERS) {
+            *map = parse_tilemap(&map_resource(source), 0, tile_offset, palette_offset).map_err(|e| e.message)?;
+        }
+        // A tileset of the list opens on its own slot, and anything else on its first tab with something in it.
+        let slot = match &resources.subject {
+            GraphicsSubject::Tileset(EntryKey::Shared) => 0,
+            GraphicsSubject::Tileset(EntryKey::SubUnit) => 2,
+            _ => 1,
+        };
         let overlays = resources
             .overlays
             .into_iter()
             .map(|o| (o.block, TileOverlay { image: o.image.map(Arc::new), remap: o.remap, replaces: o.replaces }))
             .collect();
         Ok(Self {
-            level: resources.level,
+            subject: resources.subject,
             title: title.to_owned(),
             tilesets,
-            tilemaps: [background, foreground],
+            tilemaps,
             sources: resources.tilesets,
-            map_sources: [resources.background, resources.foreground],
+            map_sources,
             initial: resources.references,
             references: resources.references,
             overlays,
-            slot: 1,
+            slot,
             tab: Tab::default(),
             composed: true,
             solid3d: true,
@@ -196,16 +222,42 @@ impl TilesetDoc {
             object: 0,
             object_cell: None,
             behavior_entry: 0,
-            map_entries: [0, 0],
+            map_entries: [0; 3],
             version: 0,
             history: History::default(),
         })
+        .map(|mut doc: Self| {
+            doc.tab = doc.tabs().first().copied().unwrap_or_default();
+            doc
+        })
     }
 
-    /// A side panel's id. Panels are named across the whole window, so each workspace's are told apart by its level,
-    /// and two shown side by side keep their own sizes.
+    /// The tabs with something to edit: the tilesets' when there are tilesets, and each layer the subject has.
+    pub fn tabs(&self) -> Vec<Tab> {
+        let tilesets = !self.tilesets.is_empty();
+        let layer = |tab: Tab| LAYERS.iter().zip(&self.map_sources).any(|(layer, source)| layer.0 == tab && !source.screen.rom_path.is_empty());
+        TABS.iter()
+            .map(|(tab, _)| *tab)
+            .filter(|tab| match tab {
+                Tab::Graphics => tilesets || self.tilemaps.iter().any(|map| !map.graphics.is_empty()),
+                Tab::Map16 | Tab::Objects | Tab::Behaviors => tilesets,
+                Tab::Background | Tab::Foreground | Tab::TilesetLayer => layer(*tab),
+            })
+            .collect()
+    }
+
+    /// The level whose references this edits, when it edits a level's.
+    pub fn level(&self) -> Option<bigstar_protocol::LevelId> {
+        match self.subject {
+            GraphicsSubject::Level(level) => Some(level),
+            _ => None,
+        }
+    }
+
+    /// A side panel's id. Panels are named across the whole window, so each workspace's are told apart by what it
+    /// edits, and two shown side by side keep their own sizes.
     fn panel_id(&self, name: &str) -> egui::Id {
-        egui::Id::new((name, self.level))
+        egui::Id::new((name, &self.subject))
     }
 
     fn touched(&mut self) {
@@ -243,8 +295,9 @@ impl TilesetDoc {
     }
 
     /// Whether the level references differ from the ones it had; they take effect when the level is saved and reloaded.
+    /// Only a level's workspace has references of its own.
     pub fn references_changed(&self) -> bool {
-        self.references != self.initial
+        self.level().is_some() && self.references != self.initial
     }
 
     // --- Pictures ---
@@ -260,9 +313,8 @@ impl TilesetDoc {
                 ),
             )
         });
-        let layers = self.tilemaps.iter().enumerate().filter(|(_, m)| !m.graphics.is_empty()).map(|(i, _)| {
-            (Sheet::Layer(i), if i == 0 { tr!("tileset_editor.tab.background").to_owned() } else { tr!("tileset_editor.tab.foreground").to_owned() })
-        });
+        let layers =
+            self.tilemaps.iter().enumerate().filter(|(_, m)| !m.graphics.is_empty()).map(|(i, _)| (Sheet::Layer(i), layer_name(i).to_owned()));
         tilesets.chain(layers).collect()
     }
 
@@ -741,10 +793,10 @@ pub struct TilesetView {
     pixels: PixelEditor,
     map16: TilemapEditor,
     map16_tiles: PickerState,
-    maps: [TilemapEditor; 2],
-    map_tiles: [PickerState; 2],
-    /// The brush has been made from each picker's selection once.
-    brushes: [bool; 3],
+    maps: [TilemapEditor; 3],
+    map_tiles: [PickerState; 3],
+    /// The brush has been made from each picker's selection once: Map16's, then each layer's.
+    brushes: [bool; 4],
     object_blocks: PickerState,
     behavior_blocks: PickerState,
     /// The object table's zoom, and the object preview's size in blocks.
@@ -792,20 +844,26 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             });
         });
     });
+    let has_tilesets = !doc.tilesets.is_empty();
     ui.horizontal_wrapped(|ui| {
-        ui.label(tr!("tileset_editor.tileset_slot"));
-        let mut slot = doc.slot;
-        if let Some(picked) = controls::numbered_choice("tileset-slot", &slot_names()).show(ui, i64::try_from(slot).ok()) {
-            slot = usize::from(picked);
-        }
-        if slot != doc.slot {
-            doc.set_slot(slot);
-            view.brushes = [false; 3];
+        if has_tilesets {
+            ui.label(tr!("tileset_editor.tileset_slot"));
+            let mut slot = doc.slot;
+            if let Some(picked) = controls::numbered_choice("tileset-slot", &slot_names()).show(ui, i64::try_from(slot).ok()) {
+                slot = usize::from(picked);
+            }
+            if slot != doc.slot {
+                doc.set_slot(slot);
+                view.brushes = [false; 4];
+            }
         }
         match history_buttons(ui, doc.can_undo(), doc.can_redo()) {
             Some(HistoryButton::Undo) => doc.undo(),
             Some(HistoryButton::Redo) => doc.redo(),
             None => {}
+        }
+        if !has_tilesets {
+            return;
         }
         if Button::new(tr!("tileset_editor.import_tileset_ellipsis")).show(ui).clicked() {
             match services.open_file(tr!("tileset_editor.import_tileset"), &["bstileset"]) {
@@ -821,7 +879,12 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
             view.notice = written.err();
         }
     });
-    controls::tabs(ui, "tileset", &mut doc.tab, &TABS.map(|(tab, name)| (tab, i18n::text(name))));
+    let tabs = doc.tabs();
+    let shown: Vec<(Tab, &str)> = TABS.iter().filter(|(tab, _)| tabs.contains(tab)).map(|(tab, name)| (*tab, i18n::text(name))).collect();
+    if !tabs.contains(&doc.tab) {
+        doc.tab = tabs.first().copied().unwrap_or_default();
+    }
+    controls::tabs(ui, "tileset", &mut doc.tab, &shown);
     controls::notice_line(ui, &mut view.notice, true);
     ui.add_space(2.0);
     match doc.tab {
@@ -831,6 +894,7 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
         Tab::Behaviors => behaviors(ui, doc, view),
         Tab::Background => tilemap(ui, doc, view, services, 0),
         Tab::Foreground => tilemap(ui, doc, view, services, 1),
+        Tab::TilesetLayer => tilemap(ui, doc, view, services, 2),
     }
     action
 }
@@ -955,7 +1019,7 @@ fn graphics(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
                     // A tileset is chosen by choosing its slot, which the other tabs follow.
                     view.sheet = Sheet::Current;
                     doc.set_slot(slot);
-                    view.brushes = [false; 3];
+                    view.brushes = [false; 4];
                 }
             }
             if let Some(action) = action {
@@ -1586,9 +1650,8 @@ fn behaviors(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView) {
 }
 
 fn tilemap(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services: &dyn Services, which: usize) {
-    let name = if which == 0 { tr!("tileset_editor.tab.background") } else { tr!("tileset_editor.tab.foreground") };
-    let (key, tiles_key): (&'static str, &'static str) =
-        if which == 0 { ("background", "background-tiles") } else { ("foreground", "foreground-tiles") };
+    let name = layer_name(which);
+    let Some(&(_, key, tiles_key, _, _)) = LAYERS.get(which) else { return };
     let palettes = doc.tilemaps.get(which).map_or(1, |m| (m.palette.len() / 256).max(1));
     let Some(editor) = view.maps.get_mut(which) else { return };
     editor.palette = editor.palette.clamp(0, palettes as i16 - 1);
@@ -1725,10 +1788,11 @@ pub(crate) mod tests {
         };
         let texture = RgbaImage { width: 16, height: 16, pixels: vec![0x7f; 16 * 16 * 4] };
         TilesetResources {
-            level: 1,
+            subject: GraphicsSubject::Level(1),
             tilesets: vec![slot(0), slot(1), slot(2)],
             background: map.clone(),
             foreground: TilemapSlot { screen: bytes("BG_nsc/fg_nsc.bin", vec![0; 128]), ..map },
+            tileset_layer: TilemapSlot::default(),
             references: LevelTilesetReferences {
                 tileset_id: 1,
                 background_graphics_id: 2,
@@ -1743,7 +1807,9 @@ pub(crate) mod tests {
     #[test]
     fn the_tileset_workspace_exposes_every_surface_and_preserves_resources() {
         let mut doc = TilesetDoc::open(resources(), "1-1").unwrap();
-        assert_eq!(TABS.len(), 6);
+        assert_eq!(TABS.len(), 7);
+        // A level has no tileset layer: that is a scene's.
+        assert_eq!(doc.tabs(), TABS.iter().map(|(tab, _)| *tab).filter(|tab| *tab != Tab::TilesetLayer).collect::<Vec<_>>());
         assert_eq!(doc.slot, 1, "the level's own tileset first");
         doc.references.tileset_id = 42;
         assert!(doc.references_changed());

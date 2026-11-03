@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 46,
-    name = "Toad house 4",
     strips = {
         { throughRow = 383, drift = 0.25 },
         { throughRow = 391, drift = 0.1875 },

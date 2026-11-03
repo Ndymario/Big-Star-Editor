@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 17,
-    name = "Snowy trees",
     strips = {
         { throughRow = 231, drift = 0.25 },
         { throughRow = 263, drift = 0.1875 },

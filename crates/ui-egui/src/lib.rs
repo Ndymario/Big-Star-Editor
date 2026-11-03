@@ -38,6 +38,7 @@ mod theme_editor;
 mod tile_picker;
 mod tilemap_editor;
 mod tileset_editor;
+mod tileset_list;
 mod tools;
 mod workspace;
 mod zoom_canvas;

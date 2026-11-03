@@ -3,6 +3,5 @@
 return {
     layer = "foreground",
     id = 31,
-    name = "Volcano tower",
     palette = { file = "BG_ncl/d_2d_Bg3_TEN_W_yougantate_ncl.bin", interval = 8, frames = 8, to = 80, count = 8, stride = 16 },
 }

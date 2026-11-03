@@ -239,6 +239,82 @@ levels:
 }
 
 #[test]
+fn the_tileset_list_names_every_slot_and_the_title_screen() {
+    let catalog = builtin_tileset_catalog();
+    for (kind, entries) in [(CatalogKind::Tileset, catalog.tilesets.len()), (CatalogKind::Background, catalog.backgrounds.len())] {
+        assert!(entries >= usize::from(TABLE_SLOTS), "{kind:?}");
+        for id in 0..TABLE_SLOTS {
+            assert!(catalog.table_name(kind, id).is_some_and(|name| !name.is_empty()), "{kind:?} {id}");
+        }
+    }
+    assert!((0..TABLE_SLOTS).all(|id| catalog.table_name(CatalogKind::Foreground, id).is_some()));
+    assert_eq!(catalog.table_name(CatalogKind::Tileset, 23), Some("Ghost house"));
+    assert_eq!(catalog.table_name(CatalogKind::Background, 0), Some("Grassland (orange hills and clouds)"));
+    assert_eq!(catalog.table_name(CatalogKind::Tileset, TABLE_SLOTS), None);
+    // NSMB Editor's "mapped tileset" is the title screen's BG2, loaded with its other two layers.
+    let title = catalog.scene("Title screen").unwrap();
+    assert_eq!(title.tileset.as_ref().unwrap().screen, "BG_nsc/d_2d_I_M_tikei_demo_castle_nsc.bin");
+    assert!(title.background.is_some() && title.foreground.is_some());
+    assert!(catalog.file_layer(CatalogKind::Background, "Jungle 2 [unused]").is_some());
+}
+
+#[test]
+fn a_projects_tileset_list_renames_slots_and_adds_entries_over_the_shipped_one() {
+    let project = parse_tileset_catalog(
+        r#"
+backgrounds:
+  - id: 23
+    name: "Haunted mansion"
+  - name: "Credits sky"
+    graphics: z_new/sky_ncg.bin
+    palette: z_new/sky_ncl.bin
+    screen: z_new/sky_nsc.bin
+tilesets:
+  - name: "Extra"
+    graphics: z_new/a.bin
+    palette: z_new/b.bin
+    map16: z_new/c.bin
+    objects: z_new/d.bin
+    object_index: z_new/e.bin
+scenes:
+  - name: "Title screen"
+    tileset: { graphics: z_new/t_ncg.bin, palette: z_new/t_ncl.bin, screen: z_new/t_nsc.bin }
+"#,
+    )
+    .unwrap();
+    let mut catalog = builtin_tileset_catalog().clone();
+    let before = catalog.backgrounds.len();
+    catalog.merge(project);
+    assert_eq!(catalog.table_name(CatalogKind::Background, 23), Some("Haunted mansion"));
+    assert_eq!(catalog.backgrounds.len(), before + 1);
+    // Slots keep their table order; named entries follow them.
+    assert_eq!(catalog.backgrounds[23].name, "Haunted mansion");
+    assert_eq!(catalog.backgrounds.last().unwrap().name, "Credits sky");
+    assert_eq!(catalog.file_tileset("Extra").unwrap().behaviors, None);
+    let title = catalog.scene("Title screen").unwrap();
+    assert_eq!(catalog.scenes.len(), 1);
+    assert!(title.background.is_none());
+    assert_eq!(title.tileset.as_ref().unwrap().graphics, "z_new/t_ncg.bin");
+
+    for bad in [
+        "backgrounds:\n  - { id: 76, name: x }",
+        "backgrounds:\n  - { id: 1, name: x, graphics: a, palette: b, screen: c }",
+        "backgrounds:\n  - { name: x }",
+        "backgrounds:\n  - { name: x, graphics: a, palette: b }",
+        "backgrounds:\n  - { name: x, graphics: ../a, palette: b, screen: c }",
+        "backgrounds:\n  - { id: 1, name: '' }",
+        "backgrounds:\n  - { id: 1, name: x }\n  - { id: 1, name: y }",
+        "tilesets:\n  - { id: 1, name: x, behaviors: a }",
+        "scenes:\n  - { name: x }",
+        "foregrounds:\n  - { id: 1, name: x, colour: red }",
+        "levels: []",
+        "backgrounds: [",
+    ] {
+        assert_eq!(parse_tileset_catalog(bad).unwrap_err().code, bigstar_core::ErrorCode::ParseError, "{bad}");
+    }
+}
+
+#[test]
 fn module_data_catalog_loads_from_the_generated_directory() {
     // A project that has never been built has no generated data, which is an empty catalog and not an error.
     let missing = std::env::temp_dir().join("big-star-no-generated-data-anywhere");

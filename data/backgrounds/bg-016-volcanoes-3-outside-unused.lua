@@ -3,7 +3,6 @@
 return {
     layer = "background",
     id = 16,
-    name = "Volcanoes 3 (outside) [Unused]",
     strips = {
         { throughRow = 384, wave = { amplitude = 2.3125, speed = 256, step = 1536 } },
         { scroll = 1.625 },

@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 37,
-    name = "Dark world 1 (dead trees, purple clouds)",
     strips = {
         { throughRow = 327, drift = 0.125 },
         { throughRow = 399, drift = 0.0625 },

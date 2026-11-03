@@ -10,7 +10,6 @@ frames[#frames + 1] = { 5 * 16, ticks = 48 }
 return {
     layer = "foreground",
     id = 16,
-    name = "Volcanoes 3 (outside) [Unused]",
     tiles = {
         file = "BG_ncg/d_2d_TEN_W_kazangake_ncg.bin",
         frames = frames,

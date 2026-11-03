@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 24,
-    name = "Background mountains",
     strips = {
         { throughRow = 360, drift = 0.125 },
         { scroll = 1.0 },

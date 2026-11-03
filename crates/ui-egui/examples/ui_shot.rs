@@ -165,6 +165,7 @@ fn remote(dir: &std::path::Path, host: &str, token: &str) -> Result<(), String> 
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
     tileset_tabs(&mut harness, dir, "remote-tilesets")?;
+    tileset_list(&mut harness, dir, "remote")?;
     // Run Patcher on a project without NCPatcher's configuration says why there is nothing to build.
     if let Some(button) = harness.query_by_label("Run Patcher") {
         button.click();
@@ -354,6 +355,43 @@ fn main() -> Result<(), String> {
         item.click();
     }
     shot(&mut harness, &dir, "preferences.png")
+}
+
+/// The Tilesets tab with every group open, and the title screen opened from it, a shot of each of its layers.
+fn tileset_list(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
+    let press = |harness: &mut Harness<'_, BigStarApp>, rect: egui::Rect| {
+        for pressed in [true, false] {
+            let button = egui::PointerButton::Primary;
+            harness.event(egui::Event::PointerMoved(rect.center()));
+            harness.event(egui::Event::PointerButton { pos: rect.center(), button, pressed, modifiers: egui::Modifiers::NONE });
+            harness.step();
+        }
+        harness.run_ok();
+    };
+    harness.state_mut().tileset_list_for_screenshot();
+    harness.run_ok();
+    for group in ["Tilesets (", "Backgrounds (", "Scenes ("] {
+        let rect = harness.query_all(egui_kittest::kittest::by().label_contains(group)).next().map(|node| node.rect());
+        if let Some(rect) = rect {
+            press(harness, rect);
+        }
+    }
+    shot(harness, dir, &format!("{prefix}-tileset-list.png"))?;
+    if let Some(session) = harness.state_mut().session_mut() {
+        session.request_tileset_resources(bigstar_protocol::GraphicsSubject::Scene("Title screen".to_owned()));
+    }
+    for _ in 0..30 {
+        harness.step();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    for (index, name) in [(4, "background"), (5, "foreground"), (6, "tileset-layer")] {
+        harness.state_mut().tileset_tab_for_screenshot(index);
+        for _ in 0..3 {
+            harness.step();
+        }
+        shot(harness, dir, &format!("{prefix}-title-screen-{name}.png"))?;
+    }
+    Ok(())
 }
 
 /// Each tab of the open tileset workspace graphics, Map16, objects, behaviours and both backgrounds.

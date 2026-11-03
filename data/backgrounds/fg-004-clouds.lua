@@ -2,7 +2,6 @@
 return {
     layer = "foreground",
     id = 4,
-    name = "Clouds",
     strips = {
         { drift = 0.25 },
     },

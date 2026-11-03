@@ -3,7 +3,6 @@
 return {
     layer = "foreground",
     id = 45,
-    name = "Final Castle",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_koopa_shiro_ncg.bin",
         interval = 5,

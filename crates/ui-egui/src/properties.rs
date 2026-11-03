@@ -372,92 +372,15 @@ fn paths(snapshot: &LevelSnapshot, kind: Kind) -> &Vec<NsmbLevelPath> {
     if kind == Kind::ProgressPath { &snapshot.course.progress_paths } else { &snapshot.course.paths }
 }
 
-/// What each of the game's 76 level tilesets looks like, as NSMB Editor names them. Several look alike; the number
-/// tells them apart. Its tables have room for no more.
-pub(crate) const TILESET_NAMES: [&str; 76] = [
-    "Grassland",
-    "Castle",
-    "Desert",
-    "Underground (with ice)",
-    "Sky/mushrooms (World 7 style)",
-    "Underwater",
-    "Desert",
-    "Volcano (brown)",
-    "Grassland",
-    "Beach (blue)",
-    "Beach (blue)",
-    "Forest",
-    "Grassland",
-    "Sky/mushrooms (with flowers and bushes)",
-    "Sky/mushrooms (with flowers and bushes)",
-    "Volcano (black)",
-    "Volcano (black 2) [unused]",
-    "Snow (with ice)",
-    "Snow",
-    "Forest",
-    "Oasis in desert",
-    "Bonus room [unused]",
-    "Volcano (black 2) [unused]",
-    "Ghost house",
-    "Cliffs",
-    "Cliffs",
-    "Snow (with ice)",
-    "Grassland",
-    "Snow (with ice)",
-    "Factory (W7-A)",
-    "Sewer (W2-3)",
-    "Volcano (yellow)",
-    "Castle",
-    "Sky/mushrooms (with flowers and bushes)",
-    "Grassland",
-    "Underground",
-    "Underground (dark blue) [unused]",
-    "Dark world (purple)",
-    "Dark world (brown)",
-    "Tower",
-    "Ghost house exit",
-    "Final castle",
-    "Toad house 1",
-    "Toad house 2",
-    "Toad house 3",
-    "Final castle",
-    "Toad house 4",
-    "Bowser Jr. battle",
-    "Beach (blue)",
-    "Boss battle",
-    "Sky/mushrooms (with flowers and bushes)",
-    "Forest",
-    "Desert",
-    "Desert",
-    "Forest",
-    "Final boss battle",
-    "Volcano (black)",
-    "Underwater",
-    "Light grey castle (W8 castle 1)",
-    "Sky/mushrooms (yellowish)",
-    "Beach (turquoise, without moss)",
-    "Lakithunder and Monty Tank battles",
-    "Boss battle",
-    "Mummy-Pokey battle",
-    "Oasis in desert",
-    "Desert",
-    "Oasis in desert",
-    "Bonus room [unused]",
-    "Bonus room [unused]",
-    "Bonus room [unused]",
-    "Bonus room [unused]",
-    "Bonus room [unused]",
-    "Bonus room [unused]",
-    "Underground (gold) [unused]",
-    "Bonus room",
-    "Grassland",
-];
-
-/// The tileset IDs a level can choose, each with its name, after none at 65535, which every load of a tileset's files
-/// skips.
-pub(crate) fn tileset_choices() -> Vec<(i64, String)> {
-    let named = (0i64..).zip(TILESET_NAMES).map(|(id, name)| (id, name.to_owned()));
-    std::iter::once((i64::from(u16::MAX), tr!("properties.none").to_owned())).chain(named).collect()
+/// The tileset IDs a level can choose, each by the name the project's tileset list gives it, after none at 65535,
+/// which every load of a tileset's files skips.
+pub(crate) fn tileset_choices(view: &LevelView) -> Option<Vec<(i64, String)>> {
+    let names = view.art.graphics.as_ref().map(|graphics| graphics.tileset_names.as_slice()).unwrap_or_default();
+    if names.is_empty() {
+        return None;
+    }
+    let named = (0i64..).zip(names).map(|(id, name)| (id, name.clone()));
+    Some(std::iter::once((i64::from(u16::MAX), tr!("properties.none").to_owned())).chain(named).collect())
 }
 
 /// Why the level's tileset should not be none, though every load of its files skips it. See `docs/no-tileset.md`.
@@ -805,7 +728,7 @@ fn layer_mismatch(course: &NsmbLevelCourse, block: ScreenBlock, graphics: u16) -
 /// A tileset record's screen when the views naming it turn with the stage (`setupBgParallax`).
 pub const ROTATING_TILESET: u16 = 0xff00;
 
-/// A background or foreground's numbers by the names the project's scripts give them, after none at 65535.
+/// A background or foreground's numbers by the names the project's tileset list gives them, after none at 65535.
 fn layer_choices(view: &LevelView, layer: BackgroundLayer) -> Option<Vec<(i64, String)>> {
     let named = view.art.graphics.as_ref().map(|graphics| graphics.backgrounds.layer(layer)).unwrap_or_default();
     if named.is_empty() {
@@ -1031,9 +954,9 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                 ("FG graphics", h.foreground_theme, Some(BackgroundLayer::Foreground)),
             ];
             // The game's tables hold a background's graphics, palette and screen at the same number, so the name the
-            // project's scripts give that number names all three.
+            // project's tileset list gives that number names all three.
             let choices = layers.map(|(_, _, layer)| match layer {
-                None => Some(tileset_choices()),
+                None => tileset_choices(view),
                 Some(layer) => layer_choices(view, layer),
             });
             if panel.advanced {
@@ -1152,7 +1075,7 @@ pub fn rows(view: &LevelView, panel: &PanelState, overlays: Option<&ObjectBankOv
                             ScreenBlock::Foreground => Some(BackgroundLayer::Foreground),
                         };
                         let choices = match layer {
-                            None => Some(tileset_choices()),
+                            None => tileset_choices(view),
                             Some(layer) => layer_choices(view, layer),
                         };
                         if let Some(choices) = choices {
@@ -2583,6 +2506,9 @@ mod tests {
         assert_eq!(header.sound_group, 3);
         view.snapshot.course.header.tileset_theme[0] = 9;
         view.snapshot.course.tilesets = vec![NsmbLevelScreen { palette_id: 9, ..Default::default() }];
+        // The tilesets go by the names the project's tileset list gives them, which come with the level's graphics.
+        let tileset_names = (0..76).map(|id| if id == 1 { "Castle".to_owned() } else { format!("Tileset {id}") }).collect();
+        view.art.set_graphics(bigstar_protocol::LevelGraphics { tileset_names, ..Default::default() });
         let shown_rows = rows(&view, &view.panel, None);
         let labels: Vec<&str> = shown_rows.rows[11..].iter().map(|row| row.label.as_str()).collect();
         assert_eq!(labels, ["Tileset", "BG graphics", "FG graphics"]);

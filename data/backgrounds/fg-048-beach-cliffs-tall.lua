@@ -2,7 +2,6 @@
 return {
     layer = "foreground",
     id = 48,
-    name = "Beach (cliffs, tall)",
     strips = {
         { throughRow = 39, drift = 0.25 },
         { throughRow = 55, drift = 0.125 },

@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 26,
-    name = "Purple sky",
     strips = {
         { throughRow = 327, drift = 0.125 },
         { throughRow = 399, drift = 0.0625 },

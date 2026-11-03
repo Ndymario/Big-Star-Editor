@@ -2,7 +2,6 @@
 return {
     layer = "background",
     id = 70,
-    name = "Bonus room (NES Mario and Luigi 2) [Unused]",
     strips = {
         { drift = -0.5 },
     },

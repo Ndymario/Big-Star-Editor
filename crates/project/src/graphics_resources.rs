@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::EffectiveFilesystem;
 use crate::tile_overlays::{TileOverlayCatalog, overlay_map16_images};
+use crate::tileset_catalog::{CatalogKind, LayerFiles, TABLE_SLOTS, TilesetFiles};
 
 /// Where one release of the game keeps its resource tables in overlay 0, and the id its NitroFS numbering starts from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -437,6 +438,50 @@ pub fn resolve_level_graphics(files: &mut EffectiveFilesystem, references: Level
     result.watched_files.sort();
     result.watched_files.dedup();
     Ok(result)
+}
+
+/// Which slots of each list's tables load anything, `TABLE_SLOTS` a kind: a tileset whose graphics the game would
+/// load, and a layer whose graphics, palette and screen all are there. The game skips a slot holding no file.
+pub fn filled_table_slots(files: &mut EffectiveFilesystem, kind: CatalogKind) -> Result<Vec<bool>> {
+    let rom = files.rom_mut().ok_or_else(|| Error::new(ErrorCode::InvalidArgument, "the project has no clean ROM to read graphics from"))?;
+    let profile = nsmb_graphics_profile(&rom.header().game_code)
+        .ok_or_else(|| Error::new(ErrorCode::Unsupported, "ROM game code does not have a graphics resource profile"))?;
+    let overlay = rom.read_overlay(0)?;
+    let tables: &[usize] = match kind {
+        CatalogKind::Tileset => &[profile.tileset_graphics],
+        CatalogKind::Background => &[profile.background_graphics, profile.background_palette, profile.background_screen],
+        CatalogKind::Foreground => &[profile.foreground_graphics, profile.foreground_palette, profile.foreground_screen],
+    };
+    let filled = |id: u16| tables.iter().all(|&table| table_entry(&overlay, table, id as u8).is_ok_and(|entry| entry != profile.no_file));
+    Ok((0..TABLE_SLOTS).map(filled).collect())
+}
+
+fn read_named(files: &mut EffectiveFilesystem, path: &str) -> Result<ResourceFile> {
+    Ok(ResourceFile { rom_path: path.to_owned(), data: files.read(path)? })
+}
+
+/// A tileset the list names by its files, loaded where a level's own tileset goes.
+pub fn resolve_file_tileset(files: &mut EffectiveFilesystem, tileset: &TilesetFiles) -> Result<TilesetResourceFiles> {
+    Ok(TilesetResourceFiles {
+        graphics: read_named(files, &tileset.graphics)?,
+        palette: read_named(files, &tileset.palette)?,
+        map16: read_named(files, &tileset.map16)?,
+        objects: read_named(files, &tileset.objects)?,
+        object_index: read_named(files, &tileset.object_index)?,
+        behaviors: tileset.behaviors.as_deref().map(|path| read_named(files, path)).transpose()?.unwrap_or_default(),
+        tile_offset: 192,
+        palette_offset: 2,
+        tile_page_offset: 1,
+    })
+}
+
+/// A background, foreground or scene layer the list names by its files.
+pub fn resolve_file_layer(files: &mut EffectiveFilesystem, layer: &LayerFiles) -> Result<BackgroundResourceFiles> {
+    Ok(BackgroundResourceFiles {
+        graphics: read_named(files, &layer.graphics)?,
+        palette: read_named(files, &layer.palette)?,
+        screen: read_named(files, &layer.screen)?,
+    })
 }
 
 /// The table of which object bank each sprite type needs, as NSMB Editor reads it. A table that names a slot the game

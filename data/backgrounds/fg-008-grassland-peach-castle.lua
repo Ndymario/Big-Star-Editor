@@ -4,7 +4,6 @@
 return {
     layer = "foreground",
     id = 8,
-    name = "Grassland (Peach Castle)",
     tiles = {
         file = "BG_ncg/d_2d_TEN_I_noharaW1_1_ncg.bin",
         interval = 7,

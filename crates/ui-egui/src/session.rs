@@ -7,9 +7,9 @@ use std::sync::Arc;
 use bigstar_client::{Connection, ConnectionState, Incoming};
 use bigstar_core::Error;
 use bigstar_protocol::{
-    ActorCatalog, DirectoryListing, DrawCommand, Event, FileWrite, FilesystemListing, FoundEntity, LevelBytes, LevelEdit, LevelId, LevelListing,
-    LevelSnapshot, LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel, Request,
-    RequestId, Response, ResponseResult, TextureData, TextureId, TilesetResources,
+    ActorCatalog, DirectoryListing, DrawCommand, Event, FileWrite, FilesystemListing, FoundEntity, GraphicsSubject, LevelBytes, LevelEdit, LevelId,
+    LevelListing, LevelSnapshot, LogLevel, ProjectData, ProjectInfo, ProjectMode, ProjectSettings, ProjectSummary, ROM_CHUNK_BYTES, RecoverableLevel,
+    Request, RequestId, Response, ResponseResult, TextureData, TextureId, TilesetListing, TilesetResources,
 };
 use bigstar_protocol::{BuildConfigKind, BuildDiagnostic, BuildEvent, BuildOutcome, DiagnosticLevel};
 
@@ -28,6 +28,7 @@ enum Pending {
     Upload,
     Download,
     ListLevels,
+    ListTilesets,
     OpenLevel(Opening),
     Edit(LevelId),
     History(LevelId),
@@ -174,6 +175,8 @@ pub struct Session {
     pub projects: Vec<ProjectSummary>,
     pub project: Option<ProjectInfo>,
     pub level_list: LevelListing,
+    /// What the Tilesets tab lists, and the names the game's tileset, background and foreground slots go by.
+    pub tileset_list: TilesetListing,
     /// Every level open on the host for this frontend, documents and preview alike.
     pub levels: BTreeMap<LevelId, LevelView>,
     /// The canvas switches a level arriving starts with: the ones every other canvas has.
@@ -250,6 +253,7 @@ impl Session {
             projects: Vec::new(),
             project: None,
             level_list: LevelListing::default(),
+            tileset_list: TilesetListing::default(),
             levels: BTreeMap::new(),
             canvas_options: CanvasOptions::default(),
             active: None,
@@ -574,9 +578,15 @@ impl Session {
         self.request(Request::Banner, Pending::Banner);
     }
 
-    /// Asks for the files behind a level's tilesets and backgrounds; they arrive in `tileset_resources`.
-    pub fn request_tileset_resources(&mut self, level: LevelId) {
-        self.request(Request::TilesetResources { level }, Pending::TilesetResources);
+    /// Asks for the files behind a level's tilesets and backgrounds, or an entry of the tileset list; they arrive in
+    /// `tileset_resources`.
+    pub fn request_tileset_resources(&mut self, subject: GraphicsSubject) {
+        self.request(Request::TilesetResources { subject }, Pending::TilesetResources);
+    }
+
+    /// Asks for the tileset list again; it arrives in `tileset_list`.
+    pub fn refresh_tileset_list(&mut self) {
+        self.request(Request::ListTilesets, Pending::ListTilesets);
     }
 
     /// Chooses the build variant whose module layers the editor reads and writes; the host closes every level session
@@ -781,6 +791,7 @@ impl Session {
                 self.settings = Some(settings);
             }
             (Pending::ListLevels, Response::Levels(list)) => self.level_list = list,
+            (Pending::ListTilesets, Response::Tilesets(list)) => self.tileset_list = list,
             (Pending::OpenLevel(opening), Response::Level(snapshot)) => self.take_snapshot(*snapshot, opening),
             (pending @ (Pending::Edit(_) | Pending::History(_) | Pending::Save(_)), Response::Edited { snapshot, outcome }) => {
                 let level = snapshot.level;
@@ -972,6 +983,7 @@ impl Session {
         self.clean_rom_asked = false;
         self.project = Some(info);
         self.request(Request::ListLevels, Pending::ListLevels);
+        self.refresh_tileset_list();
         self.request(Request::ProjectSettings, Pending::Settings);
         self.request(Request::ProjectData, Pending::ProjectData);
         self.request(Request::Recovery, Pending::Recovery);
@@ -982,6 +994,7 @@ impl Session {
         self.undownloaded = false;
         self.downloading = None;
         self.level_list = LevelListing::default();
+        self.tileset_list = TilesetListing::default();
         self.levels.clear();
         self.active = None;
         self.level_bytes = None;
@@ -1127,6 +1140,8 @@ impl Session {
                 self.graphics_generation = generation;
                 self.catalog_requested = false;
                 self.request_catalog();
+                // The host reads the tileset list with the graphics, so a project's `tilesets.yaml` comes in with them.
+                self.refresh_tileset_list();
                 let levels: Vec<LevelId> = self.levels.keys().copied().collect();
                 for level in levels {
                     if let Some(view) = self.levels.get_mut(&level) {

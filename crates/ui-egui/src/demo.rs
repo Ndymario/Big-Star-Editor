@@ -17,9 +17,10 @@ use bigstar_level::{
 };
 use bigstar_protocol::{
     ATLAS_COLUMNS, ActorCatalog, ActorDraw, ActorInfo, ActorInput, AreaSummary, DirectoryEntry, DirectoryEntryKind, DirectoryListing, DrawCommand,
-    DrawKind, EditOutcome, Event, FileEntry, FileIcon, FileStatus, FilesystemListing, FoundEntity, ImageGraphics, LevelBytes, LevelEdit,
-    LevelGraphics, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData, ProjectInfo, ProjectMode,
-    ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
+    DrawKind, EditOutcome, EntryKey, Event, FileEntry, FileIcon, FileStatus, FilesystemListing, FoundEntity, GraphicsSubject, ImageGraphics,
+    LevelBytes, LevelEdit, LevelGraphics, LevelGroup, LevelId, LevelListing, LevelSnapshot, LevelSummary, LogLevel, ModuleChoice, ProjectData,
+    ProjectInfo, ProjectMode, ProjectSummary, RecoverableLevel, Request, RequestId, Response, ResponseResult, TextureData, TilesetGraphics,
+    TilesetListEntry, TilesetListing,
 };
 
 const AREA: &str = "A01_1";
@@ -114,7 +115,12 @@ fn demo_files() -> BTreeMap<String, DemoFile> {
             }
         }
     }
-    for (name, data) in [("bg", demo_tilemap_files(false)), ("fg", demo_tilemap_files(true))] {
+    let layers = [
+        ("bg", demo_tilemap_files(false, bigstar_formats::BACKGROUND_TILE_OFFSET, bigstar_formats::BACKGROUND_PALETTE_OFFSET)),
+        ("fg", demo_tilemap_files(true, bigstar_formats::FOREGROUND_TILE_OFFSET, bigstar_formats::FOREGROUND_PALETTE_OFFSET)),
+        ("tl", demo_tilemap_files(true, bigstar_formats::TILESET_LAYER_TILE_OFFSET, bigstar_formats::TILESET_LAYER_PALETTE_OFFSET)),
+    ];
+    for (name, data) in layers {
         let Ok(data) = data else { continue };
         for (kind, bytes) in [("ncg", data.graphics), ("ncl", data.palette), ("nsc", data.screen)] {
             files.insert(format!("BG_{kind}/demo_{name}_{kind}.bin"), file(id, bytes));
@@ -223,8 +229,8 @@ fn demo_tileset_files(page: u8) -> Result<bigstar_formats::TilesetResourceData, 
 }
 
 /// A background of sky and distant hills, or a foreground of bushes over clear tiles, quantised the way an imported
-/// PNG is.
-fn demo_tilemap_files(foreground: bool) -> Result<bigstar_formats::TilemapResourceData, Error> {
+/// PNG is and numbered from where the game loads the layer, as the game's own screens are.
+fn demo_tilemap_files(foreground: bool, tile_offset: u16, palette_offset: u8) -> Result<bigstar_formats::TilemapResourceData, Error> {
     use bigstar_formats::{EditableTilemap, RgbaImage, import_tilemap_image, write_tilemap};
     // 64×16 tiles: the 1024 a screen holds, 64 across as the game lays backgrounds out.
     let (width, height) = (512usize, 128usize);
@@ -244,20 +250,7 @@ fn demo_tilemap_files(foreground: bool) -> Result<bigstar_formats::TilemapResour
             image.pixels.extend(pixel);
         }
     }
-    // Numbered from where the game loads the layer, as the game's own screens are.
-    let mut map = if foreground {
-        EditableTilemap {
-            tile_offset: bigstar_formats::FOREGROUND_TILE_OFFSET,
-            palette_offset: bigstar_formats::FOREGROUND_PALETTE_OFFSET,
-            ..Default::default()
-        }
-    } else {
-        EditableTilemap {
-            tile_offset: bigstar_formats::BACKGROUND_TILE_OFFSET,
-            palette_offset: bigstar_formats::BACKGROUND_PALETTE_OFFSET,
-            ..Default::default()
-        }
-    };
+    let mut map = EditableTilemap { tile_offset, palette_offset, ..Default::default() };
     import_tilemap_image(&mut map, &image)?;
     write_tilemap(&map)
 }
@@ -727,6 +720,7 @@ impl DemoConnection {
             background,
             foreground: ImageGraphics::default(),
             backgrounds: demo_backgrounds(),
+            tileset_names: ["Grassland", "Castle"].into_iter().map(str::to_owned).chain((2..76).map(|id| format!("Demo tileset {id}"))).collect(),
             error: None,
         }
     }
@@ -1038,8 +1032,26 @@ impl DemoConnection {
                 }
                 _ => Err(Error::new(ErrorCode::InvalidArgument, "only a file a module supplies can be removed")),
             },
-            Request::TilesetResources { level } => {
-                let references = self.entry(level)?.level.tileset_references();
+            Request::ListTilesets => {
+                let entry = |subject: GraphicsSubject, name: &str, available: bool| TilesetListEntry { subject, name: name.to_owned(), available };
+                Ok(Response::Tilesets(TilesetListing {
+                    tilesets: vec![
+                        entry(GraphicsSubject::Tileset(EntryKey::Shared), "Shared", true),
+                        entry(GraphicsSubject::Tileset(EntryKey::SubUnit), "Sub-unit", true),
+                        entry(GraphicsSubject::Tileset(EntryKey::Table(0)), "Grassland", true),
+                        entry(GraphicsSubject::Tileset(EntryKey::Table(1)), "Castle", false),
+                    ],
+                    backgrounds: vec![entry(GraphicsSubject::Background(EntryKey::Table(0)), "Grassland (orange hills and clouds)", true)],
+                    foregrounds: vec![entry(GraphicsSubject::Foreground(EntryKey::Table(0)), "Grassland (hills and clouds)", true)],
+                    scenes: vec![entry(GraphicsSubject::Scene("Title screen".to_owned()), "Title screen", true)],
+                    problem: None,
+                }))
+            }
+            Request::TilesetResources { subject } => {
+                let references = match &subject {
+                    GraphicsSubject::Level(level) => self.entry(*level)?.level.tileset_references(),
+                    _ => Default::default(),
+                };
                 let get = |path: String| bigstar_protocol::ResourceBytes {
                     bytes: self.files.get(&path).map(|f| f.bytes.clone()).unwrap_or_default(),
                     rom_path: path,
@@ -1062,14 +1074,26 @@ impl DemoConnection {
                     palette: get(format!("BG_ncl/demo_{name}_ncl.bin")),
                     screen: get(format!("BG_nsc/demo_{name}_nsc.bin")),
                 };
-                let resources = bigstar_protocol::TilesetResources {
-                    level,
+                // The demo has one of everything; an entry of the list keeps only its own part, as the host's does.
+                let mut resources = bigstar_protocol::TilesetResources {
+                    subject: subject.clone(),
                     tilesets,
                     background: map("bg"),
                     foreground: map("fg"),
+                    tileset_layer: Default::default(),
                     references,
                     overlays: Vec::new(),
                 };
+                match subject {
+                    GraphicsSubject::Level(_) => {}
+                    GraphicsSubject::Tileset(_) => (resources.background, resources.foreground) = Default::default(),
+                    GraphicsSubject::Background(_) => (resources.tilesets, resources.foreground) = Default::default(),
+                    GraphicsSubject::Foreground(_) => (resources.tilesets, resources.background) = Default::default(),
+                    GraphicsSubject::Scene(_) => {
+                        resources.tilesets.clear();
+                        resources.tileset_layer = map("tl");
+                    }
+                }
                 Ok(Response::TilesetResources(Box::new(resources)))
             }
             Request::WriteFiles { files } => {
@@ -1175,13 +1199,12 @@ mod tests {
             let tileset = bigstar_formats::parse_tileset(&data, 0, 0, page).unwrap();
             assert_eq!(tileset.map16.len(), super::sample_tileset().blocks.len());
         }
-        for foreground in [false, true] {
-            let (tiles, palettes) = if foreground {
-                (bigstar_formats::FOREGROUND_TILE_OFFSET, bigstar_formats::FOREGROUND_PALETTE_OFFSET)
-            } else {
-                (bigstar_formats::BACKGROUND_TILE_OFFSET, bigstar_formats::BACKGROUND_PALETTE_OFFSET)
-            };
-            let map = bigstar_formats::parse_tilemap(&super::demo_tilemap_files(foreground).unwrap(), 0, tiles, palettes).unwrap();
+        for (foreground, tiles, palettes) in [
+            (false, bigstar_formats::BACKGROUND_TILE_OFFSET, bigstar_formats::BACKGROUND_PALETTE_OFFSET),
+            (true, bigstar_formats::FOREGROUND_TILE_OFFSET, bigstar_formats::FOREGROUND_PALETTE_OFFSET),
+            (true, bigstar_formats::TILESET_LAYER_TILE_OFFSET, bigstar_formats::TILESET_LAYER_PALETTE_OFFSET),
+        ] {
+            let map = bigstar_formats::parse_tilemap(&super::demo_tilemap_files(foreground, tiles, palettes).unwrap(), 0, tiles, palettes).unwrap();
             assert!(map.screen.iter().all(|entry| entry.tile >= 0 && entry.palette == 0), "numbered from the layer's slots");
             assert_eq!((map.width_tiles, map.screen.len()), (64, 1024));
         }

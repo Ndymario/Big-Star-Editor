@@ -134,18 +134,18 @@ return {
     let _ = std::fs::remove_dir_all(&root);
 }
 
-/// Every background and foreground the game's tables hold has a shipped script, so each has a name.
+/// Every shipped script loads, and none names its layer: the tileset list does that.
 #[test]
 fn every_shipped_background_script_loads() {
     let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/backgrounds");
     let loaded = load_lua_background_layers(&[layer("shipped", data)]).unwrap();
     assert!(loaded.errors.is_empty(), "{:?}", loaded.errors);
     for which in [BackgroundLayer::Background, BackgroundLayer::Foreground] {
-        let ids: Vec<u16> = loaded.catalog.layer(which).iter().map(|definition| definition.id).collect();
-        assert_eq!(ids, (0..BACKGROUND_SLOT_COUNT).collect::<Vec<_>>(), "{which:?}");
+        let definitions = loaded.catalog.layer(which);
+        assert!(definitions.iter().all(|definition| definition.id < BACKGROUND_SLOT_COUNT && definition.name.is_empty()), "{which:?}");
+        // A script is there for what the game does with a layer beyond drawing it.
+        assert!(definitions.iter().all(|definition| definition.animated() || !definition.strips.is_empty() || !definition.swaps.is_empty()));
     }
-    assert_eq!(loaded.catalog.name(BackgroundLayer::Background, 5), Some("Underwater"));
-    assert_eq!(loaded.catalog.name(BackgroundLayer::Foreground, 8), Some("Grassland (Peach Castle)"));
     // The volcano's eruption: 22 and 16 short steps, then two long ones.
     let volcano = loaded.catalog.find(BackgroundLayer::Foreground, 15).unwrap().tiles.as_ref().unwrap();
     assert_eq!(volcano.steps.len(), 40);
