@@ -2120,7 +2120,7 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     let level = view(&harness).snapshot.level;
     harness.get_by_label("Tools").click();
     harness.run();
-    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.get_by_label("Level Layers…").click();
     harness.run();
     harness.run();
     assert!(harness.state().workspace.tileset(&GraphicsSubject::Level(level)).is_some());
@@ -2172,7 +2172,7 @@ fn tileset_graphics_go_out_and_back_in_with_all_their_palettes() {
     let level = view(&harness).snapshot.level;
     harness.get_by_label("Tools").click();
     harness.run();
-    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.get_by_label("Level Layers…").click();
     harness.run();
     harness.run();
     harness.get_by_label("Graphics").click();
@@ -2216,7 +2216,7 @@ fn the_graphics_grids_are_shared_by_every_canvas_and_remembered() {
         harness.run();
         harness.get_by_label("Tools").click();
         harness.run();
-        harness.get_by_label("Tilesets and Backgrounds…").click();
+        harness.get_by_label("Level Layers…").click();
         harness.run();
         harness.run();
         harness.get_by_label("Graphics").click();
@@ -2250,7 +2250,7 @@ fn a_background_is_painted_with_tiles_from_the_picker_beside_it() {
     let level = view(&harness).snapshot.level;
     harness.get_by_label("Tools").click();
     harness.run();
-    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.get_by_label("Level Layers…").click();
     harness.run();
     harness.run();
     harness.get_all_by_label("Background").next().unwrap().click();
@@ -2281,7 +2281,7 @@ fn map16_blocks_are_painted_with_tiles_chosen_in_the_picker() {
     let level = view(&harness).snapshot.level;
     harness.get_by_label("Tools").click();
     harness.run();
-    harness.get_by_label("Tilesets and Backgrounds…").click();
+    harness.get_by_label("Level Layers…").click();
     harness.run();
     harness.run();
     harness.get_by_label("Map16").click();

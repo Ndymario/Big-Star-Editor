@@ -3,7 +3,7 @@
 Use a real NSMB ROM or NCPatcher project. No ROM or game asset is packaged with Big Star. The aim is that someone used
 to NSMB Editor finds every step where they expect it.
 
-1. Open a level, then **Tools > Tilesets and Backgrounds**. On **Graphics**, paint with the left button and the right
+1. Open a level, then **Tools > Level Layers**. On **Graphics**, paint with the left button and the right
    button and confirm each paints its own colour from the palette on the right. Ctrl+click a pixel and confirm the
    colour under it becomes the left colour.
 2. Use fill, line, rectangle (with and without Shift) and the selection: copy, paste under the pointer, flip and
