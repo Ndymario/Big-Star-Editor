@@ -765,6 +765,9 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
         view.shown_eight = doc.eight;
         doc.version += 1;
     }
+    // The version the picture was drawn for: a colour or undo below moves the document's on, and the canvas must not
+    // keep this picture under that.
+    let version = doc.version;
     let Some((image, palette, editable)) = doc.picture() else { return };
     let colours: Vec<[u8; 4]> = palette.iter().map(|&c| colour(c)).collect();
     let row = if colours.len() > 16 && doc.eight || matches!(doc.page, Some(Page::Enpg(_))) { 256 } else { 16 };
@@ -782,7 +785,7 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
             Some(HistoryButton::Redo) => doc.redo(),
             None => {}
         }
-        let input = view.pixels.canvas(ui, &doc.path, &image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+        let input = view.pixels.canvas(ui, &doc.path, &image, version, ui.available_height() - zoom_canvas::below(ui));
         view.pixels.keys(ui, &input, &mut commands);
         ui.weak(pixel_editor::position_text(view.pixels.hover(), &image));
         if input.pressed().is_some() || commands.iter().any(Command::edits) {
@@ -797,6 +800,9 @@ fn image_page(ui: &mut Ui, doc: &mut ResourceDoc, view: &mut ResourceView) {
             doc.end_edit();
         }
     });
+    if doc.version != version {
+        ui.ctx().request_repaint();
+    }
 }
 
 fn metadata_page(ui: &mut Ui, doc: &mut ResourceDoc) {

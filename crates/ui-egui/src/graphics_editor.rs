@@ -8,6 +8,8 @@ use bigstar_formats::{
     decode_bgr555_palette, identify_graphics_format, pack_bgr555, parse_nanr, parse_ncer, parse_ncgr, parse_nclr, parse_nscr, parse_tex0,
     render_ncer_cell, render_tex0_texture, write_nanr, write_ncer, write_ncgr, write_nclr, write_nscr, write_tex0,
 };
+use std::rc::Rc;
+
 use egui::Ui;
 use serde::{Deserialize, Serialize};
 
@@ -1151,6 +1153,9 @@ pub enum GraphicsAction {
     Save,
 }
 
+/// A picture drawn for `K`, kept until that changes; `None` when there was nothing to draw.
+type Drawn<K> = Option<(K, Option<Rc<RgbaImage>>)>;
+
 /// The editor's view state: its tools, and the drawn picture with the version of the document it shows.
 #[derive(Default)]
 pub struct GraphicsView {
@@ -1158,21 +1163,39 @@ pub struct GraphicsView {
     tiles: TilemapEditor,
     picker: PickerState,
     picker_version: u64,
+    /// The paired graphics as the tile picker shows them, with the document version and palette row they were drawn
+    /// for, and how many times they have been drawn: what their upload is kept under.
+    picker_sheet: Drawn<(u64, usize)>,
+    picker_drawn: u64,
     still: CanvasState,
     texture: Option<(u64, egui::TextureHandle)>,
-    rendered: Option<(u64, Rendered)>,
+    rendered: Option<(u64, Rc<Rendered>)>,
     /// The image manager's choice of bitmap and palette, and what its last import or export said went wrong.
     manager: ManagerState,
     notice: Option<String>,
 }
 
+impl GraphicsView {
+    /// What the document shows as it is now, with the version it was drawn for: drawn again only when that has moved
+    /// on. A canvas is given that version, never the document's, so a change made earlier in the frame is not taken
+    /// for one already uploaded.
+    fn rendered(&mut self, doc: &GraphicsDoc) -> (u64, Rc<Rendered>) {
+        match &self.rendered {
+            Some((version, rendered)) if *version == doc.version => (*version, rendered.clone()),
+            _ => {
+                let rendered = Rc::new(doc.render());
+                self.rendered = Some((doc.version, rendered.clone()));
+                (doc.version, rendered)
+            }
+        }
+    }
+}
+
 pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services: &dyn Services) -> Vec<GraphicsAction> {
     let mut actions = Vec::new();
     let whole = ui.max_rect();
-    if view.rendered.as_ref().is_none_or(|(version, _)| *version != doc.version) {
-        view.rendered = Some((doc.version, doc.render()));
-    }
-    let Some((_, rendered)) = view.rendered.clone() else { return actions };
+    let entered = doc.version;
+    let (_, rendered) = view.rendered(doc);
     if controls::document_header(ui, &doc.path, "", doc.dirty && doc.error.is_none()) {
         actions.push(GraphicsAction::Save);
     }
@@ -1208,6 +1231,9 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
             }
         });
     });
+    // The options and lists may have chosen another texture, palette or width: what is drawn beside and below is the
+    // document as it is now.
+    let (_, rendered) = view.rendered(doc);
     let palette_only = matches!(doc.mode, Mode::Nclr | Mode::RawPalette);
     let sheet = doc.sheet().is_some();
     let screen = doc.paints_screen();
@@ -1237,19 +1263,22 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
         });
     }
     egui::CentralPanel::default().show(ui, |ui| {
+        let (version, rendered) = view.rendered(doc);
         if palette_only {
             if let Some((index, rgb)) = palette_panel::show(ui, &rendered.swatches, &mut view.pixels.colours, 256, true) {
                 doc.set_color(index, rgb);
             }
             return;
         }
-        let Some(image) = &rendered.image else { return };
+        if rendered.image.is_none() {
+            return;
+        }
         if sheet {
-            sheet_canvas(ui, doc, view, image);
+            sheet_canvas(ui, doc, view);
         } else if screen {
-            screen_canvas(ui, doc, view, image);
-        } else {
-            picture(ui, &doc.path, image, doc.version, &mut view.texture, &mut view.still, ui.available_height());
+            screen_canvas(ui, doc, view);
+        } else if let Some(image) = &rendered.image {
+            picture(ui, &doc.path, image, version, &mut view.texture, &mut view.still, ui.available_height());
         }
     });
     // A file dropped anywhere else on the editor is attached as whatever it is; the lists beside take it as they say.
@@ -1257,6 +1286,11 @@ pub fn show(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, service
         && let Some(path) = dropped_on(ui, whole.shrink(1.0))
     {
         actions.push(GraphicsAction::Load { path, palette: None });
+    }
+    // A change made after the canvas was drawn (a stroke, a colour, an import) is shown next frame, without waiting
+    // for the pointer to move.
+    if doc.version != entered {
+        ui.ctx().request_repaint();
     }
     actions
 }
@@ -1470,11 +1504,14 @@ fn take_step(doc: &mut GraphicsDoc, asked: Option<HistoryButton>) {
     }
 }
 
-fn sheet_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, image: &RgbaImage) {
+fn sheet_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
     let mut commands = Vec::new();
     let asked = view.pixels.toolbar(ui, Some((doc.can_undo(), doc.can_redo())), &mut commands);
     take_step(doc, asked);
-    let input = view.pixels.canvas(ui, &doc.path, image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+    // Drawn after the toolbar, so an undo is shown as soon as it is taken.
+    let (version, rendered) = view.rendered(doc);
+    let Some(image) = &rendered.image else { return };
+    let input = view.pixels.canvas(ui, &doc.path, image, version, ui.available_height() - zoom_canvas::below(ui));
     view.pixels.keys(ui, &input, &mut commands);
     ui.weak(pixel_editor::position_text(view.pixels.hover(), image));
     let edits = input.pressed().is_some() || commands.iter().any(Command::edits);
@@ -1498,9 +1535,12 @@ fn tile_side(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
     ui.strong(tr!("graphics_editor.tiles"));
     ui.weak(tr!("graphics_editor.drag_to_choose_tiles"));
     let row = view.tiles.palette.max(0) as usize;
-    let Some(sheet) = doc.companion_sheet(row) else { return };
-    let version = doc.version * 16 + row as u64;
-    let picked = tile_picker::show(ui, "graphics-tiles", &sheet, version, &mut view.picker, 8, 16, ui.available_height());
+    if view.picker_sheet.as_ref().is_none_or(|(drawn, _)| *drawn != (doc.version, row)) {
+        view.picker_sheet = Some(((doc.version, row), doc.companion_sheet(row).map(Rc::new)));
+        view.picker_drawn += 1;
+    }
+    let Some((_, Some(sheet))) = view.picker_sheet.clone() else { return };
+    let picked = tile_picker::show(ui, "graphics-tiles", &sheet, view.picker_drawn, &mut view.picker, 8, 16, ui.available_height());
     if picked.changed || view.picker_version == 0 {
         view.picker_version = 1;
         let picked = view.picker.indices(16, tiles);
@@ -1509,12 +1549,14 @@ fn tile_side(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
     }
 }
 
-fn screen_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, image: &RgbaImage) {
+fn screen_canvas(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView) {
     let (_, rows) = doc.companion_counts();
     let mut commands = Vec::new();
     let asked = view.tiles.toolbar(ui, Some((doc.can_undo(), doc.can_redo())), rows, &mut commands);
     take_step(doc, asked);
-    let input = view.tiles.canvas(ui, &doc.path, image, doc.version, ui.available_height() - zoom_canvas::below(ui));
+    let (version, rendered) = view.rendered(doc);
+    let Some(image) = &rendered.image else { return };
+    let input = view.tiles.canvas(ui, &doc.path, image, version, ui.available_height() - zoom_canvas::below(ui));
     view.tiles.keys(ui, &input, &mut commands);
     let hovered = view.tiles.hover().and_then(|at| doc.with_screen(|grid| crate::paint::get(grid, at)).flatten());
     ui.weak(entry_text(view.tiles.hover(), hovered));
@@ -1769,6 +1811,43 @@ mod tests {
         let texels = &doc.tex0.as_ref().unwrap().textures[0].texels;
         assert_eq!(texels[..], [0x0f, 0x00, 0, 0, 0x00, 0x90, 0, 0]);
         assert_eq!(DocImages(&mut doc).colours(), 16);
+    }
+
+    /// Choosing another texture changes the document in the middle of a frame; the canvas must still end up showing
+    /// it, at its own size, rather than keeping the one before under the new version.
+    #[test]
+    fn a_texture_chosen_in_the_list_is_the_one_drawn() {
+        use egui_kittest::kittest::Queryable as _;
+        let texture = |name: &str, width: usize| Tex0Texture {
+            name: name.to_owned(),
+            format: TextureFormat::Palette16,
+            width,
+            height: 8,
+            original_width: width,
+            original_height: 8,
+            texels: vec![0x11; width * 4],
+            ..Tex0Texture::default()
+        };
+        let mut doc = GraphicsDoc::open("t.nsbtx", &[]);
+        doc.mode = Mode::Tex0;
+        doc.error = None;
+        let palette = Tex0Palette { name: "p".to_owned(), colors: vec![0x1f; 32], ..Tex0Palette::default() };
+        doc.tex0 = Some(Tex0 { textures: vec![texture("narrow", 8), texture("wide", 32)], palettes: vec![palette], ..Tex0::default() });
+        let services = crate::services::MemoryServices::default();
+        let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
+            |ui, (doc, view): &mut (GraphicsDoc, GraphicsView)| {
+                show(ui, doc, view, &services);
+            },
+            (doc, GraphicsView::default()),
+        );
+        harness.run();
+        harness.get_by_label("wide").click();
+        harness.run();
+        let (doc, view) = harness.state();
+        assert_eq!(doc.primary, 1);
+        let (version, texture) = view.texture.as_ref().expect("uploaded");
+        assert_eq!(*version, doc.version, "the upload is of the document as it is");
+        assert_eq!(texture.size(), [32, 8], "the wide texture, not the narrow one under a newer version");
     }
 
     #[test]
