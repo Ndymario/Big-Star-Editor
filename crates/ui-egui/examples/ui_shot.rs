@@ -356,9 +356,9 @@ fn main() -> Result<(), String> {
     shot(&mut harness, &dir, "preferences.png")
 }
 
-/// Each tab of the open tileset workspace but Slots: graphics, Map16, objects, behaviours and both backgrounds.
+/// Each tab of the open tileset workspace graphics, Map16, objects, behaviours and both backgrounds.
 fn tileset_tabs(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
-    for (index, name) in [(1, "graphics"), (2, "map16"), (3, "objects"), (4, "behaviors"), (5, "background"), (6, "foreground")] {
+    for (index, name) in [(0, "graphics"), (1, "map16"), (2, "objects"), (3, "behaviors"), (4, "background"), (5, "foreground")] {
         harness.state_mut().tileset_tab_for_screenshot(index);
         for _ in 0..3 {
             harness.step();

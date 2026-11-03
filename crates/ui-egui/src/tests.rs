@@ -2003,8 +2003,8 @@ fn the_tileset_workspace_opens_from_tools_and_saves_only_what_changed() {
     harness.run();
     harness.run();
     assert!(harness.state().workspace.tilesets.contains_key(&level));
-    for tab in ["Slots", "Graphics", "Map16", "Objects", "Behaviors", "Background", "Foreground"] {
-        harness.get_by_label(tab);
+    for tab in ["Graphics", "Map16", "Objects", "Behaviors", "Background", "Foreground"] {
+        harness.get_all_by_label(tab).next().unwrap();
     }
     harness.get_by_label("Map16").click();
     harness.run();
@@ -2131,7 +2131,7 @@ fn a_background_is_painted_with_tiles_from_the_picker_beside_it() {
     harness.get_by_label("Tilesets and Backgrounds…").click();
     harness.run();
     harness.run();
-    harness.get_by_label("Background").click();
+    harness.get_all_by_label("Background").next().unwrap().click();
     harness.run();
     // The picker is docked on the right of the map.
     let mut canvases: Vec<Rect> = harness.get_all_by_label("GraphicsCanvas").map(|node| node.rect()).collect();

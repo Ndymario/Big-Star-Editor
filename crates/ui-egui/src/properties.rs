@@ -10,8 +10,8 @@ use bigstar_formats::{
     NsmbLevelView, NsmbLevelZone,
 };
 use bigstar_level::{
-    BackgroundLayer, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, LevelTilesetReferences, ScreenBlock,
-    SpriteFieldDefinition, read_sprite_field, sprite_field_max, sprite_field_min, write_sprite_field,
+    BackgroundLayer, IndexedLevelValue, LevelEntityInsertions, LevelEntitySelection, LevelEntityUpdates, ScreenBlock, SpriteFieldDefinition,
+    read_sprite_field, sprite_field_max, sprite_field_min, write_sprite_field,
 };
 use bigstar_protocol::{ActorInfo, LevelEdit, LevelSnapshot, ObjectBankOverlays};
 
@@ -452,14 +452,6 @@ pub(crate) const TILESET_NAMES: [&str; 76] = [
     "Bonus room",
     "Grassland",
 ];
-
-/// A tileset picked anew brings its own colours, as NSMB Editor has it: the game takes them from the tileset block,
-/// which the level must name the tileset in again. Another palette can be chosen after.
-pub(crate) fn follow_tileset(references: &mut LevelTilesetReferences, before: LevelTilesetReferences) {
-    if references.tileset_id != before.tileset_id {
-        references.tileset_palette_id = references.tileset_id;
-    }
-}
 
 /// The tileset IDs a level can choose, each with its name, after none at 65535, which every load of a tileset's files
 /// skips.

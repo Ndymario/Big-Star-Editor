@@ -677,7 +677,7 @@ impl BigStarApp {
         }
     }
 
-    /// Brings a tab of every open tileset workspace forward: 0 Slots … 6 Foreground (screenshots).
+    /// Brings a tab of every open tileset workspace forward: 0 Graphics … 5 Foreground (screenshots).
     pub fn tileset_tab_for_screenshot(&mut self, index: usize) {
         for (doc, _) in self.workspace.tilesets.values_mut() {
             if let Some((tab, _)) = crate::tileset_editor::TABS.get(index) {

@@ -5,7 +5,6 @@
 use crate::controls::{self, Button, Choice as _, TextField, Width};
 use crate::i18n::{self, key, tr};
 use crate::icons;
-use crate::properties::TILESET_NAMES;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -70,7 +69,6 @@ fn slot_names() -> [(u8, &'static str); 3] {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tab {
     #[default]
-    Slots,
     Graphics,
     Map16,
     Objects,
@@ -79,8 +77,7 @@ pub enum Tab {
     Foreground,
 }
 
-pub const TABS: [(Tab, &str); 7] = [
-    (Tab::Slots, key!("tileset_editor.tab.slots")),
+pub const TABS: [(Tab, &str); 6] = [
     (Tab::Graphics, key!("tileset_editor.tab.graphics")),
     (Tab::Map16, key!("tileset_editor.tab.map16")),
     (Tab::Objects, key!("tileset_editor.tab.objects")),
@@ -113,7 +110,7 @@ pub struct TilesetDoc {
     /// The files they came from, as read: what a save compares against and where it writes.
     sources: Vec<TilesetSlot>,
     map_sources: [TilemapSlot; 2],
-    /// The references the level had, and the ones the Slots tab says now.
+    /// The references the level had, and the ones the workspace holds now.
     initial: LevelTilesetReferences,
     pub references: LevelTilesetReferences,
     overlays: BTreeMap<u16, TileOverlay>,
@@ -245,7 +242,7 @@ impl TilesetDoc {
         }
     }
 
-    /// The level references the Slots tab edits; they take effect when the level is saved and reloaded.
+    /// Whether the level references differ from the ones it had; they take effect when the level is saved and reloaded.
     pub fn references_changed(&self) -> bool {
         self.references != self.initial
     }
@@ -828,7 +825,6 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
     controls::notice_line(ui, &mut view.notice, true);
     ui.add_space(2.0);
     match doc.tab {
-        Tab::Slots => slots(ui, doc),
         Tab::Graphics => graphics(ui, doc, view, services),
         Tab::Map16 => map16(ui, doc, view),
         Tab::Objects => objects(ui, doc, view),
@@ -837,46 +833,6 @@ pub fn show(ui: &mut Ui, doc: &mut TilesetDoc, view: &mut TilesetView, services:
         Tab::Foreground => tilemap(ui, doc, view, services, 1),
     }
     action
-}
-
-fn slots(ui: &mut Ui, doc: &mut TilesetDoc) {
-    let before = doc.references;
-    egui::Grid::new("tileset-references").num_columns(2).show(ui, |ui| {
-        let references = &mut doc.references;
-        // Each row's id is its English name, so a widget keeps its state whatever the language.
-        for (id, label, value) in [
-            ("Background graphics", key!("tileset_editor.slots.background_graphics"), &mut references.background_graphics_id),
-            ("Level tileset", key!("tileset_editor.slots.level_tileset"), &mut references.tileset_id),
-            ("Foreground graphics", key!("tileset_editor.slots.foreground_graphics"), &mut references.foreground_graphics_id),
-            ("Background screen", key!("tileset_editor.slots.background_screen"), &mut references.background_screen_id),
-            ("Background palette", key!("tileset_editor.slots.background_palette"), &mut references.background_palette_id),
-            ("Level tileset palette", key!("tileset_editor.slots.level_tileset_palette"), &mut references.tileset_palette_id),
-            ("Foreground screen", key!("tileset_editor.slots.foreground_screen"), &mut references.foreground_screen_id),
-            ("Foreground palette", key!("tileset_editor.slots.foreground_palette"), &mut references.foreground_palette_id),
-        ] {
-            ui.label(i18n::text(label));
-            if id.starts_with("Level tileset") {
-                tileset_choice(ui, id, value);
-            } else {
-                ui.add(controls::number(value).range(0..=255));
-            }
-            ui.end_row();
-        }
-    });
-    crate::properties::follow_tileset(&mut doc.references, before);
-    ui.add(egui::Label::new(tr!("tileset_editor.slots.ids_note")).wrap());
-}
-
-/// The level tileset, picked by name. A number the game's tables have no room for stays as it is until another is
-/// picked.
-fn tileset_choice(ui: &mut Ui, id: &str, value: &mut u16) {
-    let choices: Vec<(u16, &str)> = (0u16..).zip(TILESET_NAMES).collect();
-    if let Some(picked) = controls::filtered_choice(("tileset-choice", id), &choices, tr!("tileset_editor.filter_tilesets"))
-        .width(260.0)
-        .show(ui, Some(i64::from(*value)))
-    {
-        *value = picked;
-    }
 }
 
 fn entry_fields(
@@ -1787,7 +1743,7 @@ pub(crate) mod tests {
     #[test]
     fn the_tileset_workspace_exposes_every_surface_and_preserves_resources() {
         let mut doc = TilesetDoc::open(resources(), "1-1").unwrap();
-        assert_eq!(TABS.len(), 7);
+        assert_eq!(TABS.len(), 6);
         assert_eq!(doc.slot, 1, "the level's own tileset first");
         doc.references.tileset_id = 42;
         assert!(doc.references_changed());
