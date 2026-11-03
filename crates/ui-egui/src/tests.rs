@@ -2015,14 +2015,16 @@ fn search_left(harness: &mut Harness<'static, BigStarApp>, text: &str) {
     harness.run();
 }
 
-/// The Tilesets tab lists every entry of the tileset list, filters them, and opens each in a workspace of its own
+/// The Layers tab lists every entry of the tileset list, filters them, and opens each in a workspace of its own
 /// that shows only what it has. Saving one writes its files and edits no level.
 #[test]
-fn the_tilesets_tab_opens_each_entry_on_its_own() {
+fn the_layers_tab_opens_each_entry_on_its_own() {
     let mut harness = canvas_on(DemoConnection::new(), Vec2::new(1500.0, 800.0));
     let level = view(&harness).snapshot.level;
     let references = view(&harness).snapshot.tileset_references;
-    harness.get_by_label("Tilesets").click();
+    // The left panel's Layers, not the level properties' tab of that name.
+    let tab = harness.get_all_by_label("Layers").map(|node| node.rect()).find(|rect| rect.left() < 300.0).expect("the Layers tab");
+    click(&mut harness, tab.center(), PointerButton::Primary, Modifiers::NONE);
     harness.run();
     for group in ["Tilesets (4)", "Backgrounds (1)", "Foregrounds (1)", "Scenes (1)"] {
         harness.get_by_label(group).click();

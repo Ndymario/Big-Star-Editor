@@ -80,7 +80,7 @@ enum Action {
 enum Left {
     #[default]
     Levels,
-    Tilesets,
+    Layers,
     Palette,
     Filesystem,
 }
@@ -680,9 +680,9 @@ impl BigStarApp {
         }
     }
 
-    /// Shows the Tilesets tab of the left panel (screenshots).
+    /// Shows the Layers tab of the left panel (screenshots).
     pub fn tileset_list_for_screenshot(&mut self) {
-        self.left = Left::Tilesets;
+        self.left = Left::Layers;
     }
 
     /// Brings a tab of every open tileset workspace forward: 0 Graphics … 6 Tileset layer (screenshots).
@@ -1314,7 +1314,7 @@ impl BigStarApp {
                 &mut self.left,
                 &[
                     (Left::Levels, tr!("app.tab.levels")),
-                    (Left::Tilesets, tr!("app.tab.tilesets")),
+                    (Left::Layers, tr!("app.tab.layers")),
                     (Left::Palette, tr!("app.tab.palette")),
                     (Left::Filesystem, tr!("app.tab.filesystem")),
                 ],
@@ -1322,7 +1322,7 @@ impl BigStarApp {
             ui.add_space(2.0);
             match self.left {
                 Left::Filesystem => self.files.show(ui, session, &*self.services),
-                Left::Tilesets => crate::tileset_list::show(ui, session, &mut self.tileset_list),
+                Left::Layers => crate::tileset_list::show(ui, session, &mut self.tileset_list),
                 Left::Levels => {
                     if let Some(path) = level_list::show(ui, session, self.workspace.previewed()) {
                         // A level row hands the person over to its file.

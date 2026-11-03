@@ -1,6 +1,6 @@
 # The tileset list
 
-The **Tilesets** tab, beside Levels, lists everything the tileset workspace can edit without a level open:
+The **Layers** tab, beside Levels, lists everything the tileset workspace can edit without a level open:
 
 - **Tilesets**: the shared tileset every level loads first (jyotyu), the sub-unit every level loads last (nohara), and
   the 76 level tilesets of the game's tables.
@@ -68,7 +68,7 @@ A project's `tilesets.yaml` holds only what it changes:
 
 Slots stay in table order whatever order the file writes them in. A file that names a slot and files in one entry, a
 slot past 75, a path that leaves the ROM, an entry listed twice or a field the list does not know is refused, and the
-editor's own list is used instead, with the reason shown at the top of the Tilesets tab.
+editor's own list is used instead, with the reason shown at the top of the Layers tab.
 
 ## The title screen
 

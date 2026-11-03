@@ -357,7 +357,7 @@ fn main() -> Result<(), String> {
     shot(&mut harness, &dir, "preferences.png")
 }
 
-/// The Tilesets tab with every group open, and the title screen opened from it, a shot of each of its layers.
+/// The Layers tab with every group open, and the title screen opened from it, a shot of each of its layers.
 fn tileset_list(harness: &mut Harness<'_, BigStarApp>, dir: &std::path::Path, prefix: &str) -> Result<(), String> {
     let press = |harness: &mut Harness<'_, BigStarApp>, rect: egui::Rect| {
         for pressed in [true, false] {

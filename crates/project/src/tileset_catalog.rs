@@ -1,4 +1,4 @@
-//! The tileset list: what the Tilesets tab offers to edit and what each is called. The editor ships one
+//! The tileset list: what the Layers tab offers to edit and what each is called. The editor ships one
 //! (`tilesets/tilesets.yaml`); a project's own `tilesets.yaml` merges into it rather than taking its place, so a hack
 //! that renames two backgrounds writes two entries. See `docs/tilesets-list.md`.
 

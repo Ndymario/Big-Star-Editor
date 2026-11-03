@@ -1,4 +1,4 @@
-//! The Tilesets tab of the left panel: every tileset, background and foreground the game's tables hold, the ones the
+//! The Layers tab of the left panel: every tileset, background and foreground the game's tables hold, the ones the
 //! project's `tilesets.yaml` adds, and the scenes the game builds outside a level. Edit (or a double-click) opens one in
 //! the tileset workspace.
 

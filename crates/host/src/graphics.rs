@@ -296,7 +296,7 @@ impl ProjectGraphics {
         list
     }
 
-    /// The tileset list as the Tilesets tab shows it, each slot marked with whether the game has files for it. A slot
+    /// The tileset list as the Layers tab shows it, each slot marked with whether the game has files for it. A slot
     /// list that cannot be read marks every slot there.
     pub fn tileset_listing(&mut self) -> TilesetListing {
         let (list, problem) = self.tileset_list();

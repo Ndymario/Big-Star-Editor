@@ -175,7 +175,7 @@ pub struct Session {
     pub projects: Vec<ProjectSummary>,
     pub project: Option<ProjectInfo>,
     pub level_list: LevelListing,
-    /// What the Tilesets tab lists, and the names the game's tileset, background and foreground slots go by.
+    /// What the Layers tab lists, and the names the game's tileset, background and foreground slots go by.
     pub tileset_list: TilesetListing,
     /// Every level open on the host for this frontend, documents and preview alike.
     pub levels: BTreeMap<LevelId, LevelView>,
