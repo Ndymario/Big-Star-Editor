@@ -328,6 +328,7 @@ impl GraphicsDoc {
             GraphicsFormatKind::NitroTexture | GraphicsFormatKind::NitroModel => match parse_tex0(body) {
                 Ok(value) => {
                     self.tex0 = Some(value);
+                    self.follow_texture();
                     (Mode::Tex0, None)
                 }
                 Err(e) => fail(e.message),
@@ -386,9 +387,19 @@ impl GraphicsDoc {
         }
     }
 
+    /// Shows cell, sequence, texture or bit depth `index`; a texture comes up in its own palette when it has one.
     pub fn set_primary(&mut self, index: usize) {
         self.primary = index;
+        self.follow_texture();
         self.touched(false);
+    }
+
+    /// Chooses the palette the texture shown is named for, `<texture>_pl`, when there is one: an NSBTX doesn't say
+    /// which palette goes with which texture, but its names do.
+    fn follow_texture(&mut self) {
+        if let Some(index) = self.tex0.as_ref().and_then(|tex0| texture_palette(tex0, self.primary)) {
+            self.secondary = index;
+        }
     }
 
     pub fn set_secondary(&mut self, index: usize) {
@@ -1006,6 +1017,13 @@ impl GraphicsDoc {
     }
 }
 
+/// The palette named for texture `index`, `<texture>_pl` cut to the sixteen bytes a name holds, whatever the case.
+fn texture_palette(tex0: &Tex0, index: usize) -> Option<usize> {
+    let mut wanted = format!("{}_pl", tex0.textures.get(index)?.name);
+    wanted.truncate(wanted.char_indices().nth(16).map_or(wanted.len(), |(at, _)| at));
+    tex0.palettes.iter().position(|p| p.name.eq_ignore_ascii_case(&wanted))
+}
+
 /// Bits a texel of a paletted TEX0 format stores; the other formats aren't indices into a palette alone.
 fn tex0_bits(format: TextureFormat) -> Option<usize> {
     match format {
@@ -1464,10 +1482,12 @@ fn manager(ui: &mut Ui, doc: &mut GraphicsDoc, view: &mut GraphicsView, services
     let lists = Lists { bitmaps: &bitmaps, palettes: &palettes, groups: &groups, shared: tex0, no_import };
     let (_, action) = image_manager::show(ui, &doc.path.clone(), &mut view.manager, &lists);
     if tex0 {
+        // A palette clicked beats the one a texture clicked brings; one left alone does not undo it.
+        let listed = doc.secondary;
         if view.manager.bitmap != doc.primary {
             doc.set_primary(view.manager.bitmap);
         }
-        if view.manager.palette != doc.secondary {
+        if view.manager.palette != listed {
             doc.set_secondary(view.manager.palette);
         }
     } else if let Some(&(file, row)) = doc.palette_slots().get(view.manager.palette) {
@@ -1831,8 +1851,9 @@ mod tests {
         let mut doc = GraphicsDoc::open("t.nsbtx", &[]);
         doc.mode = Mode::Tex0;
         doc.error = None;
-        let palette = Tex0Palette { name: "p".to_owned(), colors: vec![0x1f; 32], ..Tex0Palette::default() };
-        doc.tex0 = Some(Tex0 { textures: vec![texture("narrow", 8), texture("wide", 32)], palettes: vec![palette], ..Tex0::default() });
+        let palette = |name: &str| Tex0Palette { name: name.to_owned(), colors: vec![0x1f; 32], ..Tex0Palette::default() };
+        let palettes = vec![palette("narrow_pl"), palette("wide_pl")];
+        doc.tex0 = Some(Tex0 { textures: vec![texture("narrow", 8), texture("wide", 32)], palettes, ..Tex0::default() });
         let services = crate::services::MemoryServices::default();
         let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 600.0)).build_ui_state(
             |ui, (doc, view): &mut (GraphicsDoc, GraphicsView)| {
@@ -1844,10 +1865,31 @@ mod tests {
         harness.get_by_label("wide").click();
         harness.run();
         let (doc, view) = harness.state();
-        assert_eq!(doc.primary, 1);
+        assert_eq!((doc.primary, doc.secondary), (1, 1), "in its own palette");
         let (version, texture) = view.texture.as_ref().expect("uploaded");
         assert_eq!(*version, doc.version, "the upload is of the document as it is");
         assert_eq!(texture.size(), [32, 8], "the wide texture, not the narrow one under a newer version");
+    }
+
+    #[test]
+    fn a_texture_comes_up_in_the_palette_named_for_it() {
+        let texture = |name: &str| Tex0Texture { name: name.to_owned(), ..Tex0Texture::default() };
+        let palette = |name: &str| Tex0Palette { name: name.to_owned(), ..Tex0Palette::default() };
+        let mut doc = GraphicsDoc::open("t.nsbtx", &[]);
+        doc.mode = Mode::Tex0;
+        doc.tex0 = Some(Tex0 {
+            textures: vec![texture("water"), texture("Lava"), texture("plain"), texture("abcdefghijklmnop")],
+            palettes: vec![palette("lava_pl"), palette("water_pl"), palette("abcdefghijklmnop")],
+            ..Tex0::default()
+        });
+        doc.set_primary(0);
+        assert_eq!(doc.secondary, 1);
+        doc.set_primary(1);
+        assert_eq!(doc.secondary, 0, "whatever the case");
+        doc.set_primary(2);
+        assert_eq!(doc.secondary, 0, "none named for it: the palette stays");
+        doc.set_primary(3);
+        assert_eq!(doc.secondary, 2, "a name cut to sixteen bytes");
     }
 
     #[test]
