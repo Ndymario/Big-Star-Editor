@@ -1,5 +1,5 @@
 @echo off
-rem Runs Big Star Editor from the source code in this script's folder, on Windows.
+rem Runs Big Star Editor from the source code in this script's folder, on Windows. On Linux and macOS, run.sh does the same.
 rem
 rem The first run installs what building needs when it is missing, through winget:
 rem   - Rust (rustup, with the stable toolchain);
