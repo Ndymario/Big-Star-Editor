@@ -42,10 +42,6 @@ mod mount {
             Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "only Linux mounts the ROM's folder"))
         }
 
-        pub(in crate::host) fn id(&self) -> u64 {
-            match *self {}
-        }
-
         pub(in crate::host) fn put(&self, _relative: &str, _address: &str, _bytes: &[u8]) {
             match *self {}
         }
@@ -73,6 +69,7 @@ const RECORD_FILE: &str = ".bigstar/virtual-rom.json";
 pub(crate) const LOST_DIR: &str = ".bigstar/lost";
 /// How long an edit made in the mounted folder waits for the host before it fails: the host may be busy with
 /// something that reads the folder itself.
+#[cfg(target_os = "linux")]
 const MOUNT_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// One file of the folder: where it is under the folder (`/`-separated), and the SHA-256 of what was last written
@@ -305,6 +302,7 @@ fn modules_changed(open: &mut OpenProject) {
 }
 
 /// Locks `mutex`, waiting no longer than `patience`.
+#[cfg(target_os = "linux")]
 fn lock_within<T>(mutex: &Mutex<T>, patience: std::time::Duration) -> Option<MutexGuard<'_, T>> {
     let start = std::time::Instant::now();
     loop {
@@ -675,6 +673,7 @@ impl Shared {
 
     /// A file the mount `id` took: closed after being written to, or renamed over a ROM file. It is inserted, and the
     /// mount then holds what it reads as.
+    #[cfg(target_os = "linux")]
     pub(super) fn mount_wrote(&self, id: u64, address: String, bytes: Vec<u8>) -> Result<()> {
         self.with_mount(id, &address, |host, open, mirror| {
             let changed = host.import_logged(open, mirror, &address, &bytes)?;
@@ -687,6 +686,7 @@ impl Shared {
     }
 
     /// A ROM file deleted from the mount `id`. Returns whether it was the active module's to delete.
+    #[cfg(target_os = "linux")]
     pub(super) fn mount_deleted(&self, id: u64, address: &str) -> Result<bool> {
         self.with_mount(id, address, |host, open, mirror| {
             let deleted = host.delete_one(open, mirror, address);
@@ -702,6 +702,7 @@ impl Shared {
     /// mount is brought up to date -- `address`, and every address whose source the plan now names differently --
     /// and that is announced. The state lock is waited for only so long: the host may be holding it while something
     /// reads the mount.
+    #[cfg(target_os = "linux")]
     fn with_mount<T>(
         &self,
         id: u64,
